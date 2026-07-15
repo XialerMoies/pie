@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pi Desktop</title>
+<script>try { if (localStorage.getItem('editor-theme') === 'vs') document.documentElement.classList.add('theme-light'); } catch {}</script>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Sora:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<svg style="display:none">
+<symbol id="il" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="ic" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="if" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/><polyline points="14 2 14 8 20 8" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="is" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" stroke-width="1.8" fill="none"/></symbol>
+<symbol id="iz" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><polygon points="22 2 15 22 11 13 2 9 22 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="ifolder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="imsg" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="isearch" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/><line x1="21" y1="21" x2="16.65" y2="16.65" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></symbol>
+<symbol id="igit" viewBox="0 0 24 24"><path d="M6 3v12a4 4 0 0 0 4 4h4" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 17l3 3 3-3" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6" cy="5" r="2" stroke="currentColor" stroke-width="1.8" fill="none"/><circle cx="6" cy="19" r="2" stroke="currentColor" stroke-width="1.8" fill="none"/><circle cx="18" cy="19" r="2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M14 19H10a4 4 0 0 1-4-4" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></symbol>
+<symbol id="iterm" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="19" x2="20" y2="19" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></symbol>
+<symbol id="ich-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="ich-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="irefresh" viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="iplus" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></symbol>
+<symbol id="ipin" viewBox="0 0 24 24"><path d="M15 4l5 5-4 1-4.5 4.5 1 4L11 20l-4-4 1.5-1.5 4 1L17 11l1-4-3-3z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 15l-5 5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></symbol>
+<symbol id="ipin-off" viewBox="0 0 24 24"><path d="M15 4l5 5-4 1-2 2M11.5 14.5l1 4L11 20l-4-4 1.5-1.5 2 .5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 15l-5 5M4 4l16 16" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></symbol>
+<symbol id="ibranch" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5" stroke="currentColor" stroke-width="1.8" fill="none"/><circle cx="18" cy="6" r="2.5" stroke="currentColor" stroke-width="1.8" fill="none"/><circle cx="12" cy="18" r="2.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M6 8.5v2.5a4 4 0 0 0 4 4h2M18 8.5v2.5a4 4 0 0 1-4 4h-2" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="iedit" viewBox="0 0 24 24"><path d="M4 20h4l11-11a2.5 2.5 0 0 0-4-4L4 16v4z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.5 6.5l4 4" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></symbol>
+<symbol id="itrash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="iatom" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="10" ry="4" stroke="currentColor" stroke-width="1.5" fill="none"/><ellipse cx="12" cy="12" rx="4" ry="10" stroke="currentColor" stroke-width="1.5" fill="none"/><ellipse cx="12" cy="12" rx="10" ry="10" stroke="currentColor" stroke-width="1.5" fill="none" transform="rotate(45,12,12)"/></symbol>
+<symbol id="iup" viewBox="0 0 24 24"><line x1="12" y1="20" x2="12" y2="4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><polyline points="5 11 12 4 19 11" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="idown" viewBox="0 0 24 24"><line x1="12" y1="4" x2="12" y2="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><polyline points="5 13 12 20 19 13" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="ipause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/></symbol>
+</svg>
+
+<div class="app" id="app"></div>
+
+<script src="./marked.umd.js"></script>
+<script type="module" src="./gen/editor/monaco-setup.js"></script>
+<script src="./gen/dashboard/dashboard-helpers.js"></script>
+<script src="./gen/service/explorer-service.js"></script>
+<script src="./gen/chat/chat-render.js"></script>
+<script src="./gen/chat/chat-mode.js"></script>
+<script src="./gen/chat/chat-token.js"></script>
+<script src="./gen/chat/chat-attachments.js"></script>
+<script src="./gen/dashboard/dashboard-chat.js"></script>
+<script src="./gen/dashboard/dashboard-layout.js"></script>
+<script src="./gen/dashboard/layout-tabs.js"></script>
+<script src="./gen/dashboard/layout-panel.js"></script>
+<script src="./gen/dashboard/layout-shortcuts.js"></script>
+<script src="./gen/ui/tree.js"></script>
+<script src="./gen/ui/tree-render.js"></script>
+<script src="./gen/ui/tree-events.js"></script>
+<script src="./gen/dashboard/dashboard-sessions.js"></script>
+<script src="./gen/pane/explorer/index.js"></script>
+<script src="./gen/pane/chat/index.js"></script>
+<script src="./gen/pane/search/index.js"></script>
+<script src="./gen/pane/git/index.js"></script>
+<script src="./gen/dashboard/dashboard-menus.js"></script>
+<script src="./gen/dashboard/dashboard-settings.js"></script>
+<script>
+layout(); getD();
+loadSessions();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

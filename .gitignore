@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-electron/
+data/
+release/
+*.log
+src/frontend/gen/
+CLAUDE.md
+tasks/
+.pi/
+.vscode/
+example/
+.claude/

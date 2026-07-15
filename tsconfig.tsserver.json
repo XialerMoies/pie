@@ -1,0 +1,11 @@
+{
+  // tsserver 专用配置 — 无 rootDir / include 限制
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  }
+}

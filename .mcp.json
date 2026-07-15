@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "image_mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@jettoblack/image_mcp",
+        "--base-url",
+        "https://api.siliconflow.cn/v1",
+        "--model",
+        "Qwen/Qwen3-VL-8B-Instruct"
+      ],
+      "env": {
+        "OPENAI_API_KEY": "sk-cgowpvlgpldzxgertgywgwvbveoafvvqgfxypehlhhnuzsbx"
+      }
+    }
+  }
+}

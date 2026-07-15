@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>布局设计器</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#111;color:#eee;font-family:system-ui,sans-serif;height:100vh;display:flex;flex-direction:column}
+.top{display:flex;align-items:center;gap:8px;padding:8px 16px;background:#1a1a1a;border-bottom:1px solid #333;flex-shrink:0;flex-wrap:wrap}
+.top h1{font-size:14px;font-weight:600}
+.top .hint{font-size:11px;color:#666;flex:1;min-width:100px}
+.top .sep{width:1px;height:24px;background:#333;margin:0 4px}
+.top button{padding:5px 12px;border:1px solid #444;border-radius:6px;background:#222;color:#bbb;font-size:12px;cursor:pointer;white-space:nowrap}
+.top button:hover{background:#333;color:#fff}
+.top button.prim{background:#f59e0b;color:#111;border-color:#f59e0b;font-weight:600}
+.top label{font-size:12px;color:#888;display:flex;align-items:center;gap:4px}
+.top input[type=number]{width:48px;background:#222;border:1px solid #444;border-radius:4px;color:#ccc;font-size:12px;padding:3px 6px;outline:none}
+.cv{flex:1;overflow:auto;position:relative;padding:20px}
+.cv-inner{position:relative;width:1200px;height:800px;background:#161616;border:1px solid #333;border-radius:8px;margin:0 auto;overflow:hidden}
+#svgLayer{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:1}
+#svgLayer line.sg-line{stroke:#888;stroke-width:2;stroke-linecap:round;transition:stroke .15s}
+#svgLayer line.sg-line.selected{stroke:#f59e0b;stroke-width:2.5}
+#svgLayer line.sg-line.hovered{stroke:#aaa;stroke-width:3}
+#svgLayer polygon.sg-arrow{fill:#888;pointer-events:none}
+#svgLayer polygon.sg-arrow.selected{fill:#f59e0b}
+#svgLayer circle.sg-handle{fill:#f59e0b;r:5;stroke:#111;stroke-width:1.5;opacity:0;transition:opacity .15s}
+#svgLayer circle.sg-handle.visible{opacity:1}
+#svgLayer line.guide{stroke:#f59e0b;stroke-dasharray:4 4;stroke-width:1;opacity:.8}
+.rect{position:absolute;border:2px solid #444;border-radius:8px;background:rgba(30,30,50,.6);cursor:move;display:flex;align-items:center;justify-content:center;overflow:hidden;transition:box-shadow .15s;z-index:2}
+.rect:hover{border-color:#666;box-shadow:0 0 0 1px rgba(245,158,11,.15)}
+.rect.active{border-color:#f59e0b;box-shadow:0 0 0 1px #f59e0b,0 0 20px rgba(245,158,11,.1)}
+.rect .label{font-size:13px;color:#aaa;pointer-events:none;user-select:none;padding:4px 8px;text-align:center;line-height:1.3;word-break:break-word}
+.rect .sz{position:absolute;bottom:3px;right:8px;font-size:10px;color:#555;font-family:monospace;pointer-events:none}
+.rect .del{position:absolute;top:4px;right:4px;width:18px;height:18px;border-radius:50%;border:none;background:rgba(239,68,68,.2);color:#ef4444;font-size:10px;cursor:pointer;display:none;align-items:center;justify-content:center;line-height:1;z-index:5}
+.rect:hover .del,.rect.active .del{display:flex}
+.rect .del:hover{background:#ef4444;color:#fff}
+.resize{position:absolute;bottom:-2px;right:-2px;width:16px;height:16px;cursor:nwse-resize;border-radius:50%}
+.resize::after{content:'';position:absolute;bottom:2px;right:2px;width:8px;height:8px;border-right:2px solid #f59e0b;border-bottom:2px solid #f59e0b;opacity:.5}
+.rect:hover .resize::after{opacity:1}
+.out{flex-shrink:0;background:#1a1a1a;border-top:1px solid #333;padding:8px 20px 12px}
+.out-h{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.out-h span{font-size:11px;color:#666}
+.out-h button{padding:3px 10px;border:1px solid #444;border-radius:4px;background:#222;color:#aaa;font-size:11px;cursor:pointer;margin-left:auto}
+.out-h button:hover{background:#333;color:#fff}
+.out pre{background:#0d0d0d;border:1px solid #333;border-radius:6px;padding:8px 12px;font-family:monospace;font-size:11px;color:#888;overflow-x:auto;max-height:80px;line-height:1.4;white-space:pre}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <h1>📐 布局设计器</h1>
+  <div class="hint">矩形 + 线段/箭头，自由布局</div>
+  <button class="prim" onclick="addRect()">+ 矩形</button>
+  <button class="prim" onclick="addLine()">╱ 线段</button>
+  <button class="prim" onclick="addArrow()">→ 箭头</button>
+  <div class="sep"></div>
+  <button onclick="toggleSnap()" id="btnSnap" style="background:#1a2a1a;color:#4ade80">🧲 吸附</button>
+  <label>网格 <input type="number" id="gridSize" value="10" min="1" max="100"></label>
+  <div class="sep"></div>
+  <button onclick="deleteSelected()">🗑 删除选中</button>
+  <button onclick="resetAll()">重置</button>
+</div>
+
+<div class="cv" id="cv">
+  <div class="cv-inner" id="canvas">
+    <svg id="svgLayer"></svg>
+    <div style="position:absolute;top:8px;left:10px;font-size:11px;color:#444;pointer-events:none;font-family:monospace;z-index:0">画布 1200×800</div>
+  </div>
+</div>
+
+<div class="out">
+  <div class="out-h">
+    <span>输出 JSON — 复制后贴给我</span>
+    <button onclick="copyJSON()">📋 复制</button>
+  </div>
+  <pre id="jsonOut">[]</pre>
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────
+let rects = [];
+let lines = [];   // { id, type: 'line'|'arrow', x1,y1, x2,y2, label? }
+let nextRectId = 1;
+let nextLineId = 1;
+let selectedRect = null;
+let selectedLine = null;
+let hoverLine = null;
+let snapEnabled = true;
+
+// Drag state: null | { type:'rect'|'line'|'endpoint', ... }
+let dragData = null;
+let resizeData = null;
+
+const canvas = document.getElementById('canvas');
+const svgLayer = document.getElementById('svgLayer');
+const jsonOut = document.getElementById('jsonOut');
+
+function getGridStep() { return parseInt(document.getElementById('gridSize').value) || 10; }
+
+// ─── Geometry helpers ──────────────────────────────────────
+function dist(x1,y1,x2,y2) { return Math.hypot(x2-x1, y2-y1); }
+
+function pointToSegmentDist(px,py, x1,y1, x2,y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const lenSq = dx*dx + dy*dy;
+  if (lenSq === 0) return dist(px,py,x1,y1);
+  let t = ((px-x1)*dx + (py-y1)*dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return dist(px,py, x1 + t*dx, y1 + t*dy);
+}
+
+// ─── Render ────────────────────────────────────────────────
+function render() {
+  // Remove rect DOM elements (keep SVG layer)
+  canvas.querySelectorAll('.rect').forEach(el => el.remove());
+
+  for (const r of rects) {
+    const el = document.createElement('div');
+    el.className = 'rect' + (selectedRect === r.id ? ' active' : '');
+    el.style.left = r.x + 'px';
+    el.style.top = r.y + 'px';
+    el.style.width = r.w + 'px';
+    el.style.height = r.h + 'px';
+    el.dataset.id = r.id;
+    el.innerHTML = '<div class="label">' + esc(r.label) + '</div>'
+      + '<div class="sz">' + r.w + '×' + r.h + '</div>'
+      + '<button class="del" onclick="delRect(\'' + r.id + '\')">×</button>'
+      + '<div class="resize" onmousedown="startResize(event,\'' + r.id + '\')"></div>';
+    el.onmousedown = (e) => { if (e.target.closest('.del')||e.target.closest('.resize')) return; startDrag(e, 'rect', r.id); };
+    el.onclick = (e) => { if (e.target.closest('.del')||e.target.closest('.resize')) return; selectRect(r.id); };
+    canvas.appendChild(el);
+  }
+  renderLines();
+  updateJSON();
+}
+
+function renderLines() {
+  svgLayer.innerHTML = '';
+
+  for (const L of lines) {
+    const sel = selectedLine === L.id;
+    const cls = sel ? ' selected' : '';
+
+    // Choose color: selected=amber, hovered=brighter, default=gray
+    const strokeColor = sel ? '#f59e0b' : (hoverLine === L.id ? '#aaa' : '#888');
+    const strokeWidth = sel ? 2.5 : (hoverLine === L.id ? 3 : 2);
+
+    if (L.type === 'arrow') {
+      const line = svgElem('line', { x1:L.x1, y1:L.y1, x2:L.x2, y2:L.y2, class:'sg-line'+cls,
+        stroke:strokeColor, 'stroke-width':strokeWidth });
+      svgLayer.appendChild(line);
+
+      const angle = Math.atan2(L.y2-L.y1, L.x2-L.x1);
+      const aLen=12, aA=Math.PI/6;
+      const px=L.x2, py=L.y2;
+      const pts=`${px},${py} ${px-aLen*Math.cos(angle-aA)},${py-aLen*Math.sin(angle-aA)} ${px-aLen*Math.cos(angle+aA)},${py-aLen*Math.sin(angle+aA)}`;
+      const poly = svgElem('polygon', { points:pts, class:'sg-arrow'+cls, fill:strokeColor });
+      svgLayer.appendChild(poly);
+    } else {
+      const line = svgElem('line', { x1:L.x1, y1:L.y1, x2:L.x2, y2:L.y2, class:'sg-line'+cls,
+        stroke:strokeColor, 'stroke-width':strokeWidth });
+      svgLayer.appendChild(line);
+    }
+
+    // Label
+    if (L.label) {
+      const t = svgElem('text', { x:(L.x1+L.x2)/2+6, y:(L.y1+L.y2)/2-4, fill:'#888', 'font-size':'11', 'font-family':'monospace' });
+      t.textContent = L.label;
+      svgLayer.appendChild(t);
+    }
+
+    // Handles (selected only)
+    if (sel) {
+      for (const [cx,cy] of [[L.x1,L.y1],[L.x2,L.y2]]) {
+        svgLayer.appendChild(svgElem('circle', { cx,cy, class:'sg-handle visible', r:5 }));
+      }
+    }
+  }
+
+  // Alignment guides during rect drag
+  if (dragData && dragData.type === 'rect') {
+    const r = rects.find(rr => rr.id === dragData.id);
+    if (r) drawGuides(r, dragData.id);
+  }
+}
+
+function svgElem(tag, attrs) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k,v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+// ─── Canvas mouse handler (line hit-testing) ──────────────
+canvas.addEventListener('mousedown', (e) => {
+  // Ignore clicks on rects or their children
+  if (e.target.closest('.rect') || e.target.closest('.del') || e.target.closest('.resize')) return;
+  e.preventDefault();
+
+  const cr = canvas.getBoundingClientRect();
+  const cx = e.clientX - cr.left, cy = e.clientY - cr.top;
+
+  // 1) Check endpoint handles (selected line only — tiny targets)
+  if (selectedLine) {
+    const L = lines.find(l => l.id === selectedLine);
+    if (L) {
+      if (dist(cx, cy, L.x1, L.y1) < 8) { startDrag(e, 'endpoint', L.id, 1); return; }
+      if (dist(cx, cy, L.x2, L.y2) < 8) { startDrag(e, 'endpoint', L.id, 2); return; }
+    }
+  }
+
+  // 2) Check line bodies (back-to-front for z-order)
+  // Find the line closest to the click point
+  let best = null, bestDist = 8;
+  for (const L of lines) {
+    const d = pointToSegmentDist(cx, cy, L.x1, L.y1, L.x2, L.y2);
+    if (d < bestDist) { bestDist = d; best = L; }
+  }
+  if (best) {
+    selectLine(best.id);
+    startDrag(e, 'line', best.id);
+    return;
+  }
+
+  // 3) Click on empty canvas → deselect
+  selectedRect = null;
+  selectedLine = null;
+  render();
+});
+
+// Hover effect for lines (visual feedback)
+canvas.addEventListener('mousemove', (e) => {
+  if (e.target.closest('.rect')) { if (hoverLine) { hoverLine = null; renderLines(); } return; }
+  const cr = canvas.getBoundingClientRect();
+  const cx = e.clientX - cr.left, cy = e.clientY - cr.top;
+  let found = null;
+  for (const L of lines) {
+    if (pointToSegmentDist(cx, cy, L.x1, L.y1, L.x2, L.y2) < 6) { found = L.id; break; }
+  }
+  if (found !== hoverLine) { hoverLine = found; renderLines(); }
+});
+
+canvas.addEventListener('mouseleave', () => { if (hoverLine) { hoverLine = null; renderLines(); } });
+
+// ─── Alignment guides ────────────────────────────────────
+function drawGuides(moving, skipId) {
+  const SNAP = 6;
+  const others = rects.filter(r => r.id !== skipId);
+  for (const o of others) {
+    const pairs = [
+      [moving.x, o.x, moving.y, o.y, moving.h, o.h, 1],
+      [moving.x+moving.w, o.x+o.w, moving.y, o.y, moving.h, o.h, 1],
+      [moving.x, o.x+o.w, moving.y, o.y, moving.h, o.h, 1],
+      [moving.x+moving.w, o.x, moving.y, o.y, moving.h, o.h, 1],
+      [moving.x+moving.w/2, o.x+o.w/2, moving.y, o.y, moving.h, o.h, 1],
+      [moving.y, o.y, moving.x, o.x, moving.w, o.w, 0],
+      [moving.y+moving.h, o.y+o.h, moving.x, o.x, moving.w, o.w, 0],
+      [moving.y, o.y+o.h, moving.x, o.x, moving.w, o.w, 0],
+      [moving.y+moving.h, o.y, moving.x, o.x, moving.w, o.w, 0],
+      [moving.y+moving.h/2, o.y+o.h/2, moving.x, o.x, moving.w, o.w, 0],
+    ];
+    for (const [mv, ov, sp, op, mlen, olen, isVert] of pairs) {
+      if (Math.abs(mv-ov) < SNAP) {
+        if (isVert) svgLayer.appendChild(svgElem('line', { class:'guide', x1:ov, y1:Math.min(sp,op), x2:ov, y2:Math.max(sp+mlen,op+olen) }));
+        else svgLayer.appendChild(svgElem('line', { class:'guide', x1:Math.min(sp,op), y1:ov, x2:Math.max(sp+mlen,op+olen), y2:ov }));
+      }
+    }
+  }
+}
+
+function applySnap(r, skipId) {
+  if (!snapEnabled) return;
+  const SNAP = 6;
+  const others = rects.filter(rr => rr.id !== skipId);
+  let snapX = null, snapY = null, distX = SNAP, distY = SNAP;
+  for (const o of others) {
+    const checks = [[r.x,o.x],[r.x,o.x+o.w],[r.x+r.w,o.x+o.w],[r.x+r.w,o.x],[r.x+r.w/2,o.x+o.w/2]];
+    const vchecks = [[r.y,o.y],[r.y,o.y+o.h],[r.y+r.h,o.y+o.h],[r.y+r.h,o.y],[r.y+r.h/2,o.y+o.h/2]];
+    for (const [mv,ov] of checks) { const d=Math.abs(mv-ov); if(d<distX){distX=d;snapX=ov-(mv-r.x);} }
+    for (const [mv,ov] of vchecks) { const d=Math.abs(mv-ov); if(d<distY){distY=d;snapY=ov-(mv-r.y);} }
+  }
+  if (distX<=SNAP && snapX!==null) r.x = snapX;
+  if (distY<=SNAP && snapY!==null) r.y = snapY;
+  if (distX>SNAP) { const s=getGridStep(); r.x = Math.round(r.x/s)*s; }
+  if (distY>SNAP) { const s=getGridStep(); r.y = Math.round(r.y/s)*s; }
+}
+
+// ─── Rect CRUD ───────────────────────────────────────────
+function selectRect(id) {
+  selectedRect = id;
+  selectedLine = null;
+  render();
+  // Inline edit — overlay input on the rect label area
+  setTimeout(() => {
+    const el = canvas.querySelector('.rect.active .label');
+    if (!el) return;
+    const current = rects.find(r => r.id === id)?.label || '';
+    const input = document.createElement('input');
+    input.value = current;
+    input.style.cssText = 'background:#222;border:1px solid #f59e0b;border-radius:4px;color:#fff;font-size:13px;padding:4px 8px;text-align:center;width:80%;outline:none;font-family:inherit';
+    input.onblur = () => { const r = rects.find(rr => rr.id === id); if (r) r.label = input.value || r.label; render(); };
+    input.onkeydown = (e) => { if (e.key === 'Enter') input.blur(); };
+    el.innerHTML = '';
+    el.appendChild(input);
+    input.focus();
+    input.select();
+  }, 50);
+}
+
+function selectLine(id) {
+  selectedLine = id;
+  selectedRect = null;
+  render();
+  // Inline edit — overlay input at midpoint
+  setTimeout(() => {
+    const L = lines.find(l => l.id === id);
+    if (!L) return;
+    const mx = (L.x1+L.x2)/2, my = (L.y1+L.y2)/2;
+    const input = document.createElement('input');
+    input.value = L.label || '';
+    input.placeholder = '标签…';
+    input.style.cssText = 'position:absolute;left:'+(mx-60)+'px;top:'+(my-14)+'px;width:120px;background:#222;border:1px solid #f59e0b;border-radius:4px;color:#fff;font-size:12px;padding:3px 8px;outline:none;font-family:inherit;text-align:center;z-index:10';
+    input.onblur = () => { L.label = input.value||''; input.remove(); render(); };
+    input.onkeydown = (e) => { if(e.key==='Enter')input.blur(); if(e.key==='Escape'){L.label='';input.blur();} };
+    canvas.appendChild(input);
+    input.focus();
+    input.select();
+  }, 50);
+}
+
+function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+function addRect() {
+  const id = 'r'+(nextRectId++);
+  rects.push({ id, label:'矩形 '+nextRectId, x:50+Math.random()*200, y:50+Math.random()*200, w:200, h:100 });
+  selectRect(id);
+}
+
+function addLine() {
+  const id = 'l'+(nextLineId++);
+  lines.push({ id, type:'line', x1:300, y1:100, x2:500, y2:100, label:'' });
+  selectLine(id);
+}
+
+function addArrow() {
+  const id = 'l'+(nextLineId++);
+  lines.push({ id, type:'arrow', x1:300, y1:200, x2:500, y2:200, label:'' });
+  selectLine(id);
+}
+
+function delRect(id) { rects=rects.filter(r=>r.id!==id); if(selectedRect===id)selectedRect=null; render(); }
+function delLine(id) { lines=lines.filter(l=>l.id!==id); if(selectedLine===id)selectedLine=null; render(); }
+
+function deleteSelected() {
+  if (selectedRect) delRect(selectedRect);
+  else if (selectedLine) delLine(selectedLine);
+}
+
+function toggleSnap() {
+  snapEnabled = !snapEnabled;
+  const btn = document.getElementById('btnSnap');
+  btn.style.background = snapEnabled ? '#1a2a1a' : '#222';
+  btn.style.color = snapEnabled ? '#4ade80' : '#bbb';
+  btn.textContent = snapEnabled ? '🧲 吸附' : '🧲 关闭';
+}
+
+function resetAll() {
+  rects=[]; lines=[]; selectedRect=null; selectedLine=null; nextRectId=1; nextLineId=1; render();
+}
+
+// ─── Drag ─────────────────────────────────────────────────
+function startDrag(e, type, id, ep) {
+  e.preventDefault();
+  if (type === 'rect') {
+    const r = rects.find(rr=>rr.id===id);
+    if(!r)return;
+    dragData = { type:'rect', id, ox: e.clientX - r.x, oy: e.clientY - r.y };
+  } else if (type === 'line') {
+    const L = lines.find(l=>l.id===id);
+    if(!L)return;
+    dragData = { type:'line', id, ox:e.clientX, oy:e.clientY, origX1:L.x1, origY1:L.y1, origX2:L.x2, origY2:L.y2 };
+  } else if (type === 'endpoint') {
+    const L = lines.find(l=>l.id===id);
+    if(!L)return;
+    dragData = { type:'endpoint', id, ep, ox:e.clientX, oy:e.clientY, origX: ep===1?L.x1:L.x2, origY: ep===1?L.y1:L.y2 };
+  }
+  document.querySelectorAll('.rect').forEach(el => el.style.cursor = 'grabbing');
+}
+
+function startResize(e, id) {
+  e.preventDefault(); e.stopPropagation();
+  const r = rects.find(rr=>rr.id===id);
+  if(!r)return;
+  resizeData = { id, sx:e.clientX, sy:e.clientY, sw:r.w, sh:r.h };
+}
+
+document.addEventListener('mousemove', (e) => {
+  const cr = canvas.getBoundingClientRect();
+  if (dragData) {
+    if (dragData.type === 'rect') {
+      const r = rects.find(rr=>rr.id===dragData.id);
+      if(!r)return;
+      r.x = Math.max(0, Math.min(e.clientX - dragData.ox, cr.width - r.w));
+      r.y = Math.max(0, Math.min(e.clientY - dragData.oy, cr.height - r.h));
+      applySnap(r, dragData.id);
+      render();
+    } else if (dragData.type === 'line') {
+      const L = lines.find(l=>l.id===dragData.id);
+      if(!L)return;
+      const dx = e.clientX - dragData.ox, dy = e.clientY - dragData.oy;
+      L.x1 = dragData.origX1+dx; L.y1 = dragData.origY1+dy;
+      L.x2 = dragData.origX2+dx; L.y2 = dragData.origY2+dy;
+      render();
+    } else if (dragData.type === 'endpoint') {
+      const L = lines.find(l=>l.id===dragData.id);
+      if(!L)return;
+      const dx = e.clientX - dragData.ox, dy = e.clientY - dragData.oy;
+      if (dragData.ep===1) { L.x1=dragData.origX+dx; L.y1=dragData.origY+dy; }
+      else { L.x2=dragData.origX+dx; L.y2=dragData.origY+dy; }
+      render();
+    }
+  }
+  if (resizeData) {
+    const r = rects.find(rr=>rr.id===resizeData.id);
+    if(!r)return;
+    r.w = Math.max(60, Math.min(resizeData.sw + e.clientX - resizeData.sx, cr.width - r.x));
+    r.h = Math.max(40, Math.min(resizeData.sh + e.clientY - resizeData.sy, cr.height - r.y));
+    render();
+  }
+});
+
+document.addEventListener('mouseup', () => {
+  if (dragData && dragData.type === 'rect') {
+    const r = rects.find(rr=>rr.id===dragData.id);
+    if (r && snapEnabled) { const s=getGridStep(); r.x=Math.round(r.x/s)*s; r.y=Math.round(r.y/s)*s; }
+  }
+  dragData = null; resizeData = null;
+  document.querySelectorAll('.rect').forEach(el => el.style.cursor = '');
+  updateJSON();
+});
+
+// ─── Keyboard ──────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if ((e.key==='Delete'||e.key==='Backspace') && document.activeElement?.tagName!=='INPUT') deleteSelected();
+  if (e.key==='Escape') { selectedRect=null; selectedLine=null; render(); }
+});
+
+// ─── JSON ─────────────────────────────────────────────────
+function updateJSON() {
+  const out = {
+    rects: rects.map(r => ({ id:r.id, label:r.label, x:Math.round(r.x), y:Math.round(r.y), w:Math.round(r.w), h:Math.round(r.h) })),
+    lines: lines.length ? lines.map(l => ({ id:l.id, type:l.type, x1:Math.round(l.x1), y1:Math.round(l.y1), x2:Math.round(l.x2), y2:Math.round(l.y2), label:l.label||undefined })) : undefined
+  };
+  jsonOut.textContent = JSON.stringify(out, null, 2);
+}
+
+function copyJSON() {
+  navigator.clipboard.writeText(jsonOut.textContent).then(() => {
+    const btn = document.querySelector('.out-h button');
+    btn.textContent = '✅ 已复制';
+    setTimeout(() => btn.textContent = '📋 复制', 1500);
+  });
+}
+
+// ─── Init ─────────────────────────────────────────────────
+rects = [
+  { id:'r1', label:'聊天主区域', x:234, y:81, w:726, h:719 },
+  { id:'r2', label:'顶部栏', x:0, y:0, w:1200, h:40 },
+  { id:'r4', label:'标签页栏', x:234, y:40, w:726, h:43 },
+  { id:'r5', label:'组件面板', x:60, y:41, w:174, h:759 },
+  { id:'r6', label:'侧边菜单栏', x:0, y:40, w:60, h:760 },
+  { id:'r7', label:'对话输入框', x:340, y:682, w:540, h:96 },
+  { id:'r8', label:'发送按钮', x:890, y:706, w:56, h:48 },
+];
+lines = [
+  { id:'l1', type:'arrow', x1:610, y1:650, x2:610, y2:682, label:'消息流' },
+  { id:'l2', type:'line', x1:600, y1:460, x2:700, y2:460, label:'分割线' },
+];
+nextRectId = 10;
+nextLineId = 3;
+render();
+</script>
+</body>
+</html>
