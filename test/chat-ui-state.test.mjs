@@ -37,6 +37,7 @@ function setupDom() {
     _fileTabs: [],
     _activeFileTab: null,
     _sessionTabs: [],
+    _activeSessionTabId: null,
   };
   win.App = {
     Constants: { WS_KEY: "workspace_path" },
@@ -79,6 +80,7 @@ describe("chat ui state", () => {
     env = setupDom();
     const ts = Date.now() + Math.random();
     await import(`../src/frontend/dashboard/dashboard-chat.ts?t=${ts}`);
+    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${ts}`);
     env.win.bind();
   });
 
@@ -280,8 +282,7 @@ describe("chat ui state", () => {
     let committed = null;
     env.win.commitSessionTab = (oldId, newId) => {
       committed = [oldId, newId];
-      localStorage.setItem("session-tabs", JSON.stringify([newId]));
-      localStorage.setItem("active-session-tab", newId);
+      env.win.__state._sessionTabs = [newId];
     };
 
     const fetchCalls = [];
@@ -305,7 +306,36 @@ describe("chat ui state", () => {
     streams[0].onmessage({ data: JSON.stringify({ type: "done", text: "持久回答", sessionId: "real-session" }) });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.strictEqual(localStorage.getItem("last-session-id"), "real-session");
+    assert.deepStrictEqual(env.win.__state._sessionTabs, ["real-session"]);
     assert.ok(!fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/delete") && method === "POST"));
+  });
+
+  it("legacy localStorage keys no longer written by session functions", () => {
+    const LEGACY_KEYS = ["session-tabs", "active-session-tab", "last-session-id", "session-tab-labels"];
+    for (const key of LEGACY_KEYS) localStorage.removeItem(key);
+
+    // migrateSessionTabLabels must NOT write to localStorage
+    localStorage.setItem("session-tab-labels", JSON.stringify({ "sess-old": "新会话" }));
+    const before = localStorage.getItem("session-tab-labels");
+    if (typeof env.win.migrateSessionTabLabels === "function") env.win.migrateSessionTabLabels();
+    assert.strictEqual(localStorage.getItem("session-tab-labels"), before,
+      "migrateSessionTabLabels 不能改写旧的 session-tab-labels");
+    localStorage.removeItem("session-tab-labels"); // 恢复干净状态
+
+    // setActiveSessionTabId used to write active-session-tab and last-session-id
+    env.win.__state._sessionTabs = ["sess-a"];
+    env.win.setActiveSessionTabId("sess-a");
+    for (const key of LEGACY_KEYS) {
+      assert.strictEqual(localStorage.getItem(key), null, `setActiveSessionTabId: ${key}`);
+    }
+
+    // commitSessionTab used to write session-tabs, session-tab-labels, active-session-tab, last-session-id
+    env.win.__state._sessionTabs = ["draft:regression"];
+    env.win.commitSessionTab("draft:regression", "sess-real", "手动标题");
+    for (const key of LEGACY_KEYS) {
+      assert.strictEqual(localStorage.getItem(key), null, `commitSessionTab: ${key}`);
+    }
+    assert.deepStrictEqual(env.win.__state._sessionTabs, ["sess-real"]);
+    assert.strictEqual(env.win.__state._sessionTabLabels?.["sess-real"], "手动标题");
   });
 });

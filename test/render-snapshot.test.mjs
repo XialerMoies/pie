@@ -145,27 +145,16 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes("hello"), "其他内容保留");
   });
 
-  it("trace 渲染为任务轨迹摘要，而不是原始工具标题", () => {
+  it("无 block/无 trace 时仅显示内容", () => {
     win.__state.M = [{
       role: "assistant",
-      content: "done",
-      trace: [
-        { type: "tool", status: "success", name: "search", input: { query: "SessionManager", type: "text" }, output: '搜索"SessionManager"（全文）共 2 处匹配，1 个文件', turnId: "turn-1", id: "search@turn-1" },
-        { type: "tool", status: "success", name: "file-read", input: { path: "src/server/server.ts" }, output: "server code", turnId: "turn-1", id: "read@turn-1" },
-        { type: "tool", status: "success", name: "git-status", output: "Git 根目录：E:/repo\n变更总数：1", turnId: "turn-1", id: "git@turn-1" },
-      ],
+      content: "这是回复内容",
     }];
 
     const html = win.msgs();
 
-    assert.ok(html.includes("任务轨迹"), "显示任务轨迹总览");
-    assert.ok(html.includes("搜索代码"), "search 映射为搜索代码");
-    assert.ok(html.includes("读取文件"), "file-read 映射为读取文件");
-    assert.ok(html.includes("验证结果"), "git-status 映射为验证结果");
-    assert.ok(html.includes("找到 2 处匹配，1 个文件"), "搜索结果被摘要化");
-    assert.ok(html.includes("读取文件：src/server/server.ts"), "读取节点显示文件路径摘要");
-    assert.ok(!html.includes("Grep"), "不再显示原始 Grep 标题");
-    assert.ok(!html.includes("Git status"), "不再显示原始 Git status 标题");
+    assert.ok(html.includes("这是回复内容"), "纯内容消息正常显示");
+    assert.ok(!html.includes("task track"), "不显示 trace 相关标记");
   });
 
   it("错误卡片展示原因、下一步和操作按钮", () => {
@@ -191,7 +180,6 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes("复制错误"), "显示复制错误按钮");
     assert.ok(html.includes("刷新工作区"), "显示刷新工作区按钮");
     assert.ok(html.includes("打开设置"), "显示打开设置按钮");
-    assert.ok(html.includes("ERROR"), "trace 失败标签为 ERROR");
   });
 
   it("block tool_use 渲染为工具节点", () => {

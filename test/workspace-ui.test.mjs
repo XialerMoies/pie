@@ -35,6 +35,7 @@ function setupDom() {
     _activePanel: "explorer",
     _fileTabs: [{ id: "old.ts", label: "old.ts", content: "", lang: "ts" }],
     _activeFileTab: "old.ts",
+    _activeSessionTabId: null,
   };
 
   const calls = [];
@@ -56,6 +57,7 @@ function setupDom() {
   global.E = (value) => String(value ?? "");
   global.toast = (message, type) => calls.push(["toast", message, type || "info"]);
   global.switchTab = (id) => calls.push(["switchTab", id]);
+  win.__tabs = { activateTab: (id) => { calls.push(["activateTab", id]); if (id === null) win.__state._activeFileTab = null; }, reset: () => {} };
   global.renderPanel = (name, container) => calls.push(["renderPanel", name, Boolean(container)]);
   global.loadSessions = () => calls.push(["loadSessions"]);
   win.msgs = () => "<div class=\"wl\">empty</div>";
@@ -102,7 +104,7 @@ describe("workspace ui isolation", () => {
     assert.strictEqual(env.win.__state.CS, null);
     assert.strictEqual(env.win.__state.IL, false);
     assert.deepStrictEqual(env.win.__state.M, []);
-    assert.deepStrictEqual(env.win.__state._fileTabs, []);
+    // _fileTabs 是 TabStore 投影，不再直接清除；TabStore.reset() 和 activateTab(null) 已验证
     assert.strictEqual(env.win.__state._activeFileTab, null);
 
     assert.strictEqual(env.doc.getElementById("ms").innerHTML, '<div class="wl">empty</div>');
@@ -112,7 +114,7 @@ describe("workspace ui isolation", () => {
 
     assert.ok(env.calls.some((call) => call[0] === "clearAttachments"));
     assert.ok(env.calls.some((call) => call[0] === "monacoDispose"));
-    assert.ok(env.calls.some((call) => call[0] === "switchTab" && call[1] === null));
+    assert.ok(env.calls.some((call) => call[0] === "activateTab" && call[1] === null));
     assert.ok(env.calls.some((call) => call[0] === "renderPanel" && call[1] === "explorer"));
     assert.ok(env.calls.some((call) => call[0] === "loadSessions"));
     assert.ok(env.calls.some((call) => call[0] === "refreshGit"));

@@ -19,9 +19,25 @@ interface Message {
   turnId?: string;
   content: string;
   thinking?: string;
-  trace?: Array<Record<string, unknown>>;
   streaming?: boolean;
   error?: ChatErrorState;
+  blocks?: AssistantBlock[];
+}
+
+interface AssistantBlock {
+  type: 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'step';
+  text?: string;
+  status?: 'streaming' | 'done' | 'running' | 'success' | 'error' | 'info';
+  name?: string;
+  input?: unknown;
+  output?: string;
+  error?: string;
+  isError?: boolean;
+  toolCallId?: string;
+  toolUseId?: string;
+  turnId?: string;
+  blockId: string;
+  seq: number;
 }
 
 interface ChatErrorState {
@@ -50,6 +66,29 @@ interface ElectronAPI {
   spawnTerminal(): void;
 }
 
+// ─── Unified Tab System types ─────────────────────────
+type TabKind = 'chat' | 'session' | 'file';
+
+interface AppTab {
+  id: string;                    // file path / session id / chat:<ts>-<rand>
+  kind: TabKind;
+  title: string;
+  order: number;                 // 数组索引即顺序
+  status?: 'idle' | 'running' | 'error' | 'restoring';
+  dirty?: boolean;               // 仅 file 使用
+  // kind 专属数据
+  path?: string;                 // file 专用：文件路径
+  content?: string;              // file 专用：编辑器内容缓存
+  lang?: string;                 // file 专用：语法高亮语言
+  sessionId?: string;            // session 专用
+  draftId?: string;              // chat 专用
+}
+
+interface TabsState {
+  items: AppTab[];
+  activeId: string | null;
+}
+
 interface AppState {
   D: DashboardData | null;
   M: Message[];
@@ -60,6 +99,10 @@ interface AppState {
   _fileTabs: FileTab[];
   _activeFileTab: string | null;
   _sessionTabs: string[];
+  _sessionTabLabels?: Record<string, string>;
+  _activeSessionTabId?: string | null;
+  tabs?: TabsState;
+  _uiStateStore?: any;
 }
 
 interface FileTab {
@@ -89,15 +132,12 @@ interface AppUI {
   renderTabs(): void;
   renderSessionTabs(activeId?: string): void;
   closeChatTab(): void;
-  switchTab(fileId: string | null): void;
   openFileTab(id: string, content: string, lang?: string): void;
-  closeFileTab(id: string): void;
   saveCurrentFile(): Promise<void>;
 }
 interface AppChat {
   msgs(): string;
   appendDelta(text: string): void;
-  renderTrace(trace: Array<Record<string, unknown>> | undefined): string;
   updateLastBlock(block: Record<string, unknown>): boolean;
   bind(): void;
   updateUI(): void;
@@ -125,15 +165,13 @@ interface AppSession {
   loadSessions(): void;
   newSession(): void;
   renameSession(el: HTMLElement, id: string): void;
-  deleteSession(id: string): void;
+  deleteSession(id: string): Promise<void>;
   pinSession(id: string, pinned: boolean): void;
   branchSession(id: string): void;
-  switchSession(id: string): void;
   commitSessionTab(oldId: string, newId: string): void;
   getActiveSessionTabId(): string | null;
   setActiveSessionTabId(id: string | null): void;
   renderSessionTabs(activeId?: string): void;
-  closeSessionTab(id: string): void;
 }
 interface AppSettings {
   openSettingsModal(): void;
@@ -152,6 +190,37 @@ interface AppSettings {
   toggleAutoSaveSetting(): void;
   setSearchType(type: 'filename' | 'text'): void;
   toggleCaseSensitive(): void;
+}
+// ─── TabBehavior / TabStoreAPI ──────────────────────
+interface TabBehavior {
+  activate(tab: AppTab): void;
+  close(tab: AppTab): void;
+  contextMenu?(e: MouseEvent, tab: AppTab): void;
+}
+
+interface TabStoreAPI {
+  getState(): TabsState;
+  getTabs(): AppTab[];
+  getActiveTab(): AppTab | null;
+  getTab(id: string): AppTab | undefined;
+  openTab(tab: Omit<AppTab, 'order'>): AppTab;
+  activateTab(id: string | null): void;
+  closeTab(id: string): AppTab | undefined;
+  replaceTab(id: string, updates: Partial<AppTab>): AppTab | undefined;
+  moveTab(from: number, to: number): void;
+  getSessionTabIds(): string[];
+  getFileTabIds(): string[];
+  getActiveSessionTabId(): string | null;
+  getActiveFileTabId(): string | null;
+  reset(): void;
+  registerTabBehavior(kind: TabKind, behavior: TabBehavior): void;
+  getTabBehavior(kind: TabKind): TabBehavior | undefined;
+}
+
+interface AppTabs {
+  activate(id: string): void;
+  close(id: string): void;
+  contextMenu(e: MouseEvent, id: string): void;
 }
 interface AppGit {
   refreshGit(): Promise<void>;
@@ -172,6 +241,7 @@ interface AppNamespace {
   Session: AppSession;
   Settings: AppSettings;
   Git: AppGit;
+  Tabs: AppTabs;
 }
 
 interface MonacoAPI {
@@ -237,17 +307,13 @@ declare function provDrop(ev: DragEvent, idx: number): void;
 declare function loadSessions(): void;
 declare function newSession(): void;
 declare function renameSession(el: HTMLElement, id: string): void;
-declare function deleteSession(id: string): void;
+declare function deleteSession(id: string): Promise<void>;
 declare function pinSession(id: string, pinned: boolean): void;
 declare function branchSession(id: string): void;
-declare function switchSession(id: string): void;
 declare function commitSessionTab(oldId: string, newId: string): void;
 declare function getActiveSessionTabId(): string | null;
 declare function setActiveSessionTabId(id: string | null): void;
-declare function closeSessionTab(id: string): void;
 declare function openFileTab(id: string, content: string, lang?: string): void;
-declare function closeFileTab(id: string): void;
-declare function switchTab(fileId: string | null): void;
 declare function renderTabs(): void;
 declare function registerPane(name: string, render: (container: HTMLElement) => void): void;
 declare function saveCurrentFile(): Promise<void>;
@@ -270,15 +336,6 @@ declare class Tree {
   onDragMove: ((srcId: string, dstId: string) => void) | null;
   clearChildCache(): void;
 }
-
-// Pane registration
-declare function registerPane(name: string, render: (container: HTMLElement) => void): void;
-
-// File tabs (VS Code style)
-declare function openFileTab(id: string, content: string, lang?: string): void;
-declare function closeFileTab(id: string): void;
-declare function switchTab(fileId: string | null): void;
-declare function renderTabs(): void;
 
 // ─── Token / Session Stats (from API /api/token-usage) ────────
 interface TokenUsage {

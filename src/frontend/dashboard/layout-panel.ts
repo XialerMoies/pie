@@ -1,6 +1,25 @@
 // 面板管理 — 切换/缩放/状态渲染
 // 从 dashboard-layout.ts 拆出
 
+function _panelWidth(): number {
+  const store = (window as any).__state?._uiStateStore;
+  if (store?.panel?.width && store.panel.width > 50) return store.panel.width;
+  try { return parseInt(localStorage.getItem('panel-width') || '', 10); } catch { return 0; }
+}
+
+function _syncPanelToStore(): void {
+  const store = (window as any).__state?._uiStateStore;
+  if (!store) return;
+  const si = document.getElementById('si');
+  store.panel.active = (window as any).__state?._activePanel || 'explorer';
+  store.panel.closed = si?.classList.contains('closed') ?? false;
+  // 只在面板打开时保存宽度（关闭时不覆盖，保留上一次打开的值）
+  if (si && !si.classList.contains('closed') && si.offsetWidth > 50) {
+    store.panel.width = si.offsetWidth;
+  }
+  if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
+}
+
 function togglePanel(name: string): void {
   const si = $('si'), pc = $('pc');
   if (!si || !pc) return;
@@ -8,19 +27,16 @@ function togglePanel(name: string): void {
     si.classList.add('closed');
     si.style.width = '';
     document.querySelectorAll('.sbar .b[data-side]').forEach(b => (b as HTMLElement).classList.remove('on'));
-    try { localStorage.setItem('active-panel', ''); } catch {}
+    _syncPanelToStore();
     return;
   }
   (window as any).__state._activePanel = name;
   si.classList.remove('closed');
-  const savedWidth = (() => { try { return parseInt(localStorage.getItem('panel-width') || '', 10); } catch { return 0; } })();
+  const savedWidth = _panelWidth();
   si.style.width = (savedWidth > 50 ? savedWidth : 260) + 'px';
   document.querySelectorAll('.sbar .b[data-side]').forEach(b => (b as HTMLElement).classList.toggle('on', (b as HTMLElement).dataset.side === name));
   renderPanel(name, pc);
-  try { localStorage.setItem('active-panel', name); } catch {}
-  // 同步保存到服务端 UI 状态
-  const saveFn = (window as any).App?.Session?.saveUiState;
-  if (saveFn) saveFn();
+  _syncPanelToStore();
 }
 
 /** 启动时恢复左侧面板（由 restoreSessionTabs 调用） */
@@ -29,13 +45,23 @@ function restorePanel(name: string): void {
   if (!pc) return;
   const si = $('si');
   if (!si) return;
+
+  // 从 store 读取面板状态（包含 closed/width）
+  const store = (window as any).__state?._uiStateStore;
+  const isClosed = store?.panel?.closed === true;
+  const savedWidth = store?.panel?.width && store.panel.width > 50 ? store.panel.width : _panelWidth();
+
   (window as any).__state._activePanel = name;
-  si.classList.remove('closed');
-  const savedWidth = (() => { try { return parseInt(localStorage.getItem('panel-width') || '', 10); } catch { return 0; } })();
-  si.style.width = (savedWidth > 50 ? savedWidth : 260) + 'px';
+  if (isClosed) {
+    si.classList.add('closed');
+    si.style.width = '';
+  } else {
+    si.classList.remove('closed');
+    si.style.width = savedWidth + 'px';
+  }
   document.querySelectorAll('.sbar .b[data-side]').forEach(b => (b as HTMLElement).classList.toggle('on', (b as HTMLElement).dataset.side === name));
-  renderPanel(name, pc);
-  try { localStorage.setItem('active-panel', name); } catch {}
+  if (!isClosed) renderPanel(name, pc);
+  _syncPanelToStore();
 }
 
 function initResizeHandle(): void {
@@ -56,7 +82,7 @@ function initResizeHandle(): void {
     function onUp() {
       si!.classList.remove('dragging');
       if (si!.offsetWidth < 20) { si!.classList.add('closed'); si!.style.width = ''; }
-      else { try { localStorage.setItem('panel-width', String(si!.offsetWidth)); } catch {} }
+      _syncPanelToStore();
       document.removeEventListener('mousemove', onMove as any);
       document.removeEventListener('mouseup', onUp as any);
     }

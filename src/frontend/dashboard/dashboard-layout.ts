@@ -16,9 +16,17 @@ function hasOpenSessionTabs(): boolean {
 }
 
 function closeChatTab(): void {
-  try { localStorage.setItem(CHAT_TAB_OPEN_KEY, '0'); } catch {}
+  // 关闭当前 chat tab（只关激活的那个，不多关草稿）
+  const tabs = (window as any).__tabs;
+  if (tabs) {
+    const active = tabs.getActiveTab();
+    if (active && active.kind === 'chat') tabs.closeTab(active.id);
+  }
+  const store = window.__state?._uiStateStore;
+  if (store) store.tabs.chatOpen = false;
+  if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
   if (window.__state._activeFileTab === null && window.__state._fileTabs.length > 0) {
-    switchTab(window.__state._fileTabs[0].id);
+    (window as any).App?.Tabs?.activate(window.__state._fileTabs[0].id);
     return;
   }
   renderTabs();
@@ -121,35 +129,157 @@ function buildMainArea(): string {
   </div>`;
 }
 
-// ─── 标签渲染 ───────────────────────────────────────────────
+// ─── 标签渲染（统一容器）───────────────────────────────────
 function renderTabs(): void {
   const el = $('main-tabs');
   if (!el) return;
-  const active = window.__state._activeFileTab;
-  const hasTabs = window.__state._fileTabs.length > 0;
-  const chatOpen = isChatTabOpen();
-  const sessionOpen = hasOpenSessionTabs();
+  const tabs = (window as any).__tabs;
+  const state = tabs?.getState?.();
+  const hasTabStore = state !== undefined && state !== null;
+
+  // 统一路径：从 TabStore 读取
+  let items: AppTab[] = [];
+  let activeId: string | null = null;
+  if (hasTabStore && state!.items !== undefined) {
+    items = state!.items;
+    activeId = state!.activeId;
+    // TabStore 中 session/chat tab 的 title 为 '新会话'（openTab 时写入），
+    // 从 sessionTabLabel() 实时解析真实名称
+    if (typeof (window as any).sessionTabLabel === 'function') {
+      items = items.map(t => t.kind !== 'file' ? { ...t, title: (window as any).sessionTabLabel(t.id) } : t);
+    }
+  } else if (!hasTabStore) {
+    // 回退：从旧字段构建（兼容测试/未迁移场景）
+    const st = (window as any).__state;
+    const fileTabs = st?._fileTabs ?? [];
+    for (const ft of fileTabs) {
+      items.push({ id: ft.id, kind: 'file', title: ft.label, order: items.length, path: ft.id } as AppTab);
+    }
+    // 从 readSessionTabIds（暴露在 window）读，兼容旧 localStorage 持久化
+    let sessionIds: string[] = [];
+    if (typeof (window as any).readSessionTabIds === 'function') {
+      sessionIds = (window as any).readSessionTabIds();
+    }
+    if (!sessionIds.length) sessionIds = st?._sessionTabs ?? [];
+    const getLabel = (window as any).sessionTabLabel || ((s: string) => s.startsWith('draft:') ? '新会话' : '新会话');
+    for (const sid of sessionIds) {
+      const isDraft = sid.startsWith('draft:');
+      items.push({
+        id: sid, kind: isDraft ? 'chat' : 'session', title: getLabel(sid), order: items.length,
+        ...(isDraft ? { draftId: sid } : { sessionId: sid }),
+      } as AppTab);
+    }
+    activeId = st?._activeSessionTabId ?? null;
+  }
+
   let scroll = '';
-  if (chatOpen) {
-    scroll += `<div class="tb-item${active === null && !sessionOpen ? ' active' : ''}" data-tab="chat" onclick="switchTab(null)">
-      <span class="tb-icon">${S('ic',13)}</span>
-      <span class="tb-label">对话</span>
-      <span class="tb-close" onclick="event.stopPropagation();closeChatTab()">✕</span>
+  for (let i = 0; i < items.length; i++) {
+    const tab = items[i];
+    const active = tab.id === activeId;
+    const kindClass = tab.kind !== 'file' ? ' session-tab' : '';
+    scroll += `<div class="tb-item${active ? ' active' : ''}${kindClass}" draggable="true" data-tab-index="${i}" data-tab="${E(tab.id)}" data-kind="${tab.kind}">
+      <span class="tb-icon">${tab.kind === 'file' ? ExplorerService.iconFor(tab.title, false) : S('ic',13)}</span>
+      <span class="tb-label">${E(tab.title)}</span>
+      <button type="button" class="tb-close" draggable="false" aria-label="${tab.kind === 'file' ? '关闭文件标签' : '关闭标签'}">✕</button>
     </div>`;
   }
-  for (let i = 0; i < window.__state._fileTabs.length; i++) {
-    const ft = window.__state._fileTabs[i];
-    const icon = ExplorerService.iconFor(ft.label, false);
-    scroll += `<div class="tb-item${ft.id === active ? ' active' : ''}" draggable="true" data-tab-index="${i}" data-tab="${E(ft.id)}" onclick="switchTab('${E(ft.id)}')" oncontextmenu="tabContextMenu(event,'${E(ft.id)}')">
-      <span class="tb-icon">${icon}</span>
-      <span class="tb-label">${E(ft.label)}</span>
-      <span class="tb-close" onclick="event.stopPropagation();closeFileTab('${E(ft.id)}')">✕</span>
-    </div>`;
+  el.innerHTML = `<div class="tb-scroll">${scroll}</div>${items.length > 0 ? '<div class="tb-more" title="更多操作">···</div>' : ''}`;
+  // 自动滚动到活跃标签
+  setTimeout(() => {
+    const active = el.querySelector('.tb-item.active') as HTMLElement | null;
+    if (active) active.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  }, 0);
+  if (items.length > 0 && typeof setupTabDrag === 'function') setupTabDrag(el);
+  _setupTabEvents(el);
+  _syncMainArea(activeId, items);
+}
+
+/** 统一主区显示：根据 active tab kind 切换消息区/编辑器/空白 */
+function _syncMainArea(activeId: string | null, items: AppTab[]): void {
+  const ms = $('ms');
+  const fc = $('file-content');
+  const fi = $('fi');
+  const mc = document.querySelector('.mc');
+  if (!ms || !fi) return;
+
+  if (!activeId) {
+    // 无 active tab → 空白主区
+    ms.style.display = 'none';
+    if (fc) fc.style.display = 'none';
+    fi.style.display = 'none';
+    mc?.classList.remove('editing');
+    return;
   }
-  const sessionTabs = `<div class="session-tabs empty" id="session-tabs"></div>`;
-  el.innerHTML = `${sessionTabs}<div class="tb-scroll">${scroll}</div>${hasTabs ? '<div class="tb-more" onclick="tabMoreMenu(event)" title="更多操作">···</div>' : ''}`;
-  if (hasTabs) setupTabDrag(el);
-  (window as any).App?.Session?.renderSessionTabs?.(localStorage.getItem('active-session-tab') || undefined);
+
+  const activeTab = items.find(t => t.id === activeId);
+  if (activeTab?.kind === 'file') {
+    // file tab → 显示编辑器
+    ms.style.display = 'none';
+    if (fc) fc.style.display = '';
+    mc?.classList.add('editing');
+    // 输入区对 file tab 也隐藏（聊天输入不显示在文件编辑模式）
+    fi.style.display = 'none';
+  } else {
+    // chat/session tab → 显示消息区和输入区
+    ms.style.display = '';
+    if (fc) fc.style.display = 'none';
+    fi.style.display = '';
+    mc?.classList.remove('editing');
+  }
+}
+
+// ─── 标签事件委托（替代 inline onclick，修复 ' 转义风险）───
+
+function _setupTabEvents(container: HTMLElement): void {
+  if (container.dataset.tabEvents === '1') return;
+  container.dataset.tabEvents = '1';
+
+  // 点击委托：tab 激活 / 关闭
+  container.addEventListener('click', (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    // 关闭按钮
+    if (target.classList.contains('tb-close')) {
+      e.stopPropagation();
+      const tabEl = target.closest('.tb-item') as HTMLElement | null;
+      if (!tabEl) return;
+      const id = tabEl.dataset.tab;
+      if (!id) return;
+      const AT = (window as any).App?.Tabs;
+      if (AT) AT.close(id);
+      return;
+    }
+    // tab 本身点击 → 激活
+    const tabEl = target.closest('.tb-item') as HTMLElement | null;
+    if (!tabEl) return;
+    const id = tabEl.dataset.tab;
+    if (!id) return;
+    (window as any).App?.Tabs?.activate(id);
+  });
+
+  // 阻止 close 按钮的 mousedown（避免失去焦点）
+  container.addEventListener('mousedown', (e: MouseEvent) => {
+    if ((e.target as HTMLElement).classList.contains('tb-close')) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  });
+
+  // 右键菜单委托
+  container.addEventListener('contextmenu', (e: MouseEvent) => {
+    const tabEl = (e.target as HTMLElement).closest('.tb-item') as HTMLElement | null;
+    if (!tabEl) return;
+    const id = tabEl.dataset.tab;
+    if (!id) return;
+    e.preventDefault();
+    App.Tabs.contextMenu(e, id);
+  });
+
+  // 更多菜单
+  container.addEventListener('click', (e: MouseEvent) => {
+    const more = (e.target as HTMLElement).closest('.tb-more') as HTMLElement | null;
+    if (!more) return;
+    (window as any).tabMoreMenu?.(e);
+  });
 }
 
 // ─── 滚轮滚动 ────────────────────────
@@ -159,26 +289,27 @@ document.addEventListener('wheel', (e) => {
   target.scrollLeft += e.deltaY;
 }, { passive: true });
 
-// ─── 恢复上次的标签页 ──────────────────────────────────────
+// ─── 恢复上次的文件标签页 ──────────────────────────────
 function restoreFileTabs(): void {
   try {
     const intendedTarget = localStorage.getItem('last-active-tab') ?? '__chat__';
-    const raw = localStorage.getItem('file-tabs');
-    if (!raw) { restoreActiveTabWith(intendedTarget); return; }
-    const saved = JSON.parse(raw);
-    if (!Array.isArray(saved)) { restoreActiveTabWith(intendedTarget); return; }
-    window.__state._fileTabs = [];
+    // 从 UiStateStore.tabs.items 读取持久化的 file tab 列表
+    const uis = (window as any).__uiStateStore;
+    const items: any[] = uis?._state?.tabs?.items ?? [];
+    const fileTabs: Array<{ id: string; lang?: string }> = items.filter((t: any) => t.kind === 'file');
+    if (fileTabs.length === 0) { restoreActiveTabWith(intendedTarget); return; }
+
     let loaded = 0;
-    const total = saved.length;
-    for (const st of saved) {
+    const total = fileTabs.length;
+    for (const ft of fileTabs) {
       const ws = ExplorerService.getWorkspacePath();
       if (ws) {
-        fetch(`/api/file/read?root=${encodeURIComponent(ws)}&path=${encodeURIComponent(st.id)}`)
+        fetch(`/api/file/read?root=${encodeURIComponent(ws)}&path=${encodeURIComponent(ft.id)}`)
           .then(r => r.ok ? r.json() : null)
           .then(d => {
             if (!d) return;
             const content = d.encoding === 'base64' ? '[二进制文件，无法预览]' : d.content;
-            openFileTab(st.id, content, st.lang || '');
+            openFileTab(ft.id, content, ft.lang || '');
           })
           .catch(() => {})
           .finally(() => {
@@ -190,24 +321,36 @@ function restoreFileTabs(): void {
         if (loaded >= total) restoreActiveTabWith(intendedTarget);
       }
     }
-    if (total === 0) restoreActiveTabWith(intendedTarget);
   } catch {}
 }
 
 function restoreActiveTabWith(target: string): void {
   try {
-    if (target === '__chat__' || !target) switchTab(null);
-    else {
-      const exists = window.__state._fileTabs.some(t => t.id === target);
-      if (exists) switchTab(target);
-      else switchTab(null);
+    // UiStateStore.activeView 是权威恢复源
+    const uis = (window as any).__uiStateStore;
+    const activeView = uis?._state?.activeView;
+
+    if (activeView?.type === 'session' && activeView.id) {
+      App?.Tabs?.activate(activeView.id);
+      return;
     }
-  } catch { switchTab(null); }
+    if (activeView?.type === 'file' && activeView.id) {
+      const exists = window.__state._fileTabs.some(t => t.id === activeView.id);
+      if (exists) { App?.Tabs?.activate(activeView.id); return; }
+    }
+    if (activeView?.type === 'chat' || !target || target === '__chat__') {
+      const ts = (window as any).__tabs; if (ts) ts.activateTab(null);
+      return;
+    }
+    // localStorage last-active-tab 仅作为旧格式兜底（UiStateStore.activeView 不存在或不可用时）
+    const exists = window.__state._fileTabs.some(t => t.id === target);
+    if (exists) App?.Tabs?.activate(target);
+    else { const ts = (window as any).__tabs; if (ts) ts.activateTab(null); }
+  } catch { const ts = (window as any).__tabs; if (ts) ts.activateTab(null); }
 }
 
-// 页面加载完成后恢复标签页 + 面板宽度
+// 页面加载完成后恢复面板宽度
 document.addEventListener('DOMContentLoaded', () => {
-  setTimeout(restoreFileTabs, 500);
   const si = $('si');
   if (si) {
     try {
@@ -221,6 +364,7 @@ document.addEventListener('DOMContentLoaded', () => {
 window.layout = layout;
 (window as any).renderTabs = renderTabs;
 (window as any).closeChatTab = closeChatTab;
+(window as any).restoreFileTabs = restoreFileTabs;
 
 // ─── App 命名空间绑定 ──────────────────────────────────────
 { const U = (window as any).App?.UI; if (U) {

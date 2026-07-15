@@ -167,10 +167,10 @@ try { const v = localStorage.getItem('explorer-filter'); if (v === '0') Explorer
 // 当前 explorer 的 Tree 实例引用（SSE 刷新时不重建）
 let _explorerTree: Tree | null = null;
 ExplorerService._setTree = (t: Tree | null) => { _explorerTree = t; };
-ExplorerService._getTree = (): Tree | null => _explorerTree;
+ExplorerService._getTree = ((): Tree | null => _explorerTree) as typeof ExplorerService._getTree;
 
 /** 软刷新：重新加载根目录，保留展开状态 */
-ExplorerService.refreshTree = async function () {
+ExplorerService.refreshTree = async function (): Promise<void> {
   if (!_explorerTree) return;
   const ws = ExplorerService.getWorkspacePath();
   if (!ws) return;

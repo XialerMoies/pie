@@ -40,11 +40,30 @@ function resetWorkspaceState(workspace: string): void {
   if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); st.CS = null; }
   st.IL = false;
   st.M = [];
-  st._fileTabs = [];
-  st._activeFileTab = null;
-  st._sessionTabs = [];
+  delete (st as any)._sessionTabLabels;
+  const tabs = (window as any).__tabs;
+  if (tabs) {
+    tabs.reset();
+    // 清除 st.tabs 防止 TabStore 下一次 _init() 从陈旧 st.tabs 恢复数据
+    delete (st as any).tabs;
+  }
   localStorage.setItem(App.Constants.WS_KEY, workspace);
   try { localStorage.removeItem('file-tabs'); localStorage.removeItem('last-session-id'); localStorage.removeItem('active-session-tab'); localStorage.removeItem('session-tabs'); localStorage.removeItem('session-tab-labels'); localStorage.removeItem('chat-tab-open'); } catch {}
+  // 重置 UiStateStore：清空旧工作区状态，设新 workspacePath
+  const uis = (window as any).__uiStateStore;
+  if (uis) {
+    const newState = {
+      schemaVersion: 2,
+      workspacePath: workspace,
+      activeView: { type: "chat" } as const,
+      tabs: { sessions: [], files: [], chatOpen: true, labels: {} },
+      panel: { active: "explorer", closed: false, width: 260 },
+      recent: { sessions: {} },
+    };
+    // 直接替换内部状态
+    Object.assign(uis._state, newState);
+    uis.saveNow();
+  }
   App.Chat?.clearAttachments?.();
   const msgsEl = $('ms');
   if (msgsEl) { msgsEl.innerHTML = (window as any).msgs ? (window as any).msgs() : ''; msgsEl.scrollTop = 0; }
@@ -54,7 +73,7 @@ function resetWorkspaceState(workspace: string): void {
   if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = S('iup', 16); }
   const m = (window as any).__monaco;
   if (m?.dispose) m.dispose();
-  switchTab(null);
+  (window as any).__tabs?.activateTab(null);
   (window as any).renderSessionTabs?.();
 }
 

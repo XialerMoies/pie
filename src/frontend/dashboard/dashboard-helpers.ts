@@ -9,10 +9,29 @@ window.__state = {
   CS: null,
   CT: 'chat',
   _activePanel: 'explorer',
-  _fileTabs: [],
-  _activeFileTab: null,
   _sessionTabs: [],
 };
+
+// _activeFileTab 改为从 TabStore 投影的 getter，写入变为 no-op
+Object.defineProperty(window.__state, '_activeFileTab', {
+  get() {
+    const ts = (window as any).__tabs;
+    return ts ? ts.getActiveFileTabId() : null;
+  },
+  set(v) { /* 投影自 TabStore，直接写入已弃用 */ },
+});
+
+// _fileTabs 改为从 TabStore 投影的 getter（含 content/lang 缓存），写入投射到 TabStore
+Object.defineProperty(window.__state, '_fileTabs', {
+  get() {
+    const ts = (window as any).__tabs;
+    if (!ts) return [];
+    return ts.getTabs().filter((t: any) => t.kind === 'file').map((t: any) => ({
+      id: t.id, label: t.title, content: t.content || '', lang: t.lang || '',
+    }));
+  },
+  set(v) { /* 投影自 TabStore，直接写入已弃用 */ },
+});
 
 // ═══════════════════════════════════════════════════════════════════
 //  App 命名空间 — 收敛全局函数
@@ -35,6 +54,54 @@ window.__state = {
   File: {} as Record<string, Function>,
   Session: {} as Record<string, Function>,
   Settings: {} as Record<string, Function>,
+  Tabs: {
+    activate(id: string) {
+      const tabs = (window as any).__tabs;
+      const tab = tabs?.getTab?.(id);
+      if (tab) {
+        const handler = tabs?.getTabBehavior?.(tab.kind);
+        if (handler?.activate) { handler.activate(tab); return; }
+      }
+      // 降级：TabStore 无此 tab（初始化阶段 / legacy 调用）
+      if (!tab) {
+        if (tabs) tabs.activateTab(id);
+        const ft = tabs?.getTab?.(id);
+        const editorEl = document.getElementById('fc-editor');
+        if (editorEl && ft) {
+          const m = (window as any).__monaco;
+          if (m) {
+            if (!editorEl.dataset.monacoReady) { editorEl.innerHTML = ''; m.create(editorEl); editorEl.dataset.monacoReady = '1'; }
+            m.setValue(ft.content || ''); m.setLang(ft.id);
+          }
+        }
+        if (typeof renderTabs === 'function') renderTabs();
+      }
+    },
+    close(id: string) {
+      const tabs = (window as any).__tabs;
+      const tab = tabs?.getTab?.(id);
+      if (tab) {
+        const handler = tabs?.getTabBehavior?.(tab.kind);
+        if (handler?.close) { handler.close(tab); return; }
+      }
+      // 降级：TabStore 无此 tab → 直接关 TabStore + Monaco
+      if (!tab) {
+        const monaco = (window as any).__monaco; if (monaco?.tsCloseFile) monaco.tsCloseFile(id);
+        if (tabs) tabs.closeTab(id);
+        if (typeof renderTabs === 'function') renderTabs();
+      }
+    },
+    contextMenu(e: MouseEvent, id: string) {
+      const tabs = (window as any).__tabs;
+      const tab = tabs?.getTab?.(id);
+      if (tab) {
+        const handler = tabs?.getTabBehavior?.(tab.kind);
+        if (handler?.contextMenu) { handler.contextMenu(e, tab); return; }
+      }
+      if (tab && tab.kind !== 'file') return;
+      (window as any).tabContextMenu?.(e, id);
+    },
+  },
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -158,6 +225,7 @@ App.UI.refresh = refresh;
 App.UI.winCtrl = winCtrl;
 App.UI.registerPane = registerPane;
 App.UI.getPane = getPane;
+App.Tabs = App.Tabs || {};
 
 // 公开 API — 供 onclick 和 init 使用（向后兼容，后续移除）
 window.$ = $; window.S = S; window.E = E; window.F = F;

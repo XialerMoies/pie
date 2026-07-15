@@ -17,8 +17,9 @@ function saveCurrentFile(): Promise<void> {
   }).then(r => r.json()).then(d => {
     if (!d.error) {
       if (status) { status.textContent = '已保存'; setTimeout(() => { if (status) status.textContent = ''; }, 2000); }
-      const tab = (window as any).__state._fileTabs.find((t: any) => t.id === id);
-      if (tab) tab.content = content;
+      const ts = (window as any).__tabs;
+      const appTab = ts?.getTab?.(id);
+      if (appTab) ts?.replaceTab(id, { content });
       toast('✅ 已保存: ' + (id.split('/').pop() || id), 'success');
     } else {
       if (status) status.textContent = '保存失败: ' + d.error;
@@ -129,7 +130,7 @@ document.addEventListener('keydown', (e) => {
   if (ctrl && key === 'w') {
     e.preventDefault();
     const active = (window as any).__state._activeFileTab;
-    if (active) { closeFileTab(active); return; }
+    if (active) { (window as any).App?.Tabs?.close(active); return; }
   }
   if (ctrl && key === 'tab' && !e.shiftKey) {
     e.preventDefault();
@@ -139,7 +140,7 @@ document.addEventListener('keydown', (e) => {
     const idx = active ? tabs.findIndex((t: any) => t.id === active) : -1;
     const next = (idx + 1) % tabs.length;
     const target = tabs[next >= 0 ? next : 0]?.id;
-    if (target) switchTab(target);
+    if (target) (window as any).App?.Tabs?.activate(target);
   }
   if (ctrl && key === 'tab' && e.shiftKey) {
     e.preventDefault();
@@ -149,7 +150,7 @@ document.addEventListener('keydown', (e) => {
     const idx = active ? tabs.findIndex((t: any) => t.id === active) : 0;
     const prev = (idx - 1 + tabs.length) % tabs.length;
     const target = tabs[prev >= 0 ? prev : tabs.length - 1]?.id;
-    if (target) switchTab(target);
+    if (target) (window as any).App?.Tabs?.activate(target);
   }
   if (ctrl && key === 'n') {
     e.preventDefault();

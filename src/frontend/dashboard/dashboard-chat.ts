@@ -39,9 +39,11 @@ function chatReadLocalSessionTabIds(): string[] {
 }
 
 function chatWriteLocalSessionTabIds(ids: string[]): void {
-  const unique = Array.from(new Set(ids.filter((id) => typeof id === 'string' && id.length > 0)));
-  try { localStorage.setItem('session-tabs', JSON.stringify(unique)); } catch {}
-  if (window.__state) window.__state._sessionTabs = unique;
+  // 仅通过 writeSessionTabIds 写入（发送消息时 sessions.ts 已加载完毕）
+  if (typeof (window as any).writeSessionTabIds === 'function') {
+    const unique = Array.from(new Set(ids.filter((id) => typeof id === 'string' && id.length > 0)));
+    (window as any).writeSessionTabIds(unique);
+  }
 }
 
 function chatSetActiveSessionTabId(id: string | null): void {
@@ -50,10 +52,8 @@ function chatSetActiveSessionTabId(id: string | null): void {
     fn(id);
     return;
   }
-  try {
-    if (id) localStorage.setItem('active-session-tab', id);
-    else localStorage.removeItem('active-session-tab');
-  } catch {}
+  // TabStore._syncToState 已处理 activeId+activeView, 仅触发保存
+  if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
 }
 
 function chatCommitSessionTab(oldId: string, newId: string): void {
@@ -66,7 +66,6 @@ function chatCommitSessionTab(oldId: string, newId: string): void {
   if (!nextIds.includes(newId)) nextIds.push(newId);
   chatWriteLocalSessionTabIds(nextIds);
   chatSetActiveSessionTabId(newId);
-  try { localStorage.setItem('last-session-id', newId); } catch {}
 }
 
 async function ensureSessionForSend(): Promise<ChatSendContext> {
@@ -87,7 +86,6 @@ async function ensureSessionForSend(): Promise<ChatSendContext> {
     if (activeTabId && chatIsDraftSessionId(activeTabId) && sessionId) {
       chatCommitSessionTab(activeTabId, sessionId);
       chatSetActiveSessionTabId(sessionId);
-      try { localStorage.setItem('last-session-id', sessionId); } catch {}
       return { sessionId, persistent: true, draftId: activeTabId };
     }
     return { sessionId, persistent: false, draftId: activeTabId && chatIsDraftSessionId(activeTabId) ? activeTabId : undefined };
@@ -125,7 +123,6 @@ function buildMessagesRenderKey(): string {
       nextSteps: message.error.nextSteps || [],
       raw: message.error.raw || '',
     } : null,
-    traceCount: (message as any).trace?.length || 0,
     turnId: (message as any).turnId || '',
   })));
 }
@@ -274,7 +271,7 @@ function bind(): void {
     st.CS.onmessage = (e: MessageEvent) => {
       if (_streamGen !== gen) return;
       try {
-        const d = JSON.parse(e.data) as { type: string; text?: string; thinking?: boolean; turnId?: string; trace?: any; sessionId?: string; message?: string; block?: any; blocks?: any[] };
+        const d = JSON.parse(e.data) as { type: string; text?: string; thinking?: boolean; turnId?: string; sessionId?: string; message?: string; block?: any; blocks?: any[] };
         const last = st.M[st.M.length - 1];
         if (d.type === 'block') {
           if (last?.streaming && d.block) {
@@ -287,20 +284,10 @@ function bind(): void {
             else sb('ms');
           }
           return;
-        } else if (d.type === 'trace') {
-          if (last?.streaming) {
-            if (d.trace?.turnId && !last.turnId) last.turnId = d.trace.turnId;
-            if (!last.trace) last.trace = [];
-            const idx = last.trace.findIndex((t: any) => t.id === d.trace.id);
-            if (idx >= 0) last.trace[idx] = d.trace;
-            else last.trace.push(d.trace);
-            renderLastTrace();
-          }
-          return;
         } else if (d.type === 'delta') {
           if (d.thinking) { sb('ms'); return; }
           if (last?.streaming) {
-            if (!(last as any).blocks?.length) App.Chat?.appendDelta?.(d.text || '');
+            if (!last?.blocks?.length) App.Chat?.appendDelta?.(d.text || '');
           } else {
             st.M.push({ role: 'assistant', content: d.text || '', thinking: '', streaming: true });
             updateUI();
@@ -328,9 +315,6 @@ function bind(): void {
           if (sendContext && !sendContext.persistent && sessionId) {
             void deleteEphemeralSession(sessionId).then(() => loadSessions());
           } else {
-            if (sessionId) {
-              try { localStorage.setItem('last-session-id', sessionId); } catch {}
-            }
             loadSessions();
           }
           sb('ms');
@@ -399,30 +383,6 @@ function bind(): void {
     });
   }
   App.Chat.scheduleMessagesRender = scheduleMessagesRender;
-
-  function renderLastTrace(scroll = true): void {
-    const msgsEl = $('ms');
-    const renderTrace = App.Chat?.renderTrace as ((trace: any[] | undefined) => string) | undefined;
-    if (!msgsEl || !renderTrace) { scheduleMessagesRender(scroll); return; }
-    const msgDivs = msgsEl.querySelectorAll('.m');
-    const lastMsg = msgDivs[msgDivs.length - 1] as HTMLElement | undefined;
-    const last = window.__state.M[window.__state.M.length - 1];
-    if (!lastMsg || !last) { scheduleMessagesRender(scroll); return; }
-    const traceHtml = renderTrace((last as any).trace);
-    let traceEl = lastMsg.querySelector('.trace') as HTMLElement | null;
-    if (!traceHtml) {
-      traceEl?.remove();
-    } else if (traceEl) {
-      const wrapper = document.createElement('div');
-      wrapper.innerHTML = traceHtml;
-      traceEl.replaceWith(wrapper.firstElementChild as Element);
-    } else {
-      const label = lastMsg.querySelector('.ml');
-      if (label) label.insertAdjacentHTML('afterend', traceHtml);
-      else lastMsg.insertAdjacentHTML('afterbegin', traceHtml);
-    }
-    if (scroll) sb('ms');
-  }
 
   function sendOrStop(): void {
     const st = window.__state;

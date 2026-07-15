@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"]
   },
-  "include": ["dashboard-*.ts", "dashboard.d.ts"]
+  "include": ["dashboard-*.ts", "dashboard.d.ts", "services/**/*.ts"]
 }

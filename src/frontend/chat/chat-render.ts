@@ -31,59 +31,12 @@ function toolTitle(name: string): string {
   return (name || '工具').replace(/[-_]+/g, ' ');
 }
 
-function traceStageLabel(t: any): string {
-  if (!t || t.type !== 'tool') return '';
-  const name = String(t.name || '').toLowerCase().replace(/[-_]+/g, '-');
-  if (name === 'search') return '搜索代码';
-  if (name === 'file-read' || name === 'fileread') return '读取文件';
-  if (name === 'file-write' || name === 'filewrite' || name === 'apply-patch' || name === 'edit') return '修改文件';
-  if (name === 'explorer-list' || name === 'explorerlist') return '浏览目录';
-  if (name === 'git-status') return '验证结果';
-  if (name === 'git-log') return '查看提交历史';
-  return '工具调用';
-}
-
-function traceStageKey(t: any): string {
-  const label = traceStageLabel(t);
-  if (label === '搜索代码') return 'search';
-  if (label === '读取文件') return 'read';
-  if (label === '修改文件') return 'write';
-  if (label === '浏览目录') return 'browse';
-  if (label === '验证结果' || label === '查看提交历史') return 'verify';
-  return 'other';
-}
-
 function readTracePath(input: unknown): string {
   if (!input) return '';
   if (typeof input === 'string') return input.trim();
   if (typeof input !== 'object') return '';
   const obj = input as Record<string, unknown>;
   return String(obj.path || obj.filePath || obj.root || obj.cwd || obj.query || obj.dir || obj.directory || obj.name || '').trim();
-}
-
-function traceOverviewText(trace: any[]): string[] {
-  const stages: { key: string; label: string; count: number }[] = [];
-  const indexByKey = new Map<string, number>();
-  for (const item of trace) {
-    if (item.type !== 'tool') continue;
-    const key = traceStageKey(item);
-    if (key === 'other') continue;
-    const label = traceStageLabel(item);
-    if (indexByKey.has(key)) {
-      stages[indexByKey.get(key)!].count += 1;
-    } else {
-      indexByKey.set(key, stages.length);
-      stages.push({ key, label, count: 1 });
-    }
-  }
-  return stages.map(stage => `${stage.label}${stage.count > 1 ? ` ×${stage.count}` : ''}`);
-}
-
-function traceOverview(trace: any[] | undefined): string {
-  if (!trace || trace.length === 0) return '';
-  const labels = traceOverviewText(trace);
-  if (labels.length === 0) return '';
-  return `<div class="trace-overview"><span class="trace-overview-label">任务轨迹</span>${labels.map(label => `<span class="trace-overview-chip">${E(label)}</span>`).join('')}</div>`;
 }
 
 function shouldCollapseTrace(t: any, output: string): boolean {
@@ -95,32 +48,32 @@ function shouldCollapseTrace(t: any, output: string): boolean {
 function traceSummaryText(t: any, input: string, output: string): string {
   if (t.type === 'thinking') return '';
   if (t.type === 'tool' && t.status === 'error') {
-    const errorText = shortText(t.error || output || '工具失败', 220);
-    return errorText;
+    return shortText(t.error || output || '工具失败', 220);
   }
-  const stage = traceStageLabel(t);
+  // stage 映射与 toolTitle 相同，但用于摘要文本
+  const name = String(t.name || '').toLowerCase().replace(/[-_]+/g, '-');
   const path = readTracePath(t.input);
-  if (stage === '搜索代码') {
+  if (name === 'search') {
     const firstLine = String(output || '').split('\n').find(line => line.trim()) || '';
     const match = firstLine.match(/共\s*(\d+)\s*处匹配，\s*(\d+)\s*个文件/);
     if (match) return `找到 ${match[1]} 处匹配，${match[2]} 个文件`;
     if (path) return `搜索关键词：${path}`;
     return firstLine || '搜索代码';
   }
-  if (stage === '读取文件') {
+  if (name === 'file-read' || name === 'fileread') {
     return path ? `读取文件：${path}` : '读取文件';
   }
-  if (stage === '修改文件') {
+  if (name === 'file-write' || name === 'filewrite' || name === 'apply-patch' || name === 'edit') {
     return path ? `修改文件：${path}` : '修改文件';
   }
-  if (stage === '浏览目录') {
+  if (name === 'explorer-list' || name === 'explorerlist') {
     return path ? `浏览目录：${path}` : '浏览目录';
   }
-  if (stage === '验证结果') {
+  if (name === 'git-status') {
     const firstLine = String(output || '').split('\n').find(line => line.trim()) || '';
     return firstLine || '验证结果';
   }
-  if (stage === '查看提交历史') {
+  if (name === 'git-log') {
     return '查看提交历史';
   }
   return shortText(output || input || '', 180);
@@ -134,21 +87,6 @@ function renderErrorCard(error: ChatErrorState): string {
     ? `<div class="msg-error-block"><div class="msg-error-label">下一步操作</div><ul class="msg-error-steps">${nextSteps.map(step => `<li>${E(step)}</li>`).join('')}</ul></div>`
     : '';
   return `<details class="msg-error"><summary><span class="msg-error-title">${E(error.title || '发生了错误')}</span><span class="msg-error-summary">${E(error.message || '点击查看详情')}</span></summary><div class="msg-error-body"><div class="msg-error-message">${E(error.message || '发生了错误')}</div>${reason}${steps}${raw}<div class="msg-error-actions"><button type="button" class="msg-error-btn" onclick="App.Chat.retryLastTurn()">重新发送</button><button type="button" class="msg-error-btn" onclick="App.Chat.copyLastError()">复制错误</button><button type="button" class="msg-error-btn" onclick="App.Chat.refreshWorkspaceState()">刷新工作区</button><button type="button" class="msg-error-btn" onclick="openSettingsModal()">打开设置</button></div></div></details>`;
-}
-
-function visibleTrace(trace: any[] | undefined): any[] {
-  if (!trace || trace.length === 0) return [];
-  const compact: any[] = [];
-  for (const item of trace) {
-    if (item.type === 'step') continue;
-    if (item.type === 'thinking' && item.status !== 'streaming' && compact.some(t => t.type === 'thinking')) continue;
-    const idx = compact.findIndex(t => t.type === item.type && t.id === item.id);
-    if (idx >= 0) compact[idx] = item;
-    else compact.push(item);
-  }
-  const maxItems = 24;
-  if (compact.length <= maxItems) return compact;
-  return compact.slice(0, 8).concat([{ type: 'step', status: 'info', text: `已折叠 ${compact.length - 16} 个中间步骤`, id: 'trace-folded' }], compact.slice(-8));
 }
 
 function hasTraceValue(value: unknown): boolean {
@@ -188,14 +126,6 @@ function renderTraceItem(t: any): string {
     return `<div class="trace-node trace-step trace-${t.status || 'info'}"><div class="trace-dot"></div><div class="trace-body"><div class="trace-title"><span class="trace-summary-title">${E(t.text || '')}</span></div></div></div>`;
   }
   return '';
-}
-
-function renderTrace(trace: any[] | undefined): string {
-  const shown = visibleTrace(trace);
-  if (shown.length === 0) return '';
-  const items = shown.map(renderTraceItem).filter(Boolean).join('');
-  const overview = traceOverview(shown);
-  return items ? `<div class="trace">${overview}${items}</div>` : '';
 }
 
 function blockId(b: any): string {
@@ -284,8 +214,7 @@ function renderMessage(m: any): string {
 
   const content = m.content ? mdRender(m.content) : '';
   const think = m.thinking ? `<details class="think"><summary>🤔 思考过程</summary>${mdRender(m.thinking)}</details>` : '';
-  const traceHtml = renderTrace(m.trace);
-  return `<div class="m ${c}${m.error ? ' error' : ''}"><div class="ml">${lb}</div>${error}${think}${traceHtml}<div class="mt">${content}</div>${ty}</div>`;
+  return `<div class="m ${c}${m.error ? ' error' : ''}"><div class="ml">${lb}</div>${error}${think}<div class="mt">${content}</div>${ty}</div>`;
 }
 
 function msgs(): string {
@@ -339,14 +268,14 @@ function appendDelta(text: string): void {
   if (!last) return;
 
   // Block 模式：text delta 追加到最后一个 text block
-  if ((last as any).blocks && (last as any).blocks.length > 0) {
-    const textBlocks = (last as any).blocks.filter((b: any) => b.type === 'text');
+  if (last.blocks && last.blocks.length > 0) {
+    const textBlocks = last.blocks.filter((b): b is AssistantBlock => b.type === 'text');
     if (textBlocks.length > 0) {
       textBlocks[textBlocks.length - 1].text += text;
     } else {
-      (last as any).blocks.push({ type: 'text', text, blockId: 'text-live', seq: (last as any).blocks.length + 1 });
+      last.blocks.push({ type: 'text', text, blockId: 'text-live', seq: last.blocks.length + 1 });
     }
-    updateLastBlock(textBlocks[textBlocks.length - 1] || (last as any).blocks[(last as any).blocks.length - 1]);
+    updateLastBlock(textBlocks[textBlocks.length - 1] || last.blocks[last.blocks.length - 1]);
     return;
   }
 
@@ -365,6 +294,5 @@ window.msgs = msgs;
 { const AppChat = (window as any).App?.Chat; if (AppChat) {
   AppChat.msgs = msgs;
   AppChat.appendDelta = appendDelta;
-  AppChat.renderTrace = renderTrace;
   AppChat.updateLastBlock = updateLastBlock;
 } }

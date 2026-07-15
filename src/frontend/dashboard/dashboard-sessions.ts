@@ -49,16 +49,18 @@ function normalizeSessionTabIds(ids: unknown[]): string[] {
 }
 
 function readSessionTabIds(): string[] {
+  // TabStore 优先
+  const tabs = (window as any).__tabs;
+  if (tabs) { const ids = tabs.getSessionTabIds(); if (ids.length > 0) return ids; }
+  // 降级：store → __state → localStorage
+  const store = window.__state?._uiStateStore;
+  if (store?.tabs?.sessions && Array.isArray(store.tabs.sessions)) return store.tabs.sessions;
   const stateIds = window.__state._sessionTabs;
   if (Array.isArray(stateIds) && stateIds.length > 0) return stateIds;
   try {
     const raw = localStorage.getItem(SESSION_TABS_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    if (Array.isArray(parsed)) {
-      const ids = normalizeSessionTabIds(parsed);
-      window.__state._sessionTabs = ids;
-      return ids;
-    }
+    if (Array.isArray(parsed)) return normalizeSessionTabIds(parsed);
   } catch {}
   window.__state._sessionTabs = [];
   return [];
@@ -67,24 +69,49 @@ function readSessionTabIds(): string[] {
 function writeSessionTabIds(ids: string[]): void {
   const next = normalizeSessionTabIds(ids);
   window.__state._sessionTabs = next;
-  try { localStorage.setItem(SESSION_TABS_KEY, JSON.stringify(next)); } catch {}
+  // 同步到 TabStore（作为 adapter 写入）
+  const tabs = (window as any).__tabs;
+  if (tabs) {
+    const existing = tabs.getSessionTabIds();
+    for (const id of next) {
+      if (!existing.includes(id)) {
+        const isDraft = id.startsWith('draft:');
+        tabs.openTab({
+          kind: isDraft ? 'chat' : 'session',
+          id,
+          title: '新会话',
+          ...(isDraft ? { draftId: id } : { sessionId: id }),
+        });
+      }
+    }
+    for (const id of existing) { if (!next.includes(id)) tabs.closeTab(id); }
+  }
+  // TabStore._syncToState 已处理 items → UiStateStore.tabs, 仅触发保存
+  if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
 }
 
 function getActiveSessionTabId(): string | null {
-  try {
-    const id = localStorage.getItem(ACTIVE_SESSION_TAB_KEY);
-    if (!id) return null;
-    if (readSessionTabIds().includes(id)) return id;
-    localStorage.removeItem(ACTIVE_SESSION_TAB_KEY);
-  } catch {}
+  // TabStore 优先
+  const tabs = (window as any).__tabs;
+  if (tabs) { const id = tabs.getActiveSessionTabId(); if (id) return id; }
+  // 降级：store → __state → localStorage
+  const store = window.__state?._uiStateStore;
+  if (store?.activeView?.type === 'session' && store.activeView.id) {
+    if (readSessionTabIds().includes(store.activeView.id)) return store.activeView.id;
+  }
+  const stateId = window.__state._activeSessionTabId;
+  if (stateId && readSessionTabIds().includes(stateId)) return stateId;
+  try { const id = localStorage.getItem(ACTIVE_SESSION_TAB_KEY); if (id && readSessionTabIds().includes(id)) return id; } catch {}
   return null;
 }
 
 function setActiveSessionTabId(id: string | null): void {
-  try {
-    if (id) localStorage.setItem(ACTIVE_SESSION_TAB_KEY, id);
-    else localStorage.removeItem(ACTIVE_SESSION_TAB_KEY);
-  } catch {}
+  window.__state._activeSessionTabId = id;
+  // 同步到 TabStore（_syncToState 已处理 activeView → UiStateStore）
+  const tabs = (window as any).__tabs;
+  if (tabs) tabs.activateTab(id);
+  // TabStore 不可用时回退触发保存
+  if (!tabs && typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
 }
 
 function readOpenRealSessionIds(): Set<string> {
@@ -92,29 +119,41 @@ function readOpenRealSessionIds(): Set<string> {
 }
 
 function readSessionTabLabels(): Record<string, string> {
-  try {
-    const raw = localStorage.getItem(SESSION_TAB_LABELS_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === 'object' ? parsed as Record<string, string> : {};
-  } catch { return {}; }
+  const store = window.__state?._uiStateStore;
+  if (store?.tabs?.labels && Object.keys(store.tabs.labels).length > 0) return store.tabs.labels;
+  let result: Record<string, string> = {};
+  try { const raw = localStorage.getItem(SESSION_TAB_LABELS_KEY); const parsed = raw ? JSON.parse(raw) : {}; if (parsed && typeof parsed === 'object') result = parsed as Record<string, string>; } catch {}
+  const stateLabels = (window.__state as any)._sessionTabLabels;
+  if (stateLabels && typeof stateLabels === 'object') result = { ...result, ...stateLabels };
+  return result;
 }
 
 function writeSessionTabLabel(id: string, label: string): void {
   if (!id || !label.trim()) return;
-  const labels = readSessionTabLabels();
-  labels[id] = label.trim();
-  try { localStorage.setItem(SESSION_TAB_LABELS_KEY, JSON.stringify(labels)); } catch {}
+  const labels = { ...readSessionTabLabels(), [id]: label.trim() };
+  (window.__state as any)._sessionTabLabels = labels;
+  const store = window.__state?._uiStateStore;
+  if (store) { store.tabs.labels = labels; if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave(); }
+  // 同步到 TabStore 标题
+  const tabs = (window as any).__tabs;
+  if (tabs) tabs.replaceTab(id, { title: label.trim() });
 }
 
 function removeSessionTabLabel(id: string): void {
-  const labels = readSessionTabLabels();
-  if (!(id in labels)) return;
-  delete labels[id];
-  try { localStorage.setItem(SESSION_TAB_LABELS_KEY, JSON.stringify(labels)); } catch {}
+  const labels = { ...readSessionTabLabels() }; if (!(id in labels)) return; delete labels[id];
+  (window.__state as any)._sessionTabLabels = labels;
+  const store = window.__state?._uiStateStore;
+  if (store) { store.tabs.labels = labels; if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave(); }
 }
 
 function commitSessionTab(draftId: string, sessionId: string, label?: string): void {
   if (!sessionId) return;
+  // TabStore 原地升级（chat→session）
+  const tabs = (window as any).__tabs;
+  if (tabs && tabs.getTab(draftId)) {
+    tabs.replaceTab(draftId, { kind: 'session', id: sessionId, sessionId, draftId: undefined, status: 'running' });
+    tabs.activateTab(sessionId);
+  }
   const ids = readSessionTabIds();
   const index = ids.indexOf(draftId);
   const next = index >= 0 ? ids.map(id => id === draftId ? sessionId : id) : [...ids, sessionId];
@@ -125,15 +164,22 @@ function commitSessionTab(draftId: string, sessionId: string, label?: string): v
   delete labels[draftId];
   if (nextLabel && nextLabel !== '新会话') labels[sessionId] = nextLabel;
   else delete labels[sessionId];
-  try { localStorage.setItem(SESSION_TAB_LABELS_KEY, JSON.stringify(labels)); } catch {}
+  (window.__state as any)._sessionTabLabels = labels;
+  // 同步到 UiStateStore
+  const store = window.__state?._uiStateStore;
+  if (store) { store.tabs.labels = labels; if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave(); }
 
   setActiveSessionTabId(sessionId);
-  try { localStorage.setItem('last-session-id', sessionId); } catch {}
   renderSessionTabs(sessionId);
 }
 
 function rememberSessionTab(id: string): void {
   if (!id) return;
+  const tabs = (window as any).__tabs;
+  if (tabs && !tabs.getTab(id)) {
+    const isDraft = id.startsWith('draft:');
+    tabs.openTab({ kind: isDraft ? 'chat' : 'session', id, title: '新会话', ...(isDraft ? { draftId: id } : { sessionId: id }) });
+  }
   const ids = readSessionTabIds();
   if (!ids.includes(id)) writeSessionTabIds([...ids, id]);
 }
@@ -143,12 +189,15 @@ function forgetSessionTab(id: string): string | null {
   const index = ids.indexOf(id);
   if (index < 0) return ids[0] || null;
   const next = ids.filter(tabId => tabId !== id);
+  // 先算好 next，再关闭 TabStore（避免 closeTab 后 ids 已不含 id 导致 index 误判）
+  const tabs = (window as any).__tabs;
+  if (tabs) tabs.closeTab(id);
   writeSessionTabIds(next);
   removeSessionTabLabel(id);
   return next[Math.min(index, next.length - 1)] || next[index - 1] || null;
 }
 
-function indexSessionTabs(sessions: SessionInfo[], others: { sessions: SessionInfo[] }[]): void {
+function indexSessionTabs(sessions: SessionInfo[], others: { project?: string; path?: string; sessions: SessionInfo[] }[]): void {
   const next = new Map<string, SessionInfo>();
   for (const session of sessions) next.set(session.id, session);
   for (const project of others) for (const session of project.sessions) next.set(session.id, session);
@@ -165,66 +214,65 @@ function sessionTabLabel(id: string): string {
   return '新会话';
 }
 
+/** @deprecated _syncMainArea 已接管主区切换 */
 function focusChatView(): void {
-  if (window.__state._activeFileTab === null) return;
-  if (window.switchTab) {
-    window.switchTab(null);
-    return;
-  }
-  window.__state._activeFileTab = null;
-  const ms = $('ms');
-  const fc = $('file-content');
-  const fi = $('fi');
-  const mc = document.querySelector('.mc');
-  if (ms) ms.style.display = '';
-  if (fc) fc.style.display = 'none';
-  if (fi) fi.style.display = '';
-  mc?.classList.remove('editing');
+  (window as any).__tabs?.activateTab(null);
 }
 
+/** Session tab 渲染（已合并到 renderTabs，此函数仅触发 renderTabs） */
 function renderSessionTabs(activeId?: string): void {
-  const el = $('session-tabs');
-  if (!el) return;
-  const currentId = activeId !== undefined ? activeId : (getActiveSessionTabId() || '');
-  const ids = readSessionTabIds();
-  writeSessionTabIds(ids);
-  if (ids.length === 0) {
-    el.classList.add('empty');
-    el.innerHTML = '';
-    return;
+  // 确保旧字段 activeId 同步（renderTabs fallback 需要）
+  if (activeId && !(window as any).__tabs?.getState?.().items?.length) {
+    (window as any).__state._activeSessionTabId = activeId;
   }
-  el.classList.remove('empty');
-  const tabs = ids.map(id => {
-    const session = _sessionTabLookup.get(id);
-    const active = id === currentId;
-    const running = Boolean(session?.isRunning);
-    const error = Boolean(session?.hasError);
-    const className = `tb-item session-tab${active ? ' active' : ''}${running ? ' running' : ''}${error ? ' error' : ''}`;
-    return `<div class="${className}" title="${E(sessionTabLabel(id))}" onclick="switchSession('${id}')">
-      <span class="tb-icon">${S('ic', 13)}</span>
-      <span class="tb-label">${E(sessionTabLabel(id))}</span>
-      <span class="tb-close" title="关闭标签" aria-label="关闭标签" onclick="event.stopPropagation();closeSessionTab('${id}')">✕</span>
-    </div>`;
-  }).join('');
-  el.innerHTML = `<div class="session-tab-scroll">${tabs}</div>`;
+  if (typeof (window as any).renderTabs === 'function') (window as any).renderTabs();
 }
+
+/** UiStateStore 保存快捷通道——通过 store 的 saveNow 写服务端 */
+(window as any)._uiStateSave = function _uiStateSave(): void {
+  const uis = (window as any).__uiStateStore;
+  if (!uis?._state) return;
+  const store = uis._state;
+  const activeId = store.activeView?.type === 'session' ? store.activeView.id : null;
+  if (activeId) {
+    store.recent.lastSessionId = activeId;
+    store.recent.sessions[activeId] = Date.now();
+  }
+  uis.saveNow();
+};
 
 /** 保存 UI 状态到服务端（不受随机端口影响） */
 function saveUiState(): void {
+  const tabs = (window as any).__tabs;
+  // 确保 TabStore 同步到 UiStateStore（_syncToState 已处理 items/activeId 和 activeView）
+  if (tabs) { tabs.getState(); } // 确保初始化
+  const uis = (window as any).__uiStateStore;
+  if (uis?._state) {
+    const store = uis._state;
+    const activeId = getActiveSessionTabId();
+    store.panel.active = (window as any).__state?._activePanel || 'explorer';
+    if (activeId) {
+      store.recent.lastSessionId = activeId;
+      store.recent.sessions[activeId] = Date.now();
+    }
+    uis.saveNow();
+    return;
+  }
+
+  // 降级：没有 store 时用旧格式
   const ids = readSessionTabIds();
   const activeId = getActiveSessionTabId();
   const activePanel = (window as any).__state?._activePanel || 'explorer';
-  const state = {
-    openSessionIds: ids,
-    activeView: activeId ? { type: 'session' as const, id: activeId } : { type: 'chat' as const },
-    activePanel,
-    panelClosed: false,
-  };
   try {
     fetch('/api/ui-state', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(state),
+      body: JSON.stringify({
+        openSessionIds: ids,
+        activeView: activeId ? { type: 'session', id: activeId } : { type: 'chat' },
+        activePanel,
+        panelClosed: false,
+      }),
     }).catch(() => {});
   } catch {}
 }
@@ -233,28 +281,20 @@ function saveUiState(): void {
 async function restoreSessionTabs(): Promise<void> {
   // 先拉取会话元数据索引，确保顶部标签尽早显示正确标题
   fetchAndIndexSessions();
-  let ids: string[] = [];
-  let activeId: string | null = null;
-  let activePanel = 'explorer';
 
-  // 优先从服务端读（不受 localStorage 随机端口影响）
-  try {
-    const res = await fetch('/api/ui-state');
-    const state = await res.json() as {
-      openSessionIds?: string[]; activeView?: { type: string; id?: string }; activePanel?: string;
-    };
-    if (Array.isArray(state.openSessionIds) && state.openSessionIds.length > 0) {
-      ids = state.openSessionIds;
-      if (state.activeView?.type === 'session' && state.activeView.id) activeId = state.activeView.id;
-      if (state.activePanel) activePanel = state.activePanel;
-    }
-  } catch { /* 降级到 localStorage */ }
-
-  if (ids.length === 0) {
-    ids = readSessionTabIds();
-    activeId = activeId || getActiveSessionTabId();
-    if (!activeId && ids.length > 0) activeId = ids[ids.length - 1];
+  // 从 UiStateStore hydrate（从服务端读，失败降级 localStorage）
+  const uis = (window as any).__uiStateStore;
+  if (uis?.hydrate) {
+    const state = await uis.hydrate();
+    window.__state._uiStateStore = state;
   }
+  // hydrate 后立即恢复文件标签（确保 UiStateStore.tabs.items 可用，避免独立定时器的竞态）
+  if (typeof (window as any).restoreFileTabs === 'function') (window as any).restoreFileTabs();
+  // 从 hydrate 后的 store 读取状态（已含 workspace 隔离）
+  const store = window.__state?._uiStateStore;
+  const ids: string[] = store?.tabs?.sessions || readSessionTabIds();
+  const activeId: string | null = store?.activeView?.type === 'session' ? store.activeView.id : getActiveSessionTabId() || null;
+  const activePanel: string = store?.panel?.active || 'explorer';
 
   if (!activeId && ids.length === 0 && readSessionTabIds().length === 0) {
     return; // 无历史状态
@@ -279,7 +319,7 @@ async function restoreSessionTabs(): Promise<void> {
         body: JSON.stringify({ id: activeId, workspace: ws }),
       });
       const data = await r.json() as {
-        ok: boolean; messages?: Array<{ role: string; content: string; thinking?: string; trace?: Array<Record<string, unknown>> }>;
+        ok: boolean; messages?: Array<{ role: string; content: string; thinking?: string }>;
       };
       if (data.ok && Array.isArray(data.messages)) {
         const oldCS = window.__state.CS;
@@ -289,7 +329,6 @@ async function restoreSessionTabs(): Promise<void> {
           role: m.role as 'user' | 'assistant',
           content: m.content,
           thinking: m.thinking || '',
-          trace: m.trace || [],
           streaming: false,
         }));
         if ((window as any).focusChatView) (window as any).focusChatView();
@@ -322,24 +361,24 @@ function activateDraftSession(id: string): void {
   loadSessions();
 }
 
+/** App.Tabs.close 的降级入口 */
 function closeSessionTab(id: string): void {
-  const activeId = getActiveSessionTabId() || '';
+  const T = (window as any).App?.Tabs;
+  const ts = (window as any).__tabs;
+  const tab = ts?.getTab?.(id);
+  if (tab && (tab.kind === 'session' || tab.kind === 'chat')) {
+    const handler = ts?.getTabBehavior?.(tab.kind);
+    if (handler?.close) { handler.close(tab); return; }
+  }
+  // 降级
+  const wasActive = getActiveSessionTabId() === id;
   const nextId = forgetSessionTab(id);
-  if (id === activeId) {
-    if (nextId) switchSession(nextId); // switchSession 内部调用 saveUiState
-    else {
-      setActiveSessionTabId(null);
-      window.__state.M = [];
-      window.__state.IL = false;
-      renderSessionTabs('');
-      const msgsEl = $('ms');
-      if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : '';
-      loadSessions();
-      saveUiState();
-    }
+  if (wasActive) {
+    if (nextId) { renderSessionTabs(nextId); switchSession(nextId); }
+    else { setActiveSessionTabId(null); window.__state.M = []; window.__state.IL = false; renderSessionTabs(''); const msgsEl = $('ms'); if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : ''; loadSessions(); saveUiState(); }
     return;
   }
-  renderSessionTabs(activeId);
+  renderSessionTabs(getActiveSessionTabId() || undefined);
   saveUiState();
 }
 
@@ -422,7 +461,7 @@ function renderSessionCard(session: SessionInfo, openSessionIds: Set<string>, sc
   const pinIcon = session.pinned ? S('ipin-off', 14) : S('ipin', 14);
   const branchText = session.branchFrom?.name ? `从 ${session.branchFrom.name} 分支` : session.branchFrom?.id ? '分支线程' : '';
   const hint = [threadStatusHint(status), messageText, scopeLabel, branchText].filter(Boolean).join(' · ');
-  return `<div class="${className}" title="${E(hint)}" onclick="switchSession('${session.id}')">
+  return `<div class="${className}" title="${E(hint)}" onclick="App.Tabs.activate('${session.id}')">
     <div class="thread-row">
       <div class="sess-info thread-info">
         <div class="sess-name thread-name">
@@ -451,7 +490,7 @@ function renderSessionGroup(title: string, hint: string, sessions: SessionInfo[]
   </div>`;
 }
 
-function buildSessionRenderKey(sessions: SessionInfo[], others: { project: string; path: string; sessions: SessionInfo[] }[], openSessionIds: Set<string>): string {
+function buildSessionRenderKey(sessions: SessionInfo[], others: { project: string; path?: string; sessions: SessionInfo[] }[], openSessionIds: Set<string>): string {
   return JSON.stringify({
     openSessionIds: [...openSessionIds].sort(),
     sessions: sessions.map(session => ({
@@ -470,7 +509,7 @@ function buildSessionRenderKey(sessions: SessionInfo[], others: { project: strin
     })),
     others: others.map(project => ({
       project: project.project,
-      path: project.path,
+      path: project.path || '',
       sessions: project.sessions.map(session => ({
         id: session.id,
         name: session.name,
@@ -501,7 +540,7 @@ function fetchAndIndexSessions(): Promise<void> {
   const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
   return fetch('/api/sessions?workspace=' + encodeURIComponent(ws) + '&other=1')
     .then(r => r.json())
-    .then((data: { sessions?: SessionInfo[]; other?: { project: string; sessions: SessionInfo[] }[]; error?: string }) => {
+    .then((data: { sessions?: SessionInfo[]; other?: { project: string; path?: string; sessions: SessionInfo[] }[]; error?: string }) => {
       if (data.error) return;
       const sessions = (data.sessions || []).slice().sort((a, b) => getSessionTimeValue(b) - getSessionTimeValue(a));
       const others = data.other || [];
@@ -525,7 +564,7 @@ function loadSessions(): void {
   setSessionPanelStatus('正在刷新任务线程…', 'loading');
   el.classList.add('is-loading');
   console.log(`📋 loadSessions ws="${ws}"`);
-  fetch('/api/sessions?workspace=' + encodeURIComponent(ws) + '&other=1').then(r => r.json()).then((data: { sessions?: SessionInfo[]; other?: { project: string; sessions: SessionInfo[] }[]; activeSessionId?: string | null; error?: string }) => {
+  fetch('/api/sessions?workspace=' + encodeURIComponent(ws) + '&other=1').then(r => r.json()).then((data: { sessions?: SessionInfo[]; other?: { project: string; path?: string; sessions: SessionInfo[] }[]; activeSessionId?: string | null; error?: string }) => {
     console.log(`📋 loadSessions done in ${Date.now()-t0}ms, sessions=${data.sessions?.length}, other=${data.other?.length}`);
     if (!el) return;
     if (data.error) {
@@ -671,7 +710,7 @@ function renameSession(el: HTMLElement, id: string): void {
   input.onblur = save;
 }
 
-async function deleteSession(id: string): void {
+async function deleteSession(id: string): Promise<void> {
   const ok = await confirmAsync('确定删除此会话？');
   if (!ok) return;
   const t0 = Date.now();
@@ -681,10 +720,6 @@ async function deleteSession(id: string): void {
       if (r.ok) {
         console.log(`🗑️ Session deleted in ${Date.now()-t0}ms`);
         toast('已删除');
-        // 如果删除的是当前会话，清理 localStorage 中的过期 ID
-        try {
-          if (localStorage.getItem('last-session-id') === id) localStorage.removeItem('last-session-id');
-        } catch {}
         forgetSessionTab(id);
         renderSessionTabs();
         // 彻底关闭 SSE 连接（必须先清回调再 close，否则 onerror 会重置 IL）
@@ -696,7 +731,10 @@ async function deleteSession(id: string): void {
         setTimeout(() => {
           try { const m = (window as any).__monaco; m?.pauseDiags?.(); m?.blur?.(); } catch {}
           const activeTab = window.__state._activeFileTab;
-          if (activeTab !== null) switchTab(null);
+          if (activeTab !== null) {
+            const ts = (window as any).__tabs;
+            if (ts) ts.activateTab(null);
+          }
           const msgsEl = $('ms');
           if (msgsEl) { msgsEl.innerHTML = window.msgs ? window.msgs() : ''; msgsEl.scrollTop = 0; }
           const ci = $('ci') as HTMLTextAreaElement | null;
@@ -730,16 +768,16 @@ function branchSession(id: string): void {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id, workspace: ws }),
-  }).then(r => r.json()).then((data: { ok?: boolean; id?: string; activeSessionId?: string; messages?: Array<{ role: string; content: string; thinking?: string; trace?: Array<Record<string, unknown>> }>; error?: string }) => {
+  }).then(r => r.json()).then((data: { ok?: boolean; id?: string; activeSessionId?: string; messages?: Array<{ role: string; content: string; thinking?: string }>; error?: string }) => {
     if (!data.ok || data.error) { toast('创建分支失败: ' + (data.error || ''), 'error'); return; }
     const oldCS = window.__state.CS;
     if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
     window.__state.IL = false;
-    window.__state.M = (data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', trace: m.trace || [], streaming: false }));
+    window.__state.M = (data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', streaming: false }));
     focusChatView();
     const activeId = data.activeSessionId || data.id || '';
     if (activeId) {
-      try { localStorage.setItem('last-session-id', activeId); } catch {}
+      
       rememberSessionTab(activeId);
       setActiveSessionTabId(activeId);
       renderSessionTabs(activeId);
@@ -751,74 +789,53 @@ function branchSession(id: string): void {
   }).catch(() => toast('创建分支失败', 'error'));
 }
 
+/** App.Tabs.activate 的降级入口（当 handler/fallback 调用时保留完整逻辑） */
 function switchSession(id: string): void {
-  if (isDraftSessionId(id)) {
-    activateDraftSession(id);
-    return;
+  const T = (window as any).App?.Tabs;
+  const ts = (window as any).__tabs;
+  const tab = ts?.getTab?.(id);
+  if (tab && (tab.kind === 'session' || tab.kind === 'chat')) {
+    const handler = ts?.getTabBehavior?.(tab.kind);
+    if (handler?.activate) { handler.activate(tab); return; }
   }
+  // 降级：TabStore 无此 tab 时直接执行（兼容测试/未迁移场景）
+  if (isDraftSessionId(id)) { activateDraftSession(id); return; }
   const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
-  fetch('/api/sessions/activate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id, workspace: ws }),
-  }).then(r => {
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.json();
-  }).then((data: { ok: boolean; activeSessionId?: string; messages?: Array<{ role: string; content: string; thinking?: string; trace?: Array<Record<string, unknown>> }>; error?: string }) => {
-    if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
-    const oldCS = window.__state.CS;
-    if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
-    window.__state.IL = false;
-    window.__state.M = (data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', trace: m.trace || [], streaming: false }));
-    focusChatView();
-    const msgsEl = $('ms');
-    if (msgsEl) {
-      msgsEl.innerHTML = window.__state.M.length > 0
-        ? (window.msgs ? window.msgs() : '')
-        : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
-      setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50);
-    }
-    toast('已切换到会话 (' + window.__state.M.length + ' 条消息)');
-    const activeId = data.activeSessionId || id;
-    if (activeId) {
-      try { localStorage.setItem('last-session-id', activeId); } catch {}
-      rememberSessionTab(activeId);
-      setActiveSessionTabId(activeId);
-      renderSessionTabs(activeId);
-    }
-    loadSessions();
-    saveUiState();
-  }).catch(() => {
-    try { localStorage.removeItem('last-session-id'); } catch {}
-    setActiveSessionTabId(null);
-    // 400 后状态可能残了，清理干净
-    window.__state.M = [];
-    window.__state.IL = false;
-    const oldCS = window.__state.CS;
-    if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
-    // 重置发送按钮和输入框
-    const ci = $('ci') as HTMLTextAreaElement | null;
-    const cs = $('cs') as HTMLButtonElement | null;
-    if (ci) { ci.disabled = false; ci.style.height = 'auto'; }
-    if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = window.S('iup', 16); }
-    toast('会话已失效');
-    loadSessions();
-  });
+  fetch('/api/sessions/activate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, workspace: ws }) })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then((data: any) => {
+      if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
+      const oldCS = window.__state.CS; if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
+      window.__state.IL = false; window.__state.M = (data.messages || []).map((m: any) => ({ role: m.role, content: m.content, thinking: m.thinking || '', streaming: false }));
+      focusChatView(); const msgsEl = $('ms');
+      if (msgsEl) { msgsEl.innerHTML = window.__state.M.length > 0 ? (window.msgs ? window.msgs() : '') : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>'; setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50); }
+      toast('已切换到会话 (' + window.__state.M.length + ' 条消息)');
+      const activeId = data.activeSessionId || id;
+      if (activeId) { rememberSessionTab(activeId); setActiveSessionTabId(activeId); renderSessionTabs(activeId); }
+      loadSessions(); saveUiState();
+    }).catch(() => { setActiveSessionTabId(null); window.__state.M = []; window.__state.IL = false;
+      const oldCS = window.__state.CS; if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
+      const ci = $('ci') as HTMLTextAreaElement | null; const cs = $('cs') as HTMLButtonElement | null;
+      if (ci) { ci.disabled = false; ci.style.height = 'auto'; } if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = window.S('iup', 16); }
+      toast('会话已失效'); loadSessions();
+    });
 }
 
 // 公开 API
 window.loadSessions = loadSessions;
+(window as any).readSessionTabIds = readSessionTabIds;
+(window as any).writeSessionTabIds = writeSessionTabIds;
+(window as any).sessionTabLabel = sessionTabLabel;
 window.newSession = newSession;
 window.renameSession = renameSession as any;
 window.deleteSession = deleteSession;
 window.pinSession = pinSession as any;
 window.branchSession = branchSession as any;
-window.switchSession = switchSession;
 (window as any).commitSessionTab = commitSessionTab;
 (window as any).getActiveSessionTabId = getActiveSessionTabId;
 (window as any).setActiveSessionTabId = setActiveSessionTabId;
 (window as any).renderSessionTabs = renderSessionTabs;
-(window as any).closeSessionTab = closeSessionTab;
+(window as any).migrateSessionTabLabels = migrateSessionTabLabels;
 
 // ─── App 命名空间绑定 ──────────────────────────────────────
 const AppSess = (window as any).App?.Session;
@@ -829,14 +846,123 @@ if (AppSess) {
   AppSess.deleteSession = deleteSession;
   AppSess.pinSession = pinSession;
   AppSess.branchSession = branchSession;
-  AppSess.switchSession = switchSession;
   AppSess.commitSessionTab = commitSessionTab;
   AppSess.getActiveSessionTabId = getActiveSessionTabId;
   AppSess.setActiveSessionTabId = setActiveSessionTabId;
   AppSess.renderSessionTabs = renderSessionTabs;
-  AppSess.closeSessionTab = closeSessionTab;
   AppSess.restoreSessionTabs = restoreSessionTabs;
   AppSess.saveUiState = saveUiState;
+}
+
+// ─── Session/Chat handler（Phase 2：真实行为入口）────────
+function _sessionActivate(tab: AppTab): void {
+  if (tab.kind === 'chat' || isDraftSessionId(tab.id)) {
+    // 草稿：同 activateDraftSession
+    rememberSessionTab(tab.id);
+    setActiveSessionTabId(tab.id);
+    window.__state.M = [];
+    window.__state.IL = false;
+    App.Chat?.clearAttachments?.();
+    const oldCS = window.__state.CS;
+    if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
+    focusChatView();
+    const ci = $('ci') as HTMLTextAreaElement | null;
+    if (ci) { ci.value = ''; ci.style.height = 'auto'; }
+    const msgsEl = $('ms');
+    if (msgsEl) msgsEl.innerHTML = '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
+    renderSessionTabs(tab.id);
+    loadSessions();
+    return;
+  }
+  // 真实 session：同 switchSession 核心逻辑
+  const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
+  fetch('/api/sessions/activate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: tab.id, workspace: ws }),
+  }).then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then((data: { ok: boolean; activeSessionId?: string; messages?: Array<{ role: string; content: string; thinking?: string }>; error?: string }) => {
+    if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
+    const oldCS = window.__state.CS;
+    if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
+    window.__state.IL = false;
+    window.__state.M = (data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', streaming: false }));
+    focusChatView();
+    const msgsEl = $('ms');
+    if (msgsEl) {
+      msgsEl.innerHTML = window.__state.M.length > 0
+        ? (window.msgs ? window.msgs() : '')
+        : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
+      setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50);
+    }
+    toast('已切换到会话 (' + window.__state.M.length + ' 条消息)');
+    const activeId = data.activeSessionId || tab.id;
+    if (activeId) {
+      rememberSessionTab(activeId);
+      setActiveSessionTabId(activeId);
+      renderSessionTabs(activeId);
+    }
+    loadSessions();
+    saveUiState();
+  }).catch(() => {
+    setActiveSessionTabId(null);
+    window.__state.M = [];
+    window.__state.IL = false;
+    const oldCS = window.__state.CS;
+    if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
+    const ci = $('ci') as HTMLTextAreaElement | null;
+    const cs = $('cs') as HTMLButtonElement | null;
+    if (ci) { ci.disabled = false; ci.style.height = 'auto'; }
+    if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = window.S('iup', 16); }
+    toast('会话已失效');
+    loadSessions();
+  });
+}
+
+function _sessionClose(tab: AppTab): void {
+  // 必须在 forgetSessionTab 之前捕获 activeId（TabStore 会在 closeTab 后更新 activeId）
+  const wasActive = getActiveSessionTabId() === tab.id;
+  const nextId = forgetSessionTab(tab.id);
+  const activeId = getActiveSessionTabId() || '';
+  if (wasActive) {
+    if (nextId) {
+      // 先同步更新 DOM（让标签立即消失）
+      renderSessionTabs(nextId);
+      // 再异步激活下个 tab（加载消息、刷新列表）
+      const tabs = (window as any).__tabs;
+      const nextTab = tabs?.getTab?.(nextId);
+      if (nextTab) { const handler = tabs?.getTabBehavior?.(nextTab.kind); handler?.activate?.(nextTab); }
+      else switchSession(nextId);
+    } else {
+      setActiveSessionTabId(null);
+      window.__state.M = [];
+      window.__state.IL = false;
+      renderSessionTabs('');
+      const msgsEl = $('ms');
+      if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : '';
+      loadSessions();
+      saveUiState();
+    }
+    return;
+  }
+  renderSessionTabs(activeId);
+  saveUiState();
+}
+
+// ─── TabBehavior 注册 ───────────────────────────────
+{ const tabs = (window as any).__tabs;
+  if (tabs?.registerTabBehavior) {
+    tabs.registerTabBehavior('chat', {
+      activate(tab: AppTab) { _sessionActivate(tab); },
+      close(tab: AppTab) { _sessionClose(tab); },
+    });
+    tabs.registerTabBehavior('session', {
+      activate(tab: AppTab) { _sessionActivate(tab); },
+      close(tab: AppTab) { _sessionClose(tab); },
+    });
+  }
 }
 
 // ─── 启动时迁移 ───────────────────────────────────
@@ -852,7 +978,11 @@ function migrateSessionTabLabels(): void {
         changed = true;
       }
     }
-    if (changed) try { localStorage.setItem(SESSION_TAB_LABELS_KEY, JSON.stringify(labels)); } catch {}
+    if (changed) {
+      (window.__state as any)._sessionTabLabels = labels;
+      const store = window.__state?._uiStateStore;
+      if (store) { store.tabs.labels = labels; if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave(); }
+    }
   } catch {}
 }
 migrateSessionTabLabels();

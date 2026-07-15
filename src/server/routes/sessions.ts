@@ -224,6 +224,61 @@ function thinkingFromBlocks(blocks: Array<{type: string; text?: string; thinking
   return blocks.filter((c) => c.type === "thinking").map((c) => fixSurrogates(c.thinking || "")).join("\n").trim() || undefined;
 }
 
+/**
+ * 将 trace 事件数组转为 AssistantBlock 格式。
+ * 用于旧会话（只有 trace 记录、没有 assistant_block 记录）的回放兼容。
+ */
+function convertTracesToBlocks(traces: SessionTrace[], content?: string): any[] {
+  const blocks: any[] = [];
+  let seq = 0;
+
+  // 先收集 tool 事件按 id 分组（一条 tool 在 trace 里以 running→success/error 出现）
+  const toolGroups = new Map<string, SessionTrace[]>();
+  for (const t of traces) {
+    if (t.type === 'tool') {
+      if (!toolGroups.has(t.id)) toolGroups.set(t.id, []);
+      toolGroups.get(t.id)!.push(t);
+    }
+  }
+
+  // 按原始顺序遍历，同一 tool id 只在第一次出现时输出 tool_use + tool_result
+  const emittedTools = new Set<string>();
+  for (const t of traces) {
+    if (t.type === 'thinking') {
+      blocks.push({ type: 'thinking', text: t.text, status: t.status, turnId: t.turnId || '', blockId: t.id || `thinking-${seq}`, seq: seq++ });
+    } else if (t.type === 'step') {
+      blocks.push({ type: 'step', text: t.text, status: t.status, turnId: t.turnId || '', blockId: t.id || `step-${seq}`, seq: seq++ });
+    } else if (t.type === 'tool') {
+      if (emittedTools.has(t.id)) continue;
+      emittedTools.add(t.id);
+      const group = toolGroups.get(t.id)!;
+      // 取最后一条的状态决定结果
+      // running-only（中断/崩溃）→ 标记为 error，避免伪装成 success
+      const last = group[group.length - 1];
+      const isError = last.status === 'error' || last.status === 'running';
+      const terminalStatus = isError ? 'error' : 'success';
+      blocks.push({
+        type: 'tool_use', toolCallId: t.id, name: t.name, input: t.input,
+        status: terminalStatus,
+        turnId: t.turnId || '', blockId: t.id + '_use', seq: seq++,
+      });
+      blocks.push({
+        type: 'tool_result', toolUseId: t.id,
+        output: isError ? (last.error || (last.status === 'running' ? '[中断]' : undefined)) : last.output,
+        isError,
+        turnId: t.turnId || '', blockId: t.id + '_result', seq: seq++,
+      });
+    }
+  }
+
+  // 如果有正文且没有 text block，添加一个 text block
+  if (content && !blocks.some(b => b.type === 'text')) {
+    blocks.push({ type: 'text', text: content, turnId: '', blockId: 'text-0', seq: seq++ });
+  }
+
+  return blocks;
+}
+
 /** 从 .jsonl 内容解析可显示的消息列表（与前端 dashboard-sessions.ts 兼容） */
 export function parseSessionMessages(content: string): SessionMessage[] {
   const lines = content.trim().split("\n");
@@ -346,6 +401,14 @@ export function parseSessionMessages(content: string): SessionMessage[] {
     const last = messages[messages.length - 1];
     if (last?.role === "assistant") last.trace = [...(last.trace || []), ...pendingTrace];
   }
+
+  // Stage ②: 旧会话无 assistant_block 记录时，将 trace 数据转为 block 格式
+  for (const msg of messages) {
+    if (msg.role === "assistant" && !(msg as any).blocks && msg.trace && msg.trace.length > 0) {
+      (msg as any).blocks = convertTracesToBlocks(msg.trace, msg.content);
+    }
+  }
+
   return messages;
 }
 

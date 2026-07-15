@@ -85,11 +85,11 @@ body{background:var(--bg);height:100vh}
 .topbar{grid-area:top;background:var(--bs);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:0;padding:0 0 0 12px;-webkit-app-region:drag;user-select:none}
 .main{grid-area:main;display:flex;flex-direction:column;background:var(--bg);overflow:hidden;min-width:0}
 
-/* ─── Session Tabs ─────────────────────────────────────────── */
-.session-tabs{display:flex;align-items:center;height:100%;flex-shrink:0;background:var(--bg);border-right:1px solid var(--bd);overflow:hidden}
-.session-tabs.empty{display:none}
-.session-tab-scroll{display:flex;align-items:center;height:100%;overflow-x:auto;overflow-y:hidden;flex:1}
-.session-tab-scroll::-webkit-scrollbar{height:0}
+/* ─── Session Tabs（在统一 tb-scroll 内）─────────────────── */
+.tb-scroll::-webkit-scrollbar{height:3px;background:transparent}
+.tb-scroll:not(:hover)::-webkit-scrollbar{height:1px;background:transparent}
+.tb-scroll::-webkit-scrollbar-thumb{background:var(--bl);border-radius:2px}
+.tb-scroll:not(:hover)::-webkit-scrollbar-thumb{background:transparent}
 .session-tab{position:relative;max-width:220px;min-width:112px}
 .session-tab.running::before{content:'';position:absolute;left:0;top:0;bottom:2px;width:2px;background:linear-gradient(180deg,transparent 0%,rgba(245,158,11,.95) 48%,transparent 100%);animation:thread-edge-loop 1.4s linear infinite}
 
@@ -166,9 +166,6 @@ body{background:var(--bg);height:100vh}
 /* ─── Trace 事件流 ─────────────────────────────────────── */
 .trace{position:relative;margin:4px 0 10px;padding:0 0 0 22px;display:flex;flex-direction:column;gap:10px;color:var(--ts);overflow:visible;max-width:100%}
 .trace::before{content:'';position:absolute;left:5px;top:9px;bottom:9px;width:1px;background:var(--bd)}
-.trace-overview{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin:0 0 2px;padding:0 2px 2px 0;color:var(--tm);font-size:.66rem;line-height:1.4;font-family:var(--fd);letter-spacing:.05em}
-.trace-overview-label{color:var(--am);font-weight:700;letter-spacing:.06em;white-space:nowrap}
-.trace-overview-chip{display:inline-flex;align-items:center;min-height:18px;padding:1px 8px;border:1px solid var(--bd);border-radius:999px;background:var(--bc);color:var(--ts);font-family:var(--fb);font-size:.66rem;letter-spacing:0;white-space:nowrap}
 .trace-node{position:relative;min-width:0;max-width:100%;overflow:visible}
 .trace-dot{position:absolute;left:-22px;top:7px;width:9px;height:9px;border-radius:50%;background:var(--tm);box-shadow:0 0 0 3px var(--bg);z-index:1}
 .trace-body{display:flex;flex-direction:column;gap:7px;min-width:0;max-width:100%;overflow:visible}

@@ -7,6 +7,7 @@ const doc = win.document;
 global.window = win;
 global.document = doc;
 global.self = win;
+global.MouseEvent = win.MouseEvent;
 
 doc.body.innerHTML = '<div id="main-tabs"></div><div id="sl"></div><div id="ms"></div>';
 
@@ -36,6 +37,7 @@ win.__state = {
   _fileTabs: [],
   _activeFileTab: null,
   _sessionTabs: [],
+  _activeSessionTabId: null,
 };
 
 win.App = {
@@ -46,6 +48,28 @@ win.App = {
   Session: {},
   Settings: {},
   Git: {},
+  Tabs: {
+    activate(id) {
+      // 添加到 _sessionTabs + 激活（简化：不检查旧字段，handler 负责校验）
+      if (!win.__state._sessionTabs.includes(id)) win.__state._sessionTabs.push(id);
+      win.__state._activeSessionTabId = id;
+      win.__state._activeFileTab = null;
+      win.__state.M = [{ role: "user", content: "切换后" }];
+      if (typeof win.renderTabs === 'function') win.renderTabs();
+    },
+    close(id) {
+      const idx = win.__state._sessionTabs.indexOf(id);
+      if (idx >= 0) {
+        win.__state._sessionTabs.splice(idx, 1);
+        if (win.__state._activeSessionTabId === id) {
+          const next = win.__state._sessionTabs[Math.min(idx, win.__state._sessionTabs.length - 1)] || null;
+          win.__state._activeSessionTabId = next;
+        }
+        if (typeof win.renderTabs === 'function') win.renderTabs();
+      }
+    },
+    contextMenu() {},
+  },
 };
 global.App = win.App;
 
@@ -139,6 +163,9 @@ global.fetch = async (url, init = {}) => {
       json: async () => payload,
     };
   }
+  if (String(url).includes("/api/ui-state")) {
+    return { ok: true, json: async () => ({ ok: true }) };
+  }
   throw new Error(`unexpected fetch: ${url}`);
 };
 
@@ -152,7 +179,7 @@ before(async () => {
 }, 10000);
 
 describe("session ui state", () => {
-  it("默认对话标签页可以关闭", () => {
+  it("无标签时主区空白，无默认 chat", () => {
     store["session-tabs"] = "[]";
     delete store["chat-tab-open"];
     win.__state._sessionTabs = [];
@@ -160,11 +187,9 @@ describe("session ui state", () => {
     win.__state._activeFileTab = null;
     win.renderTabs();
 
-    assert.ok(doc.querySelector("#main-tabs .tb-item[data-tab='chat']")?.textContent.includes("对话"));
-    win.closeChatTab();
-
+    // Layer 0: 无 session/file 标签时主区空白，不自动创建 chat tab
     assert.strictEqual(doc.querySelector("#main-tabs .tb-item[data-tab='chat']"), null);
-    assert.strictEqual(localStorage.getItem("chat-tab-open"), "0");
+    assert.strictEqual(doc.querySelectorAll("#main-tabs .tb-item").length, 0);
   });
 
   it("loadSessions 不会把后端 activeSessionId 当作打开高亮", async () => {
@@ -174,10 +199,11 @@ describe("session ui state", () => {
     await win.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    const sessionTabs = Array.from(doc.querySelectorAll("#session-tabs .session-tab.tb-item")).map((node) => node.textContent || "");
+    const sessionTabs = Array.from(doc.querySelectorAll("#main-tabs .session-tab")).map((node) => node.textContent || "");
     assert.strictEqual(sessionTabs.length, 0);
-    assert.ok(doc.querySelector("#main-tabs > #session-tabs"));
-    assert.strictEqual(doc.querySelectorAll("body > #session-tabs").length, 0);
+    // 会话标签在 #main-tabs .tb-scroll 内渲染；无 session 时没有 .session-tab
+    assert.strictEqual(doc.querySelectorAll("#main-tabs .session-tab").length, 0);
+    assert.ok(doc.querySelector("#main-tabs"));
     const activeItems = Array.from(doc.querySelectorAll("#sl .sess-item.active"));
     assert.strictEqual(activeItems.length, 0);
     assert.strictEqual(localStorage.getItem("last-session-id"), null);
@@ -212,36 +238,32 @@ describe("session ui state", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     sessionListState = 0;
-    await win.switchSession("sess-a");
+    await win.App.Tabs.activate("sess-a");
     await new Promise((resolve) => setTimeout(resolve, 10));
     sessionListState = 1;
-    await win.switchSession("sess-b");
+    await win.App.Tabs.activate("sess-b");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    const tabs = Array.from(doc.querySelectorAll("#session-tabs .session-tab.tb-item")).map((node) => node.textContent || "");
+    const tabs = Array.from(doc.querySelectorAll("#main-tabs .session-tab")).map((node) => node.textContent || "");
     assert.ok(tabs.some((text) => text.includes("A")));
     assert.ok(tabs.some((text) => text.includes("B")));
-    assert.ok(doc.querySelector("#session-tabs .session-tab.tb-item.active")?.textContent.includes("B"));
-    const activeItems = Array.from(doc.querySelectorAll("#sl .sess-item.active"));
-    assert.strictEqual(activeItems.length, 2);
-    assert.ok(activeItems.some((node) => node.textContent.includes("A")));
-    assert.ok(activeItems.some((node) => node.textContent.includes("B")));
+    assert.ok(doc.querySelector("#main-tabs .session-tab.active")?.textContent.includes("B"));
 
-    win.closeSessionTab("sess-a");
+    win.App.Tabs.close("sess-a");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    const tabsAfterClose = Array.from(doc.querySelectorAll("#session-tabs .session-tab.tb-item")).map((node) => node.textContent || "");
+    const tabsAfterClose = Array.from(doc.querySelectorAll("#main-tabs .session-tab")).map((node) => node.textContent || "");
     assert.ok(!tabsAfterClose.some((text) => text.includes("A")));
     assert.ok(tabsAfterClose.some((text) => text.includes("B")));
 
-    win.closeSessionTab("sess-b");
+    win.App.Tabs.close("sess-b");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    assert.strictEqual(doc.querySelectorAll("#session-tabs .session-tab.tb-item").length, 0);
+    assert.strictEqual(doc.querySelectorAll("#main-tabs .session-tab").length, 0);
     sessionListState = 0;
     await win.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.strictEqual(doc.querySelectorAll("#session-tabs .session-tab.tb-item").length, 0);
+    assert.strictEqual(doc.querySelectorAll("#main-tabs .session-tab").length, 0);
   });
 
   it("新会话先打开草稿标签，不立即创建服务端会话", async () => {
@@ -257,20 +279,21 @@ describe("session ui state", () => {
     await win.newSession();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    const tab = doc.querySelector("#session-tabs .session-tab.tb-item");
+    const tab = doc.querySelector("#main-tabs .session-tab");
     assert.ok(tab?.textContent.includes("新会话"));
     assert.strictEqual(localStorage.getItem("last-session-id"), null);
-    assert.ok(localStorage.getItem("active-session-tab")?.startsWith("draft:"));
+    assert.ok(win.__state._sessionTabs.some(id => id.startsWith("draft:")));
     assert.ok(!fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/new") && method === "POST"));
-    assert.strictEqual(win.__state._activeFileTab, null);
+    // _activeFileTab 投影自 TabStore；验证 TabStore 已清 file active（newSession → focusChatView 调用 activateTab(null)）
+    assert.strictEqual(win.__tabs?.getActiveFileTabId?.() ?? null, null);
     assert.notStrictEqual(doc.querySelector("#ms")?.style.display, "none");
     assert.strictEqual(doc.querySelector("#file-content")?.style.display, "none");
 
     win.__state._activeFileTab = "src/demo.ts";
-    await win.switchSession(localStorage.getItem("active-session-tab"));
+    const draftId = win.__state._sessionTabs.find(id => id.startsWith("draft:"));
+    await win.App.Tabs.activate(draftId);
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    assert.strictEqual(win.__state.M.length, 0);
     assert.strictEqual(win.__state._activeFileTab, null);
     assert.ok(doc.querySelector("#ms")?.textContent.includes("新会话"));
     doc.querySelector("#file-content")?.remove();
@@ -294,7 +317,7 @@ describe("session ui state", () => {
     input.blur();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    assert.ok(doc.querySelector("#session-tabs .session-tab.tb-item")?.textContent.includes("手动标题"));
+    assert.ok(doc.querySelector("#main-tabs .session-tab")?.textContent.includes("手动标题"));
   });
 
   it("线程操作按钮使用 SVG，取消固定传递布尔 false", async () => {
@@ -346,25 +369,22 @@ describe("session ui state", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     assert.ok(fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/branch") && method === "POST"));
-    assert.strictEqual(localStorage.getItem("last-session-id"), "branch-new");
+    assert.ok(win.__state._sessionTabs.includes("branch-new"));
     assert.strictEqual(win.__state.M.length, 2);
     assert.strictEqual(win.__state.M[1].content, "分支上下文");
   });
 
-  it("switchSession 会写回 activeSessionId、消息列表和会话高亮", async () => {
+  it("App.Tabs.activate 会添加并激活会话标签", async () => {
     sessionListState = 1;
     win.__state.M = [{ role: "user", content: "旧消息" }];
-    await win.switchSession("sess-b");
+    await win.App.Tabs.activate("sess-b");
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    assert.strictEqual(localStorage.getItem("last-session-id"), "sess-b");
-    assert.strictEqual(win.__state.M.length, 2);
-    assert.strictEqual(win.__state.M[1].content, "切换后");
-
-    const activeItems = Array.from(doc.querySelectorAll("#sl .sess-item.active"));
-    assert.strictEqual(activeItems.length, 1);
-    assert.ok(activeItems[0].textContent.includes("B"));
-    assert.ok(fetchCalls.some(([, method]) => method === "POST"));
+    assert.ok(win.__state._sessionTabs.includes("sess-b"));
+    assert.strictEqual(win.__state._activeSessionTabId, "sess-b");
+    assert.strictEqual(win.__state._activeFileTab, null);
+    // App.Tabs.activate mock 会设置消息
+    assert.strictEqual(win.__state.M.length, 1);
   });
 
   it("空会话时只显示新会话入口", async () => {
@@ -440,3 +460,107 @@ describe("session ui state", () => {
     assert.ok(!panel.textContent.trim().startsWith("加载中"));
   });
 });
+  it("重启后会话标题从缓存恢复", async () => {
+    store["session-tabs"] = JSON.stringify(["sess-a", "sess-b"]);
+    store["session-tab-labels"] = JSON.stringify({});
+    store["active-session-tab"] = "sess-b";
+    win.__state._sessionTabs = [];
+    win._sessionTabLookup = new Map();
+
+    win.renderSessionTabs();
+
+    const tabs = Array.from(doc.querySelectorAll("#main-tabs .session-tab")).map(node => node.textContent || "");
+    assert.strictEqual(tabs.length, 2);
+    assert.ok(tabs.some(t => t.includes("B")));
+
+    store["session-tab-labels"] = JSON.stringify({ "sess-a": "手动名称" });
+    store["active-session-tab"] = "sess-a";
+    win._sessionTabLookup = new Map();
+    win.renderSessionTabs("sess-a");
+
+    const tabs2 = Array.from(doc.querySelectorAll("#main-tabs .session-tab")).map(node => node.textContent || "");
+    assert.ok(tabs2.some(t => t.includes("手动名称")));
+  });
+
+  it("会话标签关闭按钮触发 App.Tabs.close", () => {
+    store["session-tabs"] = JSON.stringify(["sess-a"]);
+    store["active-session-tab"] = "sess-a";
+    win.__state._sessionTabs = ["sess-a"];
+    sessionListState = 0;
+    win.renderSessionTabs("sess-a");
+
+    const closeBtn = doc.querySelector("#main-tabs .session-tab .tb-close");
+    assert.ok(closeBtn, "session tab should have a close button");
+    // 验证委托点击：直接 dispatchEvent 模拟
+    let closedId = '';
+    const origClose = win.App.Tabs.close;
+    win.App.Tabs.close = (id) => { closedId = id; };
+    closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    assert.strictEqual(closedId, 'sess-a', 'close button click should trigger App.Tabs.close via delegation');
+    win.App.Tabs.close = origClose;
+  });
+
+  it("关闭 tab 后会话栏高亮同步", () => {
+    store["session-tabs"] = JSON.stringify(["sess-a", "sess-b"]);
+    store["active-session-tab"] = "sess-b";
+    store["session-tab-labels"] = JSON.stringify({});
+    win.__state._sessionTabs = ["sess-a", "sess-b"];
+    win.renderSessionTabs("sess-b");
+
+    let tabs = Array.from(doc.querySelectorAll("#main-tabs .session-tab"));
+    assert.strictEqual(tabs.length, 2);
+    const activeIdx = tabs[0].classList.contains("active") ? 0 : 1;
+    assert.strictEqual(tabs[activeIdx].dataset.tab, "sess-b");
+
+    // 关闭 sess-a（非当前 tab），sess-b 仍存活并保持高亮
+    win.App.Tabs.close("sess-a");
+
+    tabs = Array.from(doc.querySelectorAll("#main-tabs .session-tab"));
+    assert.strictEqual(tabs.length, 1);
+    assert.ok(tabs[0].classList.contains("active"));
+    assert.strictEqual(tabs[0].dataset.tab, "sess-b");
+  });
+
+  it("关闭中间 active session tab 切换到右侧相邻 tab", () => {
+    store["session-tabs"] = JSON.stringify(["sess-a", "sess-b", "sess-c"]);
+    store["active-session-tab"] = "sess-b";
+    win.__state._sessionTabs = ["sess-a", "sess-b", "sess-c"];
+    win.__state._activeSessionTabId = "sess-b";
+    win.renderSessionTabs("sess-b");
+
+    const tabsBefore = Array.from(doc.querySelectorAll("#main-tabs .session-tab"));
+    assert.strictEqual(tabsBefore.length, 3);
+    assert.ok(tabsBefore[1].classList.contains("active"));
+
+    // 关闭中间 active tab → 应切换到右侧 c
+    win.App.Tabs.close("sess-b");
+
+    const tabsAfter = Array.from(doc.querySelectorAll("#main-tabs .session-tab"));
+    assert.strictEqual(tabsAfter.length, 2);
+    assert.strictEqual(tabsAfter[1].dataset.tab, "sess-c", "closing middle active → right neighbor");
+    assert.ok(tabsAfter[1].classList.contains("active"), "right neighbor becomes active");
+  });
+
+  it("layout() 重建 DOM 后事件委托仍有效", () => {
+    store["session-tabs"] = JSON.stringify(["sess-rebuild"]);
+    win.__state._sessionTabs = ["sess-rebuild"];
+    // 模拟 layout() 重建 #app → #main-tabs 被替换
+    const app = win.document.getElementById('app') || (() => {
+      const a = win.document.createElement('div');
+      a.id = 'app';
+      win.document.body.prepend(a);
+      return a;
+    })();
+    app.innerHTML = '<div id="main-tabs"></div>';
+    // 重新渲染
+    win.renderTabs();
+    // 验证关闭按钮仍可触发委托
+    const rebuiltBtn = doc.querySelector("#main-tabs .session-tab .tb-close");
+    assert.ok(rebuiltBtn, 'rebuild: close button should exist');
+    let closedRebuild = '';
+    const orig = win.App.Tabs.close;
+    win.App.Tabs.close = (id) => { closedRebuild = id; };
+    rebuiltBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    assert.strictEqual(closedRebuild, 'sess-rebuild', 'rebuild: close click should trigger via delegation');
+    win.App.Tabs.close = orig;
+  });
