@@ -20,7 +20,7 @@
     "test": "npm run test:unit && npm run test:routes && npm run test:frontend && node test/css-vars.mjs",
     "test:unit": "tsx --test test/prompts.test.mjs test/tree.test.mjs test/explorer-service.test.mjs test/tools-input-validation.test.mjs test/ui-state-store.test.mjs",
     "test:routes": "tsx --test test/routes.test.mjs test/sessions.test.mjs test/workspace-session.test.mjs test/typescript-route.test.mjs test/chat-sse.test.mjs test/attachments.test.mjs test/tool-trace.test.mjs test/trace-sse-lifecycle.test.mjs test/block-persist.test.mjs",
-    "test:frontend": "tsx --test test/render-snapshot.test.mjs test/chat-ui-state.test.mjs test/session-ui.test.mjs test/workspace-ui.test.mjs test/app-tabs.test.mjs",
+    "test:frontend": "tsx --test test/render-snapshot.test.mjs test/chat-ui-state.test.mjs test/session-ui.test.mjs test/workspace-ui.test.mjs test/app-tabs.test.mjs test/file-restore.test.mjs",
     "test:smoke": "node test/smoke.mjs",
     "test:build": "node scripts/compile-frontend-ts.mjs && npm run build:vite && node test/smoke.mjs",
     "clean": "node scripts/clean.mjs"

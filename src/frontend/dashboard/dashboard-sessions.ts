@@ -325,6 +325,7 @@ async function restoreSessionTabs(): Promise<void> {
         const oldCS = window.__state.CS;
         if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
         window.__state.IL = false;
+        App.Chat?.resetMsgKeys?.();
         window.__state.M = data.messages.map(m => ({
           role: m.role as 'user' | 'assistant',
           content: m.content,
@@ -347,6 +348,7 @@ async function restoreSessionTabs(): Promise<void> {
 function activateDraftSession(id: string): void {
   rememberSessionTab(id);
   setActiveSessionTabId(id);
+  App.Chat?.resetMsgKeys?.();
   window.__state.M = [];
   window.__state.IL = false;
   App.Chat?.clearAttachments?.();
@@ -375,7 +377,7 @@ function closeSessionTab(id: string): void {
   const nextId = forgetSessionTab(id);
   if (wasActive) {
     if (nextId) { renderSessionTabs(nextId); switchSession(nextId); }
-    else { setActiveSessionTabId(null); window.__state.M = []; window.__state.IL = false; renderSessionTabs(''); const msgsEl = $('ms'); if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : ''; loadSessions(); saveUiState(); }
+    else { App.Chat?.resetMsgKeys?.(); setActiveSessionTabId(null); window.__state.M = []; window.__state.IL = false; renderSessionTabs(''); const msgsEl = $('ms'); if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : ''; loadSessions(); saveUiState(); }
     return;
   }
   renderSessionTabs(getActiveSessionTabId() || undefined);
@@ -667,6 +669,7 @@ function toggleOtherSessions(header: HTMLElement): void {
 
 function newSession(): void {
   const draftId = createDraftSessionId();
+  App.Chat?.resetMsgKeys?.();
   window.__state.M = [];
   window.__state.IL = false;
   App.Chat?.clearAttachments?.();
@@ -725,6 +728,7 @@ async function deleteSession(id: string): Promise<void> {
         // 彻底关闭 SSE 连接（必须先清回调再 close，否则 onerror 会重置 IL）
         const oldCS = window.__state.CS;
         if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
+        App.Chat?.resetMsgKeys?.();
         window.__state.M = [];
         window.__state.IL = false;
         // 异步延迟 DOM 操作，让 Electron 合成器有机会刷新
@@ -773,6 +777,7 @@ function branchSession(id: string): void {
     const oldCS = window.__state.CS;
     if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
     window.__state.IL = false;
+    App.Chat?.resetMsgKeys?.();
     window.__state.M = (data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', streaming: false }));
     focusChatView();
     const activeId = data.activeSessionId || data.id || '';
@@ -806,14 +811,14 @@ function switchSession(id: string): void {
     .then((data: any) => {
       if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
       const oldCS = window.__state.CS; if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
-      window.__state.IL = false; window.__state.M = (data.messages || []).map((m: any) => ({ role: m.role, content: m.content, thinking: m.thinking || '', streaming: false }));
+      window.__state.IL = false; App.Chat?.resetMsgKeys?.(); window.__state.M = (data.messages || []).map((m: any) => ({ role: m.role, content: m.content, thinking: m.thinking || '', streaming: false }));
       focusChatView(); const msgsEl = $('ms');
       if (msgsEl) { msgsEl.innerHTML = window.__state.M.length > 0 ? (window.msgs ? window.msgs() : '') : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>'; setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50); }
       toast('已切换到会话 (' + window.__state.M.length + ' 条消息)');
       const activeId = data.activeSessionId || id;
       if (activeId) { rememberSessionTab(activeId); setActiveSessionTabId(activeId); renderSessionTabs(activeId); }
       loadSessions(); saveUiState();
-    }).catch(() => { setActiveSessionTabId(null); window.__state.M = []; window.__state.IL = false;
+    }).catch(() => { App.Chat?.resetMsgKeys?.(); setActiveSessionTabId(null); window.__state.M = []; window.__state.IL = false;
       const oldCS = window.__state.CS; if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
       const ci = $('ci') as HTMLTextAreaElement | null; const cs = $('cs') as HTMLButtonElement | null;
       if (ci) { ci.disabled = false; ci.style.height = 'auto'; } if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = window.S('iup', 16); }
@@ -860,6 +865,7 @@ function _sessionActivate(tab: AppTab): void {
     // 草稿：同 activateDraftSession
     rememberSessionTab(tab.id);
     setActiveSessionTabId(tab.id);
+    App.Chat?.resetMsgKeys?.();
     window.__state.M = [];
     window.__state.IL = false;
     App.Chat?.clearAttachments?.();
@@ -888,6 +894,7 @@ function _sessionActivate(tab: AppTab): void {
     const oldCS = window.__state.CS;
     if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
     window.__state.IL = false;
+    App.Chat?.resetMsgKeys?.();
     window.__state.M = (data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', streaming: false }));
     focusChatView();
     const msgsEl = $('ms');
@@ -907,6 +914,7 @@ function _sessionActivate(tab: AppTab): void {
     loadSessions();
     saveUiState();
   }).catch(() => {
+    App.Chat?.resetMsgKeys?.();
     setActiveSessionTabId(null);
     window.__state.M = [];
     window.__state.IL = false;
@@ -936,6 +944,7 @@ function _sessionClose(tab: AppTab): void {
       if (nextTab) { const handler = tabs?.getTabBehavior?.(nextTab.kind); handler?.activate?.(nextTab); }
       else switchSession(nextId);
     } else {
+      App.Chat?.resetMsgKeys?.();
       setActiveSessionTabId(null);
       window.__state.M = [];
       window.__state.IL = false;

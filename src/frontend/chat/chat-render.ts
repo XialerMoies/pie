@@ -275,11 +275,13 @@ function appendDelta(text: string): void {
     } else {
       last.blocks.push({ type: 'text', text, blockId: 'text-live', seq: last.blocks.length + 1 });
     }
+    last._rv = (last._rv || 0) + 1;
     updateLastBlock(textBlocks[textBlocks.length - 1] || last.blocks[last.blocks.length - 1]);
     return;
   }
 
   last.content += text;
+  last._rv = (last._rv || 0) + 1;
   const msgDivs = msgsEl.querySelectorAll('.m');
   const lastMsg = msgDivs[msgDivs.length - 1];
   if (lastMsg) {
@@ -293,6 +295,7 @@ function appendDelta(text: string): void {
 window.msgs = msgs;
 { const AppChat = (window as any).App?.Chat; if (AppChat) {
   AppChat.msgs = msgs;
+  AppChat.renderMessage = renderMessage;
   AppChat.appendDelta = appendDelta;
   AppChat.updateLastBlock = updateLastBlock;
 } }

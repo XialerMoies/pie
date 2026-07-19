@@ -39,6 +39,7 @@ function resetWorkspaceState(workspace: string): void {
   const oldCS = st.CS;
   if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); st.CS = null; }
   st.IL = false;
+  App.Chat?.resetMsgKeys?.();
   st.M = [];
   delete (st as any)._sessionTabLabels;
   const tabs = (window as any).__tabs;

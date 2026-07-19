@@ -2,7 +2,7 @@
 //  Send / Stop — 消息发送 & SSE 流
 // ═══════════════════════════════════════════════════════════════════
 
-let lastMessagesRenderKey = '';
+let _msgKeys: string[] = [];
 let submitMessageHandler: ((text: string) => void) | null = null;
 
 type ChatSendContext = {
@@ -110,23 +110,6 @@ async function deleteEphemeralSession(sessionId: string): Promise<void> {
   } catch {}
 }
 
-function buildMessagesRenderKey(): string {
-  return JSON.stringify(window.__state.M.map(message => ({
-    role: message.role,
-    content: message.content,
-    thinking: message.thinking || '',
-    streaming: Boolean(message.streaming),
-    error: message.error ? {
-      title: message.error.title,
-      message: message.error.message,
-      reason: message.error.reason || '',
-      nextSteps: message.error.nextSteps || [],
-      raw: message.error.raw || '',
-    } : null,
-    turnId: (message as any).turnId || '',
-  })));
-}
-
 function extractLastUserMessage(): string {
   for (let i = window.__state.M.length - 1; i >= 0; i--) {
     const msg = window.__state.M[i];
@@ -171,6 +154,75 @@ function refreshWorkspaceState(): void {
   if (App.Git?.refreshGit) setTimeout(() => App.Git.refreshGit(), 200);
 }
 
+function _messageKey(m: any): string {
+  const err = m.error;
+  const c = m.content || "";
+  const t = m.thinking || "";
+  return `${m.role}:${c.length}:${c.slice(0, 40)}:${c.slice(-40)}:${t.length}:${t.slice(0, 40)}:${t.slice(-40)}:${(m as any).streaming ? "1" : "0"}:${err ? (err.title || "") + "|" + (err.message || "") : ""}:${(m as any).blocks?.length || 0}:${(m as any).turnId || ""}:${(m as any)._rv || 0}`;
+}
+
+/** 节点级消息 diff：逐条检查 key，变才渲染 + replaceWith；无中间字符串层 */
+function _applyMsgsDiff(msgsEl: HTMLElement, scroll: boolean): void {
+  const M = window.__state.M;
+  const rm = (window as any).App?.Chat?.renderMessage;
+  if (!rm) {
+    const fallback = (window as any).msgs ? (window as any).msgs() || "" : "";
+    msgsEl.innerHTML = fallback;
+    if (scroll) sb("ms");
+    return;
+  }
+
+  // M 被整体替换（如 newSession/clear/draft）后 key 缓存可能过时
+  if (_msgKeys.length > 0 && M.length === 0) _msgKeys = [];
+
+  // 同步 _msgKeys 长度
+  while (_msgKeys.length < M.length) _msgKeys.push("");
+  while (_msgKeys.length > M.length) _msgKeys.pop();
+
+  const existingChildren = Array.from(msgsEl.children);
+  let changed = false;
+
+  for (let i = 0; i < M.length; i++) {
+    const mk = _messageKey(M[i]);
+    const existing = existingChildren[i];
+
+    if (mk === _msgKeys[i]) continue; // 未变，跳过（零字符串 / 零 DOM）
+
+    // 变了：渲染新节点并替换
+    _msgKeys[i] = mk;
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = rm(M[i]);
+    const newChild = wrapper.firstElementChild;
+    if (!newChild) continue;
+
+    if (existing) {
+      existing.replaceWith(newChild);
+    } else {
+      msgsEl.appendChild(newChild);
+    }
+    changed = true;
+  }
+
+  // 移除多余节点
+  while (msgsEl.children.length > M.length) {
+    msgsEl.lastElementChild?.remove();
+    changed = true;
+  }
+
+  // 空 M → 欢迎屏
+  if (M.length === 0) {
+    msgsEl.innerHTML = (window as any).msgs ? (window as any).msgs() : "";
+    changed = true;
+  }
+
+  if (changed && scroll) sb("ms");
+}
+
+/** 重置消息 key 缓存（用于 M 被整体替换的场景） */
+function resetMsgKeys(): void {
+  _msgKeys = [];
+}
+
 function bind(): void {
   const ci = $('ci') as HTMLTextAreaElement | null, cs = $('cs') as HTMLButtonElement | null;
   if (!ci || !cs) return;
@@ -196,6 +248,7 @@ function bind(): void {
     last.error = makeErrorState(title, message, reason, nextSteps, raw);
     last.streaming = false;
     last.thinking = '';
+    last._rv = (last._rv || 0) + 1;
     updateUI();
   }
 
@@ -279,6 +332,7 @@ function bind(): void {
             const idx = last.blocks.findIndex((b: any) => b.blockId === d.block.blockId);
             if (idx >= 0) last.blocks[idx] = d.block;
             else last.blocks.push(d.block);
+            last._rv = (last._rv || 0) + 1;
             const updated = App.Chat?.updateLastBlock?.(d.block) || false;
             if (!updated) scheduleMessagesRender();
             else sb('ms');
@@ -294,7 +348,7 @@ function bind(): void {
           }
           sb('ms');
         } else if (d.type === 'thinking') {
-          if (last) { last.thinking = (last.thinking || '') + (d.text || ''); }
+          if (last) { last.thinking = (last.thinking || '') + (d.text || ''); last._rv = (last._rv || 0) + 1; }
           sb('ms');
         } else if (d.type === 'done') {
           if (!last) return;
@@ -303,6 +357,7 @@ function bind(): void {
           last.streaming = false;
           last.error = undefined;
           if (Array.isArray(d.blocks)) last.blocks = d.blocks;
+          last._rv = (last._rv || 0) + 1;
           st.IL = false; st.CS?.close(); st.CS = null;
           renderMessages();
           const _cs = $('cs') as HTMLButtonElement | null;
@@ -362,17 +417,17 @@ function bind(): void {
   }
   submitMessageHandler = submitMessage;
 
+    /** Per-message content signature */
+
+
+  /** 对 msgs 容器执行节点级 diff */
+
+
   function renderMessages(scroll = true): void {
-    if (renderFrame !== null) {
-      cancelAnimationFrame(renderFrame);
-      renderFrame = null;
-    }
-    const msgsEl = $('ms');
-    if (msgsEl && (window as any).msgs) {
-      lastMessagesRenderKey = buildMessagesRenderKey();
-      msgsEl.innerHTML = (window as any).msgs();
-      if (scroll) sb('ms');
-    }
+    if (renderFrame !== null) { cancelAnimationFrame(renderFrame); renderFrame = null; }
+    const msgsEl = $("ms");
+    if (!msgsEl || !(window as any).msgs) return;
+    _applyMsgsDiff(msgsEl, scroll);
   }
 
   function scheduleMessagesRender(scroll = true): void {
@@ -524,19 +579,17 @@ function updateModelName(): void {
 // ═══════════════════════════════════════════════════════════════════
 
 function updateUI(): void {
-  const ci = $('ci') as HTMLTextAreaElement | null, cs = $('cs') as HTMLButtonElement | null;
+  const ci = $("ci") as HTMLTextAreaElement | null, cs = $("cs") as HTMLButtonElement | null;
   const stIL = window.__state.IL;
   if (ci) ci.disabled = stIL;
   if (cs) {
     cs.disabled = stIL ? false : !ci?.value.trim();
-    cs.title = stIL ? '中止' : '发送消息';
-    cs.innerHTML = stIL ? S('ipause', 16) : S('iup', 16);
+    cs.title = stIL ? "中止" : "发送消息";
+    cs.innerHTML = stIL ? S("ipause", 16) : S("iup", 16);
   }
-  const msgsEl = $('ms');
-  const nextKey = buildMessagesRenderKey();
-  if (msgsEl && nextKey !== lastMessagesRenderKey) {
-    lastMessagesRenderKey = nextKey;
-    msgsEl.innerHTML = window.msgs ? window.msgs() : '';
+  const msgsEl = $("ms");
+  if (msgsEl && (window as any).msgs) {
+    _applyMsgsDiff(msgsEl, false);
   }
 }
 
@@ -601,4 +654,5 @@ window.showModelPicker = showModelPicker;
   App.Chat.retryLastTurn = retryLastTurn;
   App.Chat.copyLastError = copyLastError;
   App.Chat.refreshWorkspaceState = refreshWorkspaceState;
+  App.Chat.resetMsgKeys = resetMsgKeys;
 } }

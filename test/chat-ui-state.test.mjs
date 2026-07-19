@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from "node:test";
+﻿import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert";
 import { Window } from "happy-dom";
 
@@ -79,55 +79,72 @@ describe("chat ui state", () => {
   beforeEach(async () => {
     env = setupDom();
     const ts = Date.now() + Math.random();
+    await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/dashboard-chat.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${ts}`);
     env.win.bind();
   });
-
-  it("消息未变化时 updateUI 不重绘消息区", () => {
+  it("消息未变化时 updateUI 不重绘消息区", () => {
     const panel = env.doc.getElementById("ms");
     env.win.updateUI();
     const firstHtml = panel.innerHTML;
 
-    let redraws = 0;
-    const original = Object.getOwnPropertyDescriptor(env.win.Element.prototype, "innerHTML");
-    assert.ok(original?.set && original?.get);
-    Object.defineProperty(panel, "innerHTML", {
-      configurable: true,
-      get() { return original.get.call(this); },
-      set(value) { redraws += 1; return original.set.call(this, value); },
-    });
+    let replaces = 0;
+    const origReplaceWith = env.win.Element.prototype.replaceWith;
+    env.win.Element.prototype.replaceWith = function(...args) {
+      if (this.parentNode === panel || (panel && panel.contains(this))) replaces++;
+      return origReplaceWith.apply(this, args);
+    };
 
     const input = env.doc.getElementById("ci");
     input.value = "只改变发送按钮状态";
     env.win.updateUI();
 
-    assert.strictEqual(redraws, 0);
+    assert.strictEqual(replaces, 0, "消息未变化时不应触发 replaceWith");
     assert.strictEqual(panel.innerHTML, firstHtml);
 
-    Object.defineProperty(panel, "innerHTML", original);
+    env.win.Element.prototype.replaceWith = origReplaceWith;
   });
 
   it("消息变化时 updateUI 会重绘消息区", () => {
     const panel = env.doc.getElementById("ms");
     env.win.updateUI();
 
-    let redraws = 0;
-    const original = Object.getOwnPropertyDescriptor(env.win.Element.prototype, "innerHTML");
-    assert.ok(original?.set && original?.get);
-    Object.defineProperty(panel, "innerHTML", {
-      configurable: true,
-      get() { return original.get.call(this); },
-      set(value) { redraws += 1; return original.set.call(this, value); },
-    });
+    let replaces = 0;
+    const origReplaceWith = env.win.Element.prototype.replaceWith;
+    env.win.Element.prototype.replaceWith = function(...args) {
+      if (this.parentNode === panel || (panel && panel.contains(this))) replaces++;
+      return origReplaceWith.apply(this, args);
+    };
 
     env.win.__state.M[0].content = "hello again";
     env.win.updateUI();
 
-    assert.strictEqual(redraws, 1);
+    assert.ok(replaces > 0, "消息变化时应有 replaceWith 调用");
     assert.ok(panel.innerHTML.includes("hello again"));
 
-    Object.defineProperty(panel, "innerHTML", original);
+    env.win.Element.prototype.replaceWith = origReplaceWith;
+  });
+
+  it("同长度内容替换仍触发重绘", () => {
+    const panel = env.doc.getElementById("ms");
+    env.win.updateUI();
+
+    let replaces = 0;
+    const origReplaceWith = env.win.Element.prototype.replaceWith;
+    env.win.Element.prototype.replaceWith = function(...args) {
+      if (this.parentNode === panel || (panel && panel.contains(this))) replaces++;
+      return origReplaceWith.apply(this, args);
+    };
+
+    // 同长度替换：hello(5) → world(5)，content.length 不变
+    env.win.__state.M[0].content = "world";
+    env.win.updateUI();
+
+    assert.ok(replaces > 0, "同长度内容替换也应触发 replaceWith");
+    assert.ok(panel.innerHTML.includes("world"));
+
+    env.win.Element.prototype.replaceWith = origReplaceWith;
   });
 
   it("done 使用服务端最终 blocks 覆盖 live partial blocks", () => {
@@ -190,6 +207,7 @@ describe("chat ui state", () => {
     const panel = env.doc.getElementById("ms");
     const descriptor = Object.getOwnPropertyDescriptor(env.win.Element.prototype, "innerHTML");
     let redraws = 0;
+    let replaces = 0;
     Object.defineProperty(panel, "innerHTML", {
       configurable: true,
       get() { return descriptor.get.call(this); },
@@ -337,5 +355,39 @@ describe("chat ui state", () => {
     }
     assert.deepStrictEqual(env.win.__state._sessionTabs, ["sess-real"]);
     assert.strictEqual(env.win.__state._sessionTabLabels?.["sess-real"], "手动标题");
+  });
+
+  it("_rv 是唯一检测手段时仍触发重绘（同前缀后缀中间变化）", () => {
+    const panel = env.doc.getElementById("ms");
+    env.win.updateUI();
+
+    let replaces = 0;
+    const origReplaceWith = env.win.Element.prototype.replaceWith;
+    env.win.Element.prototype.replaceWith = function (...args) {
+      if (this.parentNode === panel || (panel && panel.contains(this))) replaces++;
+      return origReplaceWith.apply(this, args);
+    };
+
+    const prefix = "A".repeat(40), suffix = "A".repeat(40);
+    env.win.__state.M[0].content = prefix + "B".repeat(20) + suffix;
+    env.win.__state.M[0]._rv = 1;
+    env.win.updateUI();
+
+    assert.ok(replaces > 0, "_rv bump 应触发 replaceWith");
+    assert.ok(panel.innerHTML.includes("B".repeat(20)));
+
+    env.win.Element.prototype.replaceWith = origReplaceWith;
+  });
+
+  it("resetMsgKeys 暴露在 App.Chat 上", () => {
+    assert.ok(typeof App.Chat.resetMsgKeys === "function", "resetMsgKeys 应是函数");
+  });
+
+  it("空 M 时 updateUI 渲染欢迎屏", () => {
+    env.win.__state.M = [];
+    env.win.updateUI();
+    const panel = env.doc.getElementById("ms");
+    assert.ok(panel.innerHTML.includes("Pi"), "空 M 时应渲染欢迎屏");
+    assert.ok(panel.innerHTML.includes("编码"), "欢迎屏应有提示文字");
   });
 });

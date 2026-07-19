@@ -148,10 +148,8 @@ body{background:var(--bg);height:100vh}
 .win-btn.close:hover{background:var(--rs);color:#fff}
 
 /* ─── Main Content ──────────────────────────────────────────── */
-.mc{flex:1;display:flex;flex-direction:column;overflow:hidden;position:relative;min-width:0}
-.mc::after{content:'';position:absolute;bottom:0;left:0;right:0;height:180px;background:linear-gradient(to bottom,transparent 30%,var(--bg) 100%);pointer-events:none;z-index:2}
-.mc.editing::after{display:none}
-.msgs{flex:1;overflow-y:auto;padding:12px 16px 180px;display:flex;flex-direction:column;gap:0;min-width:0;max-width:100%}
+.mc{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.msgs{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:0;min-width:0;max-width:100%}
 .m{padding:10px 12px 12px 12px;font-size:.85rem;line-height:1.7;word-wrap:break-word;animation:in .15s ease-out;position:relative;min-width:0;max-width:100%}
 @keyframes in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 .m.u{color:var(--tx);margin-left:auto;max-width:80%}
@@ -247,9 +245,9 @@ body{background:var(--bg);height:100vh}
 .fi-drop-zone.show{display:flex}
 .fi-area.drag-over .fi-box{border-color:var(--am);box-shadow:0 0 0 1px var(--am),0 8px 32px var(--sd)}
 
-/* ─── Floating Chat Input — 重构版（对话框 + Token + 按钮栏） ──── */
-.fi-area{position:absolute;bottom:20px;left:10%;right:10%;max-width:740px;margin:0 auto;z-index:10;display:flex;gap:8px;align-items:stretch;animation:fi-in .25s ease-out}
-@media(min-width:1200px){.fi-area{left:calc(50% - 370px);right:calc(50% - 370px)}}
+/* ─── Chat Input — 对话框 + Token + 按钮栏 ──── */
+.fi-area{flex-shrink:0;width:80%;max-width:740px;margin:0 auto;padding:8px 0 20px;display:flex;gap:8px;align-items:stretch;animation:fi-in .25s ease-out;box-sizing:content-box}
+@media(min-width:1200px){.fi-area{width:calc(100% - 740px);min-width:400px;max-width:740px}}
 @keyframes fi-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 
 /* ─── Token 左侧面板 ─── */
