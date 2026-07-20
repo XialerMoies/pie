@@ -310,8 +310,14 @@ ipcMain.handle("open-folder-dialog", async () => {
   return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
 });
 ipcMain.handle("spawn-terminal", async () => {
-  const cmd = `start cmd /k "npx tsx src/server/main.ts --cli"`;
-  execSync(cmd, { cwd: APP_ROOT, stdio: "ignore" });
+  if (process.platform === "win32") {
+    execSync(`start cmd /k "npx tsx src/server/main.ts --cli"`, { cwd: APP_ROOT, stdio: "ignore" });
+  } else if (process.platform === "darwin") {
+    const escaped = APP_ROOT.replace(/'/g, `'\\''`);
+    execSync(`osascript -e 'tell application "Terminal" to do script "cd '\\''${escaped}'\\'' && exec npx tsx src/server/main.ts --cli"'`, { cwd: APP_ROOT, stdio: "ignore" });
+  } else {
+    execSync(`x-terminal-emulator -e "npx tsx src/server/main.ts --cli"`, { cwd: APP_ROOT, stdio: "ignore" });
+  }
   return true;
 });
 

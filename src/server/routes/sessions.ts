@@ -254,7 +254,7 @@ function convertTracesToBlocks(traces: SessionTrace[], content?: string): any[] 
       const group = toolGroups.get(t.id)!;
       // 取最后一条的状态决定结果
       // running-only（中断/崩溃）→ 标记为 error，避免伪装成 success
-      const last = group[group.length - 1];
+      const last = group[group.length - 1] as SessionTrace & { type: "tool"; error?: string; output?: string };
       const isError = last.status === 'error' || last.status === 'running';
       const terminalStatus = isError ? 'error' : 'success';
       blocks.push({
