@@ -7,7 +7,12 @@ release/
 src/frontend/gen/
 CLAUDE.md
 tasks/
+任务系统/
 .pi/
 .vscode/
 example/
 .claude/
+ROADMAP.md
+event-stream-demo.html
+layout-designer.html
+scripts/patch-sdk.mjs

@@ -24,7 +24,7 @@ function handleSlash(ci: HTMLTextAreaElement): void {
 // ═══════════════════════════════════════════════════════════════════
 
 const MODE_LABELS: Record<string, string> = { auto: '自动', explain: '解释', plan: '计划' };
-const EFFORT_LABELS: Record<string, string> = { low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
+const EFFORT_LABELS: Record<string, string> = { off: '关闭', minimal: '极少', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
 
 const MODE_INSTRUCTIONS: Record<string, string> = {
   auto: '',
@@ -42,15 +42,30 @@ const EFFORT_INSTRUCTIONS: Record<string, string> = {
 
 let _currentMode = 'auto';
 let _currentEffort = 'medium';
+let _availableLevels: string[] = Object.keys(EFFORT_LABELS);
+let _supportsThinking = false;
+
+/** 从服务端同步思考档位状态 */
+async function syncThinkingLevel(): Promise<void> {
+  try {
+    const r = await fetch('/api/thinking-level');
+    const d = await r.json();
+    if (Array.isArray(d.availableLevels)) _availableLevels = d.availableLevels;
+    _supportsThinking = !!d.supportsThinking;
+    if (_supportsThinking && d.level) _currentEffort = d.level;
+  } catch {}
+}
 
 function loadModeState(): void {
   try {
     _currentMode = localStorage.getItem('chat-mode') || 'auto';
-    _currentEffort = localStorage.getItem('chat-effort') || 'medium';
+    const effort = localStorage.getItem('chat-effort') || 'medium';
+    if (EFFORT_LABELS[effort]) _currentEffort = effort;
     if (!MODE_LABELS[_currentMode]) _currentMode = 'auto';
-    if (!EFFORT_LABELS[_currentEffort]) _currentEffort = 'medium';
-  } catch { _currentMode = 'auto'; _currentEffort = 'medium'; }
+  } catch { _currentMode = 'auto'; }
   updateModeButton();
+  // 启动时从服务端获取真实思考档位；不支持时保留本地 fallback 选择
+  void syncThinkingLevel();
 }
 
 function setMode(mode: string): void {
@@ -59,9 +74,22 @@ function setMode(mode: string): void {
   updateModeButton();
 }
 
-function setEffort(effort: string): void {
+/** 调用服务端 setThinkingLevel，替代 localStorage + 提示词前缀 */
+async function setEffort(effort: string): Promise<void> {
   _currentEffort = effort;
   try { localStorage.setItem('chat-effort', effort); } catch {}
+  if (!_supportsThinking) return;
+  try {
+    const r = await fetch('/api/thinking-level', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level: effort }),
+    });
+    const d = await r.json();
+    _supportsThinking = !!d.supportsThinking;
+    if (Array.isArray(d.availableLevels)) _availableLevels = d.availableLevels;
+    if (_supportsThinking && d.level) _currentEffort = d.level;
+  } catch {}
 }
 
 function updateEffortControl(root: HTMLElement, effortKeys: string[]): void {
@@ -95,7 +123,8 @@ function showModePopup(btn: HTMLElement): void {
   popup.style.left = rect.left + 'px';
 
   const modeKeys = Object.keys(MODE_LABELS);
-  const effortKeys = Object.keys(EFFORT_LABELS);
+  // 使用服务端返回的可用档位，而非硬编码
+  const effortKeys = _supportsThinking && _availableLevels.length > 0 ? _availableLevels : Object.keys(EFFORT_LABELS);
   let html = '';
 
   html += '<div class="mode-popup-title">模式</div><div class="mode-segment">';
@@ -176,7 +205,10 @@ function showModePopup(btn: HTMLElement): void {
 /** 根据当前 mode/effort 构建消息指令前缀 */
 function buildInstruction(message: string): string {
   const modeIns = MODE_INSTRUCTIONS[_currentMode] || ''
-  const effortIns = EFFORT_INSTRUCTIONS[_currentEffort] || ''
+  // 思考深度优先走 SDK 原生控制；不支持时才降级为提示词前缀
+  const effortIns = _supportsThinking
+    ? ''
+    : (EFFORT_INSTRUCTIONS[_currentEffort] || '')
   if (!modeIns && !effortIns) return message
   const parts: string[] = []
   if (modeIns) parts.push(modeIns)

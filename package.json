@@ -54,7 +54,7 @@
   },
   "dependencies": {
     "@mdi/font": "^7.4.47",
-    "@xiamol/pi-coding-agent": "^0.80.3",
+    "@xiamol/pi-coding-agent": "^0.80.4",
     "devicon": "^2.17.0",
     "happy-dom": "^20.10.6",
     "marked": "^18.0.5",
