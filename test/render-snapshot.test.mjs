@@ -297,6 +297,55 @@ describe("msgs() 渲染", () => {
     assert.ok(idxT1 < idxB1, "text 在 tool_use 之前");
     assert.ok(idxB1 < idxR1, "tool_use 在 tool_result 之前");
   });
+
+  it("_compacted 消息渲染为 .compact-summary 卡片", () => {
+    const html = win.App.Chat.renderMessage({
+      role: "assistant",
+      content: "📦 **上下文已压缩** — 原 500 tokens\n\nsome summary here",
+      _compacted: true,
+    });
+    assert.ok(html.startsWith('<div class="compact-summary">'), "使用 compact-summary 容器而非普通 m assistant");
+    assert.ok(html.includes("some summary here"), "summary 内容渲染");
+    assert.ok(!html.includes('class="m '), "不走普通 assistant 气泡");
+    assert.ok(html.includes("<strong>上下文已压缩</strong>"), "markdown 加粗渲染");
+  });
+
+  it("普通 assistant 不走 .compact-summary", () => {
+    const html = win.App.Chat.renderMessage({
+      role: "assistant",
+      content: "normal reply",
+    });
+    assert.ok(html.startsWith('<div class="m '), "普通 assistant 使用 m 容器");
+    assert.ok(html.includes("normal reply"), "内容渲染");
+  });
+
+  it("blocks 中 text block 渲染在事件流内", () => {
+    const html = win.App.Chat.renderMessage({
+      role: "assistant",
+      content: "reply",
+      turnId: "t1",
+      blocks: [
+        { type: "thinking", text: "思考步骤", status: "done", blockId: "think1", seq: 1 },
+        { type: "tool_use", status: "success", name: "search", toolCallId: "call1", blockId: "tool1", seq: 2 },
+        { type: "tool_result", toolUseId: "call1", output: "结果", blockId: "res1", seq: 3 },
+        { type: "text", text: "最终回复", blockId: "text1", seq: 4 },
+      ],
+    });
+    // text block 作为事件节点流的一部分，带 timeline 圆点
+    assert.ok(html.includes("block-trace"), "使用事件流容器");
+    assert.ok(html.includes('class="trace-node trace-text"'), "text block 使用 trace-text 节点");
+    assert.ok(html.includes("trace-dot"), "text block 带 timeline 圆点");
+    assert.ok(html.includes("最终回复"), "text body 渲染");
+    // 所有事件节点都在单个 trace 容器内
+    const matchTrace = html.match(/<div class="trace block-trace">/g);
+    assert.strictEqual(matchTrace?.length, 1, "所有 block 在单个 trace 容器内");
+    // 第一个 thinking 默认展开
+    assert.ok(html.includes('<details class="trace-thought" open>'), "第一个 thinking 默认展开");
+    // 最后一个节点的竖线不延伸
+    assert.ok(html.includes('trace-text'), "最后一个节点是 text block");
+    const lastNodeMatch = html.match(/<div class="trace-node trace-text">/g);
+    assert.ok(lastNodeMatch, "text 节点存在");
+  });
 });
 
 describe("sinfoHTML() 渲染", () => {

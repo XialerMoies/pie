@@ -82,25 +82,17 @@ function buildMainArea(): string {
   return `<div class="main">
     <div class="main-tabs" id="main-tabs"></div>
     <div class="mc">
+      <div class="tr-rail" id="tr-rail" title="点击查看用量详情">
+        <span class="tr-pct" id="tr-pct" title="上下文占用">--%</span>
+        <span class="tr-cr" id="tr-cr" title="缓存命中率">--%</span>
+        <button class="tr-btn" id="tr-btn" title="压缩上下文">压缩</button>
+      </div>
       <div class="msgs" id="ms">${window.msgs ? window.msgs() : ''}</div>
       <div class="file-content" id="file-content" style="display:none">
         <div class="fc-toolbar"><span class="fc-status" id="fc-status"></span></div>
         <div class="fc-editor" id="fc-editor"></div>
       </div>
       <div class="fi-area" id="fi">
-        <div class="fi-token-box" id="fi-token">
-          <div class="fi-tk-top"><span class="fi-tk-hd">Tokens</span><span class="fi-tk-ctx" id="fi-tk-ctx">— / —</span></div>
-          <div class="fi-tk-bar"><div class="fi-tk-fill" id="fi-tk-fill" style="width:0%"></div></div>
-          <div class="fi-tk-grid" id="fi-tk-grid">
-            <span class="fi-tk-l">输入</span><span class="fi-tk-v" id="fi-tk-in">—</span>
-            <span class="fi-tk-l">输出</span><span class="fi-tk-v" id="fi-tk-out">—</span>
-            <span class="fi-tk-l">命中</span><span class="fi-tk-v" id="fi-tk-ch">—</span>
-            <span class="fi-tk-l">未命</span><span class="fi-tk-v" id="fi-tk-cm">—</span>
-            <span class="fi-tk-l">命中率</span><span class="fi-tk-v" id="fi-tk-rate">—</span>
-            <span class="fi-tk-sep"></span>
-            <span class="fi-tk-l">费用</span><span class="fi-tk-v" id="fi-tk-cost">—</span>
-          </div>
-        </div>
         <div class="fi-box" id="fi-box">
           <div class="fi-drop-zone" id="fi-drop-zone">松开添加文件引用</div>
           <div class="fi-slash" id="fi-slash" style="display:none">
@@ -203,7 +195,6 @@ function _syncMainArea(activeId: string | null, items: AppTab[]): void {
   if (!ms || !fi) return;
 
   if (!activeId) {
-    // 无 active tab → 空白主区
     ms.style.display = 'none';
     if (fc) fc.style.display = 'none';
     fi.style.display = 'none';
@@ -213,19 +204,18 @@ function _syncMainArea(activeId: string | null, items: AppTab[]): void {
 
   const activeTab = items.find(t => t.id === activeId);
   if (activeTab?.kind === 'file') {
-    // file tab → 显示编辑器
     ms.style.display = 'none';
     if (fc) fc.style.display = '';
     mc?.classList.add('editing');
-    // 输入区对 file tab 也隐藏（聊天输入不显示在文件编辑模式）
     fi.style.display = 'none';
   } else {
-    // chat/session tab → 显示消息区和输入区
     ms.style.display = '';
     if (fc) fc.style.display = 'none';
     fi.style.display = '';
     mc?.classList.remove('editing');
   }
+  const scheduleRailSync = window.requestAnimationFrame || ((callback: FrameRequestCallback) => window.setTimeout(callback, 0));
+  scheduleRailSync(() => (window as any).syncTokenRailPosition?.());
 }
 
 // ─── 标签事件委托（替代 inline onclick，修复 ' 转义风险）───
@@ -281,6 +271,17 @@ function _setupTabEvents(container: HTMLElement): void {
     (window as any).tabMoreMenu?.(e);
   });
 }
+
+// ─── Token Rail 事件委托 ──────────────────────────────
+document.addEventListener('click', (e: MouseEvent) => {
+  const rail = (e.target as HTMLElement).closest('.tr-rail') as HTMLElement | null;
+  if (!rail) return;
+  if ((e.target as HTMLElement).closest('.tr-btn') && !(e.target as HTMLButtonElement).disabled) {
+    (window as any).openCompactModal?.();
+    return;
+  }
+  (window as any).openUsagePanel?.();
+});
 
 // ─── 滚轮滚动 ────────────────────────
 document.addEventListener('wheel', (e) => {

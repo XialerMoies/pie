@@ -22,6 +22,7 @@ interface Message {
   streaming?: boolean;
   error?: ChatErrorState;
   blocks?: AssistantBlock[];
+  _compacted?: boolean;        // 服务端标记：来自 session JSONL 的 compaction 摘要
 }
 
 interface AssistantBlock {

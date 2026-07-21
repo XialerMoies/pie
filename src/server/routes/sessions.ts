@@ -107,7 +107,7 @@ type SessionTrace =
   | { type: "tool"; status: "running" | "success" | "error"; name: string; input?: unknown; output?: string; error?: string; turnId?: string; id: string }
   | { type: "step"; status: "info" | "success" | "error"; text: string; turnId?: string; id: string };
 
-type SessionMessage = { role: string; content: string; thinking?: string; turnId?: string; trace?: SessionTrace[] };
+type SessionMessage = { role: string; content: string; thinking?: string; turnId?: string; trace?: SessionTrace[]; _compacted?: boolean };
 
 type SessionBranchInfo = { id: string; name?: string };
 
@@ -316,6 +316,11 @@ export function parseSessionMessages(content: string): SessionMessage[] {
   };
   const pushMessage = (message: SessionMessage) => {
     const last = messages[messages.length - 1];
+    // 不合并 _compacted 消息（compaction 卡片不应吞并/被吞并普通 assistant 消息）
+    if (message._compacted || (last as any)?._compacted) {
+      messages.push(message);
+      return;
+    }
     if (message.role === "assistant" && last?.role === "assistant") {
       last.content = [last.content, message.content].filter(Boolean).join("\n\n");
       last.thinking = [last.thinking, message.thinking].filter(Boolean).join("\n\n") || undefined;
@@ -328,10 +333,10 @@ export function parseSessionMessages(content: string): SessionMessage[] {
   const attachTrace = (trace: SessionTrace[]) => {
     if (trace.length === 0) return;
     const last = messages[messages.length - 1];
-      if (last?.role === "assistant") {
+    if (last?.role === "assistant" && !(last as any)._compacted) {
       last.trace = appendTrace(last.trace || [], trace);
-        const turnId = trace.find((item) => item.turnId)?.turnId;
-        if (!last.turnId && turnId) last.turnId = turnId;
+      const turnId = trace.find((item) => item.turnId)?.turnId;
+      if (!last.turnId && turnId) last.turnId = turnId;
     } else {
       pendingTrace = appendTrace(pendingTrace, trace);
     }
@@ -343,6 +348,13 @@ export function parseSessionMessages(content: string): SessionMessage[] {
       }
       if (entry.type === "trace" && entry.event) {
         attachTrace([{ ...entry.event, turnId: entry.event.turnId || entry.turnId }]);
+        continue;
+      }
+      if (entry.type === "compaction") {
+        const summary = entry.summary || "";
+        const tokensBefore = entry.tokensBefore || 0;
+        const content = `📦 **上下文已压缩** — 原 ${tokensBefore} tokens\n\n${summary}`;
+        messages.push({ role: "assistant", content, _compacted: true });
         continue;
       }
       if (entry.type === "message" && entry.message) {

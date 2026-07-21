@@ -28,6 +28,7 @@ function toolTitle(name: string): string {
   if (lower === 'explorer-list' || lower === 'explorerlist') return '浏览目录';
   if (lower === 'git-status') return '验证结果';
   if (lower === 'git-log') return '查看提交历史';
+  if (lower === 'file-outline' || lower === 'fileoutline') return '代码结构';
   return (name || '工具').replace(/[-_]+/g, ' ');
 }
 
@@ -97,11 +98,12 @@ function hasTraceValue(value: unknown): boolean {
   return true;
 }
 
-function renderTraceItem(t: any): string {
+function renderTraceItem(t: any, defaultOpen?: boolean): string {
   if (t.type === 'thinking') {
     const text = shortText(t.text || '思考中...', 1000);
     const status = t.status === 'done' ? 'done' : 'streaming';
-    return `<div class="trace-node trace-thinking trace-${status}"><div class="trace-dot"></div><details class="trace-thought"${status === 'streaming' ? ' open' : ''}><summary>Thought${status === 'streaming' ? '...' : ''}</summary><div class="trace-thinking-text">${mdRender(text)}</div></details></div>`;
+    const open = defaultOpen || status === 'streaming';
+    return `<div class="trace-node trace-thinking trace-${status}"><div class="trace-dot"></div><details class="trace-thought"${open ? ' open' : ''}><summary>Thought${status === 'streaming' ? '...' : ''}</summary><div class="trace-thinking-text">${mdRender(text)}</div></details></div>`;
   }
   if (t.type === 'tool') {
     const status = t.status || 'running';
@@ -125,6 +127,9 @@ function renderTraceItem(t: any): string {
   if (t.type === 'step') {
     return `<div class="trace-node trace-step trace-${t.status || 'info'}"><div class="trace-dot"></div><div class="trace-body"><div class="trace-title"><span class="trace-summary-title">${E(t.text || '')}</span></div></div></div>`;
   }
+  if (t.type === 'text') {
+    return `<div class="trace-node trace-text"><div class="trace-dot"></div><div class="trace-body trace-text-body">${mdRender(t.text || '')}</div></div>`;
+  }
   return '';
 }
 
@@ -132,14 +137,14 @@ function blockId(b: any): string {
   return String(b.blockId || `${b.type || 'block'}-${b.seq || 0}`);
 }
 
-function renderEventBlock(b: any, blocks: any[]): string {
+function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean): string {
   if (b.type === 'thinking') {
     return renderTraceItem({
       type: 'thinking',
       status: b.status || 'streaming',
       text: b.text || '',
       id: blockId(b),
-    });
+    }, defaultOpen);
   }
   if (b.type === 'tool_use') {
     const result = blocks.find(item => item.type === 'tool_result' && item.toolUseId && item.toolUseId === b.toolCallId);
@@ -174,6 +179,13 @@ function renderEventBlock(b: any, blocks: any[]): string {
       id: blockId(b),
     });
   }
+  if (b.type === 'text') {
+    return renderTraceItem({
+      type: 'text',
+      text: b.text || '',
+      id: blockId(b),
+    });
+  }
   return '';
 }
 
@@ -187,14 +199,12 @@ function renderBlocks(blocks: any[]): string {
     eventBlocks = [];
   };
 
+  let firstThinking = true;
   for (const block of sorted) {
     const id = E(blockId(block));
-    if (block.type === 'text') {
-      flushEvents();
-      parts.push(`<div class="assistant-block block-text" data-block-id="${id}">${mdRender(block.text || '')}</div>`);
-      continue;
-    }
-    const eventHtml = renderEventBlock(block, sorted);
+    const defaultOpen = block.type === 'thinking' && firstThinking;
+    if (block.type === 'thinking') firstThinking = false;
+    const eventHtml = renderEventBlock(block, sorted, defaultOpen);
     if (eventHtml) {
       eventBlocks.push(`<div class="assistant-block block-event" data-block-id="${id}">${eventHtml}</div>`);
     }
@@ -207,6 +217,12 @@ function renderMessage(m: any): string {
   const c = m.role + (m.streaming ? ' go' : ''), lb = m.role === 'user' ? '你' : 'Pi';
   const ty = m.streaming ? `<div class="ty"><span class="ty-d"></span><span class="ty-d"></span><span class="ty-d"></span></div>` : '';
   const error = m.error ? renderErrorCard(m.error) : '';
+
+  // Compact summary 专用渲染
+  if (m._compacted) {
+    const content = m.content ? mdRender(m.content) : '';
+    return `<div class="compact-summary">${content}</div>`;
+  }
 
   if (m.blocks && m.blocks.length > 0) {
     return `<div class="m ${c}${m.error ? ' error' : ''}"><div class="ml">${lb}</div>${error}<div class="mt block-flow">${renderBlocks(m.blocks)}</div>${ty}</div>`;

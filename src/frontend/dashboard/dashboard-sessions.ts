@@ -214,9 +214,9 @@ function sessionTabLabel(id: string): string {
   return '新会话';
 }
 
-/** @deprecated _syncMainArea 已接管主区切换 */
+/** @deprecated _syncMainArea 已接管主区切换，不再影响 activeId */
 function focusChatView(): void {
-  (window as any).__tabs?.activateTab(null);
+  // no-op: _syncMainArea 根据 TabStore.activeId 自动切换主区显示
 }
 
 /** Session tab 渲染（已合并到 renderTabs，此函数仅触发 renderTabs） */
@@ -331,6 +331,9 @@ async function restoreSessionTabs(): Promise<void> {
           content: m.content,
           thinking: m.thinking || '',
           streaming: false,
+          _compacted: (m as any)._compacted || false,
+          turnId: (m as any).turnId || undefined,
+          blocks: (m as any).blocks || undefined,
         }));
         if ((window as any).focusChatView) (window as any).focusChatView();
         const msgsEl = document.getElementById('ms');
@@ -778,7 +781,7 @@ function branchSession(id: string): void {
     if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
     window.__state.IL = false;
     App.Chat?.resetMsgKeys?.();
-    window.__state.M = (data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', streaming: false }));
+    window.__state.M = (data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', streaming: false, _compacted: (m as any)._compacted || false, turnId: (m as any).turnId || undefined, blocks: (m as any).blocks || undefined }));
     focusChatView();
     const activeId = data.activeSessionId || data.id || '';
     if (activeId) {
@@ -811,7 +814,7 @@ function switchSession(id: string): void {
     .then((data: any) => {
       if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
       const oldCS = window.__state.CS; if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
-      window.__state.IL = false; App.Chat?.resetMsgKeys?.(); window.__state.M = (data.messages || []).map((m: any) => ({ role: m.role, content: m.content, thinking: m.thinking || '', streaming: false }));
+      window.__state.IL = false; App.Chat?.resetMsgKeys?.(); window.__state.M = (data.messages || []).map((m: any) => ({ role: m.role, content: m.content, thinking: m.thinking || '', streaming: false, _compacted: m._compacted || false, turnId: m.turnId || undefined, blocks: m.blocks || undefined }));
       focusChatView(); const msgsEl = $('ms');
       if (msgsEl) { msgsEl.innerHTML = window.__state.M.length > 0 ? (window.msgs ? window.msgs() : '') : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>'; setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50); }
       toast('已切换到会话 (' + window.__state.M.length + ' 条消息)');
@@ -841,6 +844,7 @@ window.branchSession = branchSession as any;
 (window as any).setActiveSessionTabId = setActiveSessionTabId;
 (window as any).renderSessionTabs = renderSessionTabs;
 (window as any).migrateSessionTabLabels = migrateSessionTabLabels;
+(window as any).switchSession = switchSession;
 
 // ─── App 命名空间绑定 ──────────────────────────────────────
 const AppSess = (window as any).App?.Session;
@@ -857,6 +861,7 @@ if (AppSess) {
   AppSess.renderSessionTabs = renderSessionTabs;
   AppSess.restoreSessionTabs = restoreSessionTabs;
   AppSess.saveUiState = saveUiState;
+  AppSess.switchSession = switchSession;
 }
 
 // ─── Session/Chat handler（Phase 2：真实行为入口）────────
@@ -895,7 +900,7 @@ function _sessionActivate(tab: AppTab): void {
     if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
     window.__state.IL = false;
     App.Chat?.resetMsgKeys?.();
-    window.__state.M = (data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', streaming: false }));
+    window.__state.M = (data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', streaming: false, _compacted: (m as any)._compacted || false, turnId: (m as any).turnId || undefined, blocks: (m as any).blocks || undefined }));
     focusChatView();
     const msgsEl = $('ms');
     if (msgsEl) {

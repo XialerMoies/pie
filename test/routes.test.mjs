@@ -10,7 +10,7 @@ import assert from "node:assert";
 import { createServer } from "node:http";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -183,6 +183,72 @@ describe("dashboard routes", () => {
     assert.ok(data.sessionStats);
   });
 
+  it("GET /api/usage/current 返回当前用量", async () => {
+    const { status, body } = await callHandler(handleDashboard, "GET", "/api/usage/current");
+    assert.strictEqual(status, 200);
+    const data = parseJSON(body);
+    assert.ok(data.hasActiveSession, "应有活跃会话");
+    assert.ok(data.sessionId, "应有 sessionId");
+    assert.strictEqual(data.provider, "test-provider", "应有 provider");
+    assert.ok(data.contextUsage, "应有 contextUsage");
+    assert.strictEqual(data.contextUsage.tokens, 1234);
+    assert.ok(data.tokens, "应有 tokens");
+    assert.strictEqual(data.tokens.input, 500);
+    assert.strictEqual(data.cacheHitRate, 67, "100/(100+50)*100 = 67%");
+    assert.strictEqual(data.compactCount, 0, "无 compaction entry");
+    assert.strictEqual(data.isStreaming, false);
+    assert.strictEqual(data.isCompacting, false);
+  });
+
+  it("GET /api/usage/summary 统计真实 JSONL 格式", async () => {
+    // 创建含真实 PI 格式 session 文件的临时目录
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "usage-summary-"));
+    const sessionsDir = resolve(tmpDir, "sessions");
+    mkdirSync(resolve(sessionsDir, "by-project", "a"), { recursive: true });
+
+    // session_one: 首行 type:session (有 cwd)，后续 session_info 有名称，含 message 和 compaction
+    const f1 = resolve(sessionsDir, "by-project", "a", "one.jsonl");
+    writeFileSync(f1, [
+      JSON.stringify({ type: "session", id: "s1", cwd: "/workspace/a" }),
+      JSON.stringify({ type: "session_info", name: "Renamed One", timestamp: new Date().toISOString() }),
+      JSON.stringify({ type: "message", message: { role: "user", content: "hi" } }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "ok" } }),
+      JSON.stringify({ type: "compaction", summary: "compacted", tokensBefore: 100 }),
+    ].join("\n") + "\n");
+
+    // session_two: 无 session_info，首行有 workspace 字段
+    const f2 = resolve(sessionsDir, "by-project", "a", "two.jsonl");
+    writeFileSync(f2, [
+      JSON.stringify({ type: "session", id: "s2", workspace: "/workspace/b" }),
+      JSON.stringify({ type: "message", message: { role: "user", content: "hi" } }),
+    ].join("\n") + "\n");
+
+    const ctx = mockContext({
+      paths: { SESSIONS_DIR: sessionsDir, APP_ROOT: process.cwd(), DATA_DIR: tmpDir, PI_CONFIG_DIR: resolve(tmpDir, "pi") },
+    });
+    const { status, body } = await callHandler(handleDashboard, "GET", "/api/usage/summary", undefined, ctx);
+    assert.strictEqual(status, 200);
+    const data = parseJSON(body);
+
+    assert.strictEqual(data.sessions, 2, "2 个 session 文件");
+    assert.strictEqual(data.compactCount, 1, "1 条 compaction");
+    // token 统计：只有 session_one 的 assistant message 有 usage（未设置则无）
+    assert.ok(data.tokens, "应有 tokens 字段");
+    assert.strictEqual(data.tokens.input, 0, "测试数据无 usage 字段，故为 0");
+    assert.strictEqual(data.tokens.output, 0);
+    assert.strictEqual(typeof data.cost, "number");
+    assert.strictEqual(data.cost, 0);
+
+    // Top 5 按 token 数降序
+    assert.strictEqual(data.topSessions.length, 2);
+    assert.strictEqual(data.topSessions[0].id, "s1", "id 来自 JSONL 首行 type:session");
+    assert.strictEqual(data.topSessions[0].name, "Renamed One", "从 session_info 读取名称");
+    assert.strictEqual(data.topSessions[0].workspace, "/workspace/a", "从 cwd 读取 workspace");
+    assert.strictEqual(data.topSessions[1].id, "s2");
+    assert.strictEqual(data.topSessions[1].name, "未命名", "无 session_info 时为未命名");
+    assert.strictEqual(data.topSessions[1].workspace, "/workspace/b", "从 workspace 字段读取");
+  });
+
   it("GET /api/paths 返回路径", async () => {
     const { status, body } = await callHandler(handleDashboard, "GET", "/api/paths");
     assert.strictEqual(status, 200);
@@ -194,6 +260,125 @@ describe("dashboard routes", () => {
   it("未知 URL 返回 false", async () => {
     const { handled } = await callHandler(handleDashboard, "GET", "/api/bogus");
     assert.strictEqual(handled, false);
+  });
+
+  describe("POST /api/compact", () => {
+    it("压缩成功返回 compacted:true", async () => {
+      let compactCalledWith;
+      const ctx = mockContext({
+        runtime: {
+          session: {
+            ...mockSession(),
+            compact: async (focus) => { compactCalledWith = focus; return { summary: "compacted" }; },
+          },
+        },
+      });
+      const { status, body } = await callHandler(handleDashboard, "POST", "/api/compact", { focus: "keep bugs" }, ctx);
+      assert.strictEqual(status, 200);
+      const data = parseJSON(body);
+      assert.ok(data.ok);
+      assert.strictEqual(data.compacted, true);
+      assert.strictEqual(compactCalledWith, "keep bugs", "focus 传入 compact()");
+    });
+
+    it("Nothing to compact 返回 compacted:false", async () => {
+      const ctx = mockContext({
+        runtime: {
+          session: {
+            ...mockSession(),
+            compact: async () => { throw new Error("Nothing to compact (session too small)"); },
+          },
+        },
+      });
+      const { status, body } = await callHandler(handleDashboard, "POST", "/api/compact", {}, ctx);
+      assert.strictEqual(status, 200);
+      const data = parseJSON(body);
+      assert.ok(data.ok);
+      assert.strictEqual(data.compacted, false);
+      assert.ok(data.message.includes("Nothing to compact"));
+    });
+
+    it("Already compacted 返回 compacted:false", async () => {
+      const ctx = mockContext({
+        runtime: {
+          session: {
+            ...mockSession(),
+            compact: async () => { throw new Error("Already compacted"); },
+          },
+        },
+      });
+      const { status, body } = await callHandler(handleDashboard, "POST", "/api/compact", {}, ctx);
+      assert.strictEqual(status, 200);
+      const data = parseJSON(body);
+      assert.ok(data.ok);
+      assert.strictEqual(data.compacted, false);
+    });
+
+    it("streaming 时返回 409", async () => {
+      const ctx = mockContext({
+        runtime: {
+          session: {
+            ...mockSession({ isStreaming: true }),
+            compact: async () => ({ summary: "ok" }),
+          },
+        },
+      });
+      const { status } = await callHandler(handleDashboard, "POST", "/api/compact", {}, ctx);
+      assert.strictEqual(status, 409);
+    });
+
+    it("isCompacting 时返回 409", async () => {
+      const ctx = mockContext({
+        runtime: {
+          session: {
+            ...mockSession({ isCompacting: true }),
+            compact: async () => ({ summary: "ok" }),
+          },
+        },
+      });
+      const { status } = await callHandler(handleDashboard, "POST", "/api/compact", {}, ctx);
+      assert.strictEqual(status, 409);
+    });
+
+    it("compact 后创建 usage-index.json", async () => {
+      const tmpDir = mkdtempSync(resolve(tmpdir(), "compact-index-"));
+      const sessionsDir = resolve(tmpDir, "sessions");
+      mkdirSync(resolve(sessionsDir, "by-project", "a"), { recursive: true });
+      const sessionFile = resolve(sessionsDir, "by-project", "a", "s1.jsonl");
+      writeFileSync(sessionFile, [
+        JSON.stringify({ type: "session", id: "s1" }),
+        JSON.stringify({ type: "message", message: { role: "assistant", usage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cost: { total: 0.5 } } } }),
+      ].join("\n") + "\n");
+      const indexPath = resolve(tmpDir, "pi", "usage-index.json");
+
+      const ctx = mockContext({
+        runtime: {
+          session: {
+            ...mockSession(),
+            sessionFile,
+            compact: async () => {
+              // 模拟 compact：追加一条
+              writeFileSync(sessionFile, [
+                JSON.stringify({ type: "session", id: "s1" }),
+                JSON.stringify({ type: "message", message: { role: "assistant", usage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cost: { total: 0.5 } } } }),
+                JSON.stringify({ type: "compaction", timestamp: new Date().toISOString() }),
+              ].join("\n") + "\n");
+              return { summary: "compacted" };
+            },
+          },
+        },
+        paths: { SESSIONS_DIR: sessionsDir, PI_CONFIG_DIR: resolve(tmpDir, "pi"), DATA_DIR: tmpDir, APP_ROOT: process.cwd() },
+      });
+      const { status, body: _b } = await callHandler(handleDashboard, "POST", "/api/compact", {}, ctx);
+      assert.strictEqual(status, 200);
+
+      // 验证索引创建且更新了 compact 数据
+      assert.ok(existsSync(indexPath), "usage-index.json 已创建");
+      const index = JSON.parse(readFileSync(indexPath, "utf-8"));
+      assert.ok(index.sessions?.s1, "索引包含 s1");
+      assert.strictEqual(index.sessions.s1.compactCount, 1, "compactCount 为 1");
+      assert.strictEqual(index.sessions.s1.input, 10, "input 保留 10");
+    });
   });
 });
 

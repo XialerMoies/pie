@@ -230,64 +230,12 @@ export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStrea
     const turnId = chatStream.turnId || (event.turnIndex !== undefined ? `turn-${event.turnIndex}` : "");
     const tid = (event.toolCallId || event.id || event.type) + "@" + turnId;
 
-    if (event.type === "turn_start") {
-      const trace: TraceEvent = {
-        type: "step",
-        status: "info",
-        text: `开始第 ${Number(event.turnIndex) + 1 || 1} 轮`,
-        turnId,
-        id: `turn-start@${event.turnIndex ?? turnId}`,
-      };
-      persistTraceEvent(runtime, assignTraceSeq(chatStream, trace), { force: true });
-    }
-
-    if (event.type === "message_start") {
-      const role = event.message?.role || "message";
-      const trace: TraceEvent = {
-        type: "step",
-        status: "info",
-        text: role === "assistant"
-          ? "开始生成回复"
-          : role === "user"
-            ? "收到用户消息"
-            : role === "toolResult"
-              ? "收到工具结果"
-              : `${role} message started`,
-        turnId,
-        id: `message-start@${role}@${event.message?.id || event.message?.toolCallId || turnId}`,
-      };
-      persistTraceEvent(runtime, assignTraceSeq(chatStream, trace), { force: true });
-    }
-
-    if (event.type === "message_end") {
-      const role = event.message?.role || "message";
-      const trace: TraceEvent = {
-        type: "step",
-        status: "success",
-        text: role === "assistant"
-          ? "回复生成完成"
-          : role === "user"
-            ? "用户消息结束"
-            : role === "toolResult"
-              ? "工具结果已记录"
-              : `${role} message finished`,
-        turnId,
-        id: `message-end@${role}@${event.message?.id || event.message?.toolCallId || turnId}`,
-      };
-      persistTraceEvent(runtime, assignTraceSeq(chatStream, trace), { force: true });
+    // lifecycle 步骤不再生成 step 事件（旧 session 仍可回放，新 session 不再写入）
+    if (event.type === "message_end" && event.message?.role === "toolResult") {
       flushPendingTracePersist(runtime, turnId);
     }
-
     if (event.type === "turn_end") {
-      const trace: TraceEvent = {
-        type: "step",
-        status: "success",
-        text: `第 ${Number(event.turnIndex) + 1 || 1} 轮完成`,
-        turnId,
-        id: `turn-end@${event.turnIndex ?? turnId}`,
-      };
       flushPendingTracePersist(runtime, turnId);
-      persistTraceEvent(runtime, assignTraceSeq(chatStream, trace), { force: true });
     }
 
     // ─── Tool trace ─────────────────────────────────────────

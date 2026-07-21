@@ -158,7 +158,7 @@ function _messageKey(m: any): string {
   const err = m.error;
   const c = m.content || "";
   const t = m.thinking || "";
-  return `${m.role}:${c.length}:${c.slice(0, 40)}:${c.slice(-40)}:${t.length}:${t.slice(0, 40)}:${t.slice(-40)}:${(m as any).streaming ? "1" : "0"}:${err ? (err.title || "") + "|" + (err.message || "") : ""}:${(m as any).blocks?.length || 0}:${(m as any).turnId || ""}:${(m as any)._rv || 0}`;
+  return `${m.role}:${c.length}:${c.slice(0, 40)}:${c.slice(-40)}:${t.length}:${t.slice(0, 40)}:${t.slice(-40)}:${(m as any).streaming ? "1" : "0"}:${err ? (err.title || "") + "|" + (err.message || "") : ""}:${(m as any).blocks?.length || 0}:${(m as any).turnId || ""}:${(m as any)._rv || 0}:${(m as any)._compacted ? "1" : "0"}`;
 }
 
 /** 节点级消息 diff：逐条检查 key，变才渲染 + replaceWith；无中间字符串层 */
@@ -556,9 +556,8 @@ function bind(): void {
     });
   }
 
-  // ─── Token polling (every 6s) ───
-  (window as any).pollTokenUsage?.();
-  setInterval(() => (window as any).pollTokenUsage?.(), 6000);
+  // ─── Token polling (every 6s) → Token Rail + Usage 面板 ───
+  (window as any).startTokenPoll?.();
 }
 
 function updateModelName(): void {

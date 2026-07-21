@@ -64,6 +64,13 @@ Object.defineProperty(window.__state, '_fileTabs', {
       }
       // 降级：TabStore 无此 tab（初始化阶段 / legacy 调用）
       if (!tab) {
+        // session/chat tab 未在 TabStore 中 → 走 switchSession 加载
+        if (id.startsWith('draft:') || /^[a-f0-9-]{30,}$/i.test(id)) {
+          if (typeof (window as any).switchSession === 'function') {
+            (window as any).switchSession(id);
+            return;
+          }
+        }
         if (tabs) tabs.activateTab(id);
         const ft = tabs?.getTab?.(id);
         const editorEl = document.getElementById('fc-editor');
