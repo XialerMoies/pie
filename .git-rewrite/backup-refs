@@ -1,7 +1,0 @@
-b44808ff0ea91172ea4375abe593e8be669c99ca commit	refs/heads/clean-history
-80a73f4ba89b21bfe5fab5c28db81ef360326bdc commit	refs/heads/master
-a03a9a8e89a9aa1686478e02fa08009367b7705c commit	refs/heads/tmp-master
-a444d824c8c30889c824b3ca93232ceb8431df1d commit	refs/original/refs/heads/master
-a03a9a8e89a9aa1686478e02fa08009367b7705c commit	refs/remotes/origin/master
-6faa730f138d4630f16b46caa4698ade86633444 commit	refs/replace/67c3d12d0b87d72f2bd2f11ab38438a8799052c5
-08fd0c022e77c6a1aa2b69ffef321f2b34b14271 commit	refs/stash
