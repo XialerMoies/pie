@@ -9,7 +9,8 @@ import { resolve } from "path"
 import type { AgentSession } from "@xiamol/pi-coding-agent"
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from "@xiamol/pi-coding-agent"
 import { resolveSystemPrompt } from "./prompts"
-import { getCustomTools } from "./tools"
+import { getCustomToolsAsync } from "./tools"
+import { disconnectAllSync } from "./mcp/MCPClientService"
 import { wsDir } from "../server/routes/session-dir"
 
 export interface RuntimeConfig {
@@ -133,6 +134,7 @@ export class AgentRuntime {
   /** 清理 */
   dispose(): void {
     try { this.session.dispose() } catch {}
+    disconnectAllSync()
     this._eventCallbacks = []
   }
 
@@ -161,12 +163,13 @@ export class AgentRuntime {
     return resolve(dir, files[0])
   }
 
-  /** 中止并清理旧 session，返回事件回调列表 */
+  /** 中止并清理旧 session + MCP 连接，返回事件回调列表 */
   private _saveAndDispose(): SessionEventCallback[] {
     try { this.session?.abort() } catch {}
     const callbacks = [...this._eventCallbacks]
     this._eventCallbacks = []
     try { this.session?.dispose() } catch {}
+    disconnectAllSync()
     return callbacks
   }
 
@@ -211,7 +214,7 @@ export class AgentRuntime {
         this.sessionManager = SessionManager.create(cwd, wsSessionsDir)
       }
     }
-    const customTools = getCustomTools(cwd, (event) => this.emitEvent(event))
+    const customTools = await getCustomToolsAsync(cwd, (event) => this.emitEvent(event))
 
     console.log(`[runtime] 自定义 Tool: ${customTools.map((t: { name: string }) => t.name).join(", ") || "（无）"}`)
 

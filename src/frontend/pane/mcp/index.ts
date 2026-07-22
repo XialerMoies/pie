@@ -117,6 +117,7 @@ async function fetchMcpServers(): Promise<void> {
         ${s.tools.length > 0 ? `<div class="mcp-server-tools">${s.tools.map((t) => `<span class="mcp-tool-tag">${E(t)}</span>`).join("")}</div>` : ""}
         <div class="mcp-server-actions">
           ${s.config ? `<button class="mcp-btn mcp-btn-toggle" data-name="${E(s.name)}">${s.config.enabled !== false ? "停用" : "启用"}</button>` : ""}
+          ${s.error?.includes("未信任") ? `<button class="mcp-btn mcp-btn-trust" data-name="${E(s.name)}">信任</button>` : ""}
           ${s.canDelete !== false ? `<button class="mcp-btn mcp-btn-remove" data-name="${E(s.name)}">删除</button>` : ""}
         </div>
         ${s.config ? `<div class="mcp-server-cmd">${s.config.transport === "http" || s.config.transport === "sse" ? E(s.config.url ?? "") : E(s.config.command ?? "") + " " + (s.config.args || []).map(a => E(a)).join(" ")}</div>` : ""}
@@ -124,6 +125,7 @@ async function fetchMcpServers(): Promise<void> {
     `).join("");
 
     bindToggleEvents(content);
+    bindTrustEvents(content);
     bindRemoveEvents(content);
   } catch (err) {
     content.innerHTML = `<div class="mcp-empty mcp-error">加载失败: ${E((err as Error).message)}</div>`;
@@ -141,6 +143,28 @@ function bindToggleEvents(container: HTMLElement): void {
         if (data.restartNeeded) toast(`MCP ${data.enabled ? "已启用" : "已停用"} — ${data.message}`, "info");
         fetchMcpServers();
       } catch (err) { toast(`切换失败: ${(err as Error).message}`, "error"); }
+    });
+  });
+}
+
+function bindTrustEvents(container: HTMLElement): void {
+  container.querySelectorAll(".mcp-btn-trust").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      const name = (e.currentTarget as HTMLElement).dataset.name;
+      if (!name) return;
+      try {
+        const r = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}/trust`, { method: "POST" });
+        const data = await r.json();
+        if (!data.ok) { toast(`信任失败: ${data.error}`, "error"); return; }
+        toast(`已信任 ${name}，重启后生效`, "info");
+        // 立即更新显示，不再显示旧错误
+        const serverEl = container.querySelector(`.mcp-server-actions .mcp-btn-trust[data-name="${E(name)}"]`)?.closest(".mcp-server");
+        if (serverEl) {
+          const errorEl = serverEl.querySelector(".mcp-server-error");
+          if (errorEl) errorEl.textContent = "✅ 已信任，重启后生效";
+          (e.currentTarget as HTMLElement).remove();
+        }
+      } catch (err) { toast(`信任失败: ${(err as Error).message}`, "error"); }
     });
   });
 }

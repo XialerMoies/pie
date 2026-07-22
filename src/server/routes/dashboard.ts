@@ -2,13 +2,14 @@
  * Dashboard route — /api/dashboard, /api/paths, /layout-config, /api/usage/*
  */
 import type { RouteHandler, ServerContext } from "./types";
-import { readFileSync, writeFileSync } from "fs";
-import { resolve } from "path";
+import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { resolve, dirname } from "path";
 import { parseBody } from "./parse-body";
 import { fullScan, incrementalScan, updateSessionInIndex, loadIndex, saveIndex, type UsageIndex } from "../usage-index";
 import { getServersStatus } from "../../agent/mcp/MCPClientService";
-import { loadMcpConfig } from "../../agent/mcp/config";
+import { loadMcpConfig, defaultGlobalConfigPath } from "../../agent/mcp/config";
 import { MCP_CATALOG, type CatalogEntry } from "../../agent/mcp/builtin-list";
+import { TrustStore, hashServerCommand } from "../../agent/mcp/trust-store";
 
 export const handleDashboard: RouteHandler = (req, res, ctx) => {
   const { url, method } = req;
@@ -261,7 +262,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         tools: runtime?.tools ?? [],
         error: runtime?.error,
         config: { command: source.config.command, args: source.config.args, url: source.config.url, transport: source.config.transport ?? "stdio", enabled: source.config.enabled ?? true },
-        canDelete: source.sourcePath === rootConfigPath,
+        canDelete: true,
       };
     });
 
@@ -302,6 +303,33 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
     })();
   }
 
+  // POST /api/mcp/servers/:name/trust — 信任一个 server
+  if (url?.startsWith("/api/mcp/servers/") && url.endsWith("/trust") && method === "POST") {
+    return (async () => {
+      try {
+        const rawName = url.slice("/api/mcp/servers/".length, -"/trust".length);
+        const name = decodeURIComponent(rawName);
+        if (!name) { res.writeHead(400, {"Content-Type":"application/json",...cors}); res.end(JSON.stringify({ok:false,error:"缺少 server 名"})); return true; }
+
+        const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
+        const result = loadMcpConfig({ projectRoot: workspace });
+        const source = result.servers.find((s) => s.name === name);
+        if (!source) { res.writeHead(404, {"Content-Type":"application/json",...cors}); res.end(JSON.stringify({ok:false,error:"未找到 server"})); return true; }
+
+        const trustStore = new TrustStore();
+        const hash = hashServerCommand(source.config);
+        trustStore.addTrust(workspace, hash, source.name);
+
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: true, name, restartNeeded: true, message: `已信任 ${name}，请重启会话以加载工具` }));
+      } catch (e: any) {
+        res.writeHead(500, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+      return true;
+    })();
+  }
+
   // GET /api/mcp/catalog — 内置精选 MCP server 目录
   if (url === "/api/mcp/catalog" && method === "GET") {
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
@@ -309,7 +337,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
     return true;
   }
 
-  // POST /api/mcp/install — 从目录安装 MCP server（写入 .mcp.json）
+  // POST /api/mcp/install — 从目录安装 MCP server（写入全局 ~/.pi/agent/mcp.json）
   if (url === "/api/mcp/install" && method === "POST") {
     return (async () => {
       try {
@@ -329,18 +357,28 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         }
 
         const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
-        const configPath = resolve(workspace, ".mcp.json");
-
+        const globalPath = defaultGlobalConfigPath();
         let config: any = {};
-        try { config = JSON.parse(readFileSync(configPath, "utf-8")); } catch {}
+        try { config = JSON.parse(readFileSync(globalPath, "utf-8")); } catch {}
         if (!config.servers) config.servers = {};
+        config.servers[entry.id] = { command: entry.command, args: entry.args, enabled: false };
 
-        config.servers[entry.id] = { command: entry.command, args: entry.args };
-        writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+        mkdirSync(dirname(globalPath), { recursive: true });
+        writeFileSync(globalPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+
+        // 自动预信任（用户主动安装视为同意）
+        try {
+          const trustStore = new TrustStore();
+          const srvConfig: import("../../agent/mcp/types").McpServerConfig = {
+            command: entry.command, args: entry.args, transport: "stdio",
+          };
+          const hash = hashServerCommand(srvConfig);
+          trustStore.addTrust(workspace, hash, entry.name);
+        } catch {}
 
         const hint = entry.postInstallHint ? `提示: ${entry.postInstallHint}` : "";
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
-        res.end(JSON.stringify({ ok: true, name: entry.name, restartNeeded: true, message: `已添加 ${entry.name}，请重启会话以应用更改。${hint}` }));
+        res.end(JSON.stringify({ ok: true, name: entry.name, isGlobal: true, message: `已全局安装 ${entry.name}，在项目 MCP 面板中启用即可使用。${hint}` }));
       } catch (e: any) {
         res.writeHead(500, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: false, error: e.message }));
@@ -373,18 +411,11 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
           return true;
         }
 
-        // 只允许删除 workspace 根目录的 .mcp.json 中的条目
-        const rootConfigPath = resolve(workspace, ".mcp.json");
-        if (source.sourcePath !== rootConfigPath) {
-          res.writeHead(403, { "Content-Type": "application/json", ...cors });
-          res.end(JSON.stringify({ ok: false, error: `"${name}" 定义在 ${source.sourcePath}，请在对应文件中手动删除` }));
-          return true;
-        }
-
-        const config = JSON.parse(readFileSync(rootConfigPath, "utf-8"));
+        // 从配置来源的 .mcp.json 中删除
+        const config = JSON.parse(readFileSync(source.sourcePath, "utf-8"));
         if (config.servers?.[name]) {
           delete config.servers[name];
-          writeFileSync(rootConfigPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+          writeFileSync(source.sourcePath, JSON.stringify(config, null, 2) + "\n", "utf-8");
         }
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });

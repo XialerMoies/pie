@@ -402,7 +402,11 @@ describe("dashboard routes", () => {
 
     it("禁用 server 仍出现在列表中", async () => {
       const dir = mkdtempSync(resolve(tmpdir(), "mcp-test-"));
+      const origHome = process.env.HOME;
+      const origProfile = process.env.USERPROFILE;
       try {
+        process.env.HOME = dir;
+        process.env.USERPROFILE = dir;
         writeFileSync(resolve(dir, ".mcp.json"), JSON.stringify({
           servers: { disabled: { command: "node", enabled: false }, active: { command: "node" } },
         }));
@@ -414,7 +418,11 @@ describe("dashboard routes", () => {
         const d = data.find((s) => s.name === "disabled");
         assert.ok(d, "disabled server 可见");
         assert.strictEqual(d.config.enabled, false);
-      } finally { rmSync(dir, { recursive: true, force: true }); }
+      } finally {
+        process.env.HOME = origHome;
+        process.env.USERPROFILE = origProfile;
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it("POST toggle 修改当前 workspace 的 .mcp.json", async () => {
@@ -449,6 +457,31 @@ describe("dashboard routes", () => {
     });
   });
 
+  describe("MCP 信任", () => {
+    it("POST /api/mcp/servers/:name/trust 信任后记录添加", async () => {
+      const dir = mkdtempSync(resolve(tmpdir(), "mcp-test-"));
+      const origHome = process.env.HOME;
+      const origProfile = process.env.USERPROFILE;
+      try {
+        process.env.HOME = dir;
+        process.env.USERPROFILE = dir;
+        writeFileSync(resolve(dir, ".mcp.json"), JSON.stringify({
+          servers: { "test-srv": { command: "node", args: ["-e", "1"] } },
+        }));
+        const ctx = mockContext({ runtime: { ...mockRuntime(), currentWorkspace: dir }, paths: { APP_ROOT: dir } });
+        const { status, body } = await callHandler(handleDashboard, "POST", "/api/mcp/servers/test-srv/trust", undefined, ctx);
+        assert.strictEqual(status, 200);
+        const data = parseJSON(body);
+        assert.strictEqual(data.ok, true, "信任成功");
+        assert.strictEqual(data.name, "test-srv");
+      } finally {
+        process.env.HOME = origHome;
+        process.env.USERPROFILE = origProfile;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("MCP 目录/安装/卸载", () => {
     it("GET /api/mcp/catalog 返回精选列表", async () => {
       const { status, body } = await callHandler(handleDashboard, "GET", "/api/mcp/catalog");
@@ -459,19 +492,32 @@ describe("dashboard routes", () => {
       assert.ok(data.every((e) => e.id && e.name), "每项有 id 和 name");
     });
 
-    it("POST /api/mcp/install 安装有效 id 写入 .mcp.json", async () => {
+    it("POST /api/mcp/install 安装到全局配置，默认禁用", async () => {
       const dir = mkdtempSync(resolve(tmpdir(), "mcp-test-"));
+      const origHome = process.env.HOME;
+      const origProfile = process.env.USERPROFILE;
       try {
+        // 模拟 HOME 指向临时目录，使 defaultGlobalConfigPath 写入临时位置
+        process.env.HOME = dir;
+        process.env.USERPROFILE = dir;
         const ctx = mockContext({ runtime: { ...mockRuntime(), currentWorkspace: dir }, paths: { APP_ROOT: dir } });
         const { status, body } = await callHandler(handleDashboard, "POST", "/api/mcp/install", { id: "filesystem" }, ctx);
         assert.strictEqual(status, 200);
         const data = parseJSON(body);
         assert.strictEqual(data.ok, true);
-        // 断言写入 key 是 id（filesystem）而非中文名
-        const config = JSON.parse(readFileSync(resolve(dir, ".mcp.json"), "utf-8"));
-        assert.ok(config.servers.filesystem, "以 id 为 key 写入 .mcp.json");
-        assert.ok(!config.servers["文件系统"], "没有以中文名写入");
-      } finally { rmSync(dir, { recursive: true, force: true }); }
+        assert.strictEqual(data.isGlobal, true, "返回 global 标识");
+        // 断言配置写入了全局路径，而非项目路径
+        const globalPath = resolve(dir, ".pi", "agent", "mcp.json");
+        const config = JSON.parse(readFileSync(globalPath, "utf-8"));
+        assert.ok(config.servers.filesystem, "以 id 为 key 写入全局配置");
+        assert.strictEqual(config.servers.filesystem.enabled, false, "安装后默认禁用");
+        // 项目目录不应有 .mcp.json
+        assert.ok(!existsSync(resolve(dir, ".mcp.json")), "项目目录未写入");
+      } finally {
+        process.env.HOME = origHome;
+        process.env.USERPROFILE = origProfile;
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it("POST /api/mcp/install 拒绝未知 id", async () => {
@@ -499,7 +545,7 @@ describe("dashboard routes", () => {
       } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 
-    it("POST /api/mcp/uninstall 对非 workspace 根来源返回 403", async () => {
+    it("POST /api/mcp/uninstall 对 .vscode/mcp.json 来源成功删除", async () => {
       const dir = mkdtempSync(resolve(tmpdir(), "mcp-test-"));
       try {
         mkdirSync(resolve(dir, ".vscode"), { recursive: true });
@@ -507,8 +553,13 @@ describe("dashboard routes", () => {
           servers: { "not-local": { command: "node" } },
         }));
         const ctx = mockContext({ runtime: { ...mockRuntime(), currentWorkspace: dir }, paths: { APP_ROOT: dir } });
-        const { status } = await callHandler(handleDashboard, "POST", "/api/mcp/uninstall", { name: "not-local" }, ctx);
-        assert.strictEqual(status, 403, "非 workspace 根配置应拒绝删除");
+        const { status, body } = await callHandler(handleDashboard, "POST", "/api/mcp/uninstall", { name: "not-local" }, ctx);
+        assert.strictEqual(status, 200, "按 sourcePath 删除");
+        const data = parseJSON(body);
+        assert.strictEqual(data.ok, true);
+        // 验证 .vscode/mcp.json 中已删除
+        const config = JSON.parse(readFileSync(resolve(dir, ".vscode", "mcp.json"), "utf-8"));
+        assert.ok(!config.servers["not-local"], "已从 .vscode/mcp.json 删除");
       } finally { rmSync(dir, { recursive: true, force: true }); }
     });
   });

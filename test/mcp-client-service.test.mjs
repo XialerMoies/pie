@@ -16,8 +16,18 @@ import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 let service, TrustStore, hashServerCommand;
+let _origHome, _origProfile, _isolatedHome;
 
 before(async () => {
+  // 隔离 HOME/USERPROFILE，防止真实全局 ~/.pi/agent/mcp.json 污染测试
+  _origHome = process.env.HOME;
+  _origProfile = process.env.USERPROFILE;
+  _isolatedHome = mkdtempSync(resolve(tmpdir(), "mcp-home-"));
+  process.env.HOME = _isolatedHome;
+  process.env.USERPROFILE = _isolatedHome;
+  // 确保隔离目录下无全局配置
+  mkdirSync(resolve(_isolatedHome, ".pi", "agent"), { recursive: true });
+
   service = await import("../src/agent/mcp/MCPClientService.ts");
   const trust = await import("../src/agent/mcp/trust-store.ts");
   TrustStore = trust.TrustStore;
@@ -26,7 +36,12 @@ before(async () => {
 
 after(() => {
   service.reset();
+  process.env.HOME = _origHome;
+  process.env.USERPROFILE = _origProfile;
   delete process.env.PI_CONFIG_DIR;
+  if (_isolatedHome) {
+    try { rmSync(_isolatedHome, { recursive: true, force: true }); } catch {}
+  }
 });
 
 /** 写 .mcp.json */

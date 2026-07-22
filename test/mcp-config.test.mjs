@@ -8,16 +8,33 @@
  * 4. loadMcpConfig — 多路径合并/错误处理
  * 5. getEnabledServers — 过滤 disabled
  */
-import { describe, it, before } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 
 let mod;
+let _origHome, _origProfile, _isolatedHome;
 
 before(async () => {
+  // 隔离 HOME，防止真实全局 ~/.pi/agent/mcp.json 污染
+  _origHome = process.env.HOME;
+  _origProfile = process.env.USERPROFILE;
+  _isolatedHome = mkdtempSync(resolve(tmpdir(), "mcp-home-"));
+  process.env.HOME = _isolatedHome;
+  process.env.USERPROFILE = _isolatedHome;
+  mkdirSync(resolve(_isolatedHome, ".pi", "agent"), { recursive: true });
+
   mod = await import("../src/agent/mcp/config.ts");
+});
+
+after(() => {
+  process.env.HOME = _origHome;
+  process.env.USERPROFILE = _origProfile;
+  if (_isolatedHome) {
+    try { rmSync(_isolatedHome, { recursive: true, force: true }); } catch {}
+  }
 });
 
 /** 在临时目录写一个 JSON 配置文件 */

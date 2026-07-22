@@ -1,0 +1,6 @@
+tree d01f42163bdedb3ab0b6a14f67f8571c699964d4
+parent 2cfcd4e322bc3db8194f0b3b4ec561a3df9ed066
+author 颜芳宇 <yfy2421@foxmail.com> 1784471901 +0800
+committer 颜芳宇 <yfy2421@foxmail.com> 1784471901 +0800
+
+fix: sync file-restore test comment with actual 3 tests

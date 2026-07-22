@@ -676,4 +676,6 @@ body{background:var(--bg);height:100vh}
 .mcp-btn-install{background:var(--am);color:#0A0A0F;padding:3px 12px;font-weight:600}
 .mcp-btn-install:hover{background:#fbbf24}
 .mcp-btn-install:disabled{opacity:.5;cursor:not-allowed}
+.mcp-btn-trust{background:var(--am);color:#0A0A0F;font-weight:600}
+.mcp-btn-trust:hover{background:#fbbf24}
 
