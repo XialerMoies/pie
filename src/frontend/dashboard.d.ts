@@ -81,6 +81,7 @@ interface AppTab {
   path?: string;                 // file 专用：文件路径
   content?: string;              // file 专用：编辑器内容缓存
   lang?: string;                 // file 专用：语法高亮语言
+  renderer?: 'text' | 'image' | 'video'; // file 专用：渲染器类型
   sessionId?: string;            // session 专用
   draftId?: string;              // chat 专用
 }
@@ -133,7 +134,7 @@ interface AppUI {
   renderTabs(): void;
   renderSessionTabs(activeId?: string): void;
   closeChatTab(): void;
-  openFileTab(id: string, content: string, lang?: string): void;
+  openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video'): void;
   saveCurrentFile(): Promise<void>;
 }
 interface AppChat {
@@ -314,7 +315,7 @@ declare function branchSession(id: string): void;
 declare function commitSessionTab(oldId: string, newId: string): void;
 declare function getActiveSessionTabId(): string | null;
 declare function setActiveSessionTabId(id: string | null): void;
-declare function openFileTab(id: string, content: string, lang?: string): void;
+declare function openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video'): void;
 declare function renderTabs(): void;
 declare function registerPane(name: string, render: (container: HTMLElement) => void): void;
 declare function saveCurrentFile(): Promise<void>;

@@ -106,4 +106,13 @@ describe("File tab restore", () => {
     assert.ok(activateCalls.includes("/src/main.ts"), "openFileTab 应触发 App.Tabs.activate");
   });
 
+  it("openFileTab 带 renderer 参数时传递给 TabStore", () => {
+    win.openFileTab("/img/photo.png", "", "png", "image");
+
+    const tabs = win.__state._fileTabs;
+    assert.ok(tabs.some(function(t) { return t.id === "/img/photo.png"; }), "tab 应被打开");
+    const ft = tabs.find(function(t) { return t.id === "/img/photo.png"; });
+    assert.strictEqual(ft && ft.renderer, "image", "renderer 应保留为 image");
+  });
+
 });

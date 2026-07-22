@@ -163,11 +163,30 @@ function initTree(container: HTMLElement): void {
   tree.onSelect = async (node) => {
     console.log("[explorer] onSelect:", node.id, node.isDir);
     if (!ws()) { console.log("[explorer] no workspace"); return; }
+    // 检测图片/视频类型
+    const imageExt = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico', '.bmp']);
+    const videoExt = new Set(['.mp4', '.webm']);
+    const unsupportedVideoExt = new Set(['.avi', '.mov', '.mkv', '.wmv', '.flv']);
+    const ext = '.' + (node.id.split('.').pop() || '').toLowerCase();
+    if (imageExt.has(ext)) {
+      openFileTab(node.id, '', ext, 'image');
+      return;
+    }
+    if (videoExt.has(ext)) {
+      openFileTab(node.id, '', ext, 'video');
+      return;
+    }
+    if (unsupportedVideoExt.has(ext)) {
+      toast(`${ext} 格式不支持浏览器预览，建议用外部播放器打开`, 'info');
+      openFileTab(node.id, `[二进制文件，不支持预览: ${ext}]`, ext, 'text');
+      return;
+    }
+    // 文本文件，走原始读取流程
     try {
       const r = await fetch(`/api/file/read?root=${encodeURIComponent(ws())}&path=${encodeURIComponent(node.id)}`);
       const d = await r.json();
       if (!r.ok) { toast(d.error || '读取失败', 'error'); return; }
-      const content = d.encoding === 'base64' ? '[二进制文件，无法预览]' : d.content;
+      const content = d.content;
       const lang = d.path?.split('.').pop() || '';
       console.log("[explorer] calling openFileTab:", node.id);
       openFileTab(node.id, content, lang);

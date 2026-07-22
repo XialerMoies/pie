@@ -103,6 +103,7 @@ export class ExplorerService {
         "sql":"sql","db":"sqlite","sqlite":"sqlite",
         "zip":"zip","rar":"zip","7z":"zip","gz":"archive",
         "pdf":"pdf","png":"image","jpg":"image","jpeg":"image","gif":"image","ico":"favicon","webp":"image",
+        "mp4":"video","webm":"video","avi":"video","mov":"video","mkv":"video","wmv":"video","flv":"video",
         "ejs":"ejs","pug":"pug","coffee":"coffeescript",
         "cmake":"cmake","gradle":"gradle",
         "node":"node","npm":"npm","yarn":"yarn","nodejs":"node",

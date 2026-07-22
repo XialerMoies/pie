@@ -476,6 +476,9 @@ body{background:var(--bg);height:100vh}
 .fc-save:hover{background:rgba(245,158,11,.1)}
 .fc-status{font-size:11px;color:var(--tm)}
 .fc-editor{flex:1;overflow:hidden;min-height:0}
+.fc-media{width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--bg);overflow:auto;padding:16px}
+.fc-media img{max-width:100%;max-height:100%;object-fit:contain;border-radius:4px}
+.fc-media video{max-width:100%;max-height:100%;border-radius:4px}
 
 /* ─── Context Menu ───────────────────────────────────────── */
 .ctx-menu{position:fixed;z-index:9999;min-width:160px;background:var(--bs);border:1px solid var(--bd);border-radius:8px;padding:4px;box-shadow:0 8px 32px var(--sd)}
@@ -677,5 +680,29 @@ body{background:var(--bg);height:100vh}
 .mcp-btn-install:hover{background:#fbbf24}
 .mcp-btn-install:disabled{opacity:.5;cursor:not-allowed}
 .mcp-btn-trust{background:var(--am);color:#0A0A0F;font-weight:600}
+.mcp-custom-trigger{padding:4px 8px}
+.mcp-btn-custom-open{width:100%;background:var(--bh);border:1px dashed var(--bd);color:var(--ts);padding:8px 12px;font-size:.72rem;border-radius:6px;cursor:pointer;font-family:var(--fb);transition:all .1s}
+.mcp-btn-custom-open:hover{background:var(--bc);color:var(--am);border-color:var(--am)}
+.mcp-input{flex:1;min-width:80px;background:var(--bh);border:1px solid var(--bd);border-radius:4px;padding:4px 6px;font-size:.7rem;color:var(--tx);font-family:var(--fm);outline:none}
+.mcp-input:focus{border-color:var(--am)}
+.mcp-btn-install-custom{background:var(--am);color:#0A0A0F;padding:6px 16px;font-weight:600;font-size:.72rem}
+.mcp-btn-install-custom:hover{background:#fbbf24}
+.mcp-btn-install-custom:disabled{opacity:.5;cursor:not-allowed}
+.mcp-btn-cancel{background:var(--bd);color:var(--ts);padding:6px 16px;font-size:.72rem}
+.mcp-btn-cancel:hover{background:var(--bl);color:var(--tx)}
+.mcp-custom-msg{width:100%;font-size:.68rem;color:var(--ts);margin-top:8px;text-align:center}
 .mcp-btn-trust:hover{background:#fbbf24}
+
+/* ─── MCP 自定义安装弹窗 ──────────────── */
+.mcp-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;display:flex;align-items:center;justify-content:center}
+.mcp-modal{background:var(--bs);border:1px solid var(--bd);border-radius:12px;width:480px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.4)}
+.mcp-modal-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px;border-bottom:1px solid var(--bd)}
+.mcp-modal-title{font-size:.82rem;font-weight:600;color:var(--tx)}
+.mcp-modal-close{background:none;border:none;color:var(--tm);font-size:1.2rem;cursor:pointer;padding:0 4px;line-height:1}
+.mcp-modal-close:hover{color:var(--tx)}
+.mcp-modal-body{padding:16px}
+.mcp-modal-field{margin-bottom:12px}
+.mcp-modal-label{display:block;font-size:.7rem;font-weight:500;color:var(--ts);margin-bottom:4px}
+.mcp-modal-body .mcp-input{width:100%;padding:8px 10px;font-size:.78rem}
+.mcp-modal-footer{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px 14px}
 

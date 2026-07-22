@@ -726,6 +726,62 @@ describe("explorer routes", () => {
     const isBlocked = status === 403 || data?.error || false;
     assert.ok(isBlocked, "路径穿越应被拒绝");
   });
+
+  it("GET /api/file/raw 返回 image/png", async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "raw-test-"));
+    try {
+      writeFileSync(resolve(dir, "test.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      const ctx = mockContext({ paths: { ...mockPaths(), APP_ROOT: dir } });
+      const { status, headers: h } = await callHandler(handleExplorer, "GET", `/api/file/raw?root=${encodeURIComponent(dir)}&path=test.png`, undefined, ctx);
+      assert.strictEqual(status, 200);
+      assert.strictEqual(h["Content-Type"], "image/png");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("GET /api/file/raw 返回 video/mp4", async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "raw-test-"));
+    try {
+      writeFileSync(resolve(dir, "test.mp4"), Buffer.from([0x00, 0x00, 0x00, 0x1c]));
+      const ctx = mockContext({ paths: { ...mockPaths(), APP_ROOT: dir } });
+      const { status, headers: h } = await callHandler(handleExplorer, "GET", `/api/file/raw?root=${encodeURIComponent(dir)}&path=test.mp4`, undefined, ctx);
+      assert.strictEqual(status, 200);
+      assert.strictEqual(h["Content-Type"], "video/mp4");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("GET /api/file/raw unsupported 类型返回 403", async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "raw-test-"));
+    try {
+      writeFileSync(resolve(dir, "test.exe"), Buffer.from([0x4d, 0x5a]));
+      const ctx = mockContext({ paths: { ...mockPaths(), APP_ROOT: dir } });
+      const { status, body } = await callHandler(handleExplorer, "GET", `/api/file/raw?root=${encodeURIComponent(dir)}&path=test.exe`, undefined, ctx);
+      const data = parseJSON(body);
+      assert.strictEqual(status, 403);
+      assert.ok(data?.error?.includes("Unsupported"), "应提示 Unsupported");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("GET /api/file/raw ../ 路径穿越被拒绝", async () => {
+    const ctx = mockContext();
+    const { status, body } = await callHandler(handleExplorer, "GET", `/api/file/raw?root=${encodeURIComponent(ROOT)}&path=../../../etc/passwd`, undefined, ctx);
+    const data = parseJSON(body);
+    assert.strictEqual(status, 403);
+    assert.ok(data?.error, "应返回 error");
+  });
+
+  it("GET /api/explorer ../ 兄弟目录逃逸被拒绝", async () => {
+    const parent = mkdtempSync(resolve(tmpdir(), "explorer-guard-"));
+    try {
+      const root = resolve(parent, "root");
+      mkdirSync(root);
+      mkdirSync(resolve(parent, "root-evil"));
+      const ctx = mockContext({ paths: { ...mockPaths(), APP_ROOT: root } });
+      const { status, body } = await callHandler(handleExplorer, "GET", `/api/explorer?root=${encodeURIComponent(root)}&path=../root-evil`, undefined, ctx);
+      const data = parseJSON(body);
+      assert.strictEqual(status, 403);
+      assert.ok(data?.error, "应返回 error");
+    } finally { rmSync(parent, { recursive: true, force: true }); }
+  });
 });
 
 describe("git routes", () => {
@@ -754,6 +810,28 @@ describe("dispatchRoute 集成", () => {
     const handled = await dispatchRoute(req, res, ctx);
     assert.strictEqual(handled, true);
     assert.strictEqual(res._status, 200);
+  });
+
+  it("真实 HTTP server 中 GET /api/file/raw 支持 Range 请求", async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "range-test-"));
+    try {
+      writeFileSync(resolve(dir, "v.mp4"), Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]));
+      const ctx = mockContext({ paths: { ...mockPaths(), APP_ROOT: dir } });
+      const server = createServer(async (req, res) => {
+        const handled = await handleExplorer(req, res, ctx);
+        if (!handled) { res.writeHead(404); res.end("Not found"); }
+      });
+      const addr = server.listen(0, "127.0.0.1");
+      await new Promise(r => addr.on("listening", r));
+      const port = addr.address().port;
+      const response = await fetch(`http://127.0.0.1:${port}/api/file/raw?root=${encodeURIComponent(dir)}&path=v.mp4`, { headers: { "Range": "bytes=2-5" } });
+      assert.strictEqual(response.status, 206);
+      assert.strictEqual(response.headers.get("content-range"), "bytes 2-5/10");
+      assert.strictEqual(response.headers.get("accept-ranges"), "bytes");
+      const bytes = Array.from(new Uint8Array(await response.arrayBuffer()));
+      assert.deepStrictEqual(bytes, [2, 3, 4, 5]);
+      server.close();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("真实 HTTP server 中未知路由返回 404", async () => {

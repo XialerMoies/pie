@@ -22,6 +22,7 @@ export interface AppTab {
   path?: string;                 // file 专用：文件路径
   content?: string;              // file 专用：编辑器内容缓存
   lang?: string;                 // file 专用：语法高亮语言
+  renderer?: 'text' | 'image' | 'video'; // file 专用：渲染器类型
   sessionId?: string;            // session 专用：真实 session id
   draftId?: string;              // chat 专用：草稿前缀 draft:<ts>-<rand>
 }

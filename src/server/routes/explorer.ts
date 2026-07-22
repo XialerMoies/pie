@@ -2,8 +2,8 @@
  * Explorer routes — file system browsing and operations
  */
 import type { RouteHandler } from "./types";
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, renameSync, rmSync, mkdirSync } from "fs";
-import { resolve, dirname } from "path";
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, renameSync, rmSync, mkdirSync, createReadStream } from "fs";
+import { resolve, dirname, relative, isAbsolute } from "path";
 import { parseBody } from "./parse-body";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
@@ -53,7 +53,8 @@ export const handleExplorer: RouteHandler = async (req, res, ctx) => {
       const rawPath = parsedUrl.searchParams.get("path") || "";
       const targetDir = rawPath ? resolve(rootDir, rawPath) : rootDir;
 
-      if (!targetDir.startsWith(rootDir)) {
+      const tdRel = relative(rootDir, targetDir);
+      if (tdRel.startsWith("..") || isAbsolute(tdRel)) {
         res.writeHead(403, { ...cors });
         res.end(JSON.stringify({ error: "Access denied" }));
         return true;
@@ -102,6 +103,67 @@ export const handleExplorer: RouteHandler = async (req, res, ctx) => {
     return true;
   }
 
+  // GET /api/file/raw — 流式返回文件原始字节（用于图片/视频预览）
+  if (url?.startsWith("/api/file/raw") && method === "GET") {
+    try {
+      const parsedUrl = new URL(url, `http://${req.headers.host || "localhost"}`);
+      const filePath = parsedUrl.searchParams.get("path") || "";
+      const rootDir = parsedUrl.searchParams.get("root") || p.APP_ROOT;
+      const resolvedPath = resolve(rootDir, filePath);
+
+      const rel = relative(rootDir, resolvedPath);
+      if (rel.startsWith("..") || isAbsolute(rel)) {
+        res.writeHead(403, { ...cors }); res.end(JSON.stringify({ error: "Access denied" })); return true;
+      }
+      if (!existsSync(resolvedPath)) {
+        res.writeHead(404, { ...cors }); res.end(JSON.stringify({ error: "File not found" })); return true;
+      }
+      if (statSync(resolvedPath).isDirectory()) {
+        res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: "Is a directory" })); return true;
+      }
+
+      const mimeMap: Record<string, string> = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+        ".ico": "image/x-icon", ".bmp": "image/bmp",
+        ".mp4": "video/mp4", ".webm": "video/webm",
+      };
+      const ext = resolvedPath.slice(resolvedPath.lastIndexOf(".")).toLowerCase();
+      const mime = mimeMap[ext];
+      if (!mime) {
+        res.writeHead(403, { ...cors }); res.end(JSON.stringify({ error: "Unsupported file type" })); return true;
+      }
+
+      const size = statSync(resolvedPath).size;
+
+      // Range 请求支持（视频拖拽进度）
+      const rangeHeader = (req.headers as any)?.range || "";
+      const rangeMatch = rangeHeader.match(/^bytes=(\d+)-(\d*)$/);
+      if (rangeMatch) {
+        const start = parseInt(rangeMatch[1], 10);
+        const end = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : size - 1;
+        if (start >= size || end >= size || start > end) {
+          res.writeHead(416, { "Content-Range": `bytes */${size}`, ...cors }); res.end(); return true;
+        }
+        res.writeHead(206, {
+          "Content-Type": mime, "Content-Range": `bytes ${start}-${end}/${size}`,
+          "Content-Length": end - start + 1, "Accept-Ranges": "bytes", ...cors,
+        });
+        createReadStream(resolvedPath, { start, end }).pipe(res);
+        return true;
+      }
+
+      // 无 Range：全量返回
+      res.writeHead(200, {
+        "Content-Type": mime, "Content-Length": size, "Accept-Ranges": "bytes", ...cors,
+      });
+      res.end(readFileSync(resolvedPath));
+      return true;
+    } catch (e: any) {
+      res.writeHead(500, { ...cors }); res.end(JSON.stringify({ error: e.message })); return true;
+    }
+  }
+
   // Read file content (modes: content, toc)
   if (url?.startsWith("/api/file/read") && method === "GET") {
     try {
@@ -111,7 +173,8 @@ export const handleExplorer: RouteHandler = async (req, res, ctx) => {
       const mode = parsedUrl.searchParams.get("mode") || "content";
       const resolvedPath = resolve(rootDir, filePath);
 
-      if (!resolvedPath.startsWith(rootDir)) {
+      const rel = relative(rootDir, resolvedPath);
+if (rel.startsWith("..") || isAbsolute(rel)) {
         res.writeHead(403, { ...cors });
         res.end(JSON.stringify({ error: "Access denied" }));
         return true;

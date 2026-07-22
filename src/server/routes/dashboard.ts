@@ -337,6 +337,45 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
     return true;
   }
 
+  // POST /api/mcp/install/custom — 自定义安装（写入全局 ~/.pi/agent/mcp.json，默认禁用）
+  if (url === "/api/mcp/install/custom" && method === "POST") {
+    return (async () => {
+      try {
+        const body = await parseBody(req);
+        const { name, command, args } = body || {};
+        if (!name || !command) {
+          res.writeHead(400, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: false, error: "缺少 name 或 command" }));
+          return true;
+        }
+
+        const globalPath = defaultGlobalConfigPath();
+        let config: any = {};
+        try { config = JSON.parse(readFileSync(globalPath, "utf-8")); } catch {}
+        if (!config.servers) config.servers = {};
+        config.servers[name] = { command, args: args || [], enabled: false };
+
+        mkdirSync(dirname(globalPath), { recursive: true });
+        writeFileSync(globalPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+
+        // 自动预信任（用户主动安装视为同意）
+        try {
+          const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
+          const { TrustStore: TS, hashServerCommand: HSC } = await import("../../agent/mcp/trust-store");
+          const store = new TS();
+          store.addTrust(workspace, HSC({ command, args: args || [], transport: "stdio" }), name);
+        } catch {}
+
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: true, name, isGlobal: true, restartNeeded: true, message: `已全局安装 ${name}，在项目 MCP 面板中启用即可使用` }));
+      } catch (e: any) {
+        res.writeHead(500, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+      return true;
+    })();
+  }
+
   // POST /api/mcp/install — 从目录安装 MCP server（写入全局 ~/.pi/agent/mcp.json）
   if (url === "/api/mcp/install" && method === "POST") {
     return (async () => {

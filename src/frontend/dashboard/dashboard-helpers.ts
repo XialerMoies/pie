@@ -197,6 +197,22 @@ function confirmAsync(msg: string): Promise<boolean> {
   });
 }
 
+/** 在 viewport 内安全定位右键菜单，自动翻转防止溢出 */
+function placeContextMenu(menu: HTMLElement, x: number, y: number, opts?: { margin?: number; maxHeight?: number }): void {
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  const m = opts?.margin ?? 8;
+  let left = x, top = y;
+  if (left + r.width > window.innerWidth - m) left = window.innerWidth - r.width - m;
+  if (top + r.height > window.innerHeight - m) top = window.innerHeight - r.height - m;
+  menu.style.left = Math.max(m, left) + 'px';
+  menu.style.top = Math.max(m, top) + 'px';
+  if (opts?.maxHeight) {
+    menu.style.maxHeight = String(opts.maxHeight) + 'px';
+    menu.style.overflowY = 'auto';
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  窗口控制 (Electron IPC)
 // ═══════════════════════════════════════════════════════════════════
@@ -232,6 +248,7 @@ App.UI.refresh = refresh;
 App.UI.winCtrl = winCtrl;
 App.UI.registerPane = registerPane;
 App.UI.getPane = getPane;
+App.UI.placeContextMenu = placeContextMenu;
 App.Tabs = App.Tabs || {};
 
 // 公开 API — 供 onclick 和 init 使用（向后兼容，后续移除）
@@ -239,3 +256,4 @@ window.$ = $; window.S = S; window.E = E; window.F = F;
 window.sb = sb; window.toast = toast as any;
 window.getD = getD; window.refresh = refresh;
 window.winCtrl = winCtrl;
+window.placeContextMenu = placeContextMenu;

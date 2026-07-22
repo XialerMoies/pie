@@ -299,20 +299,27 @@ function restoreFileTabs(): void {
     // 从 UiStateStore.tabs.items 读取持久化的 file tab 列表
     const uis = (window as any).__uiStateStore;
     const items: any[] = uis?._state?.tabs?.items ?? [];
-    const fileTabs: Array<{ id: string; lang?: string }> = items.filter((t: any) => t.kind === 'file');
+    const fileTabs = items.filter((t: any) => t.kind === 'file');
     if (fileTabs.length === 0) { restoreActiveTabWith(intendedTarget); return; }
 
     let loaded = 0;
     const total = fileTabs.length;
     for (const ft of fileTabs) {
       const ws = ExplorerService.getWorkspacePath();
+      // 媒体 tab：直接开标签，不读取文本内容
+      if (ft.renderer === 'image' || ft.renderer === 'video') {
+        const ext = '.' + (ft.id.split('.').pop() || '').toLowerCase();
+        openFileTab(ft.id, '', ext, ft.renderer);
+        loaded++;
+        if (loaded >= total) restoreActiveTabWith(intendedTarget);
+        continue;
+      }
       if (ws) {
         fetch(`/api/file/read?root=${encodeURIComponent(ws)}&path=${encodeURIComponent(ft.id)}`)
           .then(r => r.ok ? r.json() : null)
           .then(d => {
             if (!d) return;
-            const content = d.encoding === 'base64' ? '[二进制文件，无法预览]' : d.content;
-            openFileTab(ft.id, content, ft.lang || '');
+            openFileTab(ft.id, d.content, (d.path?.split('.').pop() || ''), ft.renderer);
           })
           .catch(() => {})
           .finally(() => {

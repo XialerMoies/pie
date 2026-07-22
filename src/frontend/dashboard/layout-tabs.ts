@@ -48,14 +48,14 @@ function _saveFileTabs(): void {
   _syncTabsToStore();
 }
 
-function openFileTab(id: string, content: string, lang?: string): void {
+function openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video'): void {
   const label = id.split('/').pop() || id;
   const tabs = (window as any).__tabs;
   // 写入 TabStore（含 content/lang 缓存）
   if (tabs) {
     const existing = tabs.getTab(id);
-    if (existing) tabs.replaceTab(id, { content, lang: lang || '' });
-    else tabs.openTab({ kind: 'file', id, title: label, path: id, content, lang: lang || '' });
+    if (existing) tabs.replaceTab(id, { content, lang: lang || '', renderer });
+    else tabs.openTab({ kind: 'file', id, title: label, path: id, content, lang: lang || '', renderer });
   }
   _saveFileTabs();
   (window as any).App?.Tabs?.activate(id);
@@ -164,8 +164,7 @@ function tabContextMenu(e: MouseEvent, id: string): void {
   const idx = tabs.findIndex((t: any) => t.id === id);
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
-  menu.style.left = e.clientX + 'px';
-  menu.style.top = e.clientY + 'px';
+  placeContextMenu(menu, e.clientX, e.clientY);
   const T = (window as any).App?.Tabs;
   const items: { label: string; action: () => void }[] = [
     { label: '关闭', action: () => T?.close(id) },
@@ -182,7 +181,6 @@ function tabContextMenu(e: MouseEvent, id: string): void {
     item.onclick = () => { menu.remove(); a.action(); };
     menu.appendChild(item);
   }
-  document.body.appendChild(menu);
   setTimeout(() => document.addEventListener('click', () => menu.remove(), { once: true }), 0);
 }
 
@@ -193,11 +191,7 @@ function tabMoreMenu(e: MouseEvent): void {
   const maxH = Math.min(allTabs.length * 28 + 70, 450);
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
-  let x = e.clientX, y = e.clientY + 4;
-  const mw = 200;
-  if (x + mw > window.innerWidth) x = window.innerWidth - mw - 8;
-  if (y + maxH > window.innerHeight) y = window.innerHeight - maxH - 4;
-  menu.style.left = x + 'px'; menu.style.top = y + 'px'; menu.style.maxHeight = maxH + 'px'; menu.style.overflowY = 'auto';
+  placeContextMenu(menu, e.clientX, e.clientY + 4, { maxHeight: maxH });
 
   const T = (window as any).App?.Tabs;
   const actions: { label: string; fn: () => void }[] = [
@@ -224,7 +218,6 @@ function tabMoreMenu(e: MouseEvent): void {
       menu.appendChild(item);
     }
   }
-  document.body.appendChild(menu);
   setTimeout(() => document.addEventListener('click', () => menu.remove(), { once: true }), 0);
 }
 
@@ -237,19 +230,34 @@ function tabMoreMenu(e: MouseEvent): void {
 function _fileActivate(tab: AppTab): void {
   const ts = (window as any).__tabs;
   if (ts) ts.activateTab(tab.id);
-  // Monaco 加载：从 tab.content/lang 读取（TabStore 已缓存）
   const editorEl = $('fc-editor');
-  if (editorEl) {
-    const m = (window as any).__monaco;
-    if (m) {
-      if (!editorEl.dataset.monacoReady) {
-        editorEl.innerHTML = '';
-        m.create(editorEl);
-        editorEl.dataset.monacoReady = '1';
-      }
-      m.setValue(tab.content || '');
-      m.setLang(tab.id);
+  if (!editorEl) return;
+  const m = (window as any).__monaco;
+
+  // 图片/视频 — 销毁 Monaco，显示媒体元素
+  if (tab.renderer === 'image' || tab.renderer === 'video') {
+    if (m && editorEl.dataset.monacoReady) { m.dispose(); editorEl.dataset.monacoReady = ''; }
+    const ws = ExplorerService.getWorkspacePath();
+    const url = `/api/file/raw?root=${encodeURIComponent(ws)}&path=${encodeURIComponent(tab.id)}`;
+    if (tab.renderer === 'image') {
+      editorEl.innerHTML = `<div class="fc-media"><img src="${E(url)}" alt="${E(tab.title)}"></div>`;
+    } else {
+      editorEl.innerHTML = `<div class="fc-media"><video src="${E(url)}" controls autoplay></video></div>`;
     }
+    renderTabs();
+    _syncTabsToStore();
+    return;
+  }
+
+  // 文本 — Monaco 编辑器
+  if (m) {
+    if (!editorEl.dataset.monacoReady) {
+      editorEl.innerHTML = '';
+      m.create(editorEl);
+      editorEl.dataset.monacoReady = '1';
+    }
+    m.setValue(tab.content || '');
+    m.setLang(tab.id);
   }
   renderTabs();
   _syncTabsToStore();

@@ -233,7 +233,7 @@
       label: a.label, disabled: a.disabled?.(this._ctxNode!),
       action: () => { this._hideCtxMenu(); a.action(this._ctxNode!, this); },
     })));
-    menu.style.left = x + 'px'; menu.style.top = y + 'px';
+    placeContextMenu(menu, x, y);
     this._attachMenu(menu);
   };
 
@@ -244,7 +244,7 @@
       label: a.label, disabled: false,
       action: () => { this._hideCtxMenu(); a.action(); },
     })));
-    menu.style.left = x + 'px'; menu.style.top = y + 'px';
+    placeContextMenu(menu, x, y);
     this._attachMenu(menu);
   };
 

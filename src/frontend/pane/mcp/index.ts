@@ -150,7 +150,8 @@ function bindToggleEvents(container: HTMLElement): void {
 function bindTrustEvents(container: HTMLElement): void {
   container.querySelectorAll(".mcp-btn-trust").forEach((btn) => {
     btn.addEventListener("click", async (e) => {
-      const name = (e.currentTarget as HTMLElement).dataset.name;
+      const btnEl = e.currentTarget as HTMLElement;
+      const name = btnEl.dataset.name;
       if (!name) return;
       try {
         const r = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}/trust`, { method: "POST" });
@@ -162,7 +163,7 @@ function bindTrustEvents(container: HTMLElement): void {
         if (serverEl) {
           const errorEl = serverEl.querySelector(".mcp-server-error");
           if (errorEl) errorEl.textContent = "✅ 已信任，重启后生效";
-          (e.currentTarget as HTMLElement).remove();
+          btnEl.remove();
         }
       } catch (err) { toast(`信任失败: ${(err as Error).message}`, "error"); }
     });
@@ -217,12 +218,92 @@ async function renderExploreTab(container: HTMLElement): Promise<void> {
           </div>
         `).join("")}
       </div>
-    `).join("");
+    `).join("") + `
+      <div class="mcp-explore-section">
+        <div class="mcp-explore-category">自定义安装</div>
+        <div class="mcp-custom-trigger">
+          <button class="mcp-btn mcp-btn-custom-open" id="mcp-btn-custom-open">+ 自定义安装</button>
+        </div>
+      </div>
+
+      <!-- 自定义安装弹窗 -->
+      <div class="mcp-modal-overlay" id="mcp-custom-modal" style="display:none">
+        <div class="mcp-modal">
+          <div class="mcp-modal-header">
+            <span class="mcp-modal-title">自定义安装 MCP Server</span>
+            <button class="mcp-modal-close" id="mcp-modal-close">&times;</button>
+          </div>
+          <div class="mcp-modal-body">
+            <div class="mcp-modal-field">
+              <label class="mcp-modal-label" for="mcp-custom-name">名称</label>
+              <input type="text" id="mcp-custom-name" placeholder="如 my-server" class="mcp-input">
+            </div>
+            <div class="mcp-modal-field">
+              <label class="mcp-modal-label" for="mcp-custom-cmd">启动命令</label>
+              <input type="text" id="mcp-custom-cmd" placeholder="如 npx -y @modelcontextprotocol/server-filesystem /path" class="mcp-input">
+            </div>
+            <div id="mcp-custom-msg" class="mcp-custom-msg"></div>
+          </div>
+          <div class="mcp-modal-footer">
+            <button class="mcp-btn mcp-btn-cancel" id="mcp-btn-cancel">取消</button>
+            <button class="mcp-btn mcp-btn-install-custom" id="mcp-btn-custom">安装</button>
+          </div>
+        </div>
+      </div>`;
 
     bindInstallEvents(container);
+    bindCustomInstall(container);
   } catch (err) {
     container.innerHTML = `<div class="mcp-empty mcp-error">加载目录失败: ${E((err as Error).message)}</div>`;
   }
+}
+
+function bindCustomInstall(container: HTMLElement): void {
+  const modal = container.querySelector("#mcp-custom-modal") as HTMLElement;
+  const nameInput = container.querySelector("#mcp-custom-name") as HTMLInputElement;
+  const cmdInput = container.querySelector("#mcp-custom-cmd") as HTMLInputElement;
+  const msgEl = container.querySelector("#mcp-custom-msg") as HTMLElement;
+  const installBtn = container.querySelector("#mcp-btn-custom") as HTMLElement;
+
+  function openModal(): void { if (modal) modal.style.display = ""; }
+  function closeModal(): void {
+    if (modal) modal.style.display = "none";
+    if (msgEl) msgEl.textContent = "";
+    if (nameInput) nameInput.value = "";
+    if (cmdInput) cmdInput.value = "";
+  }
+
+  // 打开弹窗
+  container.querySelector("#mcp-btn-custom-open")?.addEventListener("click", openModal);
+  // 关闭弹窗 — 取消按钮
+  container.querySelector("#mcp-btn-cancel")?.addEventListener("click", closeModal);
+  // 关闭弹窗 — × 按钮
+  container.querySelector("#mcp-modal-close")?.addEventListener("click", closeModal);
+  // 关闭弹窗 — 点击遮罩
+  modal?.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+
+  // 安装
+  installBtn?.addEventListener("click", async () => {
+    const name = nameInput?.value?.trim();
+    const cmd = cmdInput?.value?.trim();
+    if (!name || !cmd) { if (msgEl) msgEl.textContent = "名称和命令不能为空"; return; }
+    try {
+      const parts = cmd.split(/\s+/);
+      const command = parts[0];
+      const args = parts.slice(1);
+      installBtn.textContent = "安装中…";
+      (installBtn as HTMLButtonElement).disabled = true;
+      const r = await fetch("/api/mcp/install/custom", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, command, args }),
+      });
+      const data = await r.json();
+      if (!data.ok) { if (msgEl) msgEl.textContent = `安装失败: ${data.error}`; return; }
+      if (msgEl) { msgEl.textContent = `✅ 已添加 ${name}，重启后生效`; msgEl.style.color = "var(--em)"; }
+      setTimeout(closeModal, 1500);
+    } catch (err) { if (msgEl) msgEl.textContent = `安装失败: ${(err as Error).message}`; }
+    finally { installBtn.textContent = "安装"; (installBtn as HTMLButtonElement).disabled = false; }
+  });
 }
 
 function bindInstallEvents(container: HTMLElement): void {
