@@ -10,7 +10,7 @@ import assert from "node:assert";
 import { createServer } from "node:http";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -378,6 +378,138 @@ describe("dashboard routes", () => {
       assert.ok(index.sessions?.s1, "索引包含 s1");
       assert.strictEqual(index.sessions.s1.compactCount, 1, "compactCount 为 1");
       assert.strictEqual(index.sessions.s1.input, 10, "input 保留 10");
+    });
+  });
+
+  describe("GET /api/mcp/servers", () => {
+    it("返回 200 JSON 数组", async () => {
+      const { status, body } = await callHandler(handleDashboard, "GET", "/api/mcp/servers");
+      assert.strictEqual(status, 200);
+      const data = parseJSON(body);
+      assert.ok(Array.isArray(data), "返回数组");
+    });
+
+    it("不泄露 env / 敏感字段", async () => {
+      const { status, body } = await callHandler(handleDashboard, "GET", "/api/mcp/servers");
+      assert.strictEqual(status, 200);
+      const data = parseJSON(body);
+      for (const s of data) {
+        if (s.config) {
+          assert.ok(!("env" in s.config), `env 已被脱敏: ${s.name}`);
+        }
+      }
+    });
+
+    it("禁用 server 仍出现在列表中", async () => {
+      const dir = mkdtempSync(resolve(tmpdir(), "mcp-test-"));
+      try {
+        writeFileSync(resolve(dir, ".mcp.json"), JSON.stringify({
+          servers: { disabled: { command: "node", enabled: false }, active: { command: "node" } },
+        }));
+        const ctx = mockContext({ runtime: { ...mockRuntime(), currentWorkspace: dir }, paths: { APP_ROOT: dir } });
+        const { status, body } = await callHandler(handleDashboard, "GET", "/api/mcp/servers", undefined, ctx);
+        assert.strictEqual(status, 200);
+        const data = parseJSON(body);
+        assert.strictEqual(data.length, 2, "2 个 server 都在列表中");
+        const d = data.find((s) => s.name === "disabled");
+        assert.ok(d, "disabled server 可见");
+        assert.strictEqual(d.config.enabled, false);
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it("POST toggle 修改当前 workspace 的 .mcp.json", async () => {
+      const dir = mkdtempSync(resolve(tmpdir(), "mcp-test-"));
+      try {
+        writeFileSync(resolve(dir, ".mcp.json"), JSON.stringify({
+          servers: { myServer: { command: "node", enabled: false } },
+        }));
+        const ctx = mockContext({ runtime: { ...mockRuntime(), currentWorkspace: dir }, paths: { APP_ROOT: dir } });
+        const { status, body } = await callHandler(handleDashboard, "POST", "/api/mcp/servers/myServer/toggle", undefined, ctx);
+        assert.strictEqual(status, 200);
+        const data = parseJSON(body);
+        assert.strictEqual(data.enabled, true, "已被启用");
+        const file = JSON.parse(readFileSync(resolve(dir, ".mcp.json"), "utf-8"));
+        assert.strictEqual(file.servers.myServer.enabled, true, "文件内容已变更");
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it("POST toggle 支持 URL-encoded server 名", async () => {
+      const dir = mkdtempSync(resolve(tmpdir(), "mcp-test-"));
+      try {
+        writeFileSync(resolve(dir, ".mcp.json"), JSON.stringify({
+          servers: { "my server": { command: "node", enabled: true } },
+        }));
+        const ctx = mockContext({ runtime: { ...mockRuntime(), currentWorkspace: dir }, paths: { APP_ROOT: dir } });
+        const { status, body } = await callHandler(handleDashboard, "POST", "/api/mcp/servers/my%20server/toggle", undefined, ctx);
+        assert.strictEqual(status, 200);
+        const data = parseJSON(body);
+        assert.strictEqual(data.name, "my server", "名称已 decode");
+        assert.strictEqual(data.enabled, false, "已被禁用");
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+  });
+
+  describe("MCP 目录/安装/卸载", () => {
+    it("GET /api/mcp/catalog 返回精选列表", async () => {
+      const { status, body } = await callHandler(handleDashboard, "GET", "/api/mcp/catalog");
+      assert.strictEqual(status, 200);
+      const data = parseJSON(body);
+      assert.ok(Array.isArray(data), "返回数组");
+      assert.ok(data.length > 5, "至少 6 个精选条目");
+      assert.ok(data.every((e) => e.id && e.name), "每项有 id 和 name");
+    });
+
+    it("POST /api/mcp/install 安装有效 id 写入 .mcp.json", async () => {
+      const dir = mkdtempSync(resolve(tmpdir(), "mcp-test-"));
+      try {
+        const ctx = mockContext({ runtime: { ...mockRuntime(), currentWorkspace: dir }, paths: { APP_ROOT: dir } });
+        const { status, body } = await callHandler(handleDashboard, "POST", "/api/mcp/install", { id: "filesystem" }, ctx);
+        assert.strictEqual(status, 200);
+        const data = parseJSON(body);
+        assert.strictEqual(data.ok, true);
+        // 断言写入 key 是 id（filesystem）而非中文名
+        const config = JSON.parse(readFileSync(resolve(dir, ".mcp.json"), "utf-8"));
+        assert.ok(config.servers.filesystem, "以 id 为 key 写入 .mcp.json");
+        assert.ok(!config.servers["文件系统"], "没有以中文名写入");
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it("POST /api/mcp/install 拒绝未知 id", async () => {
+      const ctx = mockContext();
+      const { status, body } = await callHandler(handleDashboard, "POST", "/api/mcp/install", { id: "nonexistent-mcp" }, ctx);
+      assert.strictEqual(status, 400);
+      const data = parseJSON(body);
+      assert.strictEqual(data.ok, false);
+    });
+
+    it("POST /api/mcp/uninstall 删除当前 workspace 的 server", async () => {
+      const dir = mkdtempSync(resolve(tmpdir(), "mcp-test-"));
+      try {
+        writeFileSync(resolve(dir, ".mcp.json"), JSON.stringify({
+          servers: { "DuckDuckGo 搜索": { command: "npx", args: ["-y", "mcp-server-duckduckgo"] } },
+        }));
+        const ctx = mockContext({ runtime: { ...mockRuntime(), currentWorkspace: dir }, paths: { APP_ROOT: dir } });
+        const { status, body } = await callHandler(handleDashboard, "POST", "/api/mcp/uninstall", { name: "DuckDuckGo 搜索" }, ctx);
+        assert.strictEqual(status, 200);
+        const data = parseJSON(body);
+        assert.strictEqual(data.ok, true);
+        // 验证文件已删除
+        const config = JSON.parse(readFileSync(resolve(dir, ".mcp.json"), "utf-8"));
+        assert.ok(!config.servers["DuckDuckGo 搜索"], "已从 .mcp.json 删除");
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it("POST /api/mcp/uninstall 对非 workspace 根来源返回 403", async () => {
+      const dir = mkdtempSync(resolve(tmpdir(), "mcp-test-"));
+      try {
+        mkdirSync(resolve(dir, ".vscode"), { recursive: true });
+        writeFileSync(resolve(dir, ".vscode", "mcp.json"), JSON.stringify({
+          servers: { "not-local": { command: "node" } },
+        }));
+        const ctx = mockContext({ runtime: { ...mockRuntime(), currentWorkspace: dir }, paths: { APP_ROOT: dir } });
+        const { status } = await callHandler(handleDashboard, "POST", "/api/mcp/uninstall", { name: "not-local" }, ctx);
+        assert.strictEqual(status, 403, "非 workspace 根配置应拒绝删除");
+      } finally { rmSync(dir, { recursive: true, force: true }); }
     });
   });
 });

@@ -377,10 +377,28 @@ function closeSessionTab(id: string): void {
   }
   // 降级
   const wasActive = getActiveSessionTabId() === id;
-  const nextId = forgetSessionTab(id);
+  const nextSessionId = forgetSessionTab(id);
   if (wasActive) {
-    if (nextId) { renderSessionTabs(nextId); switchSession(nextId); }
-    else { App.Chat?.resetMsgKeys?.(); setActiveSessionTabId(null); window.__state.M = []; window.__state.IL = false; renderSessionTabs(''); const msgsEl = $('ms'); if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : ''; loadSessions(); saveUiState(); }
+    // 优先切换到其他会话标签
+    if (nextSessionId) { renderSessionTabs(nextSessionId); switchSession(nextSessionId); return; }
+    // 没有其他会话标签，但可能有文件标签 → 用 TabStore 自动选中的下一个
+    const nextTab = ts?.getActiveTab?.();
+    if (nextTab) {
+      if (nextTab.kind === 'file') {
+        setActiveSessionTabId(null);
+        ts?.activateTab(nextTab.id);
+        renderSessionTabs();
+        loadSessions();
+        saveUiState();
+        return;
+      }
+      if (nextTab.kind === 'session' || nextTab.kind === 'chat') {
+        renderSessionTabs(nextTab.id); switchSession(nextTab.id);
+        return;
+      }
+    }
+    // 真的没有其他标签了，才创建新会话
+    App.Chat?.resetMsgKeys?.(); setActiveSessionTabId(null); window.__state.M = []; window.__state.IL = false; renderSessionTabs(''); const msgsEl = $('ms'); if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : ''; loadSessions(); saveUiState();
     return;
   }
   renderSessionTabs(getActiveSessionTabId() || undefined);
@@ -721,35 +739,46 @@ async function deleteSession(id: string): Promise<void> {
   if (!ok) return;
   const t0 = Date.now();
   console.log(`🗑️ Deleting session: ${id}`);
+
+  // 先关闭 SSE
+  const oldCS = window.__state.CS;
+  if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
+
   fetch('/api/sessions/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
     .then(r => r.json()).then((r: { ok: boolean }) => {
       if (r.ok) {
         console.log(`🗑️ Session deleted in ${Date.now()-t0}ms`);
         toast('已删除');
-        forgetSessionTab(id);
-        renderSessionTabs();
-        // 彻底关闭 SSE 连接（必须先清回调再 close，否则 onerror 会重置 IL）
-        const oldCS = window.__state.CS;
-        if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
-        App.Chat?.resetMsgKeys?.();
-        window.__state.M = [];
-        window.__state.IL = false;
-        // 异步延迟 DOM 操作，让 Electron 合成器有机会刷新
-        setTimeout(() => {
-          try { const m = (window as any).__monaco; m?.pauseDiags?.(); m?.blur?.(); } catch {}
-          const activeTab = window.__state._activeFileTab;
-          if (activeTab !== null) {
-            const ts = (window as any).__tabs;
-            if (ts) ts.activateTab(null);
+
+        // forgetSessionTab 会调用 TabStore.closeTab 自动选下一个标签
+        const nextId = forgetSessionTab(id);
+        const ts = (window as any).__tabs;
+
+        if (nextId) {
+          // 有下一个会话标签 → 切换到它
+          renderSessionTabs(nextId); switchSession(nextId);
+        } else {
+          // 没有其他会话标签
+          App.Chat?.resetMsgKeys?.();
+          window.__state.M = [];
+          window.__state.IL = false;
+
+          const nextTab = ts?.getActiveTab?.();
+          if (nextTab?.kind === 'file') {
+            // 有文件标签 → 保持文件标签
+          } else {
+            // 真的没有其他标签了 → 欢迎页
+            setActiveSessionTabId(null);
+            const msgsEl = $('ms');
+            if (msgsEl) { msgsEl.innerHTML = window.msgs ? window.msgs() : ''; msgsEl.scrollTop = 0; }
           }
-          const msgsEl = $('ms');
-          if (msgsEl) { msgsEl.innerHTML = window.msgs ? window.msgs() : ''; msgsEl.scrollTop = 0; }
-          const ci = $('ci') as HTMLTextAreaElement | null;
-          if (ci) { ci.disabled = false; ci.value = ''; ci.style.height = 'auto'; }
-          const cs = $('cs') as HTMLButtonElement | null;
-          if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = window.S('iz', 16); }
-          console.log(`  UI reset done at ${Date.now()}`);
-        }, 50);
+        }
+
+        // 重置输入框
+        const ci = $('ci') as HTMLTextAreaElement | null;
+        if (ci) { ci.disabled = false; ci.value = ''; ci.style.height = 'auto'; }
+        const cs = $('cs') as HTMLButtonElement | null;
+        if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = window.S('iz', 16); }
         loadSessions();
       }
       else toast('删除失败');

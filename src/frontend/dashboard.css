@@ -624,3 +624,56 @@ body{background:var(--bg);height:100vh}
 .git-action:hover{background:var(--bc);color:var(--tx)}
 .git-action-refresh{margin-left:auto}
 
+/* ─── MCP Servers Panel ──────────────────────── */
+.mcp-panel{padding:0}
+.mcp-header{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--bd);margin-bottom:8px}
+.mcp-title{font-size:.72rem;font-weight:600;color:var(--tx);font-family:var(--fd);flex:1}
+.mcp-count{font-size:.65rem;color:var(--tm);background:var(--bc);border-radius:8px;padding:1px 7px}
+.mcp-empty{padding:20px 10px;text-align:center;color:var(--tm);font-size:.72rem}
+.mcp-error{color:var(--rs)}
+.mcp-server{padding:6px 10px;margin-bottom:4px;background:var(--bc);border-radius:6px}
+.mcp-server-top{display:flex;align-items:center;gap:6px}
+.mcp-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.mcp-dot--connected{background:var(--em)}
+.mcp-dot--error{background:var(--rs)}
+.mcp-dot--connecting{background:var(--am);animation:mcp-pulse 1s infinite}
+.mcp-dot--disconnected{background:var(--tm)}
+@keyframes mcp-pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.mcp-server-name{flex:1;font-size:.72rem;font-weight:500;color:var(--tx)}
+.mcp-server-state{font-size:.62rem;padding:1px 7px;border-radius:4px}
+.mcp-state--connected{color:var(--em)}
+.mcp-state--error{color:var(--rs)}
+.mcp-state--connecting{color:var(--am)}
+.mcp-state--disconnected{color:var(--tm)}
+.mcp-server-error{font-size:.65rem;color:var(--rs);margin-top:4px;padding:3px 6px;background:rgba(239,68,68,.1);border-radius:4px}
+.mcp-server-tools{display:flex;flex-wrap:wrap;gap:3px;margin-top:4px}
+.mcp-tool-tag{font-size:.6rem;color:var(--ts);background:var(--bd);padding:1px 6px;border-radius:3px;font-family:var(--fm)}
+.mcp-server-cmd{font-size:.6rem;color:var(--tm);margin-top:3px;font-family:var(--fm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mcp-server-actions{display:flex;gap:4px;margin-top:4px}
+.mcp-btn{font-size:.62rem;padding:2px 8px;border:none;border-radius:4px;cursor:pointer;font-family:var(--fb);transition:all .1s}
+.mcp-btn-toggle{background:var(--bd);color:var(--ts)}
+.mcp-btn-toggle:hover{background:var(--bl);color:var(--tx)}
+.mcp-bar{font-size:.55rem;color:var(--tm);text-align:center;padding:3px 0;cursor:default;font-family:var(--fm);letter-spacing:.5px;border-top:1px solid var(--bd);margin:0 6px}
+.mcp-tabs{display:flex;border-bottom:1px solid var(--bd);margin-bottom:6px}
+.mcp-tab{flex:1;padding:4px 0;border:none;background:transparent;color:var(--tm);font-size:.7rem;cursor:pointer;font-family:var(--fb);transition:all .1s;border-bottom:2px solid transparent}
+.mcp-tab.active{color:var(--tx);border-bottom-color:var(--am)}
+.mcp-tab:hover{color:var(--ts)}
+.mcp-content{min-height:100px}
+.mcp-explore-section{margin-bottom:8px}
+.mcp-explore-category{font-size:.6rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--tm);margin-bottom:4px;padding:0 4px}
+.mcp-explore-item{display:flex;align-items:flex-start;gap:4px;padding:5px 8px;margin-bottom:3px;background:var(--bc);border-radius:6px}
+.mcp-explore-info{flex:1;min-width:0}
+.mcp-explore-name{font-size:.72rem;font-weight:600;color:var(--tx)}
+.mcp-explore-desc{font-size:.65rem;color:var(--ts);margin-top:1px}
+.mcp-explore-cmd{font-size:.6rem;color:var(--tm);font-family:var(--fm);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mcp-explore-env{font-size:.6rem;color:var(--uw);margin-top:1px}
+.mcp-explore-note{font-size:.6rem;color:var(--rs);margin-top:1px}
+.mcp-btn{font-size:.62rem;padding:2px 8px;border:none;border-radius:4px;cursor:pointer;font-family:var(--fb);transition:all .1s;white-space:nowrap}
+.mcp-btn-toggle{background:var(--bd);color:var(--ts)}
+.mcp-btn-toggle:hover{background:var(--bl);color:var(--tx)}
+.mcp-btn-remove{background:transparent;color:var(--rs);font-size:.6rem}
+.mcp-btn-remove:hover{background:rgba(239,68,68,.15)}
+.mcp-btn-install{background:var(--am);color:#0A0A0F;padding:3px 12px;font-weight:600}
+.mcp-btn-install:hover{background:#fbbf24}
+.mcp-btn-install:disabled{opacity:.5;cursor:not-allowed}
+

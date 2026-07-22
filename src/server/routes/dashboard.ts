@@ -2,10 +2,13 @@
  * Dashboard route — /api/dashboard, /api/paths, /layout-config, /api/usage/*
  */
 import type { RouteHandler, ServerContext } from "./types";
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
 import { parseBody } from "./parse-body";
 import { fullScan, incrementalScan, updateSessionInIndex, loadIndex, saveIndex, type UsageIndex } from "../usage-index";
+import { getServersStatus } from "../../agent/mcp/MCPClientService";
+import { loadMcpConfig } from "../../agent/mcp/config";
+import { MCP_CATALOG, type CatalogEntry } from "../../agent/mcp/builtin-list";
 
 export const handleDashboard: RouteHandler = (req, res, ctx) => {
   const { url, method } = req;
@@ -239,6 +242,158 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         res.end(JSON.stringify({ ok: false, error: msg }));
         return true;
       }
+    })();
+  }
+
+  // MCP 状态：合并已配置 server + 运行时状态（脱敏返回）
+  if (url === "/api/mcp/servers" && method === "GET") {
+    const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
+    const runtimeStatus = getServersStatus();
+    const configResult = loadMcpConfig({ projectRoot: workspace });
+
+    // 每个已配置的 server 与运行时状态合并
+    const rootConfigPath = resolve(workspace, ".mcp.json");
+    const merged = configResult.servers.map((source) => {
+      const runtime = runtimeStatus.find((s) => s.name === source.name);
+      return {
+        name: source.name,
+        state: runtime?.state ?? (source.config.enabled === false ? "disconnected" : "connecting"),
+        tools: runtime?.tools ?? [],
+        error: runtime?.error,
+        config: { command: source.config.command, args: source.config.args, url: source.config.url, transport: source.config.transport ?? "stdio", enabled: source.config.enabled ?? true },
+        canDelete: source.sourcePath === rootConfigPath,
+      };
+    });
+
+    res.writeHead(200, { "Content-Type": "application/json", ...cors });
+    res.end(JSON.stringify(merged));
+    return true;
+  }
+
+  // POST /api/mcp/servers/:name/toggle — 切换 server 启用状态（修改 .mcp.json）
+  if (url?.startsWith("/api/mcp/servers/") && url.endsWith("/toggle") && method === "POST") {
+    return (async () => {
+      try {
+        const rawName = url.slice("/api/mcp/servers/".length, -"/toggle".length);
+        const name = decodeURIComponent(rawName);
+        if (!name) { res.writeHead(400, {"Content-Type":"application/json",...cors}); res.end(JSON.stringify({ok:false,error:"缺少 server 名"})); return true; }
+
+        // 从当前 workspace 查找
+        const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
+        const result = loadMcpConfig({ projectRoot: workspace });
+        const source = result.servers.find((s) => s.name === name);
+        if (!source) { res.writeHead(404, {"Content-Type":"application/json",...cors}); res.end(JSON.stringify({ok:false,error:"未找到 server"})); return true; }
+
+        // 修改 .mcp.json 中的 enabled 字段
+        const filePath = source.sourcePath;
+        const content = JSON.parse(readFileSync(filePath, "utf-8"));
+        const current = content.servers?.[name]?.enabled;
+        const newEnabled = current === false ? true : false;
+        content.servers[name].enabled = newEnabled;
+        writeFileSync(filePath, JSON.stringify(content, null, 2) + "\n", "utf-8");
+
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: true, name, enabled: newEnabled, restartNeeded: true, message: "请重启会话以应用更改" }));
+      } catch (e: any) {
+        res.writeHead(500, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+      return true;
+    })();
+  }
+
+  // GET /api/mcp/catalog — 内置精选 MCP server 目录
+  if (url === "/api/mcp/catalog" && method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json", ...cors });
+    res.end(JSON.stringify(MCP_CATALOG));
+    return true;
+  }
+
+  // POST /api/mcp/install — 从目录安装 MCP server（写入 .mcp.json）
+  if (url === "/api/mcp/install" && method === "POST") {
+    return (async () => {
+      try {
+        const body = await parseBody(req);
+        const { id } = body || {};
+        if (!id) {
+          res.writeHead(400, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: false, error: "缺少 id" }));
+          return true;
+        }
+
+        const entry = MCP_CATALOG.find((e) => e.id === id);
+        if (!entry) {
+          res.writeHead(400, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: false, error: `未知的 MCP: ${id}` }));
+          return true;
+        }
+
+        const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
+        const configPath = resolve(workspace, ".mcp.json");
+
+        let config: any = {};
+        try { config = JSON.parse(readFileSync(configPath, "utf-8")); } catch {}
+        if (!config.servers) config.servers = {};
+
+        config.servers[entry.id] = { command: entry.command, args: entry.args };
+        writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+
+        const hint = entry.postInstallHint ? `提示: ${entry.postInstallHint}` : "";
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: true, name: entry.name, restartNeeded: true, message: `已添加 ${entry.name}，请重启会话以应用更改。${hint}` }));
+      } catch (e: any) {
+        res.writeHead(500, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+      return true;
+    })();
+  }
+
+  // POST /api/mcp/uninstall — 移除 MCP server（从配置来源的 .mcp.json 删除）
+  if (url === "/api/mcp/uninstall" && method === "POST") {
+    return (async () => {
+      try {
+        const body = await parseBody(req);
+        const { name } = body || {};
+        if (!name) {
+          res.writeHead(400, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: false, error: "缺少 name" }));
+          return true;
+        }
+
+        const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
+
+        // 从配置源中找到这个 server 所在的文件
+        const result = loadMcpConfig({ projectRoot: workspace });
+        const source = result.servers.find((s) => s.name === name);
+
+        if (!source) {
+          res.writeHead(404, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: false, error: `未找到 server "${name}"` }));
+          return true;
+        }
+
+        // 只允许删除 workspace 根目录的 .mcp.json 中的条目
+        const rootConfigPath = resolve(workspace, ".mcp.json");
+        if (source.sourcePath !== rootConfigPath) {
+          res.writeHead(403, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: false, error: `"${name}" 定义在 ${source.sourcePath}，请在对应文件中手动删除` }));
+          return true;
+        }
+
+        const config = JSON.parse(readFileSync(rootConfigPath, "utf-8"));
+        if (config.servers?.[name]) {
+          delete config.servers[name];
+          writeFileSync(rootConfigPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: true, name, restartNeeded: true, message: `已移除 ${name}，请重启会话以应用更改` }));
+      } catch (e: any) {
+        res.writeHead(500, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+      return true;
     })();
   }
 

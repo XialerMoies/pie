@@ -66,6 +66,8 @@ function buildSideBar(): string {
     <button class="b" data-side="chat" onclick="togglePanel('chat')" title="任务线程">${S('imsg',20)}</button>
     <button class="b" data-side="search" onclick="togglePanel('search')" title="搜索">${S('isearch',20)}</button>
     <button class="b" data-side="git" onclick="togglePanel('git')" title="Git">${S('igit',20)}</button>
+    <button class="b" data-side="mcp" onclick="togglePanel('mcp')" title="MCP">${S('iatom',20)}</button>
+    <div class="mcp-bar" id="mcp-bar" title="MCP 服务器">MCP <span id="mcp-bar-count">0</span></div>
     <div class="spcr"></div>
     <div class="bb">
       <button class="b" title="CLI" onclick="launchCli()">${S('iterm',20)}</button>
