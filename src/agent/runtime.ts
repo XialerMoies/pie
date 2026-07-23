@@ -9,9 +9,10 @@ import { resolve } from "path"
 import type { AgentSession } from "@xiamol/pi-coding-agent"
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from "@xiamol/pi-coding-agent"
 import { resolveSystemPrompt } from "./prompts"
-import { getCustomToolsAsync } from "./tools"
-import { disconnectAllSync } from "./mcp/MCPClientService"
+import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools"
 import { wsDir } from "../server/routes/session-dir"
+
+const _pendingOpens = new Map<string, Promise<void>>()
 
 export interface RuntimeConfig {
   agentDir: string
@@ -49,7 +50,7 @@ export class AgentRuntime {
 
     console.log(`[runtime] Switching workspace: "${this.currentWorkspace}" → "${workspace}"`)
 
-    const callbacks = this._saveAndDispose()
+    const callbacks = await this._saveAndDispose(false)
 
     // 不续写旧文件：workspace 切换意味着项目切换，新项目应有自己的 session 文件
     await this._initSession(workspace)
@@ -62,14 +63,37 @@ export class AgentRuntime {
   /**
    * 打开指定 session 文件作为活跃 session。
    * 与 switchWorkspace 不同：相同 workspace 下切换不同 session 文件。
+   * 同 workspace 不断 MCP，保持缓存有效。
    */
   async openSession(sessionFile: string, workspace: string): Promise<void> {
-    console.log(`[runtime] Opening session: "${sessionFile}"`)
+    // 避免重复打开同一个 session 文件（含并发：相同参数复用同一个 Promise）
+    const key = sessionFile + "::" + workspace
+    if (this.session?.sessionFile === sessionFile && this.currentWorkspace === workspace) {
+      console.log(`[runtime] ⏭ Skipping duplicate openSession: "${sessionFile}"`)
+      return
+    }
+    const inFlight = _pendingOpens.get(key)
+    if (inFlight) {
+      console.log(`[runtime] ⏭ In-flight dedup openSession: "${sessionFile}"`)
+      return inFlight
+    }
 
-    const callbacks = this._saveAndDispose()
+    const promise = this._doOpenSession(sessionFile, workspace)
+    _pendingOpens.set(key, promise)
+    try {
+      return await promise
+    } finally {
+      _pendingOpens.delete(key)
+    }
+  }
+
+  private async _doOpenSession(sessionFile: string, workspace: string): Promise<void> {
+    console.log(`[runtime] Opening session: "${sessionFile}"`)
+    // 跨 workspace 时断开 MCP，同 workspace 保留 cache
+    const sameWs = workspace === this.currentWorkspace
+    const callbacks = await this._saveAndDispose(sameWs)
     await this._initSession(workspace, sessionFile)
     this.currentWorkspace = workspace
-
     this._rebindEvents(callbacks)
     console.log(`[runtime] ✅ Session opened: "${sessionFile}"`)
   }
@@ -81,7 +105,7 @@ export class AgentRuntime {
   async createNewSession(): Promise<string> {
     console.log(`[runtime] Creating new session`)
 
-    const callbacks = this._saveAndDispose()
+    const callbacks = await this._saveAndDispose(true)
     await this._initSession(this.currentWorkspace, undefined, true /* forceNew */)
 
     this._rebindEvents(callbacks)
@@ -134,7 +158,7 @@ export class AgentRuntime {
   /** 清理 */
   dispose(): void {
     try { this.session.dispose() } catch {}
-    disconnectAllSync()
+    disconnectMcp()
     this._eventCallbacks = []
   }
 
@@ -163,13 +187,13 @@ export class AgentRuntime {
     return resolve(dir, files[0])
   }
 
-  /** 中止并清理旧 session + MCP 连接，返回事件回调列表 */
-  private _saveAndDispose(): SessionEventCallback[] {
+  /** 中止并清理旧 session，返回事件回调列表 */
+  private async _saveAndDispose(keepMcp: boolean): Promise<SessionEventCallback[]> {
     try { this.session?.abort() } catch {}
     const callbacks = [...this._eventCallbacks]
     this._eventCallbacks = []
     try { this.session?.dispose() } catch {}
-    disconnectAllSync()
+    if (!keepMcp) await disconnectMcp()
     return callbacks
   }
 
@@ -226,6 +250,7 @@ export class AgentRuntime {
       cwd,
       sessionManager: this.sessionManager,
       customTools,
+      excludeTools: ["bash"],
     })
 
     this.session = session

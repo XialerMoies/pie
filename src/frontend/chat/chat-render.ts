@@ -154,7 +154,7 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean): string 
       status,
       name: b.name || 'tool',
       input: b.input,
-      output: result?.isError ? undefined : result?.output,
+      output: result?.isError ? undefined : (result?.output || b.output),
       error: result?.isError ? result?.output : undefined,
       id: blockId(b),
     });
@@ -250,11 +250,10 @@ function updateLastBlock(block: any): boolean {
 
   const flow = lastMessageElement.querySelector('.assistant-blocks') as HTMLElement | null;
   if (!flow) {
-    const wrapper = document.createElement('div');
-    wrapper.innerHTML = renderMessage(message);
-    const replacement = wrapper.firstElementChild;
-    if (!replacement) return false;
-    lastMessageElement.replaceWith(replacement);
+    const contentElement = lastMessageElement.querySelector('.mt') as HTMLElement | null;
+    if (!contentElement) return false;
+    contentElement.classList.add('block-flow');
+    contentElement.innerHTML = renderBlocks(message.blocks);
     return true;
   }
 
@@ -271,8 +270,85 @@ function updateLastBlock(block: any): boolean {
       return true;
     }
   }
+  if (target && block.type === 'tool_use') {
+    target.innerHTML = renderEventBlock(block, message.blocks);
+    return true;
+  }
+  if (block.type === 'tool_result') {
+    const toolUse = message.blocks.find((item: any) => item.type === 'tool_use' && item.toolCallId && item.toolCallId === block.toolUseId);
+    if (toolUse) {
+      const toolTarget = Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
+        .find(element => element.dataset.blockId === blockId(toolUse));
+      if (toolTarget) {
+        toolTarget.innerHTML = renderEventBlock(toolUse, message.blocks);
+        return true;
+      }
+    }
+  }
 
   flow.outerHTML = renderBlocks(message.blocks);
+  return true;
+}
+
+function finalizeLastMessage(): boolean {
+  const messages = window.__state.M;
+  const message = messages[messages.length - 1] as any;
+  const messagesElement = $('ms');
+  if (!message || !messagesElement) return false;
+  const messageElements = messagesElement.querySelectorAll('.m');
+  const lastMessageElement = messageElements[messageElements.length - 1] as HTMLElement | undefined;
+  if (!lastMessageElement) return false;
+
+  lastMessageElement.classList.remove('go');
+  lastMessageElement.querySelector('.ty')?.remove();
+
+  const contentElement = lastMessageElement.querySelector('.mt') as HTMLElement | null;
+  if (!contentElement) return false;
+
+  if (message.blocks?.length) {
+    contentElement.classList.add('block-flow');
+    const flow = contentElement.querySelector('.assistant-blocks') as HTMLElement | null;
+    if (!flow) {
+      contentElement.innerHTML = renderBlocks(message.blocks);
+      return true;
+    }
+
+    let fullySynced = true;
+    for (const block of [...message.blocks].sort((a: any, b: any) => a.seq - b.seq)) {
+      const target = Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
+        .find(element => element.dataset.blockId === blockId(block));
+      if (target && block.type === 'text') {
+        target.innerHTML = mdRender(block.text || '');
+      } else if (target && block.type === 'thinking') {
+        const textElement = target.querySelector('.trace-thinking-text') as HTMLElement | null;
+        if (textElement) textElement.innerHTML = mdRender(block.text || '');
+        else fullySynced = false;
+      } else if (target && block.type === 'tool_use') {
+        target.innerHTML = renderEventBlock(block, message.blocks);
+      } else if (block.type === 'tool_result') {
+        const toolUse = message.blocks.find((item: any) => item.type === 'tool_use' && item.toolCallId && item.toolCallId === block.toolUseId);
+        const toolTarget = toolUse ? Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
+          .find(element => element.dataset.blockId === blockId(toolUse)) : null;
+        if (toolTarget) toolTarget.innerHTML = renderEventBlock(toolUse, message.blocks);
+        else fullySynced = false;
+      } else {
+        fullySynced = false;
+      }
+    }
+    if (!fullySynced) contentElement.innerHTML = renderBlocks(message.blocks);
+    return true;
+  }
+
+  contentElement.classList.remove('block-flow');
+  contentElement.innerHTML = mdRender(message.content || '');
+  const thinkingElement = lastMessageElement.querySelector('.think') as HTMLElement | null;
+  if (message.thinking) {
+    const html = `<details class="think"><summary>🤔 思考过程</summary>${mdRender(message.thinking)}</details>`;
+    if (thinkingElement) thinkingElement.outerHTML = html;
+    else contentElement.insertAdjacentHTML('beforebegin', html);
+  } else {
+    thinkingElement?.remove();
+  }
   return true;
 }
 
@@ -314,4 +390,5 @@ window.msgs = msgs;
   AppChat.renderMessage = renderMessage;
   AppChat.appendDelta = appendDelta;
   AppChat.updateLastBlock = updateLastBlock;
+  AppChat.finalizeLastMessage = finalizeLastMessage;
 } }

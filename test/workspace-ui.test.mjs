@@ -6,6 +6,9 @@ function setupDom() {
   const win = new Window();
   const doc = win.document;
   global.window = win;
+global.mark = () => {};
+global.logTiming = () => {};
+
   global.document = doc;
   global.self = win;
   global.localStorage = win.localStorage;

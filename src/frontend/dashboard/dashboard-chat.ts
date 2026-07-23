@@ -218,6 +218,13 @@ function _applyMsgsDiff(msgsEl: HTMLElement, scroll: boolean): void {
   if (changed && scroll) sb("ms");
 }
 
+function markLastMessageRendered(): void {
+  const M = window.__state.M;
+  while (_msgKeys.length < M.length) _msgKeys.push("");
+  while (_msgKeys.length > M.length) _msgKeys.pop();
+  if (M.length > 0) _msgKeys[M.length - 1] = _messageKey(M[M.length - 1]);
+}
+
 /** 重置消息 key 缓存（用于 M 被整体替换的场景） */
 function resetMsgKeys(): void {
   _msgKeys = [];
@@ -324,7 +331,7 @@ function bind(): void {
     st.CS.onmessage = (e: MessageEvent) => {
       if (_streamGen !== gen) return;
       try {
-        const d = JSON.parse(e.data) as { type: string; text?: string; thinking?: boolean; turnId?: string; sessionId?: string; message?: string; block?: any; blocks?: any[] };
+        if (!window.___sseFirst) { window.___sseFirst = true; mark('sse_first_event'); } const d = JSON.parse(e.data) as { type: string; text?: string; thinking?: boolean; turnId?: string; sessionId?: string; message?: string; block?: any; blocks?: any[] };
         const last = st.M[st.M.length - 1];
         if (d.type === 'block') {
           if (last?.streaming && d.block) {
@@ -359,7 +366,9 @@ function bind(): void {
           if (Array.isArray(d.blocks)) last.blocks = d.blocks;
           last._rv = (last._rv || 0) + 1;
           st.IL = false; st.CS?.close(); st.CS = null;
-          renderMessages();
+          const finalized = App.Chat?.finalizeLastMessage?.() || false;
+          if (finalized) markLastMessageRendered();
+          else renderMessages();
           const _cs = $('cs') as HTMLButtonElement | null;
           const _ci = $('ci') as HTMLTextAreaElement | null;
           if (_cs) { _cs.disabled = false; _cs.title = '发送消息'; _cs.innerHTML = S('iup', 16); }

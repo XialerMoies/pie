@@ -360,7 +360,7 @@ function restoreActiveTabWith(target: string): void {
 }
 
 // 页面加载完成后恢复面板宽度
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', () => { mark('dom_ready'); mark('dom_ready');
   const si = $('si');
   if (si) {
     try {

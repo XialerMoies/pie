@@ -23,14 +23,17 @@ export interface ToolContext {
   sessionId: string
   workspace?: string  // 当前 workspace 路径，用于工具 API 调用
   toolCallId?: string
+  /** 中间输出回调（工具执行中产生 stdout 时调用） */
+  onUpdate?: (chunk: string) => void
 }
 
 export type ToolTraceEmitter = (event: {
-  type: "tool_execution_start" | "tool_execution_end"
+  type: "tool_execution_start" | "tool_execution_update" | "tool_execution_end"
   toolCallId: string
   toolName: string
   args?: Record<string, unknown>
   result?: string
+  partialResult?: string
   isError?: boolean
 }) => void
 
@@ -101,11 +104,20 @@ export class ToolRegistry {
           args,
         })
         try {
+          const onUpdate = (chunk: string) => {
+            emitTrace?.({
+              type: "tool_execution_update",
+              toolCallId: _toolCallId,
+              toolName: tool.name,
+              partialResult: chunk,
+            })
+          }
           const text = await tool.execute(args, {
             cwd: workspace || "",
             sessionId: "",
             workspace,
             toolCallId: _toolCallId,
+            onUpdate,
           })
           emitTrace?.({
             type: "tool_execution_end",

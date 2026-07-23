@@ -260,4 +260,64 @@ describe("agentToolToPiTool", () => {
       /tool failed/,
     );
   });
+
+// ─── MCP 工具生命周期测试 ─────────────────────────
+
+it("bumpGeneration / currentGeneration 基本行为", async () => {
+  const svc = await import("../src/agent/mcp/MCPClientService.ts");
+  const g1 = svc.currentGeneration();
+  svc.bumpGeneration();
+  assert.ok(svc.currentGeneration() > g1, "bumpGeneration 应递增");
+});
+
+it("disconnectMcp 清空缓存", async () => {
+  const tools = await import("../src/agent/tools/index.ts");
+  // 主动断开一次确保状态干净
+  await tools.disconnectMcp();
+  const after = await tools.getCustomToolsAsync("/tmp");
+  // 首次调用返回内置工具（无 MCP cache）
+  const names = after.map((t) => t.name);
+  assert.ok(names.includes("git-status"), "应有内置工具");
+  assert.ok(!names.some((n) => n.startsWith("mcp__")), "首次调用不应有 MCP 工具");
+});
+
+it("getCustomToolsAsync 命中 _mcpCache 返回 MCP 工具", async () => {
+  const tools = await import("../src/agent/tools/index.ts");
+  const svc = await import("../src/agent/mcp/MCPClientService.ts");
+  svc.reset();
+
+  // 初始 cache 为空
+  assert.strictEqual(tools._getMcpCacheLen(), 0, "初始 cache 应为空");
+
+  // 注入已知 MCP cache
+  const fakeTool = { name: "mcp__fake__tool", isReadOnly: true };
+  tools._setMcpCache("/test-ws", [fakeTool]);
+
+  // 同 workspace 调用：应命中 cache，返回内置 + MCP
+  const result = await tools.getCustomToolsAsync("/test-ws");
+  assert.ok(result.some((t) => t.name === "git-status"), "应有内置工具");
+  assert.ok(result.some((t) => t.name === "mcp__fake__tool"), "应有缓存的 MCP 工具");
+
+  // 不同 workspace：不应命中 cache
+  const resultWs2 = await tools.getCustomToolsAsync("/other-ws");
+  assert.ok(resultWs2.some((t) => t.name === "git-status"), "应有内置工具");
+  assert.ok(!resultWs2.some((t) => t.name === "mcp__fake__tool"), "跨 workspace 不应有旧 cache");
+});
+
+it("不调 disconnectMcp 时 generation 不变（同 workspace 保留 MCP）", async () => {
+  const svc = await import("../src/agent/mcp/MCPClientService.ts");
+  svc.reset();
+
+  const g1 = svc.currentGeneration();
+  const tools = await import("../src/agent/tools/index.ts");
+
+  // 同 workspace 切 session 等效于不调 disconnectMcp
+  // 不调用 disconnectMcp，gen 应不变
+  assert.strictEqual(svc.currentGeneration(), g1, "不调 disconnectMcp 时 gen 不变");
+
+  // 调用 disconnectMcp（相当于 keepMcp=false 路径）：gen 应递增
+  await tools.disconnectMcp();
+  assert.ok(svc.currentGeneration() > g1, "disconnectMcp 后 gen 递增");
+});
+
 });

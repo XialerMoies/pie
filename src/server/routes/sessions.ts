@@ -78,7 +78,7 @@ export function findAllJsonl(dir: string): string[] {
   return files;
 }
 
-function findSessionFileById(baseDir: string, id: string): string | null {
+export function findSessionFileById(baseDir: string, id: string): string | null {
   // Search all session files by reading header ID
   const searchDirs = [baseDir, resolve(baseDir, "by-project")];
   for (const dir of searchDirs) {

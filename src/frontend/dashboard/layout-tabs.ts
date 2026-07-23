@@ -3,6 +3,18 @@
 
 const FILE_TABS_KEY = 'file-tabs';
 const LAST_ACTIVE_KEY = 'last-active-tab';
+let _monacoLoadPromise: Promise<void> | null = null;
+
+async function loadMonaco(): Promise<void> {
+  if ((window as any).__monaco) return;
+  if (!_monacoLoadPromise) {
+    _monacoLoadPromise = import("../editor/monaco-setup").then(() => undefined).catch((err) => {
+      _monacoLoadPromise = null;
+      throw err;
+    });
+  }
+  await _monacoLoadPromise;
+}
 
 function _syncTabsToStore(): void {
   // TabStore._syncToState 已处理 items/activeId → UiStateStore
@@ -227,15 +239,15 @@ function tabMoreMenu(e: MouseEvent): void {
 (window as any).tabMoreMenu = tabMoreMenu;
 
 // ─── File handler ────────────────────────────
-function _fileActivate(tab: AppTab): void {
+async function _fileActivate(tab: AppTab): Promise<void> {
   const ts = (window as any).__tabs;
   if (ts) ts.activateTab(tab.id);
   const editorEl = $('fc-editor');
   if (!editorEl) return;
-  const m = (window as any).__monaco;
 
   // 图片/视频 — 销毁 Monaco，显示媒体元素
   if (tab.renderer === 'image' || tab.renderer === 'video') {
+    const m = (window as any).__monaco;
     if (m && editorEl.dataset.monacoReady) { m.dispose(); editorEl.dataset.monacoReady = ''; }
     const ws = ExplorerService.getWorkspacePath();
     const url = `/api/file/raw?root=${encodeURIComponent(ws)}&path=${encodeURIComponent(tab.id)}`;
@@ -249,7 +261,11 @@ function _fileActivate(tab: AppTab): void {
     return;
   }
 
-  // 文本 — Monaco 编辑器
+  // 文本 — Monaco 编辑器（懒加载）
+  if (!(window as any).__monaco) {
+    await loadMonaco()
+  }
+  const m = (window as any).__monaco;
   if (m) {
     if (!editorEl.dataset.monacoReady) {
       editorEl.innerHTML = '';

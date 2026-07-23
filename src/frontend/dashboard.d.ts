@@ -141,6 +141,7 @@ interface AppChat {
   msgs(): string;
   appendDelta(text: string): void;
   updateLastBlock(block: Record<string, unknown>): boolean;
+  finalizeLastMessage(): boolean;
   bind(): void;
   updateUI(): void;
   updateModelName(): void;
@@ -307,6 +308,7 @@ declare function provDragStart(ev: DragEvent, idx: number): void;
 declare function provDragOver(ev: DragEvent, idx: number): void;
 declare function provDrop(ev: DragEvent, idx: number): void;
 declare function loadSessions(): void;
+declare function loadMonaco(): Promise<void>;
 declare function newSession(): void;
 declare function renameSession(el: HTMLElement, id: string): void;
 declare function deleteSession(id: string): Promise<void>;

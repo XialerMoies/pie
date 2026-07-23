@@ -214,6 +214,18 @@ function placeContextMenu(menu: HTMLElement, x: number, y: number, opts?: { marg
 }
 
 // ═══════════════════════════════════════════════════════════════════
+
+/** 启动耗时埋点 */
+const _marks = {}
+function mark(name) { _marks[name] = performance.now() }
+function logTiming() {
+  const entries = Object.entries(_marks).sort((a, b) => a[1] - b[1])
+  if (entries.length === 0) return
+  const base = entries[0][1]
+  const lines = entries.map(([n, t]) => "  +" + ((t - base).toFixed(0).padStart(5)) + "ms  " + n)
+  console.log("[timing] 前端启动\n" + lines.join("\n"))
+}
+
 //  窗口控制 (Electron IPC)
 // ═══════════════════════════════════════════════════════════════════
 
@@ -257,3 +269,5 @@ window.sb = sb; window.toast = toast as any;
 window.getD = getD; window.refresh = refresh;
 window.winCtrl = winCtrl;
 window.placeContextMenu = placeContextMenu;
+window.mark = mark;
+window.logTiming = logTiming;

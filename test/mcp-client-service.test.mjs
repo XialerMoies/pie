@@ -271,4 +271,35 @@ describe("状态管理不变式", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("stale 连接失败不写 error 状态", async () => {
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "mcp-svc-stale-"));
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const originalConnect = Client.prototype.connect;
+    let rejectConnect;
+    try {
+      writeConfig(tmpDir, { "stale-srv": { command: "mock-cmd" } });
+      withTrust(tmpDir);
+      const { loadMcpConfig } = await import("../src/agent/mcp/config.ts");
+      const cfg = loadMcpConfig({ projectRoot: tmpDir }).servers[0];
+      addTrustForConfig(tmpDir, "stale-srv", cfg.config);
+
+      Client.prototype.connect = function () {
+        return new Promise((_, reject) => {
+          rejectConnect = reject;
+        });
+      };
+
+      const pending = service.connectAll(tmpDir);
+      service.bumpGeneration();
+      rejectConnect(new Error("mock stale fail"));
+
+      const tools = await pending;
+      assert.strictEqual(tools.length, 0);
+      assert.strictEqual(service.getServersStatus().length, 0);
+    } finally {
+      Client.prototype.connect = originalConnect;
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

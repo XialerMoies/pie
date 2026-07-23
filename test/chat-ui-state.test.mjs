@@ -6,6 +6,9 @@ function setupDom() {
   const win = new Window();
   const doc = win.document;
   global.window = win;
+global.mark = () => {};
+global.logTiming = () => {};
+
   global.document = doc;
   global.self = win;
   global.localStorage = win.localStorage;
@@ -84,7 +87,8 @@ describe("chat ui state", () => {
     await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${ts}`);
     env.win.bind();
   });
-  it("消息未变化时 updateUI 不重绘消息区", () => {
+
+  it("消息未变化时 updateUI 不重绘消息区", () => {
     const panel = env.doc.getElementById("ms");
     env.win.updateUI();
     const firstHtml = panel.innerHTML;
@@ -219,6 +223,60 @@ describe("chat ui state", () => {
 
     assert.strictEqual(blockUpdates, 1);
     assert.strictEqual(redraws, 0, "block 更新不能重绘整个消息区");
+    Object.defineProperty(panel, "innerHTML", descriptor);
+  });
+
+  it("done SSE 不替换最后一条 assistant 消息", () => {
+    const streams = [];
+    class MockEventSource {
+      constructor() { this.onmessage = null; this.onerror = null; streams.push(this); }
+      close() {}
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+    env.win.App.Chat.updateLastBlock = () => true;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "流式结束";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    const stream = streams[0];
+    const panel = env.doc.getElementById("ms");
+    stream.onmessage({
+      data: JSON.stringify({ type: "block", block: { type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" } }),
+    });
+    const assistantBefore = panel.querySelectorAll('.m')[panel.querySelectorAll('.m').length - 1];
+    const descriptor = Object.getOwnPropertyDescriptor(env.win.Element.prototype, "innerHTML");
+    let panelRedraws = 0;
+    let messageReplaces = 0;
+    const origReplaceWith = env.win.Element.prototype.replaceWith;
+    Object.defineProperty(panel, "innerHTML", {
+      configurable: true,
+      get() { return descriptor.get.call(this); },
+      set(value) { panelRedraws += 1; return descriptor.set.call(this, value); },
+    });
+    env.win.Element.prototype.replaceWith = function(...args) {
+      if (this === assistantBefore || this.parentNode === panel) messageReplaces += 1;
+      return origReplaceWith.apply(this, args);
+    };
+
+    stream.onmessage({
+      data: JSON.stringify({
+        type: "done",
+        text: "",
+        blocks: [
+          { type: "tool_use", status: "success", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\ndone\n" },
+          { type: "tool_result", toolUseId: "call1", output: "done\n", blockId: "result-1", seq: 2 },
+        ],
+      }),
+    });
+
+    assert.strictEqual(panelRedraws, 0, "done 不能重绘整个消息区");
+    assert.strictEqual(messageReplaces, 0, "done 不能替换最后一条 assistant 消息");
+    assert.strictEqual(panel.querySelectorAll('.m')[panel.querySelectorAll('.m').length - 1], assistantBefore);
+    assert.strictEqual(assistantBefore.classList.contains('go'), false);
+    assert.ok(assistantBefore.textContent.includes("done"));
+
+    env.win.Element.prototype.replaceWith = origReplaceWith;
     Object.defineProperty(panel, "innerHTML", descriptor);
   });
 

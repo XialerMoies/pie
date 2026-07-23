@@ -15,6 +15,7 @@ import { appendFileSync, readFileSync, writeFileSync, existsSync, statSync, watc
 import { dispatchRoute } from "./routes/index";
 import type { ServerContext, ChatStreamState, TraceEvent, AssistantBlock } from "./routes/types";
 import { TsserverManager } from "./ts-server";
+import { mark, logTiming } from "./timing";
 // 不再移动活跃 session 文件——只在 header 标记 workspace
 export function tagSessionHeader(sessionFile: string | undefined, ws: string): void {
   if (!sessionFile) return
@@ -275,6 +276,26 @@ export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStrea
         id: tid,
       };
       emitTrace(runtime, chatStream, trace, { minIntervalMs: 250 });
+      if (event.partialResult) {
+        const toolBlock = chatStream.blocks.find(
+          (b): b is AssistantBlock & { type: "tool_use" } => b.type === "tool_use" && b.toolCallId === event.toolCallId
+        );
+        if (toolBlock && !(toolBlock.output || "").includes("[截断")) {
+          const chunk = String(event.partialResult ?? "");
+          const merged = (toolBlock.output || "") + chunk;
+          if (merged.length >= 50400) {
+            emitBlock(runtime, chatStream, {
+              ...toolBlock,
+              output: merged.slice(0, 50370) + '\n... [截断: 输出超过 50KB]',
+            } as AssistantBlock, { persist: false });
+            return;
+          }
+          emitBlock(runtime, chatStream, {
+            ...toolBlock,
+            output: merged,
+          } as AssistantBlock, { persist: false });
+        }
+      }
     }
 
     if (event.type === "tool_execution_end" && turnId) {
@@ -290,10 +311,15 @@ export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStrea
           id: tid,
         };
         emitTrace(runtime, chatStream, trace, { force: true });
+        const flowBlock2 = chatStream.blocks.find(
+          (b): b is AssistantBlock & { type: "tool_use" } =>
+            b.type === "tool_use" && b.toolCallId === event.toolCallId
+        );
+        const flowOut = flowBlock2?.output || "";
         const seq = nextBlockSeq(chatStream);
         const block: AssistantBlock = {
           type: "tool_result", toolUseId: event.toolCallId || "",
-          output: event.result,
+          output: event.result || flowOut || undefined,
           isError: event.isError === true,
           turnId,
           blockId: "result-" + seq,
@@ -418,6 +444,7 @@ export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStrea
 }
 
 async function main() {
+  mark("server_start");
   console.log("Starting Pi server...");
 
   const runtime = await initAgent({
@@ -429,6 +456,33 @@ async function main() {
   });
 
   console.log("Pi session ready");
+  mark("agent_ready");
+
+  // ─── 启动恢复：切换到上次活跃 workspace ──────────────────────
+  try {
+    const uiStateFile = resolve(PI_CONFIG_DIR, "ui-state.json");
+    if (existsSync(uiStateFile)) {
+      const uiData = JSON.parse(readFileSync(uiStateFile, "utf-8"));
+      const workspaces = uiData.workspaces || {};
+      for (const [ws, state] of Object.entries(workspaces) as any) {
+        if (ws !== "_default" && state.activeView?.type === "session" && state.activeView?.id) {
+          console.log(`[startup] 恢复 workspace: "${ws}", session: ${state.activeView.id}`);
+          const { findSessionFileById } = await import("./routes/sessions");
+          const sessionFile = findSessionFileById(SESSIONS_DIR, state.activeView.id);
+          if (sessionFile) {
+            // openSession 内部处理跨 workspace 切换，无需额外 switchWorkspace
+            await runtime.openSession(sessionFile, ws);
+          } else {
+            // 找不到 session 文件则只切 workspace
+            await runtime.switchWorkspace(ws);
+          }
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    console.log(`[startup] 恢复失败: ${e}`);
+  }
 
   // ─── 共享可变状态 ────────────────────────────────────────────
   const chatStream: ChatStreamState = { textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "", response: null, turnId: "", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0 };
@@ -563,6 +617,8 @@ async function main() {
       const port = addr.port;
       process.env.SERVER_PORT = String(port);
       console.log(`SERVER_PORT:${port}`);
+      mark("http_listening");
+      logTiming();
       console.log(`Pi Desktop server: http://127.0.0.1:${port}`);
     }
     // ─── 文件系统监听 ──────────────────────────────────────────

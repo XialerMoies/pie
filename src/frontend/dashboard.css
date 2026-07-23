@@ -1,4 +1,12 @@
 
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url(./fonts/DM-Mono-400.ttf) format('truetype')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;src:url(./fonts/DM-Mono-500.ttf) format('truetype')}
+@font-face{font-family:'Sora';font-style:normal;font-weight:400;font-display:swap;src:url(./fonts/Sora-400.ttf) format('truetype')}
+@font-face{font-family:'Sora';font-style:normal;font-weight:500;font-display:swap;src:url(./fonts/Sora-500.ttf) format('truetype')}
+@font-face{font-family:'Sora';font-style:normal;font-weight:600;font-display:swap;src:url(./fonts/Sora-600.ttf) format('truetype')}
+@font-face{font-family:'Syne';font-style:normal;font-weight:600;font-display:swap;src:url(./fonts/Syne-600.ttf) format('truetype')}
+@font-face{font-family:'Syne';font-style:normal;font-weight:700;font-display:swap;src:url(./fonts/Syne-700.ttf) format('truetype')}
+@font-face{font-family:'Syne';font-style:normal;font-weight:800;font-display:swap;src:url(./fonts/Syne-800.ttf) format('truetype')}
 :root{--bg:#0A0A0F;--bs:#111118;--bc:#181825;--bh:#1E1E30;--be:#222238;--bd:#262640;--bl:#333358;--am:#F59E0B;--in:#6366F1;--em:#34D399;--rs:#FB7185;--tx:#F1F1F9;--ts:#A0A0BB;--tm:#555570;--sd:rgba(0,0,0,.5);--fd:'Syne',sans-serif;--fb:'Sora',sans-serif;--fm:'DM Mono',monospace;--uw:#F97316;--ud:#EF4444 /* 警戒色，light/dark 同值（设计意图） */}
 .theme-light{--bg:#FAFAFA;--bs:#F0F0F0;--bc:#E6E6E6;--bh:#D8D8D8;--be:#F5F5F5;--bd:#D0D0D0;--bl:#BBBBBB;--am:#F59E0B;--in:#6366F1;--em:#34D399;--rs:#FB7185;--tx:#222222;--ts:#666666;--tm:#999999;--sd:rgba(0,0,0,.1);--fd:'Syne',sans-serif;--fb:'Sora',sans-serif;--fm:'DM Mono',monospace;--uw:#F97316;--ud:#EF4444 /* 警戒色，light/dark 同值（设计意图） */}
 *,*::after,*::before{box-sizing:border-box;margin:0;padding:0}

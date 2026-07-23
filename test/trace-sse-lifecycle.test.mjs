@@ -138,3 +138,55 @@ describe("SSE agent_end ordering", () => {
     );
   });
 });
+
+  it("tool_execution_end falls back to tool_use.output when event.result is empty", () => {
+    const runtime = mockRuntime("", { flushed: true, getSessionId: () => "session-1" });
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write(c) { return true; }, end() {} },
+      turnId: "turn-1", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0,
+    };
+    attachSessionEvents(runtime, chatStream);
+    runtime.emit({ type: "tool_execution_start", toolCallId: "call-1", toolName: "demo", args: {} });
+    runtime.emit({ type: "tool_execution_update", toolCallId: "call-1", toolName: "demo", partialResult: "live-output\n" });
+    runtime.emit({ type: "tool_execution_end", toolCallId: "call-1", toolName: "demo", result: "", isError: false });
+    const toolResult = chatStream.blocks.find((b) => b.type === "tool_result");
+    assert.ok(toolResult, "应有 tool_result block");
+    assert.ok(toolResult.output, "tool_result.output 不应为空");
+    assert.ok(toolResult.output.includes("live-output"), "tool_result.output 应包含流式阶段内容");
+  });
+
+  it("tool_execution_update 50KB 累积后添加截断提示", () => {
+    const runtime = mockRuntime("", { flushed: true, getSessionId: () => "session-1" });
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write(c) { return true; }, end() {} },
+      turnId: "turn-1", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0,
+    };
+    attachSessionEvents(runtime, chatStream);
+    runtime.emit({ type: "tool_execution_start", toolCallId: "call-1", toolName: "demo", args: {} });
+    for (let i = 0; i < 25; i++) {
+      runtime.emit({ type: "tool_execution_update", toolCallId: "call-1", toolName: "demo", partialResult: "x".repeat(2400) });
+    }
+    const toolBlock = chatStream.blocks.find((b) => b.type === "tool_use");
+    assert.ok(toolBlock, "应有 tool_use block");
+    
+    assert.ok(toolBlock.output.length < 52000, "output 不应超过 52KB");
+    assert.ok(toolBlock.output.includes("[截断"), "截断后应包含 [截断] 提示");
+  });
+
+  it("tool_execution_update 单次 60KB chunk 触发 50KB 截断", () => {
+    const runtime = mockRuntime("", { flushed: true, getSessionId: () => "session-1" });
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write(c) { return true; }, end() {} },
+      turnId: "turn-1", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0,
+    };
+    attachSessionEvents(runtime, chatStream);
+    runtime.emit({ type: "tool_execution_start", toolCallId: "call-1", toolName: "demo", args: {} });
+    runtime.emit({ type: "tool_execution_update", toolCallId: "call-1", toolName: "demo", partialResult: "x".repeat(60000) });
+    const b = chatStream.blocks.find((b) => b.type === "tool_use");
+    assert.ok(b, "应有 tool_use block");
+    assert.ok(b.output.length < 52000, "output 不应超过 52KB");
+    assert.ok(b.output.includes("[截断"), "单次大 chunk 也触发生成 [截断] 提示");
+  });

@@ -19,6 +19,8 @@ global.window = win;
 global.self = win;
 global.setTimeout = setTimeout;
 global.clearTimeout = clearTimeout;
+global.mark = () => {};
+global.logTiming = () => {};
 
 doc.body.innerHTML = '<div id="app"></div><div id="ms"></div><div id="si"></div>';
 
@@ -274,6 +276,90 @@ describe("msgs() 渲染", () => {
     assert.strictEqual(panel.querySelector('[data-block-id="text-0"]'), targetBefore, "保留目标 block DOM");
     assert.ok(targetBefore.textContent.includes("partial"));
     Object.defineProperty(panel, "innerHTML", descriptor);
+  });
+
+  it("流式 tool_use block 原位更新且不替换 block flow", () => {
+    win.__state.M = [{
+      role: "assistant",
+      streaming: true,
+      blocks: [{ type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" }],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    const flowBefore = panel.querySelector('.assistant-blocks');
+    const targetBefore = panel.querySelector('[data-block-id="tool-1"]');
+
+    const block = { type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\nstep 2\n" };
+    win.__state.M[0].blocks[0] = block;
+    const updated = win.App.Chat.updateLastBlock(block);
+
+    assert.strictEqual(updated, true);
+    assert.strictEqual(panel.querySelector('.assistant-blocks'), flowBefore, "保留 block flow DOM");
+    assert.strictEqual(panel.querySelector('[data-block-id="tool-1"]'), targetBefore, "保留目标 tool_use block DOM");
+    assert.ok(targetBefore.textContent.includes("step 2"));
+  });
+
+  it("首个 tool_use block 只填充消息内容区", () => {
+    win.__state.M = [{ role: "assistant", content: "", streaming: true }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    const messageBefore = panel.querySelector('.m');
+
+    const block = { type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" };
+    win.__state.M[0].blocks = [block];
+    const updated = win.App.Chat.updateLastBlock(block);
+
+    assert.strictEqual(updated, true);
+    assert.strictEqual(panel.querySelector('.m'), messageBefore, "保留 assistant 消息 DOM");
+    assert.ok(panel.querySelector('.assistant-blocks'), "内容区填充 block flow");
+    assert.ok(panel.textContent.includes("step 1"));
+  });
+
+  it("成对 tool_result block 只刷新对应 tool_use 节点", () => {
+    win.__state.M = [{
+      role: "assistant",
+      streaming: true,
+      blocks: [{ type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" }],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    const flowBefore = panel.querySelector('.assistant-blocks');
+    const targetBefore = panel.querySelector('[data-block-id="tool-1"]');
+
+    const result = { type: "tool_result", toolUseId: "call1", output: "done\n", blockId: "result-1", seq: 2 };
+    win.__state.M[0].blocks.push(result);
+    const updated = win.App.Chat.updateLastBlock(result);
+
+    assert.strictEqual(updated, true);
+    assert.strictEqual(panel.querySelector('.assistant-blocks'), flowBefore, "保留 block flow DOM");
+    assert.strictEqual(panel.querySelector('[data-block-id="tool-1"]'), targetBefore, "保留对应 tool_use block DOM");
+    assert.ok(targetBefore.textContent.includes("done"));
+  });
+
+  it("done 结束态不替换 assistant 气泡", () => {
+    win.__state.M = [{
+      role: "assistant",
+      streaming: true,
+      blocks: [{ type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" }],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    const messageBefore = panel.querySelector('.m');
+    const targetBefore = panel.querySelector('[data-block-id="tool-1"]');
+
+    win.__state.M[0].streaming = false;
+    win.__state.M[0].blocks = [
+      { type: "tool_use", status: "success", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\ndone\n" },
+      { type: "tool_result", toolUseId: "call1", output: "done\n", blockId: "result-1", seq: 2 },
+    ];
+    const finalized = win.App.Chat.finalizeLastMessage();
+
+    assert.strictEqual(finalized, true);
+    assert.strictEqual(panel.querySelector('.m'), messageBefore, "保留 assistant 消息 DOM");
+    assert.strictEqual(panel.querySelector('[data-block-id="tool-1"]'), targetBefore, "保留工具节点 DOM");
+    assert.strictEqual(messageBefore.classList.contains('go'), false);
+    assert.strictEqual(messageBefore.querySelector('.ty'), null);
+    assert.ok(targetBefore.textContent.includes("done"));
   });
 
   it("block text → tool_use → tool_result 保持 seq 顺序", () => {

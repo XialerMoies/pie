@@ -44,24 +44,37 @@ interface ConnectionRecord {
 const _connections = new Map<string, ConnectionRecord>()
 const _statusMap = new Map<string, McpServerStatus>()
 let _trustStore: TrustStore | undefined
+let _mcpGen = 0  // connectAll 生成号，stale 连接跳过写入全局状态
 
 function getTrustStore(): TrustStore {
   if (!_trustStore) _trustStore = new TrustStore()
   return _trustStore
 }
 
+/** 递增生成号，旧 connectAll 调用不会写入全局状态 */
+export function bumpGeneration(): number {
+  return ++_mcpGen
+}
+
+/** 读取当前 generation，用于调用方判断是否过期 */
+export function currentGeneration(): number {
+  return _mcpGen
+}
+
 /**
  * 连接指定 workspace 的所有 enabled MCP server，
  * 返回包装后的 AgentTool 列表。
  *
- * 调用前清空旧状态——确保 status 只反映当前 workspace。
+ * 调用前清空旧 status——确保 status 只反映当前 workspace。
  * 每个 server 独立连接，失败只影响自身。
+ * 内置 generation 检查：如果 _mcpGen 在连接过程中变化，跳过后续写入。
  */
 export async function connectAll(
   workspace: string,
   emitTrace?: ToolTraceEmitter,
 ): Promise<AgentTool[]> {
   const tools: AgentTool[] = []
+  const gen = _mcpGen
   const result = loadMcpConfig({ projectRoot: workspace })
   const enabled = getEnabledServers(result)
 
@@ -69,6 +82,10 @@ export async function connectAll(
   _statusMap.clear()
 
   for (const source of enabled) {
+    if (gen !== _mcpGen) {
+      console.log(`[mcp] ⏭ connectAll 跳过过期 server: ${source.name}`)
+      continue
+    }
     const hash = hashServerCommand(source.config)
     const trustStore = getTrustStore()
 
@@ -96,6 +113,8 @@ export async function connectAll(
  * 异常安全：
  * - 所有异常路径（超时/connect/listTools/包装）都关闭 client+transport
  * - 不依赖 _connections 作清理——即使未注册也关闭
+ *
+ * generation 检查：连接完成后若 _mcpGen 已变化，不写入全局状态并关闭 client。
  */
 async function connectServer(
   name: string,
@@ -103,6 +122,7 @@ async function connectServer(
   sourcePath: string,
   emitTrace?: ToolTraceEmitter,
 ): Promise<AgentTool[]> {
+  const gen = _mcpGen
   const client = new Client(CLIENT_INFO, { capabilities: {} })
   const transport = createTransport(config)
 
@@ -119,12 +139,23 @@ async function connectServer(
       createMcpToolAdapter({ serverName: name, tool, client }),
     )
 
+    // 写入全局状态前检查 generation，过期则关闭 client 不注册
+    if (gen !== _mcpGen) {
+      console.log(`[mcp] ⏭ 跳过过期 server: ${name} (gen=${gen}, current=${_mcpGen})`)
+      await safeClose(client)
+      return []
+    }
+
     _connections.set(name, { client, transport: transport as any, serverName: name, connectedAt: Date.now() })
     _setStatus(name, "connected", undefined, config, tools.map((t) => t.name))
     console.log(`[mcp] ✅ ${name}: ${tools.length} 个工具可用`)
     return tools
   } catch (err) {
     await safeClose(client)
+    if (gen !== _mcpGen) {
+      console.log(`[mcp] ⏭ 忽略过期 server 错误: ${name} (gen=${gen}, current=${_mcpGen})`)
+      return []
+    }
     _setStatus(name, "error", err instanceof Error ? err.message : String(err), config)
     throw err
   }

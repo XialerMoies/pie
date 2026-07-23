@@ -12,6 +12,9 @@ import { Window } from "happy-dom";
 
 const win = new Window();
 global.window = win;
+global.mark = () => {};
+global.logTiming = () => {};
+
 global.document = win.document;
 global.self = win;
 global.MouseEvent = win.MouseEvent;

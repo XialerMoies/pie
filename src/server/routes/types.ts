@@ -18,7 +18,7 @@ export type TraceEvent =
 export type AssistantBlock =
   | { type: "thinking"; text: string; status: "streaming" | "done"; turnId: string; blockId: string; seq: number }
   | { type: "text"; text: string; turnId: string; blockId: string; seq: number }
-  | { type: "tool_use"; toolCallId: string; name: string; input?: unknown; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
+  | { type: "tool_use"; toolCallId: string; name: string; input?: unknown; output?: string; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
   | { type: "tool_result"; toolUseId: string; output?: string; isError?: boolean; turnId: string; blockId: string; seq: number }
   | { type: "step"; text: string; status: "info" | "success" | "error"; turnId: string; blockId: string; seq: number };
 

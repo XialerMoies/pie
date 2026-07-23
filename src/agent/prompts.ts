@@ -112,7 +112,7 @@ defineSection("tools_guidance", `## 工具使用指南
 
 - 使用 Read 来查看文件内容
 - 使用 Edit/Write 来修改文件
-- 使用 Bash 来执行命令（编译、运行、测试）
+- 使用 Command 来执行命令（编译、运行、测试），支持实时查看输出
 - 使用 Glob/Grep 来搜索文件
 
 注意安全：执行破坏性命令前需确认。

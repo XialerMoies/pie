@@ -24,6 +24,9 @@ if (existsSync(HTML_PATH)) {
   let m;
   while ((m = re.exec(html)) !== null) moduleEntryPoints.add(m[1]);
 }
+// 动态 import() 加载的模块也需要保留 export（如 Monaco）
+moduleEntryPoints.add("gen/editor/monaco-setup.js");
+moduleEntryPoints.add("gen/editor/monaco-theme.js");
 
 // 依赖追踪：从 module entry 出发，找出所有被 import 的文件
 // 这些文件都应保留 export
