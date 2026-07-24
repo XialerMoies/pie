@@ -43,6 +43,8 @@ function layout(): void {
   bind();
   // 从 localStorage 恢复会话标签页（读取 session-tabs / active-session-tab / last-closed）
   (window as any).App?.Session?.restoreSessionTabs?.();
+  // Problems 底部栏初始化（DOM 已就绪）
+  _initProblemsBar();
 }
 
 // ─── Top Bar ──────────────────────────────────────────────────
@@ -67,7 +69,6 @@ function buildSideBar(): string {
     <button class="b" data-side="search" onclick="togglePanel('search')" title="搜索">${S('isearch',20)}</button>
     <button class="b" data-side="git" onclick="togglePanel('git')" title="Git">${S('igit',20)}</button>
     <button class="b" data-side="mcp" onclick="togglePanel('mcp')" title="MCP">${S('iatom',20)}</button>
-    <button class="b" data-side="problems" onclick="togglePanel('problems')" title="问题">${S('iissue',20)}</button>
     <div class="mcp-bar" id="mcp-bar" title="MCP 服务器">MCP <span id="mcp-bar-count">0</span></div>
     <div class="spcr"></div>
     <div class="bb">
@@ -94,6 +95,15 @@ function buildMainArea(): string {
       <div class="file-content" id="file-content" style="display:none">
         <div class="fc-toolbar"><span class="fc-status" id="fc-status"></span></div>
         <div class="fc-editor" id="fc-editor"></div>
+      </div>
+      <!-- Problems 底部栏 — 位于编辑器与输入区之间 -->
+      <div class="pb-bar" id="pb-bar">
+        <div class="pb-summary" id="pb-summary" role="button" tabindex="0" aria-expanded="false" aria-label="问题面板">
+          <span class="pb-summary-text" id="pb-summary-text">问题</span>
+          <span class="pb-counts" id="pb-counts"></span>
+          <button class="pb-toggle" id="pb-toggle" title="展开/收起" tabindex="-1">▴</button>
+        </div>
+        <div class="pb-body" id="pb-body" style="display:none"></div>
       </div>
       <div class="fi-area" id="fi">
         <div class="fi-box" id="fi-box">
@@ -370,6 +380,154 @@ document.addEventListener('DOMContentLoaded', () => { mark('dom_ready'); mark('d
     } catch {}
   }
 });
+
+// ─── Problems 底部栏 ─────────────────────────────────────
+
+let _pbExpanded = false;
+
+function _updateProblemsBar(): void {
+  const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
+  const el = $('pb-summary-text');
+  const counts = $('pb-counts');
+  if (!store || !el) return;
+
+  const errors = store.getErrorCount();
+  const warnings = store.getWarningCount();
+  const total = store.getProblems().length;
+
+  let text = '问题';
+  const chips: string[] = [];
+  if (errors > 0) chips.push(`<span style="color:var(--ud)">${errors} 错误</span>`);
+  if (warnings > 0) chips.push(`<span style="color:var(--uw)">${warnings} 警告</span>`);
+  if (total > 0) chips.push(`<span style="color:var(--ts)">${total} 总计</span>`);
+  counts!.innerHTML = chips.length ? '&nbsp;·&nbsp;' + chips.join('&nbsp;') : '';
+
+  if (_pbExpanded) _renderProblemsList(store);
+}
+
+function _renderProblemsList(store: ProblemsStoreAPI): void {
+  const body = $('pb-body');
+  if (!body) return;
+
+  const all = store.getProblems();
+  if (all.length === 0) {
+    body.innerHTML = '<div class="pb-empty">当前没有检测到问题 ✦</div>';
+    return;
+  }
+
+  const errors = all.filter(p => p.severity === 'error');
+  const warnings = all.filter(p => p.severity === 'warning');
+  const infos = all.filter(p => p.severity === 'info');
+
+  let html = '';
+  if (errors.length) html += _pbRenderGroup('错误', errors, 'var(--ud)');
+  if (warnings.length) html += _pbRenderGroup('警告', warnings, 'var(--uw)');
+  if (infos.length) html += _pbRenderGroup('信息', infos, 'var(--in)');
+  body.innerHTML = html;
+  _pbBindClicks(body);
+}
+
+function _pbRenderGroup(label: string, items: ProblemItem[], color: string): string {
+  let html = `<div class="pf-group">
+    <div class="pf-group-hd" style="border-left-color:${color}"><span class="pf-group-label">${label}</span><span class="pf-group-cnt">${items.length}</span></div>`;
+  const byFile = new Map<string, ProblemItem[]>();
+  for (const p of items) {
+    const list = byFile.get(p.filePath) || [];
+    list.push(p); byFile.set(p.filePath, list);
+  }
+  for (const [filePath, fileProblems] of byFile) {
+    const fileName = filePath.split('/').pop() || filePath;
+    for (const p of fileProblems) {
+      html += `<div class="pf-item" data-file="${E(p.filePath)}" data-line="${p.line}" data-col="${p.column}" title="${E(p.message)}">
+        <span class="pf-sev-dot" style="background:${color}"></span>
+        <span class="pf-msg">${E(p.message)}</span>
+        <span class="pf-loc">${E(fileName)}:${p.line}:${p.column}</span>
+      </div>`;
+    }
+  }
+  html += '</div>';
+  return html;
+}
+
+function _pbBindClicks(container: HTMLElement): void {
+  container.querySelectorAll('.pf-item').forEach(el => {
+    (el as HTMLElement).onclick = () => {
+      const file = (el as HTMLElement).dataset.file;
+      if (!file) return;
+      _pbNavigateToProblem(file, parseInt((el as HTMLElement).dataset.line || '1', 10), parseInt((el as HTMLElement).dataset.col || '1', 10));
+      _pbToggle(false);
+    };
+  });
+}
+
+async function _pbNavigateToProblem(filePath: string, line: number, col: number): Promise<void> {
+  const tabs = (window as any).__tabs;
+  const tab = tabs?.getTab?.(filePath);
+  if (tab) { const AT = (window as any).App?.Tabs; if (AT) AT.activate(filePath); }
+  else {
+    const fn = (window as any).openFileTab as ((id: string, content: string, lang?: string) => void) | undefined;
+    if (fn) {
+      const key = (window as any).App?.Constants?.WS_KEY;
+      const root = key ? (window as any).localStorage?.getItem?.(key) || "" : "";
+      fetch(`/api/file/read?root=${encodeURIComponent(root)}&path=${encodeURIComponent(filePath)}`)
+        .then(r => r.json())
+        .then((d: any) => { fn!(filePath, d?.content || '', '.' + (filePath.split('.').pop() || '').toLowerCase()); })
+        .catch(() => fn!(filePath, '', ''));
+    }
+  }
+  const m = (window as any).__monaco as MonacoAPI | undefined;
+  if (!m) return;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (m.isReady?.() && m.getCurrentFile?.() === filePath) {
+      m.revealPosition(line, col);
+      return;
+    }
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+  }
+  try { m.revealPosition(line, col); } catch {}
+}
+
+function _pbToggle(force?: boolean): void {
+  _pbExpanded = force !== undefined ? force : !_pbExpanded;
+  const body = $('pb-body');
+  const toggle = $('pb-toggle');
+  const summary = $('pb-summary');
+  if (body) body.style.display = _pbExpanded ? '' : 'none';
+  if (toggle) toggle.textContent = _pbExpanded ? '▾' : '▴';
+  if (summary) summary.setAttribute('aria-expanded', String(_pbExpanded));
+  if (_pbExpanded) _updateProblemsBar();
+}
+
+// 初始化底部栏（由 layout() 在 DOM 创建后调用）
+let _pbUnsubscribe: (() => void) | null = null;
+function _initProblemsBar(): void {
+  // 解除前一次订阅，避免 layout() 重建时累积
+  if (_pbUnsubscribe) { _pbUnsubscribe(); _pbUnsubscribe = null; }
+
+  // 点击摘要栏任何位置展开/收起
+  const summary = $('pb-summary');
+  if (summary) {
+    summary.onclick = () => _pbToggle();
+    summary.onkeydown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _pbToggle(); }
+    };
+  }
+  // 右侧箭头按钮也可点击
+  const toggle = $('pb-toggle');
+  if (toggle) toggle.onclick = (e: MouseEvent) => { e.stopPropagation(); _pbToggle(); };
+
+  const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
+  if (store) {
+    _pbUnsubscribe = store.subscribe(() => {
+      if (document.getElementById('pb-bar')) _updateProblemsBar();
+    });
+  }
+  _pbToggle(_pbExpanded);
+}
+
+// ─── window 别名 ──────────────────────────────────
+window.layout = layout;
+(window as any).renderTabs = renderTabs;
 
 // ─── window 别名 ──────────────────────────────────
 window.layout = layout;

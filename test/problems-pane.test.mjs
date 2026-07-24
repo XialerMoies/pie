@@ -1,5 +1,7 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import { Window } from "happy-dom";
 
 function setupDom() {
@@ -112,8 +114,8 @@ describe("Problems Pane", () => {
 
   beforeEach(async () => {
     env = setupDom();
-    const ts = Date.now() + Math.random();
-    await import(`../src/frontend/pane/problems/index.ts?t=${ts}`);
+    // 使用编译产物（避免 tsx 动态编译源文件时的差异）
+    await import(`../src/frontend/gen/pane/problems/index.js?t=${Date.now() + Math.random()}`);
   });
 
   it("renders workspace filter and quick-fix action", async () => {
@@ -135,5 +137,70 @@ describe("Problems Pane", () => {
     assert.ok(env.fetchCalls.some(([url]) => url === "/api/ts/apply-code-action"));
     assert.deepStrictEqual(env.refreshCalls, ["/test.ts"]);
     assert.ok(env.toastCalls.some(([message, type]) => message === "已应用修复" && type === "success"));
+  });
+
+  it("bottom bar toggles expand/collapse on summary click", async () => {
+    const { doc } = env;
+    const win = env.win;
+
+    // 设置底部栏 DOM
+    doc.body.innerHTML = `
+      <div id="pb-bar">
+        <div class="pb-summary" id="pb-summary">
+          <span id="pb-summary-text">问题</span>
+          <span id="pb-counts"></span>
+          <button class="pb-toggle" id="pb-toggle">▴</button>
+        </div>
+        <div class="pb-body" id="pb-body" style="display:none"></div>
+      </div>
+    `;
+
+    // 补充 ProblemsStore 用于渲染
+    win.__problemsStore.getProblems = () => [{
+      filePath: "/test.ts", line: 1, column: 1,
+      endLine: 1, endColumn: 1,
+      severity: "error", message: "test error",
+      code: 1001, source: "typescript",
+    }];
+
+    // 加载布局模块获取真实的 _initProblemsBar / _pbToggle
+    // 使用 vm.runInThisContext 在全局作用域执行脚本
+    const layoutPath = new URL("../src/frontend/gen/dashboard/dashboard-layout.js", import.meta.url);
+    const layoutCode = readFileSync(layoutPath, "utf-8");
+    vm.runInThisContext(layoutCode, { filename: "dashboard-layout.js" });
+
+    const initFn = globalThis._initProblemsBar;
+    assert.strictEqual(typeof initFn, "function", "_initProblemsBar should be a global function");
+
+    // 调用真实初始化逻辑绑定事件
+    initFn();
+
+    const summary = doc.getElementById("pb-summary");
+    const body = doc.getElementById("pb-body");
+    const toggle = doc.getElementById("pb-toggle");
+
+    // 初始状态：收起
+    assert.strictEqual(body.style.display, "none");
+
+    // 点击摘要栏展开
+    summary.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    assert.strictEqual(body.style.display, "");
+
+    // 再次点击收起
+    summary.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    assert.strictEqual(body.style.display, "none");
+
+    // 点击箭头按钮展开
+    toggle.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    assert.strictEqual(body.style.display, "");
+
+    // 重新初始化（模拟 layout() 重建 DOM）后保持展开状态
+    body.style.display = "none";
+    summary.setAttribute("aria-expanded", "false");
+    toggle.textContent = "▴";
+    initFn();
+    assert.strictEqual(body.style.display, "");
+    assert.strictEqual(summary.getAttribute("aria-expanded"), "true");
+    assert.strictEqual(toggle.textContent, "▾");
   });
 });

@@ -14,7 +14,7 @@
 /// <reference path="../../dashboard.d.ts" />
 
 /** 将相对路径转为 tsserver 绝对路径（用于 code actions API） */
-function __tsserverAbsPath(filePath: string): string {
+function _tsserverAbsPath(filePath: string): string {
   const key = (window as any).App?.Constants?.WS_KEY;
   const root = key ? (window as any).localStorage?.getItem?.(key) || "" : "";
   return root ? root + "/" + filePath : filePath;
