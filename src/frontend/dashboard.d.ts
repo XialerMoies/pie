@@ -256,6 +256,14 @@ interface MonacoAPI {
   tsOpenFile(filePath: string, content: string): void;
   tsChangeFile(filePath: string, content: string): void;
   tsCloseFile(filePath: string): void;
+  updateSettings(): void;
+  blur(): void;
+  pauseDiags(): void;
+  resumeDiags(): void;
+  refreshDiagnosticsForFile(filePath: string): Promise<void>;
+  revealPosition(line: number, col: number): void;
+  getCurrentFile(): string;
+  isReady(): boolean;
 }
 
 interface Window {
@@ -264,6 +272,7 @@ interface Window {
   __state: AppState;
   App: AppNamespace;
   __monaco: MonacoAPI;
+  __problemsStore: ProblemsStoreAPI;
   ExplorerService: typeof ExplorerService;
 }
 
@@ -366,6 +375,34 @@ interface ExplorerItem {
   name: string;
   path: string;
   isDir: boolean;
+}
+
+// ─── ProblemsStore Types ──────────────────────────────────────────
+interface ProblemItem {
+  filePath: string;
+  line: number;
+  column: number;
+  endLine: number;
+  endColumn: number;
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  code?: string | number;
+  fixCount?: number;
+  source: string;      // "typescript" | "eslint" | ...
+}
+
+interface ProblemsStoreAPI {
+  getProblems(): ProblemItem[];
+  getProblemsForFile(filePath: string): ProblemItem[];
+  setProblems(filePath: string, items: ProblemItem[]): void;
+  clearFile(filePath: string): void;
+  clear(): void;
+  subscribe(fn: () => void): () => void;
+  getErrorCount(): number;
+  getWarningCount(): number;
+  getInfoCount(): number;
+  getFileCount(): number;
+  getAllFiles(): string[];
 }
 
 // ─── Chat Attachment Types ──────────────────────────────────────

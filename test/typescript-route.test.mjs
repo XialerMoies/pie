@@ -37,8 +37,33 @@ async function callHandler(handler, method, url, body, ctx) {
 describe("tsserver 通信", () => {
   let handleTypeScript;
 
+  const sendRequest = async (cmd, args) => {
+    switch (cmd) {
+      case "semanticDiagnosticsSync":
+      case "syntacticDiagnosticsSync":
+        return [];
+      case "completionInfo":
+        return { entries: [] };
+      case "quickinfo":
+        return { displayString: "const test: number", documentation: "" };
+      case "definitionAndBoundSpan":
+        return { definitions: [] };
+      case "references":
+        return { refs: [] };
+      case "getCodeFixes":
+        return [{ description: "fix it", changes: [{ fileName: "/test.ts", textChanges: [{ span: { start: { line: 1, offset: 1 }, end: { line: 1, offset: 1 } }, newText: "const fixed = true;\n" }] }], commands: [], fixId: "fix", fixName: "fix-it", fixAllDescription: "Fix it" }];
+      case "getApplicableRefactors":
+        return [{ name: "Extract type", description: "Extract type", actions: [{ name: "Extract to type alias", description: "Extract to type alias", kind: "refactor.extract.type" }] }];
+      case "getEditsForRefactor":
+        return { edits: [{ fileName: "/test.ts", textChanges: [{ span: { start: { line: 1, offset: 1 }, end: { line: 1, offset: 1 } }, newText: "type Extracted = string;\n" }] }], renameFilename: undefined, renameLocation: undefined };
+      default:
+        return { success: true, command: cmd, arguments: args };
+    }
+  };
+
   const mockTsServer = {
-    send: async (cmd) => ({ success: true, ...cmd }),
+    sendRequest,
+    send: sendRequest,
     start: async () => {},
     init: async () => {},
     isRunning: () => true,
@@ -117,6 +142,24 @@ describe("tsserver 通信", () => {
   it("POST /api/ts/references 返回 JSON", async () => {
     const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/references", { file: "/test.ts", line: 1, offset: 1 }, ctx);
     assert.strictEqual(status, 200);
+  });
+
+  it("POST /api/ts/code-actions 支持 quickfix", async () => {
+    const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/code-actions", { file: "/test.ts", line: 1, offset: 1, endLine: 1, endOffset: 1, errorCodes: [1001] }, ctx);
+    assert.strictEqual(status, 200);
+    const data = JSON.parse(body);
+    assert.ok(Array.isArray(data.actions));
+    assert.strictEqual(data.actions[0].kind, "quickfix");
+    assert.strictEqual(data.actions[0].description, "fix it");
+  });
+
+  it("POST /api/ts/code-actions 支持 refactor", async () => {
+    const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/code-actions", { file: "/test.ts", line: 1, offset: 1, endLine: 1, endOffset: 1, errorCodes: [] }, ctx);
+    assert.strictEqual(status, 200);
+    const data = JSON.parse(body);
+    assert.ok(Array.isArray(data.actions));
+    assert.strictEqual(data.actions[0].kind, "refactor.extract.type");
+    assert.strictEqual(data.actions[0].description, "Extract to type alias");
   });
 
   it("GET /api/ts/diagnostics 返回 JSON", async () => {

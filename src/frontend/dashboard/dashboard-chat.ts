@@ -147,6 +147,9 @@ async function copyLastError(): Promise<void> {
 }
 
 function refreshWorkspaceState(): void {
+  // 切换工作区时清理 ProblemsStore，避免旧 workspace 诊断数据残留
+  const pstore = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
+  if (pstore) pstore.clear();
   loadSessions();
   getD();
   const pc = $('pc');

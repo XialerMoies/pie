@@ -262,6 +262,9 @@ async function _fileActivate(tab: AppTab): Promise<void> {
   }
 
   // 文本 — Monaco 编辑器（懒加载）
+  // 确保容器在 Monaco 创建前可见，防止 0x0 尺寸渲染
+  const fc = $('file-content');
+  if (fc) fc.style.display = '';
   if (!(window as any).__monaco) {
     await loadMonaco()
   }
@@ -282,6 +285,9 @@ async function _fileActivate(tab: AppTab): Promise<void> {
 function _fileClose(tab: AppTab): void {
   const monaco = (window as any).__monaco;
   if (monaco?.tsCloseFile) monaco.tsCloseFile(tab.id);
+  // 清理 ProblemsStore 中此文件的问题，避免残留
+  const pstore = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
+  if (pstore) pstore.clearFile(tab.id);
   // TabStore 处理移除 + 自动切换 activeId（_fileTabs 已投影自 TabStore，无需手动 splice）
   const ts = (window as any).__tabs;
   if (ts) ts.closeTab(tab.id);

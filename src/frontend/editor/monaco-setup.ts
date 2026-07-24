@@ -52,6 +52,54 @@ let _diagTimer: ReturnType<typeof setInterval> | null = null;
 
 let _diagFile = "";
 
+/** 将 tsserver 诊断转换为 Monaco markers + ProblemItem 列表 */
+function _diagnosticsToState(filePath: string, diags: any[]): { markers: monaco.editor.IMarkerData[]; problems: ProblemItem[] } {
+  const markers: monaco.editor.IMarkerData[] = [];
+  const problems: ProblemItem[] = [];
+
+  for (const d of diags || []) {
+    const line = d.start?.line || d.line || 1;
+    const col = d.start?.offset || d.column || 1;
+    const endLine = d.end?.line || d.line || 1;
+    const endCol = d.end?.offset || d.column || 1;
+    const sev = d.severity === "error" || d.category === "error"
+      ? monaco.MarkerSeverity.Error
+      : d.category === "warning"
+        ? monaco.MarkerSeverity.Warning
+        : monaco.MarkerSeverity.Info;
+
+    const marker: monaco.editor.IMarkerData = {
+      severity: sev,
+      message: d.text || d.message || "",
+      startLineNumber: line,
+      startColumn: col,
+      endLineNumber: endLine,
+      endColumn: endCol,
+    };
+    // CodeActionProvider 依赖 marker.code 来获取 errorCodes
+    if (d.code != null) (marker as any).code = String(d.code);
+    markers.push(marker);
+
+    const problemSev: ProblemItem["severity"] = sev === monaco.MarkerSeverity.Error ? "error"
+      : sev === monaco.MarkerSeverity.Warning ? "warning" : "info";
+
+    problems.push({
+      filePath,
+      line,
+      column: col,
+      endLine,
+      endColumn: endCol,
+      severity: problemSev,
+      message: d.text || d.message || "",
+      code: d.code,
+      fixCount: 0,
+      source: "typescript",
+    });
+  }
+
+  return { markers, problems };
+}
+
 async function pollDiagnostics(): Promise<void> {
   if (!_diagFile || !editor) return;
   const model = editor.getModel();
@@ -60,19 +108,12 @@ async function pollDiagnostics(): Promise<void> {
   try {
     const diags = await tsDiagnostics(_diagFile);
     if (diags && diags.length > 0) console.log(`[tsserver] ${diags.length} diagnostics for ${_diagFile}`);
-    const markers: monaco.editor.IMarkerData[] = (diags as any[]).map((d: { severity?: string; category?: string; text?: string; message?: string; start?: { line?: number; offset?: number }; end?: { line?: number; offset?: number }; line?: number; column?: number }) => ({
-      severity: d.severity === "error" || d.category === "error"
-        ? monaco.MarkerSeverity.Error
-        : d.category === "warning"
-          ? monaco.MarkerSeverity.Warning
-          : monaco.MarkerSeverity.Info,
-      message: d.text || d.message || "",
-      startLineNumber: d.start?.line || d.line || 1,
-      startColumn: d.start?.offset || d.column || 1,
-      endLineNumber: d.end?.line || d.line || 1,
-      endColumn: d.end?.offset || d.column || 1,
-    }));
+    const { markers, problems } = _diagnosticsToState(_diagFile, diags as any[]);
     monaco.editor.setModelMarkers(model, "typescript", markers);
+
+    // 同步写入 ProblemsStore
+    const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
+    if (store) store.setProblems(_diagFile, problems);
   } catch {
     // ignore
   }
@@ -194,6 +235,96 @@ monaco.languages.registerReferenceProvider("typescript", {
     }
   },
 });
+
+// ─── Code Actions Provider ──────────────────────────────────
+
+function _markerErrorCodes(marker?: monaco.editor.IMarkerData): number[] {
+  const rawCode = marker?.code;
+  if (rawCode == null) return [];
+  const text = typeof rawCode === "object" ? (rawCode as any).value : rawCode;
+  const code = Number(text);
+  return Number.isFinite(code) ? [code] : [];
+}
+
+monaco.languages.registerCodeActionProvider("typescript", {
+  provideCodeActions: async (model, range, context) => {
+    const filePath = _currentFilePath;
+    if (!filePath || !_diagFile) return { actions: [] };
+
+    const marker = context.markers?.[0];
+    const requestedKind = (context as any)?.only?.value as string | undefined;
+    const refactorRequested = requestedKind?.startsWith("refactor") ?? false;
+    const quickfixRequested = requestedKind?.startsWith("quickfix") ?? false;
+    const sourceRequested = requestedKind?.startsWith("source") ?? false;
+
+    if (!marker && (quickfixRequested || sourceRequested)) return { actions: [] };
+
+    const useRefactorFlow = refactorRequested || !marker;
+    const requestRange = !marker || useRefactorFlow
+      ? range
+      : new monaco.Range(marker.startLineNumber, marker.startColumn, marker.endLineNumber, marker.endColumn);
+    const errorCodes = marker && !useRefactorFlow ? _markerErrorCodes(marker) : [];
+
+    try {
+      const resp = await fetch("/api/ts/code-actions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          file: tsserverAbsPath(filePath),
+          line: requestRange.startLineNumber,
+          offset: requestRange.startColumn,
+          endLine: requestRange.endLineNumber,
+          endOffset: requestRange.endColumn,
+          errorCodes,
+          kind: requestedKind,
+        }),
+      });
+      const data = await resp.json();
+      if (!data?.actions?.length) return { actions: [] };
+
+      const actions: monaco.languages.CodeAction[] = data.actions
+        .filter((a: any) => a.changes?.length > 0)
+        .map((a: any) => ({
+          title: a.description,
+          kind: (a.kind || (useRefactorFlow ? "refactor" : "quickfix")) as monaco.languages.CodeActionKind,
+          diagnostics: marker ? [marker] : undefined,
+          edit: _buildWorkspaceEdit(a.changes!),
+          command: {
+            id: "code-action-persist",
+            title: "",
+            arguments: [a.changes],
+          },
+        }));
+
+      return { actions };
+    } catch {
+      return { actions: [] };
+    }
+  },
+});
+
+function _buildWorkspaceEdit(changes: any[]): monaco.languages.WorkspaceEdit | undefined {
+  if (!changes?.length) return undefined;
+  const edits: any[] = [];
+  for (const change of changes) {
+    if (!change.textChanges) continue;
+    for (const tc of change.textChanges) {
+      const uri = monaco.Uri.parse("file:///" + encodeURIComponent(change.fileName.replace(/\\/g, "/")));
+      edits.push({
+        resource: uri,
+        textEdit: {
+          range: new monaco.Range(
+            tc.span.start.line, tc.span.start.offset,
+            tc.span.end.line, tc.span.end.offset,
+          ),
+          text: tc.newText,
+          forceMoveMarkers: true,
+        } as any,
+      });
+    }
+  }
+  return edits.length ? { edits } : undefined;
+}
 
 // ─── 主题注册（加载时执行一次）──────────────────────────────────
 defineThemes();
@@ -319,6 +450,74 @@ export function monacoCreateEditor(container: HTMLElement): void {
   });
   zhObs.observe(document.body, { childList: true, subtree: true, characterData: true });
 
+  // ─── Code Action 持久化命令 ─────────────────────────
+  const _rootCache = () => {
+    const ws = (window as any).App?.Constants?.WS_KEY;
+    return ws ? (window as any).localStorage?.getItem?.(ws) || "" : "";
+  };
+  const _toast = (msg: string, type?: 'info' | 'error' | 'success') =>
+    (window as any).App?.UI?.toast?.(msg, type);
+
+  editor.addAction({
+    id: "code-action-persist",
+    label: "persist code action to disk",
+    run: (_ed, changes: any) => {
+      if (!changes) return;
+      fetch("/api/ts/apply-code-action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ changes }),
+      })
+        .then(r => r.json())
+        .then((data: any) => {
+          if (!data) { _toast('代码修复返回为空', 'error'); return; }
+
+          if (data.ok || data.partial) {
+            const root = _rootCache();
+            const refreshes: Promise<void>[] = [];
+
+            // 先刷新所有受影响文件的编辑器模型和缓存
+            if (data.files?.length && root) {
+              for (const changedFile of data.files) {
+                const url = `/api/file/read?root=${encodeURIComponent(root)}&path=${encodeURIComponent(changedFile)}`;
+                const p = fetch(url)
+                  .then(r => r.json())
+                  .then((d: any) => {
+                    if (typeof d?.content !== 'string') return;
+                    const tabs = (window as any).__tabs;
+                    if (tabs?.replaceTab) tabs.replaceTab(changedFile, { content: d.content });
+                    if (changedFile === _currentFilePath && editor) {
+                      if (editor.getValue() !== d.content) editor.setValue(d.content);
+                    } else {
+                      // 清除非当前文件的 ProblemsStore（pollDiagnostics 只刷新 _diagFile）
+                      const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
+                      if (store) store.clearFile(changedFile);
+                      // 如果有 Monaco model，同步更新并清除过期 markers
+                      const uri = monaco.Uri.parse("file:///" + encodeURIComponent(changedFile.replace(/\\/g, "/")));
+                      const model = monaco.editor.getModel(uri);
+                      if (model && model.getValue() !== d.content) {
+                        model.setValue(d.content);
+                        monaco.editor.setModelMarkers(model, "typescript", []);
+                      }
+                    }
+                  })
+                  .catch(() => {});
+                refreshes.push(p);
+              }
+            }
+
+            // 等所有重载完成后统一刷新诊断，避免与 setValue 竞态
+            Promise.all(refreshes).then(() => pollDiagnostics());
+
+            if (data.partial) _toast('部分文件代码修复失败，请检查', 'error');
+          } else {
+            _toast(data.errors?.[0] || '代码修复应用失败', 'error');
+          }
+        })
+        .catch(() => { _toast('代码修复请求失败', 'error'); });
+    },
+  });
+
   // 启动诊断轮询（每 3 秒轮询当前文件）
   _diagTimer = setInterval(pollDiagnostics, 3000);
 }
@@ -368,6 +567,33 @@ export function monacoBlur(): void {
   editor?.blur();
 }
 
+/** 为指定文件刷新诊断并更新 ProblemsStore */
+async function _refreshDiagnosticsForFile(filePath: string, model?: monaco.editor.ITextModel | null): Promise<void> {
+  const diags = await tsDiagnostics(filePath);
+  const { markers, problems } = _diagnosticsToState(filePath, diags as any[]);
+  if (model) monaco.editor.setModelMarkers(model, "typescript", markers);
+  const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
+  if (store) store.setProblems(filePath, problems);
+}
+
+/** 定位到指定行列（Problems 面板点问题时跳转） */
+export function monacoRevealPosition(line: number, col: number): void {
+  if (!editor) return;
+  editor.revealPositionInCenter({ lineNumber: line, column: col });
+  editor.setPosition({ lineNumber: line, column: col });
+  editor.focus();
+}
+
+/** 获取当前编辑器打开的路径（Problems 跳转用） */
+export function monacoGetCurrentFile(): string {
+  return _currentFilePath;
+}
+
+/** 检查编辑器是否已初始化 */
+export function monacoIsReady(): boolean {
+  return editor !== null && editor.getModel() !== null;
+}
+
 /** 暂停 diagnostics 轮询 */
 export function monacoPauseDiags(): void {
   if (_diagTimer) { clearInterval(_diagTimer); _diagTimer = null; }
@@ -379,6 +605,12 @@ export function monacoResumeDiags(): void {
   if (!_diagTimer && editor) {
     _diagTimer = setInterval(pollDiagnostics, 3000);
   }
+}
+
+export async function monacoRefreshDiagnosticsForFile(filePath: string): Promise<void> {
+  if (!filePath) return;
+  const model = filePath === _currentFilePath ? editor?.getModel() : null;
+  await _refreshDiagnosticsForFile(filePath, model);
 }
 
 export function monacoDispose(): void {
@@ -400,4 +632,9 @@ export function monacoDispose(): void {
   updateSettings: updateEditorSettings,
   blur: monacoBlur,
   pauseDiags: monacoPauseDiags,
+  resumeDiags: monacoResumeDiags,
+  refreshDiagnosticsForFile: monacoRefreshDiagnosticsForFile,
+  revealPosition: monacoRevealPosition,
+  getCurrentFile: monacoGetCurrentFile,
+  isReady: monacoIsReady,
 };

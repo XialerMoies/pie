@@ -36,6 +36,30 @@ body{background:var(--bg);height:100vh}
 .panel-content .sg-item{padding:5px 0;cursor:pointer;transition:color .1s}
 .panel-content .sg-item:hover{color:var(--tx)}
 .panel-content .sg-item.active{color:var(--am)}
+
+/* ─── Problems 面板 ─────────────────────────────────────────── */
+.pf-bar{display:flex;gap:4px;padding:0 0 6px;flex-wrap:wrap;border-bottom:1px solid var(--bd);margin-bottom:6px}
+.pf-btn{padding:2px 8px;border-radius:5px;border:1px solid transparent;background:0 0;color:var(--ts);font-size:.68rem;font-family:var(--fb);cursor:pointer;transition:all .1s;display:flex;align-items:center;gap:4px;white-space:nowrap}
+.pf-btn:hover{color:var(--tx);background:var(--bc)}
+.pf-btn.on{color:var(--am);border-color:var(--am);background:rgba(245,158,11,.08)}
+.pf-cnt{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;font-size:.58rem;font-family:var(--fm);background:var(--be);color:var(--ts)}
+.pf-btn.on .pf-cnt{background:rgba(245,158,11,.15);color:var(--am)}
+.pf-empty{padding:20px 4px;text-align:center;color:var(--tm);font-size:.72rem}
+.pf-summary{display:flex;align-items:center;gap:6px;padding:2px 0 6px;flex-wrap:wrap}
+.pf-sev-tag{font-size:.65rem;font-weight:500;padding:1px 6px;border-radius:4px;background:var(--bc);font-family:var(--fm)}
+.pf-files{margin-left:auto;font-size:.62rem;color:var(--tm)}
+.pf-group{margin-bottom:8px}
+.pf-group-hd{display:flex;align-items:center;gap:6px;padding:3px 6px;border-left:3px solid;margin-bottom:2px;background:var(--bc);border-radius:0 4px 4px 0}
+.pf-group-label{font-size:.65rem;font-weight:600;color:var(--tx)}
+.pf-group-cnt{font-size:.6rem;color:var(--tm);font-family:var(--fm)}
+.pf-item{display:flex;align-items:flex-start;gap:6px;padding:4px 6px 4px 12px;border-radius:4px;cursor:pointer;transition:background .08s;min-width:0}
+.pf-item:hover{background:var(--bh)}
+.pf-sev-dot{flex-shrink:0;width:6px;height:6px;border-radius:50%;margin-top:5px}
+.pf-msg{flex:1;min-width:0;font-size:.72rem;color:var(--tx);line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pf-act{flex-shrink:0;padding:2px 7px;border:1px solid var(--bd);border-radius:5px;background:var(--bc);color:var(--ts);font-size:.62rem;font-family:var(--fb);cursor:pointer;transition:all .1s;white-space:nowrap}
+.pf-act:hover{background:var(--bh);border-color:var(--am);color:var(--am)}
+.pf-loc{flex-shrink:0;font-size:.65rem;color:var(--tm);font-family:var(--fm);margin-left:auto;white-space:nowrap}
+.pf-code{flex-shrink:0;font-size:.62rem;color:var(--bl);font-family:var(--fm);margin-left:4px}
 /* ─── 会话列表 ─────────────────────────────────────────────── */
 .session-kicker{margin:-2px 0 8px;font-size:.68rem;line-height:1.5;color:var(--tm)}
 .session-toolbar{display:flex;flex-direction:column;gap:6px;padding:2px 0 8px}
