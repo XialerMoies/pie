@@ -311,6 +311,24 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
         return true;
       }
 
+      case url === "/api/ts/format": {
+        const { file, tabSize, useTabs } = body;
+        if (!file) { res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: "Missing 'file'" })); return true; }
+        const result = await ts.sendRequest("getFormattingEditsForDocument", {
+          file,
+          options: {
+            tabSize: tabSize ?? 2,
+            indentSize: tabSize ?? 2,
+            convertTabsToSpaces: useTabs !== true,
+            newLineCharacter: "\n",
+          },
+          host: ctx.paths.APP_ROOT,
+        });
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ edits: result || [] }));
+        return true;
+      }
+
       case url === "/api/ts/organize-imports": {
         const result = await ts.sendRequest("organizeImports", {
           file,

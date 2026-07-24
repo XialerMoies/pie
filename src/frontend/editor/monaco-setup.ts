@@ -518,6 +518,61 @@ export function monacoCreateEditor(container: HTMLElement): void {
     },
   });
 
+  // ─── Format Document ────────────────────────────
+  editor.addAction({
+    id: "format-document",
+    label: "格式化文档",
+    keybindings: [monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF],
+    run: async (ed) => {
+      const file = _currentFilePath;
+      if (!file) return;
+      const model = ed.getModel();
+      if (!model) return;
+      const lang = model.getLanguageId();
+      if (lang !== "typescript" && lang !== "javascript") return;
+
+      try {
+        const r = await fetch("/api/ts/format", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            file,
+            tabSize: parseInt(localStorage.getItem("editor-tab-size") || "2", 10),
+            useTabs: localStorage.getItem("editor-use-tabs") === "1",
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) { _toast("格式化请求失败", "error"); return; }
+        if (!data.edits?.length) { _toast("文档已符合格式规范", "info"); return; }
+
+        const edits = data.edits as any[];
+        // 用 model 计算偏移量用于反向排序，保证位置正确
+        const ops = edits
+          .map((e: any) => ({
+            range: new monaco.Range(
+              e.span.start.line, e.span.start.offset,
+              e.span.end.line, e.span.end.offset,
+            ),
+            text: e.newText,
+          }))
+          .sort((a: any, b: any) => {
+            const aOff = model.getOffsetAt({ lineNumber: a.range.startLineNumber, column: a.range.startColumn });
+            const bOff = model.getOffsetAt({ lineNumber: b.range.startLineNumber, column: b.range.startColumn });
+            return bOff - aOff;
+          });
+
+        // 用 editor.executeEdits 进入撤销栈，前后加 undo stop 使一次格式化为单独撤销步
+        ed.pushUndoStop();
+        ed.executeEdits("format-document", ops);
+        ed.pushUndoStop();
+        _toast(`已格式化 (${edits.length} 处变更)`, "success");
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        _toast("格式化失败: " + msg, "error");
+      }
+    },
+  });
+
   // 启动诊断轮询（每 3 秒轮询当前文件）
   _diagTimer = setInterval(pollDiagnostics, 3000);
 }
