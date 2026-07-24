@@ -9,8 +9,6 @@
 import { readFileSync, existsSync, readdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { getCurrentRuntime } from "./runtime.js";
-
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(__dirname, "..", "..");
 const MEMORY_DIR = resolve(APP_ROOT, "data", "pi", "memory");
@@ -179,8 +177,12 @@ DANGEROUS_uncachedSystemPromptSection("env_info", () => {
 
 // ─── 项目级记忆（AGENT.md）────────────────────────────────────────
 
+import { getCurrentRuntime } from "./globals.js";
+
+// ─── project sections ─────────────────────────────────────────────
+
 DANGEROUS_uncachedSystemPromptSection("agent_md", () => {
-  // 使用当前工作区路径，使 AGENT.md 随项目切换
+  // globals.ts 零依赖，不会产生循环引用
   const runtime = getCurrentRuntime();
   const root = runtime?.currentWorkspace || APP_ROOT;
   const agentMdPath = resolve(root, "AGENT.md");

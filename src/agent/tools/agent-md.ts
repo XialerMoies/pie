@@ -8,7 +8,7 @@ import { writeFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import type { AgentTool } from "../types.js";
-import { getCurrentRuntime } from "../runtime.js";
+import { getCurrentRuntime } from "../globals.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(__dirname, "..", "..", "..");

@@ -14,10 +14,10 @@ import { wsDir } from "../server/routes/session-dir"
 
 const _pendingOpens = new Map<string, Promise<void>>()
 
-// 全局 runtime 引用，供 tools 调 refreshSystemPrompt
-let _currentRuntime: AgentRuntime | null = null;
-export function setCurrentRuntime(r: AgentRuntime | null): void { _currentRuntime = r; }
-export function getCurrentRuntime(): AgentRuntime | null { return _currentRuntime; }
+import { setCurrentRuntime as _setGlobalRuntime, getCurrentRuntime as _getGlobalRuntime } from "./globals.js";
+// 重导出供 tools 使用，实际实现在 globals.ts（零依赖，防循环）
+export const getCurrentRuntime = _getGlobalRuntime;
+export const setCurrentRuntime = _setGlobalRuntime;
 
 export interface RuntimeConfig {
   agentDir: string
@@ -45,7 +45,7 @@ export class AgentRuntime {
     const runtime = new AgentRuntime()
     runtime.config = config
     runtime.currentWorkspace = config.cwd
-    setCurrentRuntime(runtime) // _initSession 会调 resolveSystemPrompt → getCurrentRuntime，必须先设置
+    _setGlobalRuntime(runtime) // _initSession 会调 resolveSystemPrompt → getCurrentRuntime，必须先设置
     await runtime._initSession(config.cwd)
     return runtime
   }

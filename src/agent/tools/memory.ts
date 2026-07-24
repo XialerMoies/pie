@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import type { AgentTool } from "../types.js";
-import { getCurrentRuntime } from "../runtime.js";
+import { getCurrentRuntime } from "../globals.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(__dirname, "..", "..", "..");
@@ -18,7 +18,7 @@ const MEMORY_DIR = resolve(APP_ROOT, "data", "pi", "memory");
 const MEMORY_INDEX = resolve(MEMORY_DIR, "MEMORY.md");
 
 /** 安全文件名校验：只允许字母、数字、点、下划线、短横线，最长 64 字符 */
-function validMemoryName(name: string): boolean {
+export function validMemoryName(name: string): boolean {
   return /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name) && name.length <= 64;
 }
 
