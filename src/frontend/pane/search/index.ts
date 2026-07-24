@@ -37,6 +37,25 @@ let _isSearching = false;
 let _debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let _hasSearched = false;
 
+// ─── Replace state ────────────────────────────────────────────────
+
+interface ReplaceMatch {
+  line: number; column: number; oldText: string; newText: string;
+}
+interface ReplaceFileResult {
+  file: string; absolutePath: string; matches: ReplaceMatch[];
+}
+interface ReplaceResponse {
+  files: ReplaceFileResult[]; totalChanges: number; preview: boolean;
+}
+
+let _replaceQuery = "";
+let _replaceRegex = false;
+let _replacePreview: ReplaceResponse | null = null;
+let _isPreviewing = false;
+let _isApplying = false;
+let _replaceExpanded = false;
+
 // NOTE: WS_KEY is in App.Constants.WS_KEY — don't redeclare const
 function getSearchRoot(): string {
   return localStorage.getItem(App.Constants.WS_KEY) || "";
@@ -122,6 +141,14 @@ function renderResults(): void {
   }
 
   list.innerHTML = html;
+
+  // Toggle replace section
+  const replaceSection = document.getElementById("search-replace-section");
+  if (replaceSection) {
+    const show = _searchType === "text" && _results.length > 0;
+    replaceSection.style.display = show ? "" : "none";
+    if (!show) { _replacePreview = null; _replaceExpanded = false; }
+  }
 }
 
 // ─── doSearch ───────────────────────────────────────────────────
@@ -202,15 +229,209 @@ async function openSearchResult(filePath: string, line?: number): Promise<void> 
     const content = d.encoding === "base64" ? "[二进制文件，无法预览]" : d.content;
     const lang = filePath.split(".").pop() || "";
     openFileTab(filePath, content, lang);
+    // 如果有行号，等 Monaco 就绪后定位
+    if (line) {
+      const m = (window as any).__monaco as any;
+      if (m?.revealPosition) {
+        for (let attempt = 0; attempt < 40; attempt++) {
+          if (m.isReady?.() && m.getCurrentFile?.() === filePath) {
+            m.revealPosition(line, 1);
+            return;
+          }
+          await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        }
+        try { m.revealPosition(line, 1); } catch {}
+      }
+    }
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     toast("读取失败: " + msg, "error");
   }
 }
 
+// ─── Replace API calls ────────────────────────────────────────────
+
+async function runReplacePreview(): Promise<ReplaceResponse> {
+  const root = getSearchRoot();
+  const r = await fetch("/api/search/replace", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: _searchQuery.trim(),
+      replacement: _replaceQuery,
+      root,
+      type: "text",
+      caseSensitive: _searchCase,
+      regex: _replaceRegex,
+      previewOnly: true,
+    }),
+  });
+  if (!r.ok) { const e = await r.text(); throw new Error(e); }
+  return r.json();
+}
+
+async function runReplaceApply(): Promise<ReplaceResponse> {
+  const root = getSearchRoot();
+  const r = await fetch("/api/search/replace", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: _searchQuery.trim(),
+      replacement: _replaceQuery,
+      root,
+      type: "text",
+      caseSensitive: _searchCase,
+      regex: _replaceRegex,
+      previewOnly: false,
+    }),
+  });
+  if (!r.ok) { const e = await r.text(); throw new Error(e); }
+  return r.json();
+}
+
+// ─── Replace preview ──────────────────────────────────────────────
+
+async function doReplacePreview(): Promise<void> {
+  if (_isPreviewing) return;
+  const previewContainer = document.getElementById("replace-preview");
+  if (!previewContainer) return;
+  if (!_searchQuery.trim()) return;
+
+  _isPreviewing = true;
+  previewContainer.innerHTML = '<div class="search-status">正在预览…</div>';
+
+  try {
+    _replacePreview = await runReplacePreview();
+    renderReplacePreview();
+  } catch (e: unknown) {
+    _replacePreview = null;
+    const msg = e instanceof Error ? e.message : String(e);
+    previewContainer.innerHTML = `<div class="search-status error">预览失败: ${E(msg)}</div>`;
+  }
+  _isPreviewing = false;
+}
+
+function renderReplacePreview(): void {
+  const previewContainer = document.getElementById("replace-preview");
+  const allBtn = document.getElementById("replace-all-btn");
+  if (!previewContainer) return;
+
+  if (!_replacePreview || _replacePreview.files.length === 0) {
+    previewContainer.innerHTML = '<div class="search-status dim">没有匹配的替换内容</div>';
+    if (allBtn) allBtn.style.display = "none";
+    return;
+  }
+
+  const { files, totalChanges } = _replacePreview;
+  let html = `<div class="replace-summary">将替换 ${totalChanges} 处匹配，涉及 ${files.length} 个文件</div>`;
+
+  for (const file of files) {
+    const fileName = file.file.split("/").pop() || file.file;
+    const iconHtml = (window as any).ExplorerService?.iconFor(fileName, false) || S("ifolder", 14);
+
+    html += `<div class="replace-file">`;
+    html += `<div class="replace-file-header">`;
+    html += `<span class="replace-file-icon">${iconHtml}</span>`;
+    html += `<span class="replace-file-name">${E(fileName)}</span>`;
+    html += `<span class="replace-file-matches">${file.matches.length} 处</span>`;
+    html += `</div>`;
+
+    const shown = file.matches.slice(0, 20);
+    for (const m of shown) {
+      html += `<div class="replace-match">`;
+      html += `<span class="replace-match-line">${m.line}</span>`;
+      html += `<span class="replace-match-old">${E(m.oldText)}</span>`;
+      html += `<span class="replace-match-arrow">→</span>`;
+      html += `<span class="replace-match-new">${E(m.newText)}</span>`;
+      html += `</div>`;
+    }
+    if (file.matches.length > 20) {
+      html += `<div class="search-more">… 还有 ${file.matches.length - 20} 处匹配</div>`;
+    }
+    html += `</div>`;
+  }
+
+  previewContainer.innerHTML = html;
+  if (allBtn) {
+    allBtn.style.display = "";
+    allBtn.textContent = `全部替换 (${totalChanges} 处)`;
+  }
+}
+
+// ─── Replace All ─────────────────────────────────────────────────
+
+async function doReplaceAll(): Promise<void> {
+  if (_isApplying) return;
+  if (!_replacePreview) return;
+
+  const ok = await confirmAsync(
+    `确定要替换全部 ${_replacePreview.totalChanges} 处匹配吗？\n涉及 ${_replacePreview.files.length} 个文件。此操作不可撤销。`
+  );
+  if (!ok) return;
+
+  _isApplying = true;
+  const allBtn = document.getElementById("replace-all-btn");
+  if (allBtn) allBtn.textContent = "替换中…";
+
+  try {
+    await runReplaceApply();
+    toast(`已替换 ${_replacePreview.totalChanges} 处匹配`, "success");
+    _replacePreview = null;
+    _replaceExpanded = false;
+    const prevEl = document.getElementById("replace-preview");
+    if (prevEl) prevEl.innerHTML = "";
+    const allBtnEl = document.getElementById("replace-all-btn");
+    if (allBtnEl) allBtnEl.style.display = "none";
+    const bodyEl = document.getElementById("search-replace-body");
+    if (bodyEl) bodyEl.style.display = "none";
+    const arrowEl = document.getElementById("replace-arrow");
+    if (arrowEl) arrowEl.innerHTML = "▸";
+    if (_debounceTimer) clearTimeout(_debounceTimer);
+    await doSearch();
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast("替换失败: " + msg, "error");
+  }
+  _isApplying = false;
+  if (allBtn) allBtn.textContent = "全部替换";
+}
+
+// ─── Replace section toggle ──────────────────────────────────────
+
+function toggleReplaceSection(): void {
+  _replaceExpanded = !_replaceExpanded;
+  const body = document.getElementById("search-replace-body");
+  const arrow = document.getElementById("replace-arrow");
+  if (body) body.style.display = _replaceExpanded ? "" : "none";
+  if (arrow) arrow.innerHTML = _replaceExpanded ? "▾" : "▸";
+  if (_replaceExpanded) {
+    const inp = document.getElementById("replace-input") as HTMLInputElement | null;
+    setTimeout(() => inp?.focus(), 50);
+  }
+}
+
+function clearReplaceUI(): void {
+  _replacePreview = null;
+  const prevEl = document.getElementById("replace-preview");
+  if (prevEl) prevEl.innerHTML = "";
+  const allBtn = document.getElementById("replace-all-btn");
+  if (allBtn) allBtn.style.display = "none";
+}
+
+function toggleReplaceRegex(): void {
+  _replaceRegex = !_replaceRegex;
+  const btn = document.getElementById("replace-regex");
+  if (btn) btn.classList.toggle("on", _replaceRegex);
+  clearReplaceUI();
+}
+
 // ─── Export for App namespace ─────────────────────────────────
 
 (window as any).openSearchResult = openSearchResult;
+(window as any).toggleReplaceSection = toggleReplaceSection;
+(window as any).toggleReplaceRegex = toggleReplaceRegex;
+(window as any).doReplacePreview = doReplacePreview;
+(window as any).doReplaceAll = doReplaceAll;
 
 // ─── Main render function ─────────────────────────────────────
 
@@ -222,12 +443,28 @@ function searchPaneRender(container: HTMLElement): void {
     `<div class="search-controls">`,
     // Type toggle
     `<div class="search-type-toggle">`,
-    `<button class="search-type-btn on" id="search-type-file" onclick="App.Settings?.setSearchType?.('filename') || setSearchType('filename')">文件名</button>`,
-    `<button class="search-type-btn" id="search-type-text" onclick="App.Settings?.setSearchType?.('text') || setSearchType('text')">全文</button>`,
-    `<button class="search-case-btn" id="search-case" onclick="App.Settings?.toggleCaseSensitive?.() || toggleCaseSensitive()" title="区分大小写">Aa</button>`,
+    `<button class="search-type-btn on" id="search-type-file" onclick="App.Settings?.setSearchType ? App.Settings.setSearchType('filename') : setSearchType('filename')">文件名</button>`,
+    `<button class="search-type-btn" id="search-type-text" onclick="App.Settings?.setSearchType ? App.Settings.setSearchType('text') : setSearchType('text')">全文</button>`,
+    `<button class="search-case-btn" id="search-case" onclick="App.Settings?.toggleCaseSensitive ? App.Settings.toggleCaseSensitive() : toggleCaseSensitive()" title="区分大小写">Aa</button>`,
     `</div>`,
     // Input
     `<input class="s-search" id="search-input" placeholder="搜索文件..." autofocus>`,
+    `</div>`,
+    // Replace section (collapsible, only visible for text search with results)
+    `<div class="search-replace" id="search-replace-section" style="display:none">`,
+    `<div class="search-replace-header" id="search-replace-header" onclick="toggleReplaceSection()">`,
+    `<span class="search-replace-arrow" id="replace-arrow">▸</span>`,
+    `<span>替换</span>`,
+    `</div>`,
+    `<div class="search-replace-body" id="search-replace-body" style="display:none">`,
+    `<input class="s-search" id="replace-input" placeholder="替换为…">`,
+    `<div class="search-replace-controls">`,
+    `<button class="search-type-btn${_replaceRegex ? ' on' : ''}" id="replace-regex" onclick="toggleReplaceRegex()" title="使用正则表达式">.*</button>`,
+    `<button class="search-replace-preview-btn" id="replace-preview-btn" onclick="doReplacePreview()">预览替换</button>`,
+    `</div>`,
+    `<div class="replace-preview" id="replace-preview"></div>`,
+    `<button class="search-replace-all" id="replace-all-btn" style="display:none" onclick="doReplaceAll()">全部替换</button>`,
+    `</div>`,
     `</div>`,
     // Results
     `<div class="search-results" id="search-results"><div class="search-status dim">输入关键词开始搜索</div></div>`,
@@ -245,6 +482,18 @@ function searchPaneRender(container: HTMLElement): void {
     });
     // Focus input after a short delay
     setTimeout(() => input.focus(), 100);
+  }
+
+  // Bind replace input
+  const replaceInput = el("replace-input") as HTMLInputElement | null;
+  if (replaceInput) {
+    replaceInput.addEventListener("input", () => {
+      _replaceQuery = replaceInput.value;
+      clearReplaceUI();
+    });
+    replaceInput.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter") doReplacePreview();
+    });
   }
 }
 

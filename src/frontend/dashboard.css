@@ -49,7 +49,7 @@ body{background:var(--bg);height:100vh}
 .pf-loc{flex-shrink:0;font-size:.65rem;color:var(--tm);font-family:var(--fm);margin-left:auto;white-space:nowrap}
 
 /* ─── Problems 状态栏与主区面板 ────────────────────────────── */
-.statusbar{grid-area:status;min-width:0;background:var(--be);border-top:1px solid var(--bd);display:flex;align-items:stretch}
+.statusbar{grid-area:status;min-width:0;background:var(--bs);border-top:1px solid var(--bd);display:flex;align-items:stretch}
 .status-problems{display:flex;align-items:center;gap:5px;min-width:0;padding:0 9px;border:0;border-right:1px solid var(--bd);background:transparent;color:var(--ts);font:500 .64rem var(--fb);cursor:pointer}
 .status-problems:hover,.status-problems.active{background:var(--bc);color:var(--tx)}
 .status-problems:focus-visible{outline:1px solid var(--am);outline-offset:-2px}
@@ -614,6 +614,32 @@ body{background:var(--bg);height:100vh}
 .search-match-text{color:var(--ts);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--fm);font-size:.65rem}
 .search-more{padding:2px 0 2px 22px;font-size:.6rem;color:var(--tm)}
 .search-hl{background:rgba(245,158,11,.25);color:var(--am);border-radius:2px;padding:0 1px}
+
+/* ── Search Replace ────────────────────────────────── */
+.search-replace{border-top:1px solid var(--bd);margin-top:6px;padding-top:6px}
+.search-replace-header{display:flex;align-items:center;gap:6px;padding:4px 2px;cursor:pointer;font-size:.72rem;color:var(--ts);user-select:none;border-radius:4px;transition:background .1s}
+.search-replace-header:hover{background:var(--bh)}
+.search-replace-arrow{font-size:.6rem;color:var(--tm);width:12px;text-align:center}
+.search-replace-body{padding:6px 0;display:flex;flex-direction:column;gap:6px}
+.search-replace-controls{display:flex;gap:6px;align-items:center}
+.search-replace-preview-btn{padding:3px 10px;border-radius:5px;border:1px solid var(--bd);background:var(--bc);color:var(--ts);font-size:.68rem;font-family:var(--fb);cursor:pointer;margin-left:auto}
+.search-replace-preview-btn:hover{background:var(--bh);color:var(--tx)}
+.replace-preview{font-size:.72rem;max-height:300px;overflow-y:auto}
+.replace-summary{padding:4px 0 6px;font-size:.65rem;color:var(--em);font-weight:600}
+.replace-file{margin-bottom:6px;border-radius:5px;border:1px solid var(--bd);overflow:hidden}
+.replace-file-header{display:flex;align-items:center;gap:5px;padding:5px 6px;background:var(--bc);font-size:.7rem}
+.replace-file-icon{flex-shrink:0}
+.replace-file-icon svg{width:13px;height:13px}
+.replace-file-name{flex:1;color:var(--ts);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.replace-file-matches{font-size:.6rem;color:var(--tm)}
+.replace-match{display:flex;align-items:flex-start;gap:6px;padding:3px 6px 3px 8px;font-size:.65rem;font-family:var(--fm);border-top:1px solid var(--bd)}
+.replace-match-line{color:var(--tm);font-size:.6rem;min-width:24px;text-align:right;flex-shrink:0;padding-top:1px}
+.replace-match-old{flex:1;color:var(--rs);background:rgba(239,68,68,.08);border-radius:3px;padding:0 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:line-through}
+.replace-match-arrow{color:var(--tm);flex-shrink:0;font-size:.7rem;padding:0 2px}
+.replace-match-new{flex:1;color:var(--em);background:rgba(52,211,153,.08);border-radius:3px;padding:0 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.search-replace-all{display:block;width:100%;margin-top:6px;padding:5px 16px;border-radius:6px;border:none;background:var(--am);color:#0A0A0F;font-size:.72rem;font-family:var(--fb);font-weight:600;cursor:pointer;transition:opacity .1s}
+.search-replace-all:hover{opacity:.85}
+.search-replace-all:disabled{opacity:.4;cursor:not-allowed}
 
 /* ─── Git Pane ─────────────────────────────────────────── */
 .git-empty{padding:24px 0;text-align:center;color:var(--tm);font-size:.72rem}

@@ -686,6 +686,53 @@ describe("search routes", () => {
 });
 
 describe("explorer routes", () => {
+
+describe("search replace route", () => {
+  it("POST /api/search/replace preview ok", async () => {
+    const ctx = mockContext();
+    const { status, body } = await callHandler(
+      handleSearch, "POST", "/api/search/replace",
+      { query: "function", replacement: "fn", root: ROOT, type: "text", previewOnly: true },
+      ctx,
+    );
+    assert.strictEqual(status, 200);
+    const data = parseJSON(body);
+    assert.strictEqual(data.preview, true);
+    assert.ok(typeof data.totalChanges === "number");
+    assert.ok(Array.isArray(data.files));
+  });
+
+  it("POST /api/search/replace missing query 400", async () => {
+    const ctx = mockContext();
+    const { status } = await callHandler(
+      handleSearch, "POST", "/api/search/replace",
+      { replacement: "fn", type: "text" },
+      ctx,
+    );
+    assert.strictEqual(status, 400);
+  });
+
+  it("POST /api/search/replace type=filename 400", async () => {
+    const ctx = mockContext();
+    const { status } = await callHandler(
+      handleSearch, "POST", "/api/search/replace",
+      { query: "test", replacement: "x", type: "filename" },
+      ctx,
+    );
+    assert.strictEqual(status, 400);
+  });
+
+  it("POST /api/search/replace path traversal 403", async () => {
+    const ctx = mockContext();
+    const { status } = await callHandler(
+      handleSearch, "POST", "/api/search/replace",
+      { query: "test", replacement: "x", root: "../../../etc", type: "text" },
+      ctx,
+    );
+    assert.strictEqual(status, 403);
+  });
+});
+
   it("GET /api/explorer 返回目录内容", async () => {
     const ctx = mockContext();
     const { status, body } = await callHandler(handleExplorer, "GET", `/api/explorer?root=${encodeURIComponent(ROOT)}&path=src`, undefined, ctx);

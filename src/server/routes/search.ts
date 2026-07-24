@@ -3,9 +3,10 @@
  *
  * 核心逻辑在 search-core.ts，此处仅 HTTP 路由分发。
  */
+import { resolve, relative, isAbsolute } from "path";
 import type { RouteHandler } from "./types";
 import { parseBody } from "./parse-body";
-import { doSearch } from "./search-core";
+import { doSearch, doReplace } from "./search-core";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
@@ -30,6 +31,51 @@ export const handleSearch: RouteHandler = async (req, res, ctx) => {
         u.searchParams.get("caseSensitive") === "true",
         parseInt(u.searchParams.get("maxResults") || "200", 10) || 200,
       );
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify(data));
+    } catch (err: unknown) {
+      res.writeHead(400, { ...cors });
+      res.end(JSON.stringify({ error: (err as Error).message }));
+    }
+    return true;
+  }
+
+  // POST /api/search/replace   Body: { query, replacement, root?, type?, caseSensitive?, regex?, previewOnly? }
+  if (url === "/api/search/replace" && method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const { query, replacement, root, type, caseSensitive, regex, previewOnly } = body;
+      if (!query) {
+        res.writeHead(400, { ...cors });
+        res.end(JSON.stringify({ error: "Missing 'query'" }));
+        return true;
+      }
+      if (replacement === undefined) {
+        res.writeHead(400, { ...cors });
+        res.end(JSON.stringify({ error: "Missing 'replacement'" }));
+        return true;
+      }
+      if (type !== "text") {
+        res.writeHead(400, { ...cors });
+        res.end(JSON.stringify({ error: "Replace only supports 'text' type" }));
+        return true;
+      }
+      const rootDir = root || p.APP_ROOT;
+      const resolved = resolve(rootDir);
+      const rel = relative(resolve(p.APP_ROOT), resolved);
+      if (rel.startsWith("..") || isAbsolute(rel)) {
+        res.writeHead(403, { ...cors });
+        res.end(JSON.stringify({ error: "Access denied" }));
+        return true;
+      }
+      const data = doReplace({
+        query,
+        replacement,
+        rootDir,
+        caseSensitive: caseSensitive ?? false,
+        regex: regex ?? false,
+        previewOnly: previewOnly !== false,
+      });
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify(data));
     } catch (err: unknown) {
