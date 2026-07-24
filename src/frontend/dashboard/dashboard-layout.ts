@@ -33,7 +33,7 @@ function closeChatTab(): void {
 }
 
 function layout(): void {
-  $('app')!.innerHTML = buildTopBar() + buildSideBar() + buildSidePanel() + buildMainArea();
+  $('app')!.innerHTML = buildTopBar() + buildSideBar() + buildSidePanel() + buildMainArea() + buildStatusBar();
   initResizeHandle();
   renderTabs();
   document.querySelectorAll('.sbar .b[data-side]').forEach(b =>
@@ -96,15 +96,6 @@ function buildMainArea(): string {
         <div class="fc-toolbar"><span class="fc-status" id="fc-status"></span></div>
         <div class="fc-editor" id="fc-editor"></div>
       </div>
-      <!-- Problems 底部栏 — 位于编辑器与输入区之间 -->
-      <div class="pb-bar" id="pb-bar">
-        <div class="pb-summary" id="pb-summary" role="button" tabindex="0" aria-expanded="false" aria-label="问题面板">
-          <span class="pb-summary-text" id="pb-summary-text">问题</span>
-          <span class="pb-counts" id="pb-counts"></span>
-          <button class="pb-toggle" id="pb-toggle" title="展开/收起" tabindex="-1">▴</button>
-        </div>
-        <div class="pb-body" id="pb-body" style="display:none"></div>
-      </div>
       <div class="fi-area" id="fi">
         <div class="fi-box" id="fi-box">
           <div class="fi-drop-zone" id="fi-drop-zone">松开添加文件引用</div>
@@ -131,7 +122,25 @@ function buildMainArea(): string {
         </div>
       </div>
     </div>
+    ${buildProblemsPanel()}
   </div>`;
+}
+
+function buildProblemsPanel(): string {
+  return `<section class="pb-panel" id="pb-panel" aria-label="问题" style="display:none">
+    <div class="pb-panel-head"><span>问题</span></div>
+    <div class="pb-body" id="pb-body"></div>
+  </section>`;
+}
+
+function buildStatusBar(): string {
+  return `<footer class="statusbar" aria-label="状态栏">
+    <button class="status-problems" id="pb-status-trigger" type="button" aria-controls="pb-panel" aria-expanded="false" title="显示问题">
+      ${S('iissue', 14)}
+      <span class="status-problems-label">问题</span>
+      <span class="status-problems-counts" id="pb-status-counts"></span>
+    </button>
+  </footer>`;
 }
 
 // ─── 标签渲染（统一容器）───────────────────────────────────
@@ -371,7 +380,7 @@ function restoreActiveTabWith(target: string): void {
 }
 
 // 页面加载完成后恢复面板宽度
-document.addEventListener('DOMContentLoaded', () => { mark('dom_ready'); mark('dom_ready');
+document.addEventListener('DOMContentLoaded', () => { mark('dom_ready');
   const si = $('si');
   if (si) {
     try {
@@ -387,20 +396,20 @@ let _pbExpanded = false;
 
 function _updateProblemsBar(): void {
   const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
-  const el = $('pb-summary-text');
-  const counts = $('pb-counts');
-  if (!store || !el) return;
+  const counts = $('pb-status-counts');
+  const trigger = $('pb-status-trigger');
+  if (!store || !counts) return;
 
   const errors = store.getErrorCount();
   const warnings = store.getWarningCount();
   const total = store.getProblems().length;
 
-  let text = '问题';
   const chips: string[] = [];
-  if (errors > 0) chips.push(`<span style="color:var(--ud)">${errors} 错误</span>`);
-  if (warnings > 0) chips.push(`<span style="color:var(--uw)">${warnings} 警告</span>`);
-  if (total > 0) chips.push(`<span style="color:var(--ts)">${total} 总计</span>`);
-  counts!.innerHTML = chips.length ? '&nbsp;·&nbsp;' + chips.join('&nbsp;') : '';
+  if (errors > 0) chips.push(`<span class="status-problems-error">${errors}</span>`);
+  if (warnings > 0) chips.push(`<span class="status-problems-warning">${warnings}</span>`);
+  counts.innerHTML = chips.join('');
+  trigger?.classList.toggle('has-errors', errors > 0);
+  trigger?.setAttribute('aria-label', total > 0 ? `问题：${errors} 个错误，${warnings} 个警告` : '没有问题');
 
   if (_pbExpanded) _renderProblemsList(store);
 }
@@ -489,12 +498,14 @@ async function _pbNavigateToProblem(filePath: string, line: number, col: number)
 
 function _pbToggle(force?: boolean): void {
   _pbExpanded = force !== undefined ? force : !_pbExpanded;
-  const body = $('pb-body');
-  const toggle = $('pb-toggle');
-  const summary = $('pb-summary');
-  if (body) body.style.display = _pbExpanded ? '' : 'none';
-  if (toggle) toggle.textContent = _pbExpanded ? '▾' : '▴';
-  if (summary) summary.setAttribute('aria-expanded', String(_pbExpanded));
+  const panel = $('pb-panel');
+  const trigger = $('pb-status-trigger');
+  if (panel) panel.style.display = _pbExpanded ? '' : 'none';
+  if (trigger) {
+    trigger.setAttribute('aria-expanded', String(_pbExpanded));
+    trigger.title = _pbExpanded ? '隐藏问题' : '显示问题';
+    trigger.classList.toggle('active', _pbExpanded);
+  }
   if (_pbExpanded) _updateProblemsBar();
 }
 
@@ -504,22 +515,13 @@ function _initProblemsBar(): void {
   // 解除前一次订阅，避免 layout() 重建时累积
   if (_pbUnsubscribe) { _pbUnsubscribe(); _pbUnsubscribe = null; }
 
-  // 点击摘要栏任何位置展开/收起
-  const summary = $('pb-summary');
-  if (summary) {
-    summary.onclick = () => _pbToggle();
-    summary.onkeydown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _pbToggle(); }
-    };
-  }
-  // 右侧箭头按钮也可点击
-  const toggle = $('pb-toggle');
-  if (toggle) toggle.onclick = (e: MouseEvent) => { e.stopPropagation(); _pbToggle(); };
+  const trigger = $('pb-status-trigger');
+  if (trigger) trigger.onclick = () => _pbToggle();
 
   const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
   if (store) {
     _pbUnsubscribe = store.subscribe(() => {
-      if (document.getElementById('pb-bar')) _updateProblemsBar();
+      if (document.getElementById('pb-status-trigger')) _updateProblemsBar();
     });
   }
   _pbToggle(_pbExpanded);
@@ -529,9 +531,6 @@ function _initProblemsBar(): void {
 window.layout = layout;
 (window as any).renderTabs = renderTabs;
 
-// ─── window 别名 ──────────────────────────────────
-window.layout = layout;
-(window as any).renderTabs = renderTabs;
 (window as any).closeChatTab = closeChatTab;
 (window as any).restoreFileTabs = restoreFileTabs;
 

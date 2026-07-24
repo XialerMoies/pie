@@ -7,7 +7,7 @@
  *   - 以 <script>（非 module）加载的文件 → 移除 export（全局 script 不需要）
  */
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "fs";
-import { resolve, dirname, relative, join } from "path";
+import { resolve, dirname, relative, join, sep } from "path";
 import { fileURLToPath } from "url";
 import * as esbuild from "esbuild";
 
@@ -80,7 +80,7 @@ for (const entryPath of moduleEntryPoints) {
   for (const d of deps) preserveExport.add(d);
 }
 
-// 编译每个文件
+// 1. 逐文件编译（保留向后兼容）
 for (const fullPath of allFiles) {
   const rel = relative(SRC, fullPath).replace(/\\/g, "/");
   const relJs = rel.replace(/\.ts$/, ".js");
@@ -99,5 +99,51 @@ for (const fullPath of allFiles) {
   if (previous !== code) {
     writeFileSync(outPath, code, "utf-8");
     console.log(`  ${rel} → gen/${rel.replace(".ts", ".js")}${isModule ? ' (module)' : ''}`);
+  }
+}
+
+// 2. 额外生成单文件 bundle（替代 25 个独立 script 标签）
+//    IIFE 会隔离顶层声明导致全局不可访问，改为按顺序拼接已编译的 gen 文件
+const bundleOut = resolve(SRC, "gen", "dashboard.js");
+const bundlePrev = existsSync(bundleOut) ? readFileSync(bundleOut, "utf-8") : null;
+
+// 与 dashboard.html 原 script 顺序一致（已移除 problems/index 和 pane/problems）
+const bundleOrder = [
+  "gen/dashboard/dashboard-helpers.js",
+  "gen/service/explorer-service.js",
+  "gen/chat/chat-render.js",
+  "gen/chat/chat-mode.js",
+  "gen/chat/chat-token.js",
+  "gen/chat/chat-attachments.js",
+  "gen/services/ui-state-store.js",
+  "gen/services/tab-store.js",
+  "gen/services/problems-store.js",
+  "gen/dashboard/dashboard-chat.js",
+  "gen/dashboard/dashboard-layout.js",
+  "gen/dashboard/layout-tabs.js",
+  "gen/dashboard/layout-panel.js",
+  "gen/dashboard/layout-shortcuts.js",
+  "gen/ui/tree.js",
+  "gen/ui/tree-render.js",
+  "gen/ui/tree-events.js",
+  "gen/dashboard/dashboard-sessions.js",
+  "gen/pane/explorer/index.js",
+  "gen/pane/chat/index.js",
+  "gen/pane/search/index.js",
+  "gen/pane/git/index.js",
+  "gen/pane/mcp/index.js",
+  "gen/dashboard/dashboard-menus.js",
+  "gen/dashboard/dashboard-settings.js",
+].filter(f => existsSync(resolve(SRC, f)));
+
+if (bundleOrder.length > 0) {
+  const parts = bundleOrder.map(f => {
+    const fullPath = resolve(SRC, f);
+    return readFileSync(fullPath, "utf-8");
+  });
+  const code = parts.join("\n");
+  if (code !== bundlePrev) {
+    writeFileSync(bundleOut, code, "utf-8");
+    console.log(`  [bundle] gen/dashboard.js (${bundleOrder.length} files, ${(code.length / 1024).toFixed(0)} KB)`);
   }
 }

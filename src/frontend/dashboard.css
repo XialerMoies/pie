@@ -21,7 +21,7 @@ body{background:var(--bg);height:100vh}
 .msgs::-webkit-scrollbar-track{margin:4px 4px 40px 0}
 
 /* ─── Grid Layout ───────────────────────────────────────────── */
-.app{position:fixed;inset:0;display:grid;grid-template-columns:60px auto minmax(0,1fr);grid-template-rows:40px 1fr;grid-template-areas:"top top top" "mn si main";overflow:hidden;background:var(--bg)}
+.app{position:fixed;inset:0;display:grid;grid-template-columns:60px auto minmax(0,1fr);grid-template-rows:40px minmax(0,1fr) 24px;grid-template-areas:"top top top" "mn si main" "status status status";overflow:hidden;background:var(--bg)}
 .sbar{grid-area:mn;background:var(--bs);border-right:1px solid var(--bd);display:flex;flex-direction:column;align-items:center;padding:6px 0;gap:2px}
 .sinfo{grid-area:si;background:var(--bs);border-right:1px solid var(--bd);overflow:hidden;width:260px;padding:10px 0;transition:width .2s,padding .2s,opacity .15s;opacity:1;position:relative}
 .sinfo.dragging{transition:none!important}
@@ -37,17 +37,7 @@ body{background:var(--bg);height:100vh}
 .panel-content .sg-item:hover{color:var(--tx)}
 .panel-content .sg-item.active{color:var(--am)}
 
-/* ─── Problems 面板 ─────────────────────────────────────────── */
-.pf-bar{display:flex;gap:4px;padding:0 0 6px;flex-wrap:wrap;border-bottom:1px solid var(--bd);margin-bottom:6px}
-.pf-btn{padding:2px 8px;border-radius:5px;border:1px solid transparent;background:0 0;color:var(--ts);font-size:.68rem;font-family:var(--fb);cursor:pointer;transition:all .1s;display:flex;align-items:center;gap:4px;white-space:nowrap}
-.pf-btn:hover{color:var(--tx);background:var(--bc)}
-.pf-btn.on{color:var(--am);border-color:var(--am);background:rgba(245,158,11,.08)}
-.pf-cnt{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;font-size:.58rem;font-family:var(--fm);background:var(--be);color:var(--ts)}
-.pf-btn.on .pf-cnt{background:rgba(245,158,11,.15);color:var(--am)}
-.pf-empty{padding:20px 4px;text-align:center;color:var(--tm);font-size:.72rem}
-.pf-summary{display:flex;align-items:center;gap:6px;padding:2px 0 6px;flex-wrap:wrap}
-.pf-sev-tag{font-size:.65rem;font-weight:500;padding:1px 6px;border-radius:4px;background:var(--bc);font-family:var(--fm)}
-.pf-files{margin-left:auto;font-size:.62rem;color:var(--tm)}
+/* ─── Problems 底部栏共享样式 ───────────────────────────────── */
 .pf-group{margin-bottom:8px}
 .pf-group-hd{display:flex;align-items:center;gap:6px;padding:3px 6px;border-left:3px solid;margin-bottom:2px;background:var(--bc);border-radius:0 4px 4px 0}
 .pf-group-label{font-size:.65rem;font-weight:600;color:var(--tx)}
@@ -56,19 +46,20 @@ body{background:var(--bg);height:100vh}
 .pf-item:hover{background:var(--bh)}
 .pf-sev-dot{flex-shrink:0;width:6px;height:6px;border-radius:50%;margin-top:5px}
 .pf-msg{flex:1;min-width:0;font-size:.72rem;color:var(--tx);line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pf-act{flex-shrink:0;padding:2px 7px;border:1px solid var(--bd);border-radius:5px;background:var(--bc);color:var(--ts);font-size:.62rem;font-family:var(--fb);cursor:pointer;transition:all .1s;white-space:nowrap}
-.pf-act:hover{background:var(--bh);border-color:var(--am);color:var(--am)}
 .pf-loc{flex-shrink:0;font-size:.65rem;color:var(--tm);font-family:var(--fm);margin-left:auto;white-space:nowrap}
-.pf-code{flex-shrink:0;font-size:.62rem;color:var(--bl);font-family:var(--fm);margin-left:4px}
 
-/* ─── Problems 底部栏 ──────────────────────────────────────── */
-.pb-bar{flex-shrink:0;border-top:1px solid var(--bd);background:var(--bs);max-height:40vh;overflow:hidden;display:flex;flex-direction:column}
-.pb-summary{display:flex;align-items:center;gap:8px;padding:3px 10px;cursor:pointer;user-select:none;font-size:.72rem;color:var(--ts);min-height:26px}
-.pb-summary:hover{background:var(--bc)}
-.pb-counts{font-size:.68rem;color:var(--tm)}
-.pb-toggle{margin-left:auto;border:none;background:0 0;color:var(--tm);cursor:pointer;font-size:.72rem;padding:2px 6px;border-radius:4px}
-.pb-toggle:hover{color:var(--tx);background:var(--bh)}
-.pb-body{flex:1;overflow-y:auto;padding:2px 8px 8px;min-height:0;border-top:1px solid var(--bd)}
+/* ─── Problems 状态栏与主区面板 ────────────────────────────── */
+.statusbar{grid-area:status;min-width:0;background:var(--be);border-top:1px solid var(--bd);display:flex;align-items:stretch}
+.status-problems{display:flex;align-items:center;gap:5px;min-width:0;padding:0 9px;border:0;border-right:1px solid var(--bd);background:transparent;color:var(--ts);font:500 .64rem var(--fb);cursor:pointer}
+.status-problems:hover,.status-problems.active{background:var(--bc);color:var(--tx)}
+.status-problems:focus-visible{outline:1px solid var(--am);outline-offset:-2px}
+.status-problems svg{flex-shrink:0}
+.status-problems-counts{display:flex;align-items:center;gap:4px;font:500 .6rem var(--fm)}
+.status-problems-error{color:var(--ud)}
+.status-problems-warning{color:var(--uw)}
+.pb-panel{flex-shrink:0;max-height:38vh;min-height:0;overflow:hidden;border-top:1px solid var(--bd);background:var(--bs);display:flex;flex-direction:column}
+.pb-panel-head{display:flex;align-items:center;min-height:26px;padding:0 10px;border-bottom:1px solid var(--bd);color:var(--ts);font:600 .66rem var(--fd);text-transform:uppercase}
+.pb-body{flex:1;overflow-y:auto;padding:2px 8px 8px;min-height:0}
 .pb-body .pf-item{padding:3px 6px 3px 10px;font-size:.72rem}
 .pb-body .pf-group{margin-bottom:4px}
 .pb-body .pf-group-hd{padding:2px 6px;font-size:.65rem}

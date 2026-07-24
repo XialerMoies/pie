@@ -16,6 +16,7 @@ import { watch } from "chokidar";
 import * as path from "path";
 import * as fs from "fs";
 import { fileURLToPath } from "url";
+import { compilePreload } from "./compile-preload.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -82,20 +83,7 @@ function buildElectron() {
   console.log("🔨 Compiling electron main...");
   try {
     execSync("npx tsc -p tsconfig.electron.json", { cwd: ROOT, stdio: "pipe" });
-    const preloadPath = path.join(ROOT, "dist-electron", "electron", "preload.js");
-    fs.writeFileSync(preloadPath, `const { contextBridge, ipcRenderer } = require('electron');
-contextBridge.exposeInMainWorld('electronAPI', {
-  minimize: () => ipcRenderer.send('window-minimize'),
-  maximize: () => ipcRenderer.send('window-maximize'),
-  close: () => ipcRenderer.send('window-close'),
-  openFile: () => ipcRenderer.invoke('dialog-open-file'),
-  openFolder: () => ipcRenderer.invoke('open-folder-dialog'),
-  showItemInFolder: (path) => ipcRenderer.invoke('show-item-in-folder', path),
-  trashItem: (path) => ipcRenderer.invoke('trash-item', path),
-  newWindow: () => ipcRenderer.send('window-new'),
-  spawnTerminal: () => ipcRenderer.invoke('spawn-terminal'),
-});
-`);
+    compilePreload();
     console.log("✅ Electron compiled");
   } catch (err) {
     console.error("❌ Compile failed:", err.stderr?.toString() || err.message);

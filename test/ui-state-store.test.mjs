@@ -92,6 +92,42 @@ describe("UiStateStore", () => {
     assert.strictEqual(s.activeView.type, "chat");
   });
 
+  it("saveNow 只持久化新 tabs 格式", async () => {
+    storage["workspace_path"] = "/project-alpha";
+    storage["session-tabs"] = JSON.stringify(["sess-a"]);
+    storage["session-tab-labels"] = JSON.stringify({ "sess-a": "手动名称" });
+
+    let savedBody = null;
+    global.fetch = async (url, init) => {
+      if (String(url).includes("/api/ui-state") && init?.method === "PUT") {
+        savedBody = JSON.parse(init.body);
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          schemaVersion: 2,
+          workspacePath: "/project-alpha",
+          activeView: { type: "session", id: "sess-a" },
+          tabs: { sessions: ["sess-a"], files: [], chatOpen: true, labels: { "sess-a": "手动名称" } },
+          panel: { active: "explorer", closed: false, width: 260 },
+          recent: { sessions: {} },
+        }),
+      };
+    };
+
+    await store().hydrate();
+
+    assert.ok(savedBody, "hydrate 后应保存一次状态");
+    assert.ok(Array.isArray(savedBody.tabs.items), "保存体应携带 tabs.items");
+    assert.strictEqual(savedBody.tabs.items.length, 1, "保存体保留标签项");
+    assert.strictEqual(savedBody.tabs.activeId, "sess-a", "保存体保留 activeId");
+    assert.strictEqual("sessions" in savedBody.tabs, false, "不再写 sessions 旧字段");
+    assert.strictEqual("files" in savedBody.tabs, false, "不再写 files 旧字段");
+    assert.strictEqual("chatOpen" in savedBody.tabs, false, "不再写 chatOpen 旧字段");
+    assert.strictEqual("labels" in savedBody.tabs, false, "不再写 labels 旧字段");
+  });
+
   it("panel.closed 恢复", async () => {
     global.fetch = async () => ({
       ok: true,

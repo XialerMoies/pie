@@ -249,7 +249,7 @@ function _markerErrorCodes(marker?: monaco.editor.IMarkerData): number[] {
 monaco.languages.registerCodeActionProvider("typescript", {
   provideCodeActions: async (model, range, context) => {
     const filePath = _currentFilePath;
-    if (!filePath || !_diagFile) return { actions: [] };
+    if (!filePath || !_diagFile) return { actions: [], dispose: () => {} };
 
     const marker = context.markers?.[0];
     const requestedKind = (context as any)?.only?.value as string | undefined;
@@ -257,7 +257,7 @@ monaco.languages.registerCodeActionProvider("typescript", {
     const quickfixRequested = requestedKind?.startsWith("quickfix") ?? false;
     const sourceRequested = requestedKind?.startsWith("source") ?? false;
 
-    if (!marker && (quickfixRequested || sourceRequested)) return { actions: [] };
+    if (!marker && (quickfixRequested || sourceRequested)) return { actions: [], dispose: () => {} };
 
     const useRefactorFlow = refactorRequested || !marker;
     const requestRange = !marker || useRefactorFlow
@@ -280,7 +280,7 @@ monaco.languages.registerCodeActionProvider("typescript", {
         }),
       });
       const data = await resp.json();
-      if (!data?.actions?.length) return { actions: [] };
+      if (!data?.actions?.length) return { actions: [], dispose: () => {} };
 
       const actions: monaco.languages.CodeAction[] = data.actions
         .filter((a: any) => a.changes?.length > 0)
@@ -296,9 +296,9 @@ monaco.languages.registerCodeActionProvider("typescript", {
           },
         }));
 
-      return { actions };
+      return { actions, dispose: () => {} };
     } catch {
-      return { actions: [] };
+      return { actions: [], dispose: () => {} };
     }
   },
 });

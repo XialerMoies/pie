@@ -20,7 +20,10 @@ const OUT = resolve(ROOT, "dist", "frontend");
 console.log("→ Vite build…");
 execSync("npx vite build", { cwd: ROOT, stdio: "inherit" });
 
-// 1.5 复制 marked.umd.js（常规 script 引用，Vite 不会自动处理）
+// 1.5 编译 preload.ts（Electron 需要 CommonJS 格式）
+import("./compile-preload.mjs").then(m => { m.compilePreload(); console.log("→ preload.js compiled"); }).catch(e => { console.error("❌ preload build failed:", e.message); process.exit(1); });
+
+// 1.6 复制 marked.umd.js（常规 script 引用，Vite 不会自动处理）
 const markedSrc = resolve(SRC, "marked.umd.js");
 const markedDst = resolve(OUT, "marked.umd.js");
 if (existsSync(markedSrc) && !existsSync(markedDst)) {

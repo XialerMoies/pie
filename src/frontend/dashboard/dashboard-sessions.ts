@@ -90,19 +90,23 @@ function writeSessionTabIds(ids: string[]): void {
   if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
 }
 
+let _getActiveSessionTabIdDepth = 0;
 function getActiveSessionTabId(): string | null {
-  // TabStore 优先
-  const tabs = (window as any).__tabs;
-  if (tabs) { const id = tabs.getActiveSessionTabId(); if (id) return id; }
-  // 降级：store → __state → localStorage
-  const store = window.__state?._uiStateStore;
-  if (store?.activeView?.type === 'session' && store.activeView.id) {
-    if (readSessionTabIds().includes(store.activeView.id)) return store.activeView.id;
-  }
-  const stateId = window.__state._activeSessionTabId;
-  if (stateId && readSessionTabIds().includes(stateId)) return stateId;
-  try { const id = localStorage.getItem(ACTIVE_SESSION_TAB_KEY); if (id && readSessionTabIds().includes(id)) return id; } catch {}
-  return null;
+  // 递归防护（TabStore 初始化时序可能产生循环调用）
+  if (_getActiveSessionTabIdDepth > 5) { _getActiveSessionTabIdDepth = 0; return null; }
+  _getActiveSessionTabIdDepth++;
+  try {
+    const tabs = (window as any).__tabs;
+    if (tabs) { const id = tabs.getActiveSessionTabId(); if (id) return id; }
+    const store = window.__state?._uiStateStore;
+    if (store?.activeView?.type === 'session' && store.activeView.id) {
+      if (readSessionTabIds().includes(store.activeView.id)) return store.activeView.id;
+    }
+    const stateId = window.__state._activeSessionTabId;
+    if (stateId && readSessionTabIds().includes(stateId)) return stateId;
+    try { const id = localStorage.getItem(ACTIVE_SESSION_TAB_KEY); if (id && readSessionTabIds().includes(id)) return id; } catch {}
+    return null;
+  } finally { _getActiveSessionTabIdDepth--; }
 }
 
 function setActiveSessionTabId(id: string | null): void {
@@ -348,15 +352,67 @@ async function restoreSessionTabs(): Promise<void> {
   saveUiState();
 }
 
-function activateDraftSession(id: string): void {
+/** 关闭当前 SSE 连接 + 重置忙状态 */
+function _disposeActiveStream(): void {
+  const oldCS = window.__state.CS;
+  if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
+  window.__state.IL = false;
+}
+
+/** 将 API 响应映射为 Message 数组 */
+function _mapMessages(raw: any[]): Message[] {
+  return (raw || []).map(m => ({
+    role: m.role as 'user' | 'assistant',
+    content: m.content,
+    thinking: m.thinking || '',
+    streaming: false,
+    _compacted: (m as any)._compacted || false,
+    turnId: (m as any).turnId || undefined,
+    blocks: (m as any).blocks || undefined,
+  }));
+}
+
+/** 设置消息列表 + 刷新 UI + 记住会话 + 保存状态 */
+function _applySessionMessages(data: { activeSessionId?: string; messages?: any[] }, fallbackId: string): void {
+  App.Chat?.resetMsgKeys?.();
+  window.__state.M = _mapMessages(data.messages);
+  focusChatView();
+  const msgsEl = $('ms');
+  if (msgsEl) {
+    msgsEl.innerHTML = window.__state.M.length > 0
+      ? (window.msgs ? window.msgs() : '')
+      : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
+    setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50);
+  }
+  const activeId = data.activeSessionId || fallbackId;
+  if (activeId) { rememberSessionTab(activeId); setActiveSessionTabId(activeId); renderSessionTabs(activeId); }
+  loadSessions();
+  saveUiState();
+}
+
+/** 激活失败时的状态回滚 */
+function _activateFailReset(): void {
+  App.Chat?.resetMsgKeys?.();
+  setActiveSessionTabId(null);
+  window.__state.M = [];
+  window.__state.IL = false;
+  const oldCS = window.__state.CS;
+  if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
+  const ci = $('ci') as HTMLTextAreaElement | null;
+  const cs = $('cs') as HTMLButtonElement | null;
+  if (ci) { ci.disabled = false; ci.style.height = 'auto'; }
+  if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = window.S('iup', 16); }
+}
+
+/** 新草稿/空会话 */
+function _setupDraftSession(id: string): void {
   rememberSessionTab(id);
   setActiveSessionTabId(id);
   App.Chat?.resetMsgKeys?.();
   window.__state.M = [];
   window.__state.IL = false;
   App.Chat?.clearAttachments?.();
-  const oldCS = window.__state.CS;
-  if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
+  _disposeActiveStream();
   focusChatView();
   const ci = $('ci') as HTMLTextAreaElement | null;
   if (ci) { ci.value = ''; ci.style.height = 'auto'; }
@@ -364,6 +420,11 @@ function activateDraftSession(id: string): void {
   if (msgsEl) msgsEl.innerHTML = '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
   renderSessionTabs(id);
   loadSessions();
+}
+
+/** 保留向后兼容入口 */
+function activateDraftSession(id: string): void {
+  _setupDraftSession(id);
 }
 
 /** App.Tabs.close 的降级入口 */
@@ -690,19 +751,8 @@ function toggleOtherSessions(header: HTMLElement): void {
 
 function newSession(): void {
   const draftId = createDraftSessionId();
-  App.Chat?.resetMsgKeys?.();
-  window.__state.M = [];
-  window.__state.IL = false;
-  App.Chat?.clearAttachments?.();
-  const oldCS = window.__state.CS;
-  if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
-  rememberSessionTab(draftId);
+  _setupDraftSession(draftId);
   writeSessionTabLabel(draftId, '新会话');
-  setActiveSessionTabId(draftId);
-  focusChatView();
-  const msgsEl = $('ms');
-  if (msgsEl) msgsEl.innerHTML = '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
-  renderSessionTabs(draftId);
   toast('已开启新会话', 'success');
 }
 
@@ -836,26 +886,16 @@ function switchSession(id: string): void {
     if (handler?.activate) { handler.activate(tab); return; }
   }
   // 降级：TabStore 无此 tab 时直接执行（兼容测试/未迁移场景）
-  if (isDraftSessionId(id)) { activateDraftSession(id); return; }
+  if (isDraftSessionId(id)) { _setupDraftSession(id); return; }
   const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
   fetch('/api/sessions/activate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, workspace: ws }) })
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then((data: any) => {
       if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
-      const oldCS = window.__state.CS; if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
-      window.__state.IL = false; App.Chat?.resetMsgKeys?.(); window.__state.M = (data.messages || []).map((m: any) => ({ role: m.role, content: m.content, thinking: m.thinking || '', streaming: false, _compacted: m._compacted || false, turnId: m.turnId || undefined, blocks: m.blocks || undefined }));
-      focusChatView(); const msgsEl = $('ms');
-      if (msgsEl) { msgsEl.innerHTML = window.__state.M.length > 0 ? (window.msgs ? window.msgs() : '') : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>'; setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50); }
+      _disposeActiveStream();
+      _applySessionMessages(data, id);
       toast('已切换到会话 (' + window.__state.M.length + ' 条消息)');
-      const activeId = data.activeSessionId || id;
-      if (activeId) { rememberSessionTab(activeId); setActiveSessionTabId(activeId); renderSessionTabs(activeId); }
-      loadSessions(); saveUiState();
-    }).catch(() => { App.Chat?.resetMsgKeys?.(); setActiveSessionTabId(null); window.__state.M = []; window.__state.IL = false;
-      const oldCS = window.__state.CS; if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
-      const ci = $('ci') as HTMLTextAreaElement | null; const cs = $('cs') as HTMLButtonElement | null;
-      if (ci) { ci.disabled = false; ci.style.height = 'auto'; } if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = window.S('iup', 16); }
-      toast('会话已失效'); loadSessions();
-    });
+    }).catch(() => { _activateFailReset(); toast('会话已失效'); loadSessions(); });
 }
 
 // 公开 API
@@ -896,25 +936,9 @@ if (AppSess) {
 // ─── Session/Chat handler（Phase 2：真实行为入口）────────
 function _sessionActivate(tab: AppTab): void {
   if (tab.kind === 'chat' || isDraftSessionId(tab.id)) {
-    // 草稿：同 activateDraftSession
-    rememberSessionTab(tab.id);
-    setActiveSessionTabId(tab.id);
-    App.Chat?.resetMsgKeys?.();
-    window.__state.M = [];
-    window.__state.IL = false;
-    App.Chat?.clearAttachments?.();
-    const oldCS = window.__state.CS;
-    if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
-    focusChatView();
-    const ci = $('ci') as HTMLTextAreaElement | null;
-    if (ci) { ci.value = ''; ci.style.height = 'auto'; }
-    const msgsEl = $('ms');
-    if (msgsEl) msgsEl.innerHTML = '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
-    renderSessionTabs(tab.id);
-    loadSessions();
+    _setupDraftSession(tab.id);
     return;
   }
-  // 真实 session：同 switchSession 核心逻辑
   const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
   fetch('/api/sessions/activate', {
     method: 'POST',
@@ -923,44 +947,12 @@ function _sessionActivate(tab: AppTab): void {
   }).then(r => {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
-  }).then((data: { ok: boolean; activeSessionId?: string; messages?: Array<{ role: string; content: string; thinking?: string }>; error?: string }) => {
+  }).then((data: { ok: boolean; activeSessionId?: string; messages?: any[]; error?: string }) => {
     if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
-    const oldCS = window.__state.CS;
-    if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
-    window.__state.IL = false;
-    App.Chat?.resetMsgKeys?.();
-    window.__state.M = (data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', streaming: false, _compacted: (m as any)._compacted || false, turnId: (m as any).turnId || undefined, blocks: (m as any).blocks || undefined }));
-    focusChatView();
-    const msgsEl = $('ms');
-    if (msgsEl) {
-      msgsEl.innerHTML = window.__state.M.length > 0
-        ? (window.msgs ? window.msgs() : '')
-        : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
-      setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50);
-    }
+    _disposeActiveStream();
+    _applySessionMessages(data, tab.id);
     toast('已切换到会话 (' + window.__state.M.length + ' 条消息)');
-    const activeId = data.activeSessionId || tab.id;
-    if (activeId) {
-      rememberSessionTab(activeId);
-      setActiveSessionTabId(activeId);
-      renderSessionTabs(activeId);
-    }
-    loadSessions();
-    saveUiState();
-  }).catch(() => {
-    App.Chat?.resetMsgKeys?.();
-    setActiveSessionTabId(null);
-    window.__state.M = [];
-    window.__state.IL = false;
-    const oldCS = window.__state.CS;
-    if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); window.__state.CS = null; }
-    const ci = $('ci') as HTMLTextAreaElement | null;
-    const cs = $('cs') as HTMLButtonElement | null;
-    if (ci) { ci.disabled = false; ci.style.height = 'auto'; }
-    if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = window.S('iup', 16); }
-    toast('会话已失效');
-    loadSessions();
-  });
+  }).catch(() => { _activateFailReset(); toast('会话已失效'); loadSessions(); });
 }
 
 function _sessionClose(tab: AppTab): void {

@@ -138,21 +138,16 @@ function legacyTabsToNew(
   return items;
 }
 
-/** 确保 _state.tabs 包含新格式 items/activeId，旧格式缺失时也补全 */
+/** 确保 _state.tabs 包含新格式 items/activeId。旧格式不再补充写回 */
 function ensureTabsFormat(state: WorkspaceUiState): void {
   const tabs = state.tabs;
   if (!tabs) {
     (state as any).tabs = { ...makeDefaultTabs(), items: [], activeId: null };
     return;
   }
-  // 已有新格式 → 确保旧字段兼容
-  if (tabs.items) {
-    if (!Array.isArray(tabs.sessions)) tabs.sessions = tabs.items.filter(t => t.kind === 'session').map(t => t.id);
-    if (typeof tabs.chatOpen !== 'boolean') tabs.chatOpen = tabs.items.length > 0;
-    if (!tabs.labels) tabs.labels = {};
-    return;
-  }
-  // 旧格式 → 转为新格式
+  // 已有新格式 → 直接返回，不再写旧格式
+  if (tabs.items) return;
+  // 旧格式 → 转为新格式（仅启动时迁移用）
   tabs.items = legacyTabsToNew(
     { sessions: tabs.sessions, files: tabs.files, labels: tabs.labels },
     state.activeView,
@@ -207,6 +202,18 @@ function _scheduleSave(): void {
   _saveTimer = setTimeout(() => { saveNow(); }, 500);
 }
 
+function serializeStateForSave(state: WorkspaceUiState): WorkspaceUiState {
+  const tabs = state.tabs;
+  if (!tabs || !Array.isArray(tabs.items)) return state;
+  return {
+    ...state,
+    tabs: {
+      items: tabs.items.map(tab => ({ ...tab })),
+      activeId: tabs.activeId ?? null,
+    } as any,
+  };
+}
+
 /** 立即保存到服务端 */
 async function saveNow(): Promise<boolean> {
   _saveTimer = null;
@@ -215,9 +222,10 @@ async function saveNow(): Promise<boolean> {
     try { _state.workspacePath = localStorage.getItem(OLD.WS_KEY) || ""; } catch {}
   }
   try {
+    const payload = serializeStateForSave(_state);
     const r = await fetch("/api/ui-state", {
       method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(_state),
+      body: JSON.stringify(payload),
     });
     return r.ok;
   } catch { return false; }
