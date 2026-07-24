@@ -65,11 +65,11 @@ describe("prompts", () => {
     it("永久 section 在 invalidateAll 后保留", async () => {
       const mod = await freshPrompts();
       mod.defineSection("perm", "永久", { permanent: true });
-      mod.defineSection("temp", "临时");
+      mod.defineSection("temp", "测试节");
       mod.invalidateAllSections();
       const r = mod.resolveSystemPrompt();
       assert.ok(r.includes("永久"), "永久 section 应保留");
-      assert.ok(!r.includes("临时"), "临时 section 应被清除");
+      assert.ok(!r.includes("测试节"), "临时 section 应被清除");
     });
 
     it("invalidateAllSections 模拟 /api/clear：永久保留，factory 保留，静态临时清除", async () => {

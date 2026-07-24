@@ -14,6 +14,11 @@ import { wsDir } from "../server/routes/session-dir"
 
 const _pendingOpens = new Map<string, Promise<void>>()
 
+// 全局 runtime 引用，供 tools 调 refreshSystemPrompt
+let _currentRuntime: AgentRuntime | null = null;
+export function setCurrentRuntime(r: AgentRuntime | null): void { _currentRuntime = r; }
+export function getCurrentRuntime(): AgentRuntime | null { return _currentRuntime; }
+
 export interface RuntimeConfig {
   agentDir: string
   cwd: string
@@ -40,6 +45,7 @@ export class AgentRuntime {
     const runtime = new AgentRuntime()
     runtime.config = config
     runtime.currentWorkspace = config.cwd
+    setCurrentRuntime(runtime) // _initSession 会调 resolveSystemPrompt → getCurrentRuntime，必须先设置
     await runtime._initSession(config.cwd)
     return runtime
   }
@@ -50,11 +56,18 @@ export class AgentRuntime {
 
     console.log(`[runtime] Switching workspace: "${this.currentWorkspace}" → "${workspace}"`)
 
+    const prevWs = this.currentWorkspace
     const callbacks = await this._saveAndDispose(false)
 
     // 不续写旧文件：workspace 切换意味着项目切换，新项目应有自己的 session 文件
-    await this._initSession(workspace)
-    this.currentWorkspace = workspace
+    this.currentWorkspace = workspace // 先设 workspace 再 initSession，使 prompt 读到新项目 AGENT.md
+    try {
+      await this._initSession(workspace)
+    } catch (e) {
+      // 失败时恢复旧 workspace，避免状态错乱
+      this.currentWorkspace = prevWs
+      throw e
+    }
 
     this._rebindEvents(callbacks)
     console.log(`[runtime] ✅ Switched to "${workspace}"`)
@@ -89,12 +102,20 @@ export class AgentRuntime {
 
   private async _doOpenSession(sessionFile: string, workspace: string): Promise<void> {
     console.log(`[runtime] Opening session: "${sessionFile}"`)
-    // 跨 workspace 时断开 MCP，同 workspace 保留 cache
+    // 记录是否同 workspace（在更新 currentWorkspace 之前判断）
     const sameWs = workspace === this.currentWorkspace
-    const callbacks = await this._saveAndDispose(sameWs)
-    await this._initSession(workspace, sessionFile)
+    const prevWs = this.currentWorkspace
+    // 先设 workspace 再 _initSession，使 resolveSystemPrompt 读到新路径
     this.currentWorkspace = workspace
-    this._rebindEvents(callbacks)
+    try {
+      const callbacks = await this._saveAndDispose(sameWs)
+      await this._initSession(workspace, sessionFile)
+      this._rebindEvents(callbacks)
+    } catch (e) {
+      // 失败时恢复旧 workspace，避免状态错乱
+      this.currentWorkspace = prevWs
+      throw e
+    }
     console.log(`[runtime] ✅ Session opened: "${sessionFile}"`)
   }
 

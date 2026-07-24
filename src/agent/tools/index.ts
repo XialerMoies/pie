@@ -18,6 +18,8 @@ import { fileOutlineTool } from "./file-outline.js"
 import { webSearchTool, setSearchBackend, getSearchBackend } from "./web-search.js"
 import { webFetchTool } from "./web-fetch.js"
 import { commandTool } from "./command.js"
+import { writeAgentMdTool } from "./agent-md.js"
+import { readMemoryTool, writeMemoryTool } from "./memory.js"
 
 /** 全局 Tool 注册表 */
 export const toolRegistry = new ToolRegistry()
@@ -39,6 +41,9 @@ toolRegistry.register(fileOutlineTool)
 toolRegistry.register(webSearchTool)
 toolRegistry.register(webFetchTool)
 toolRegistry.register(commandTool)
+toolRegistry.register(writeAgentMdTool)
+toolRegistry.register(readMemoryTool)
+toolRegistry.register(writeMemoryTool)
 
 export function registerTool(
   tool: Parameters<typeof toolRegistry.register>[0],
