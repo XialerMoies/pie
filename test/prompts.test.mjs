@@ -89,9 +89,15 @@ describe("prompts", () => {
       // factory section（env_info）保留（factory 每次 resolve 已重新求值）
       assert.ok(after.includes("当前环境"), "factory section 应保留");
       assert.ok(after.includes("平台："), "env_info 平台信息应保留");
+      // 新增永久 section 在 invalidateAll 后保留
+      assert.ok(after.includes("不要写多余的代码"), "engineering_rules 永久 section 应保留");
+      assert.ok(after.includes("高风险操作"), "operation_boundaries 永久 section 应保留");
+      assert.ok(after.includes("用什么语言回复"), "language_preference 永久 section 应保留");
+      assert.ok(after.includes("注意 token 用量"), "token_budget 永久 section 应保留");
+      assert.ok(after.includes("重要的工具执行结果"), "tool_results 永久 section 应保留");
       // 静态临时 section 被清除
       assert.ok(!after.includes("静态临时"), "静态非永久 section 应被清除");
-      assert.ok(after.length > 50, "clear 后 system prompt 不应为空");
+      assert.ok(after.length > 100, "clear 后 system prompt 不应为空");
     });
   });
 

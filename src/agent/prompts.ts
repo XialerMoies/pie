@@ -9,6 +9,7 @@
 import { readFileSync, existsSync, readdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import { getCurrentRuntime } from "./globals.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(__dirname, "..", "..");
 const MEMORY_DIR = resolve(APP_ROOT, "data", "pi", "memory");
@@ -162,6 +163,61 @@ defineSection("memory_management", `## 记忆管理
 不需要记录普通的对话内容或临时修改。
 `, { permanent: true });
 
+// ─── 工程任务规则 ─────────────────────────────────────────
+
+defineSection("engineering_rules", `## 工程任务规则
+
+- 不要写多余的代码、不要添加不需要的功能、不要做未要求的重构
+- 不要改动与当前任务无关的文件
+- 不要预估任务完成时间
+- 用户没要求的情况下，不要替用户做技术选型或架构决策
+- 渐进式修改，不改更无关的格式
+`, { permanent: true });
+
+// ─── 操作边界 ─────────────────────────────────────────────────
+
+defineSection("operation_boundaries", `## 操作边界
+
+- 高风险操作（删除文件、批量替换、安装依赖、修改配置文件）需谨慎
+- 用户已明确要求执行某项操作时，可以直接执行，无需再询问
+- 影响范围不明确或可能造成不可逆后果时，先确认再执行
+- 低风险操作（读取文件、局部修改、搜索代码）可以直接执行
+`, { permanent: true });
+
+// ─── 语言偏好 ─────────────────────────────────────────────────
+
+defineSection("language_preference", `## 语言
+
+- 用户用什么语言和你说话，你就用什么语言回复
+- 代码中的注释、变量名、commit message 使用项目原有语言惯例
+- 不要主动切换语言
+`, { permanent: true });
+
+// ─── MCP 指令（volatile，有则注入）────────────────────────────
+
+DANGEROUS_uncachedSystemPromptSection("mcp_instructions", () => {
+  // TODO: 从 MCPClientService 获取服务器自定义指令
+  return "";
+});
+
+// ─── Token 预算 ───────────────────────────────────────────────
+
+defineSection("token_budget", `## Token 使用
+
+- 注意 token 用量，长回复会消耗更多 token
+- 工具结果如果很长，只提取关键信息，不要全文搬运
+- 连续工具调用时，在已有足够信息后及时给出答案
+`, { permanent: true });
+
+// ─── 工具结果记录 ─────────────────────────────────────────────
+
+defineSection("tool_results", `## 工具结果
+
+- 重要的工具执行结果（如错误信息、关键输出、配置内容）应该记录下来，不要只让它们留在对话历史里
+- 如果发现项目的构建方式、测试命令、代码风格等配置信息，用 write_agent_md 记录到项目指南
+- 如果发现用户的编码偏好，用 write_memory 记录到全局记忆
+`, { permanent: true });
+
 // ─── volatile 动态 section（每次 resolve 重新计算）────────────────
 
 /**
@@ -176,8 +232,6 @@ DANGEROUS_uncachedSystemPromptSection("env_info", () => {
 });
 
 // ─── 项目级记忆（AGENT.md）────────────────────────────────────────
-
-import { getCurrentRuntime } from "./globals.js";
 
 // ─── project sections ─────────────────────────────────────────────
 
