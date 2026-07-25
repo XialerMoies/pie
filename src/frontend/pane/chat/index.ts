@@ -211,6 +211,20 @@ function openConvResult(sessionId: string, msgIndex?: number, matchOrdinal?: num
   openConvMatch(sessionId, msgIndex, matchOrdinal);
 }
 
+/** 清除搜索输入，退回会话列表 */
+function clearConvSearch(): void {
+  const input = document.getElementById("chat-search-input") as HTMLInputElement | null;
+  if (input) { input.value = ""; }
+  _convQuery = "";
+  _convCache = null;
+  _convCacheQuery = "";
+  _convPendingQuery = "";
+  _convSearching = false;
+  if (_convTimer) clearTimeout(_convTimer);
+  _convTimer = null;
+  loadSessions();
+}
+
 function isConversationSearchActive(): boolean {
   return _convQuery.trim().length > 0 || _convSearching;
 }
@@ -264,6 +278,7 @@ function chatPaneRender(container: HTMLElement): void {
     `<div class="ch-search">
       <span class="ch-search-icon">${S('isearch', 14)}</span>
       <input class="ch-search-input" id="chat-search-input" placeholder="搜索会话…">
+      <button class="ch-search-clear" id="chat-search-clear" onclick="clearConvSearch()" title="清除搜索">✕</button>
     </div>`,
     // 3. 列表
     `<div class="session-list" id="sl">加载中...</div>`,
@@ -302,6 +317,7 @@ function chatPaneRender(container: HTMLElement): void {
 (window as any).openConvResult = openConvResult;
 (window as any).openConvMatch = openConvMatch;
 (window as any).isConversationSearchActive = isConversationSearchActive;
+(window as any).clearConvSearch = clearConvSearch;
 
 registerPane('chat', chatPaneRender);
 
