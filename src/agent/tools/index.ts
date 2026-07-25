@@ -20,6 +20,8 @@ import { webFetchTool } from "./web-fetch.js"
 import { commandTool } from "./command.js"
 import { writeAgentMdTool } from "./agent-md.js"
 import { readMemoryTool, writeMemoryTool } from "./memory.js"
+import { strReplaceEditorTool } from "./str-replace-editor.js"
+import { fileWriteTool } from "./file-write.js"
 
 /** 全局 Tool 注册表 */
 export const toolRegistry = new ToolRegistry()
@@ -44,6 +46,8 @@ toolRegistry.register(commandTool)
 toolRegistry.register(writeAgentMdTool)
 toolRegistry.register(readMemoryTool)
 toolRegistry.register(writeMemoryTool)
+toolRegistry.register(strReplaceEditorTool)
+toolRegistry.register(fileWriteTool)
 
 export function registerTool(
   tool: Parameters<typeof toolRegistry.register>[0],

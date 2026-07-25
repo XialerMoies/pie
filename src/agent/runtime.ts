@@ -271,7 +271,7 @@ export class AgentRuntime {
       cwd,
       sessionManager: this.sessionManager,
       customTools,
-      excludeTools: ["bash"],
+      excludeTools: ["bash", "edit", "write"],
     })
 
     this.session = session

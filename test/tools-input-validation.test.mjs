@@ -7,8 +7,11 @@
  *   2. 错误状态码（403 Access denied）友好传播
  *   3. 路径特殊字符（空格、Unicode）保持原样
  */
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { resolve } from "node:path";
+import { tmpdir } from "node:os";
 
 // ── 模拟 fetch ────────────────────────────────────────────
 let mockStatus = 200;
@@ -157,5 +160,147 @@ describe("file_outline tool", () => {
     mockBody = { error: "Access denied" };
     const r = await fileOutlineTool.execute({ path: "../secret.ts" }, ctx());
     assert.ok(r.includes("无权限"));
+  });
+});
+
+// ── 新工具导入 ───────────────────────────────────────────
+import { strReplaceEditorTool } from "../src/agent/tools/str-replace-editor.ts";
+import { fileWriteTool } from "../src/agent/tools/file-write.ts";
+
+describe("str_replace_editor tool", () => {
+  let dir;
+
+  beforeEach(() => {
+    dir = mkdtempSync(resolve(tmpdir(), "sre-test-"));
+  });
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function workspaceCtx() {
+    return { workspace: dir, toolCallId: "call-1" };
+  }
+
+  it("找不到 old_string 返回友好提示", async () => {
+    writeFileSync(resolve(dir, "test.txt"), "hello world", "utf-8");
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "test.txt", old_string: "notfound", new_string: "replaced" },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("未找到匹配文本"));
+  });
+
+  it("old_string === new_string 拒绝", async () => {
+    writeFileSync(resolve(dir, "test.txt"), "hello", "utf-8");
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "test.txt", old_string: "hello", new_string: "hello" },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("相同"));
+  });
+
+  it("成功替换并返回结果", async () => {
+    writeFileSync(resolve(dir, "test.txt"), "hello world", "utf-8");
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "test.txt", old_string: "world", new_string: "there" },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("已替换"));
+    const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
+    assert.strictEqual(content, "hello there");
+  });
+
+  it("replace_all 替换所有匹配", async () => {
+    writeFileSync(resolve(dir, "test.txt"), "a b a b", "utf-8");
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "test.txt", old_string: "a", new_string: "x", replace_all: true },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("全部"));
+    const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
+    assert.strictEqual(content, "x b x b");
+  });
+
+  it("拒绝路径穿越", async () => {
+    writeFileSync(resolve(dir, "test.txt"), "hello", "utf-8");
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "../../../etc/passwd", old_string: "hello", new_string: "x" },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("Access denied") || r.includes("outside workspace"));
+  });
+
+  it("拒绝不存在的文件", async () => {
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "nonexistent.txt", old_string: "hello", new_string: "x" },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("不存在"));
+  });
+});
+
+describe("file_write tool", () => {
+  let dir;
+
+  beforeEach(() => {
+    dir = mkdtempSync(resolve(tmpdir(), "fw-test-"));
+  });
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function workspaceCtx() {
+    return { workspace: dir, toolCallId: "call-1" };
+  }
+
+  it("创建新文件返回'已创建'", async () => {
+    const r = await fileWriteTool.execute(
+      { file_path: "new.txt", content: "hello" },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("已创建"));
+    const content = readFileSync(resolve(dir, "new.txt"), "utf-8");
+    assert.strictEqual(content, "hello");
+  });
+
+  it("覆盖已有文件返回'已覆盖'", async () => {
+    writeFileSync(resolve(dir, "exist.txt"), "old", "utf-8");
+    const r = await fileWriteTool.execute(
+      { file_path: "exist.txt", content: "new" },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("已覆盖"));
+    const content = readFileSync(resolve(dir, "exist.txt"), "utf-8");
+    assert.strictEqual(content, "new");
+  });
+
+  it("拒绝路径穿越", async () => {
+    const r = await fileWriteTool.execute(
+      { file_path: "../../../etc/hack", content: "evil" },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("Access denied") || r.includes("outside workspace"));
+  });
+
+  it("拒绝 symlink 目录逃逸", async () => {
+    const { symlinkSync } = await import("fs");
+    const outsideDir = mkdtempSync(resolve(tmpdir(), "outside-"));
+    const linkPath = resolve(dir, "escape-link");
+    try {
+      symlinkSync(outsideDir, linkPath, "junction");
+    } catch {
+      rmSync(outsideDir, { recursive: true, force: true });
+      return; // 没有 symlink 权限时跳过
+    }
+    // 通过 symlink 目录新建文件
+    const r = await fileWriteTool.execute(
+      { file_path: "escape-link/evil.txt", content: "oops" },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("Access denied") || r.includes("outside workspace"),
+      "通过 symlink 写外部应被拒绝");
+    rmSync(outsideDir, { recursive: true, force: true });
   });
 });
