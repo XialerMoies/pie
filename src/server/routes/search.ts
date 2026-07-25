@@ -6,7 +6,7 @@
 import { resolve, relative, isAbsolute } from "path";
 import type { RouteHandler } from "./types";
 import { parseBody } from "./parse-body";
-import { doSearch, doReplace } from "./search-core";
+import { doSearch, doReplace, searchConversations } from "./search-core";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
@@ -76,6 +76,25 @@ export const handleSearch: RouteHandler = async (req, res, ctx) => {
         regex: regex ?? false,
         previewOnly: previewOnly !== false,
       });
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify(data));
+    } catch (err: unknown) {
+      res.writeHead(400, { ...cors });
+      res.end(JSON.stringify({ error: (err as Error).message }));
+    }
+    return true;
+  }
+
+  // POST /api/search/conversations   Body: { query, caseSensitive? }
+  if (url === "/api/search/conversations" && method === "POST") {
+    try {
+      const { query, caseSensitive } = await parseBody(req);
+      if (!query) {
+        res.writeHead(400, { ...cors });
+        res.end(JSON.stringify({ error: "Missing 'query'" }));
+        return true;
+      }
+      const data = searchConversations(query, p.SESSIONS_DIR, caseSensitive || false);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify(data));
     } catch (err: unknown) {

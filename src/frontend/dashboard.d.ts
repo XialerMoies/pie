@@ -274,6 +274,8 @@ interface Window {
   __monaco: MonacoAPI;
   __problemsStore: ProblemsStoreAPI;
   ExplorerService: typeof ExplorerService;
+  bumpSessionListSeq?: () => number;
+  isCurrentSessionListSeq?: (seq: number) => boolean;
 }
 
 // 公共函数声明（在 HTML onclick 中用）
@@ -317,6 +319,8 @@ declare function provDragStart(ev: DragEvent, idx: number): void;
 declare function provDragOver(ev: DragEvent, idx: number): void;
 declare function provDrop(ev: DragEvent, idx: number): void;
 declare function loadSessions(): void;
+declare function bumpSessionListSeq(): number;
+declare function isCurrentSessionListSeq(seq: number): boolean;
 declare function loadMonaco(): Promise<void>;
 declare function newSession(): void;
 declare function renameSession(el: HTMLElement, id: string): void;

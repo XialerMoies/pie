@@ -733,6 +733,32 @@ describe("search replace route", () => {
   });
 });
 
+describe("search conversations route", () => {
+  it("POST /api/search/conversations 返回 JSON", async () => {
+    const ctx = mockContext();
+    const { status, body } = await callHandler(
+      handleSearch, "POST", "/api/search/conversations",
+      { query: "test" },
+      ctx,
+    );
+    assert.strictEqual(status, 200);
+    const data = parseJSON(body);
+    assert.ok(Array.isArray(data.results), "results 为数组");
+    assert.ok(typeof data.total === "number", "total 为数字");
+    assert.ok(typeof data.truncated === "boolean", "truncated 为布尔");
+  });
+
+  it("POST /api/search/conversations 缺少 query 返回 400", async () => {
+    const ctx = mockContext();
+    const { status } = await callHandler(
+      handleSearch, "POST", "/api/search/conversations",
+      {},
+      ctx,
+    );
+    assert.strictEqual(status, 400);
+  });
+});
+
   it("GET /api/explorer 返回目录内容", async () => {
     const ctx = mockContext();
     const { status, body } = await callHandler(handleExplorer, "GET", `/api/explorer?root=${encodeURIComponent(ROOT)}&path=src`, undefined, ctx);

@@ -21,6 +21,11 @@ global.localStorage = {
   removeItem: (key) => { delete store[key]; },
 };
 
+const registeredPanes = new Map();
+global.registerPane = (name, render) => {
+  registeredPanes.set(name, render);
+};
+
 global.$ = (id) => doc.getElementById(id);
 global.E = (value) => String(value ?? "");
 global.S = (name, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24"><use href="#${name}"/></svg>`;
@@ -178,6 +183,10 @@ before(async () => {
   const ts = Date.now();
   await import(`../src/frontend/dashboard/dashboard-layout.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${ts}`);
+  await import(`../src/frontend/pane/chat/index.ts?t=${ts}`);
+  global.loadSessions = win.loadSessions;
+  global.bumpSessionListSeq = win.bumpSessionListSeq;
+  global.isCurrentSessionListSeq = win.isCurrentSessionListSeq;
   win.renderTabs();
 }, 10000);
 
@@ -461,6 +470,97 @@ describe("session ui state", () => {
 
     assert.ok(panel.textContent.includes("固定线程"));
     assert.ok(!panel.textContent.trim().startsWith("加载中"));
+  });
+
+  it("聊天面板搜索不会被更慢的任务线程列表覆盖", async () => {
+    const originalSl = doc.querySelector("#sl");
+    const originalSlParent = originalSl?.parentNode;
+    const originalSlNext = originalSl?.nextSibling;
+    const originalFetch = global.fetch;
+    const originalWinFetch = win.fetch;
+    const chatRender = registeredPanes.get("chat");
+    assert.ok(chatRender, "chat pane should be registered");
+    let pane = null;
+
+    let resolveSessions;
+    const pendingSessions = new Promise((resolve) => { resolveSessions = resolve; });
+    const staleSessions = {
+      sessions: [
+        {
+          id: "stale-thread",
+          name: "过时线程",
+          active: false,
+          messageCount: 1,
+          createdAt: "2026-07-12T14:00:00.000Z",
+          updatedAt: "2026-07-12T14:05:00.000Z",
+          file: "stale.jsonl",
+        },
+      ],
+      other: [],
+      activeSessionId: null,
+    };
+
+    try {
+      originalSl?.remove();
+      pane = doc.createElement("div");
+      doc.body.appendChild(pane);
+
+      global.fetch = async (url, init = {}) => {
+        const href = String(url);
+        if (href.includes("/api/sessions?")) {
+          return { ok: true, json: async () => pendingSessions };
+        }
+        if (href.includes("/api/search/conversations")) {
+          return {
+            ok: true,
+            json: async () => ({
+              results: [{
+                sessionId: "match-session",
+                sessionName: "命中线程",
+                workspace: "E:/my-code-agent",
+                file: "by-project/demo/2026-07-25.jsonl",
+                matches: [{ line: 2, role: "user", text: "needle marker", length: 6 }],
+              }],
+              total: 1,
+              truncated: false,
+            }),
+          };
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      };
+      win.fetch = global.fetch;
+
+      chatRender(pane);
+
+      const input = doc.querySelector("#chat-search-input");
+      assert.ok(input, "chat search input exists");
+      input.value = "needle";
+      input.dispatchEvent(new win.Event("input", { bubbles: true }));
+      input.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const panel = doc.querySelector("#sl");
+      assert.ok(panel, "session list panel exists");
+      assert.ok(!panel.classList.contains("is-loading"), "search result should clear loading state");
+      assert.ok(panel.textContent.includes("命中线程"));
+      assert.ok(panel.textContent.includes("needle marker"));
+      assert.ok(!panel.textContent.includes("过时线程"));
+
+      resolveSessions(staleSessions);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      assert.ok(panel.textContent.includes("命中线程"), "stale session list must not overwrite search results");
+      assert.ok(panel.textContent.includes("needle marker"), "search hit remains visible");
+      assert.ok(!panel.textContent.includes("过时线程"), "stale session list stays ignored");
+
+    } finally {
+      global.fetch = originalFetch;
+      win.fetch = originalWinFetch;
+      pane?.remove();
+      if (originalSl && originalSlParent) {
+        originalSlParent.insertBefore(originalSl, originalSlNext || null);
+      }
+    }
   });
 });
   it("重启后会话标题从缓存恢复", async () => {

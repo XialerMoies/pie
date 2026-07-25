@@ -142,7 +142,7 @@ function renderResults(): void {
 
   list.innerHTML = html;
 
-  // Toggle replace section
+  // Toggle replace section (hide for conversations)
   const replaceSection = document.getElementById("search-replace-section");
   if (replaceSection) {
     const show = _searchType === "text" && _results.length > 0;
@@ -443,9 +443,9 @@ function searchPaneRender(container: HTMLElement): void {
     `<div class="search-controls">`,
     // Type toggle
     `<div class="search-type-toggle">`,
-    `<button class="search-type-btn on" id="search-type-file" onclick="App.Settings?.setSearchType ? App.Settings.setSearchType('filename') : setSearchType('filename')">文件名</button>`,
-    `<button class="search-type-btn" id="search-type-text" onclick="App.Settings?.setSearchType ? App.Settings.setSearchType('text') : setSearchType('text')">全文</button>`,
-    `<button class="search-case-btn" id="search-case" onclick="App.Settings?.toggleCaseSensitive ? App.Settings.toggleCaseSensitive() : toggleCaseSensitive()" title="区分大小写">Aa</button>`,
+    `<button class="search-type-btn on" id="search-type-file" onclick="App.Settings?.setSearchType?.('filename') || setSearchType('filename')">文件名</button>`,
+    `<button class="search-type-btn" id="search-type-text" onclick="App.Settings?.setSearchType?.('text') || setSearchType('text')">全文</button>`,
+    `<button class="search-case-btn" id="search-case" onclick="App.Settings?.toggleCaseSensitive?.() || toggleCaseSensitive()" title="区分大小写">Aa</button>`,
     `</div>`,
     // Input
     `<input class="s-search" id="search-input" placeholder="搜索文件..." autofocus>`,

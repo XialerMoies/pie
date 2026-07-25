@@ -23,11 +23,21 @@ type ThreadStatus = 'running' | 'error' | 'archived' | 'pinned' | 'success' | 'e
 let _loadRetries = 0;
 const MAX_LOAD_RETRIES = 8;
 let _lastSessionRenderKey = '';
+let _sessionListSeq = 0;
 const SESSION_TABS_KEY = 'session-tabs';
 const SESSION_TAB_LABELS_KEY = 'session-tab-labels';
 const ACTIVE_SESSION_TAB_KEY = 'active-session-tab';
 const DRAFT_SESSION_PREFIX = 'draft:';
 let _sessionTabLookup = new Map<string, SessionInfo>();
+
+function bumpSessionListSeq(): number {
+  _sessionListSeq += 1;
+  return _sessionListSeq;
+}
+
+function isCurrentSessionListSeq(seq: number): boolean {
+  return seq === _sessionListSeq;
+}
 
 function isDraftSessionId(id: string | null | undefined): boolean {
   return typeof id === 'string' && id.startsWith(DRAFT_SESSION_PREFIX);
@@ -644,11 +654,13 @@ function loadSessions(): void {
     _loadRetries++; if (_loadRetries > MAX_LOAD_RETRIES) return; console.log(`⏳ loadSessions retry #${_loadRetries}: no #sl`); setTimeout(loadSessions, 500); return;
   }
   _loadRetries = 0;
+  const seq = bumpSessionListSeq();
   const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
   setSessionPanelStatus('正在刷新任务线程…', 'loading');
   el.classList.add('is-loading');
   console.log(`📋 loadSessions ws="${ws}"`);
   fetch('/api/sessions?workspace=' + encodeURIComponent(ws) + '&other=1').then(r => r.json()).then((data: { sessions?: SessionInfo[]; other?: { project: string; path?: string; sessions: SessionInfo[] }[]; activeSessionId?: string | null; error?: string }) => {
+    if (!isCurrentSessionListSeq(seq)) return;
     console.log(`📋 loadSessions done in ${Date.now()-t0}ms, sessions=${data.sessions?.length}, other=${data.other?.length}`);
     if (!el) return;
     if (data.error) {
@@ -725,6 +737,7 @@ function loadSessions(): void {
       console.log(`📋 loadSessions skipped redraw (${totalSessions} sessions unchanged)`);
     }
   }).catch(() => {
+    if (!isCurrentSessionListSeq(seq)) return;
     const el = $('sl');
     if (el) {
       _lastSessionRenderKey = '';
@@ -900,6 +913,8 @@ function switchSession(id: string): void {
 
 // 公开 API
 window.loadSessions = loadSessions;
+(window as any).bumpSessionListSeq = bumpSessionListSeq;
+(window as any).isCurrentSessionListSeq = isCurrentSessionListSeq;
 (window as any).readSessionTabIds = readSessionTabIds;
 (window as any).writeSessionTabIds = writeSessionTabIds;
 (window as any).sessionTabLabel = sessionTabLabel;
@@ -919,6 +934,8 @@ window.branchSession = branchSession as any;
 const AppSess = (window as any).App?.Session;
 if (AppSess) {
   AppSess.loadSessions = loadSessions;
+  AppSess.bumpSessionListSeq = bumpSessionListSeq;
+  AppSess.isCurrentSessionListSeq = isCurrentSessionListSeq;
   AppSess.newSession = newSession;
   AppSess.renameSession = renameSession;
   AppSess.deleteSession = deleteSession;

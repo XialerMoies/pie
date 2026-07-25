@@ -1,7 +1,7 @@
 /**
  * Search core — 文件名/全文搜索纯逻辑，无 HTTP 依赖
  */
-import { readFileSync, writeFileSync, readdirSync, statSync } from "fs";
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "fs";
 import { resolve, relative, sep } from "path";
 
 // ─── Types ───────────────────────────────────────────────────────
@@ -260,4 +260,118 @@ export function doReplace(opts: ReplaceOptions): ReplaceResponse {
 
   const totalChanges = files.reduce((s, f) => s + f.matches.length, 0);
   return { files, totalChanges, preview: opts.previewOnly };
+}
+
+// ─── Conversation search types ───────────────────────────────────
+
+export interface ConvMatch {
+  line: number;
+  role: string;
+  text: string;
+}
+
+export interface ConvResult {
+  sessionId: string;
+  sessionName: string;
+  workspace: string;
+  file: string;
+  matches: ConvMatch[];
+}
+
+export interface ConvResponse {
+  results: ConvResult[];
+  total: number;
+  truncated: boolean;
+}
+
+function extractConvText(content: any[]): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((c: any) => c.type === "text" && c.text)
+    .map((c: any) => c.text)
+    .join("\n");
+}
+
+export function searchConversations(
+  q: string,
+  sessionsDir: string,
+  cs: boolean,
+  maxSessions = 50,
+  maxMatchesPerSession = 5,
+): ConvResponse {
+  const query = cs ? q : q.toLowerCase();
+  const byProjectDir = resolve(sessionsDir, "by-project");
+  if (!existsSync(byProjectDir)) return { results: [], total: 0, truncated: false };
+
+  const results: ConvResult[] = [];
+  let truncated = false;
+
+  try {
+    const projects = readdirSync(byProjectDir);
+    for (const project of projects) {
+      if (results.length >= maxSessions) { truncated = true; break; }
+      const projectDir = resolve(byProjectDir, project);
+      try {
+        const entries = readdirSync(projectDir);
+        for (const entry of entries) {
+          if (results.length >= maxSessions) { truncated = true; break; }
+          if (!entry.endsWith(".jsonl")) continue;
+          const filePath = resolve(projectDir, entry);
+          try {
+            const content = readFileSync(filePath, "utf-8");
+            const lines = content.split("\n");
+            let sessionId = entry.replace(/\.jsonl$/, "");
+            let sessionName = "";
+            let workspace = project;
+            const matches: ConvMatch[] = [];
+
+            for (let i = 0; i < lines.length && matches.length < maxMatchesPerSession; i++) {
+              const line = lines[i].trim();
+              if (!line) continue;
+              let entryJson: any;
+              try { entryJson = JSON.parse(line); } catch { continue; }
+              if (entryJson.type === "session") {
+                if (entryJson.id) sessionId = entryJson.id;
+                if (entryJson.workspace) workspace = entryJson.workspace;
+                continue;
+              }
+              if (entryJson.type === "session_info" && entryJson.name) {
+                sessionName = entryJson.name;
+                const nameMatch = cs
+                  ? sessionName.includes(query)
+                  : sessionName.toLowerCase().includes(query);
+                if (nameMatch) {
+                  matches.push({ line: i + 1, role: "session_info", text: sessionName });
+                }
+                continue;
+              }
+              if (entryJson.type === "message" && entryJson.message) {
+                const msg = entryJson.message;
+                const role = msg.role || "unknown";
+                const text = extractConvText(msg.content);
+                const searchText = cs ? text : text.toLowerCase();
+                if (searchText.includes(query)) {
+                  const snippet = text.length > 200 ? text.slice(0, 200) + "…" : text;
+                  matches.push({ line: i + 1, role, text: snippet });
+                }
+              }
+            }
+
+            if (matches.length > 0) {
+              results.push({
+                sessionId,
+                sessionName: sessionName || sessionId.slice(0, 8),
+                workspace,
+                file: `${project}/${entry}`,
+                matches,
+              });
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+  } catch {}
+
+  const total = results.reduce((s, r) => s + r.matches.length, 0);
+  return { results, total, truncated };
 }
