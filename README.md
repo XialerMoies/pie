@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-413%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-422%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
   <img src="https://img.shields.io/badge/license-AGPLv3-6366F1?style=flat&labelColor=1a1a2e" alt="License">
   <img src="https://img.shields.io/badge/electron-30-F59E0B?style=flat&labelColor=1a1a2e" alt="Electron">
   <img src="https://img.shields.io/badge/typescript-5.9-3178C6?style=flat&labelColor=1a1a2e" alt="TypeScript">
@@ -42,7 +42,9 @@
 
 - 多会话标签页（文件/会话/草稿三种类型统一管理），支持切换/关闭/重命名/拖拽重排
 - 草稿模式：新建会话不立即落盘，首次发送才创建持久化 session
-- 会话历史按项目分组，支持固定
+- 会话历史按项目分组，支持固定、分支、删除
+- **对话全文搜索**：跨所有 JSONL 会话文件搜索关键词，结果按会话分组、关键词高亮、点击跳转到匹配消息位置而非最新回复
+- **搜索结果缓存**：点击跳转不丢失搜索状态，面板重建时自动恢复
 - 关闭窗口前自动保存 UI 状态（标签、活跃视图、面板位置），跨重启恢复
 
 ### AI 交互
@@ -79,12 +81,13 @@
 
 ### 搜索
 
-- 全项目代码搜索（文件名 + 全文两种模式）
+- 全项目代码搜索（文件名 + 全文两种模式），支持替换操作
+- 跨会话对话全文搜索：搜索所有 JSONL 历史会话，关键词高亮、点击跳转匹配消息
 - Quick Open 文件快速跳转（Ctrl+P）
 
 ### 工具与集成
 
-- 6 个自定义 Agent 工具：代码搜索、文件阅读、目录浏览、Git 状态/日志、文件结构预览
+- 9 个自定义 Agent 工具：代码搜索（`search`）、文件阅读（`file_read`）、目录浏览（`explorer_list`）、文件结构预览（`file_outline`）、Git 状态/日志（`git_status`、`git_diff`）、**str_replace_editor**（替换/创建/批量编辑）、**file_write**（创建含目录）、**agent_md**（项目级 AGENT.md）
 - Git 面板：状态查看、提交、推送、拉取
 - Web 搜索：`web-search` + `web-fetch`（URL 抓取转文本），Provider 原生 + Bing 自适应
 - 附件系统：拖放文件/文件夹作为 LLM 上下文，64KB/文件 256KB 总量
@@ -127,7 +130,7 @@ npm run dist:portable
 ### 测试
 
 ```bash
-npm test            # 全量 413 项测试（约 12s）
+npm test            # 全量 422 项测试（约 12s）
 npm run test:build  # 构建验证 + smoke test
 npm run typecheck   # TypeScript 类型检查
 ```
@@ -135,8 +138,8 @@ npm run typecheck   # TypeScript 类型检查
 | 套件 | 数量 | 覆盖 |
 |------|------|------|
 | unit | 217 | prompts（14 节）/ tree / explorer-service / tool 输入验证 / ui-state-store / usage-index / mcp-config / mcp-trust / mcp-client / mcp-client-service / tab-store / search-replace / agent-memory / str-replace-editor（32 项） |
-| routes | 115 | 全部 API handler / session / block 协议 / SSE / trace / code-actions / organize-imports / search-replace |
-| frontend | 79 | 消息渲染 / chat-ui / session-ui / workspace-ui / app-tabs / file-restore / problems-store / bottom-bar |
+| routes | 120 | 全部 API handler / session / block 协议 / SSE / trace / code-actions / organize-imports / search-replace / conversation-search |
+| frontend | 85 | 消息渲染 / chat-ui / session-ui（含 openConvMatch）/ workspace-ui / app-tabs / file-restore / problems-store / bottom-bar |
 | CSS | 20+20 | 变量定义完整性扫描（dark + light 各 20 项） |
 
 ---
@@ -211,7 +214,7 @@ ProblemsStore ──→ Monaco diagnostics → 底部栏
 三层职责：
 
 - **Desktop** — Electron 主进程，窗口生命周期、崩溃恢复、preload 桥
-- **Agent** — `AgentRuntime` + `ToolRegistry` + 6 个自定义工具 + MCP 工具适配，封装 PI SDK
+- **Agent** — `AgentRuntime` + `ToolRegistry` + 9 个自定义工具（含 str_replace_editor / file_write / agent_md）+ MCP 工具适配，封装 PI SDK
 - **PI SDK** — 自 fork 版（v0.80.4），修了 compaction 等底层 bug，新增 max 思考档位
 
 ---
@@ -228,7 +231,7 @@ src/
 │   ├── runtime.ts       # AgentRuntime（session 生命周期）
 │   ├── prompts.ts       # System prompt 分片管理
 │   ├── types.ts         # AgentTool + ToolRegistry
-│   └── tools/           # 6 个自定义工具 + MCP 工具包装
+│   └── tools/           # 9 个自定义工具 + MCP 工具包装
 ├── mcp/                 # MCP 客户端
 │   ├── client.ts        # 连接管理（stdio/http/sse）
 │   ├── config.ts        # 配置发现与合并
@@ -242,7 +245,7 @@ src/
 │   ├── services/        # TabStore / ProblemsStore / UiStateStore
 │   ├── pane/            # 5 面板（explorer / chat / search / git / mcp）
 │   └── ui/              # Tree 组件 + ContextMenu
-test/                    # 27 个测试文件，367 项
+test/                    # 30 个测试文件，422 项
 scripts/                 # 编译/构建/清理脚本
 ```
 
