@@ -28,7 +28,7 @@ body{background:var(--bg);height:100vh}
 .sinfo.closed{width:0;padding:0;opacity:0;border-right:none}
 .sinfo-handle{position:absolute;top:0;right:-4px;bottom:0;width:8px;cursor:col-resize;z-index:20;background:transparent}
 .sinfo-handle:hover,.sinfo-handle:active{background:rgba(245,158,11,.15)}
-.panel-content{padding:0 8px;height:100%;overflow-y:auto;font-size:.78rem;color:var(--ts)}
+.panel-content{padding:0 8px;height:100%;overflow-y:auto;font-size:.78rem;color:var(--ts);background:var(--bs)}
 .panel-content .sg{margin-bottom:12px}
 .panel-content .sg-t{font-size:.6rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--tm);margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--bd);font-family:var(--fd)}
 .sg-more{background:none;border:none;color:var(--tm);cursor:pointer;font-size:12px;padding:2px 6px;border-radius:4px;letter-spacing:2px;line-height:1}
@@ -83,6 +83,28 @@ body{background:var(--bg);height:100vh}
 .session-empty-actions{display:flex;flex-wrap:wrap;gap:6px;width:100%}
 .session-list{display:flex;flex-direction:column;gap:2px}
 .session-list.is-loading{opacity:.85}
+
+/* ─── Chat Pane ────────────────────────────────────────────── */
+.ch-header{font-size:.65rem;text-transform:uppercase;letter-spacing:.5px;padding:14px 16px;color:var(--ts);font-weight:500;border-bottom:1px solid var(--bd)}
+.ch-new{display:flex;align-items:center;gap:10px;padding:10px 16px;font-size:.82rem;cursor:pointer;border-bottom:1px solid var(--bd);color:var(--ts)}
+.ch-new:hover{background:var(--bc);color:var(--tx)}
+.ch-new-icon{font-size:1.05rem;font-weight:300;line-height:1;color:var(--ts)}
+.ch-search{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--bd)}
+.ch-search-icon{color:var(--tm);font-size:.82rem;line-height:1;flex-shrink:0}
+.ch-search-input{background:transparent;border:none;color:var(--tx);width:100%;outline:none;font-size:.76rem;padding:4px 0;font-family:var(--fb)}
+.ch-search-input::placeholder{color:var(--tm)}
+
+/* ─── Conversation search results ──────────────────────────── */
+.cs-count{padding:6px 12px;font-size:.62rem;color:var(--tm)}
+.cs-session{padding:8px 16px;cursor:pointer;transition:background .1s}
+.cs-session:hover{background:var(--bc)}
+.cs-session-title{font-size:.82rem;color:var(--ts);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:4px}
+.cs-match{display:flex;align-items:flex-start;gap:6px;padding:2px 0 2px 4px;font-size:.7rem;color:var(--tm);line-height:1.4}
+.cs-match-role{color:var(--tm);flex-shrink:0;font-size:.6rem;padding-top:2px}
+.cs-match-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cs-more{padding:2px 0 2px 10px;font-size:.6rem;color:var(--tm)}
+.cs-empty{padding:12px;text-align:center;color:var(--tm);font-size:.72rem}
+
 .sess-item{display:flex;flex-direction:column;gap:4px;padding:6px 8px 6px 10px;border-radius:7px;border:1px solid transparent;background:transparent;cursor:pointer;transition:background .1s,border-color .1s;position:relative;overflow:hidden}
 .sess-item::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;border-radius:7px 0 0 7px;background:transparent;transition:background .1s}
 .sess-item:hover{background:var(--bc)}

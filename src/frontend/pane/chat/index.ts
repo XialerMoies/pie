@@ -1,5 +1,7 @@
 /**
  * Chat (Session History) pane — 会话列表面板 + 对话搜索
+ *
+ * 样式参考 Claude Code 侧边栏设计。
  */
 /// <reference path="../../dashboard.d.ts" />
 
@@ -36,37 +38,43 @@ async function doConvSearch(): Promise<void> {
 function renderConvResults(list: HTMLElement, data: any): void {
   list.classList.remove("is-loading");
   if (!data.results?.length) {
-    list.innerHTML = '<div class="search-status dim">未找到匹配的对话</div>';
+    list.innerHTML = '<div class="cs-empty">未找到匹配的对话</div>';
     return;
   }
-  let html = `<div class="search-count" style="padding:6px">${data.results.length} 个会话，${data.total} 处匹配</div>`;
+  let html = `<div class="cs-count">${data.results.length} 个会话，${data.total} 处匹配</div>`;
   for (const r of data.results) {
-    html += `<div class="search-file" style="margin:4px 0">`;
-    html += `<div class="search-file-name" onclick="App.Session?.activate?.('${E(r.sessionId)}')">`;
-    html += `💬 ${E(r.sessionName)} <span class="search-file-path">${E(r.workspace)}</span>`;
-    html += `</div>`;
-    for (const m of r.matches) {
-      const icon = m.role === "user" ? "👤" : m.role === "assistant" ? "🤖" : "📝";
-      html += `<div class="search-match" style="padding:2px 6px 2px 22px">`;
-      html += `<span class="search-match-text">${icon} ${E(m.text)}</span>`;
-      html += `</div>`;
+    html += `<div class="cs-session" onclick="App.Session?.activate?.('${E(r.sessionId)}')">`;
+    html += `<div class="cs-session-title">${E(r.sessionName)}</div>`;
+    for (const m of r.matches.slice(0, 3)) {
+      const icon = m.role === "user" ? "→" : "←";
+      html += `<div class="cs-match"><span class="cs-match-role">${icon}</span><span class="cs-match-text">${E(m.text)}</span></div>`;
+    }
+    if (r.matches.length > 3) {
+      html += `<div class="cs-more">… 还有 ${r.matches.length - 3} 处匹配</div>`;
     }
     html += `</div>`;
   }
-  if (data.truncated) {
-    html += `<div class="search-more">… 结果过多已截断</div>`;
-  }
+  if (data.truncated) html += `<div class="cs-more">… 结果过多已截断</div>`;
   list.innerHTML = html;
 }
 
 function chatPaneRender(container: HTMLElement): void {
   container.style.cssText = "display:flex;flex-direction:column;height:100%;min-height:0";
   container.innerHTML = [
-    '<div class="sg-t">任务线程</div>',
-    '<input class="s-search" id="chat-search-input" placeholder="搜索对话…" style="margin:4px 6px;width:calc(100% - 12px)">',
-    '<div class="session-kicker" style="padding:0 6px">按当前任务、历史任务和项目归档整理</div>',
-    '<div class="session-list" id="sl" style="flex:1;min-height:0;overflow-y:auto">加载中...</div>',
-  ].join('');
+    // 1. 标题
+    `<div class="ch-header">任务线程</div>`,
+    // 2. 新会话
+    `<div class="ch-new" onclick="App.Session?.newSession?.() || newSession?.()">
+      <span class="ch-new-icon">+</span> 开启新对话
+    </div>`,
+    // 3. 搜索
+    `<div class="ch-search">
+      <span class="ch-search-icon">🔍</span>
+      <input class="ch-search-input" id="chat-search-input" placeholder="搜索会话…">
+    </div>`,
+    // 4. 列表
+    `<div class="session-list" id="sl">加载中...</div>`,
+  ].join("");
   loadSessions();
 
   const input = document.getElementById("chat-search-input") as HTMLInputElement | null;
