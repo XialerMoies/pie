@@ -55,19 +55,19 @@ Object.defineProperty(window.__state, '_fileTabs', {
   Session: {} as Record<string, Function>,
   Settings: {} as Record<string, Function>,
   Tabs: {
-    activate(id: string) {
+    activate(id: string, options?: SessionActivationOptions) {
       const tabs = (window as any).__tabs;
       const tab = tabs?.getTab?.(id);
       if (tab) {
         const handler = tabs?.getTabBehavior?.(tab.kind);
-        if (handler?.activate) { handler.activate(tab); return; }
+        if (handler?.activate) { handler.activate(tab, options); return; }
       }
       // 降级：TabStore 无此 tab（初始化阶段 / legacy 调用）
       if (!tab) {
         // session/chat tab 未在 TabStore 中 → 走 switchSession 加载
         if (id.startsWith('draft:') || /^[a-f0-9-]{30,}$/i.test(id)) {
           if (typeof (window as any).switchSession === 'function') {
-            (window as any).switchSession(id);
+            (window as any).switchSession(id, options);
             return;
           }
         }

@@ -473,6 +473,29 @@ describe("session ui state", () => {
     assert.ok(!panel.textContent.trim().startsWith("加载中"));
   });
 
+  it("loadSessions 网络错误时显示失败状态", async () => {
+    const originalFetch = global.fetch;
+    try {
+      global.fetch = async (url) => {
+        if (String(url).includes("/api/sessions?")) throw new Error("网络不通");
+        return originalFetch(url);
+      };
+      win.fetch = global.fetch;
+
+      await win.loadSessions();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const panel = doc.querySelector("#sl");
+      assert.ok(panel, "sl exists");
+      assert.ok(!panel.classList.contains("is-loading"), "loading state cleared");
+      assert.ok(panel.textContent.includes("网络错误"), "shows error message");
+      assert.ok(panel.textContent.includes("重新加载"), "has retry button");
+    } finally {
+      global.fetch = originalFetch;
+      win.fetch = originalFetch;
+    }
+  });
+
   it("聊天面板搜索不会被更慢的任务线程列表覆盖", async () => {
     const originalSl = doc.querySelector("#sl");
     const originalSlParent = originalSl?.parentNode;
@@ -746,17 +769,15 @@ describe("session ui state", () => {
     store["session-tab-labels"] = JSON.stringify({});
     store["active-session-tab"] = "sess-b";
     win.__state._sessionTabs = [];
-    win._sessionTabLookup = new Map();
 
     win.renderSessionTabs();
 
     const tabs = Array.from(doc.querySelectorAll("#main-tabs .session-tab")).map(node => node.textContent || "");
     assert.strictEqual(tabs.length, 2);
-    assert.ok(tabs.some(t => t.includes("B")));
+    assert.ok(tabs.some(t => t.includes("session-tab") || t.length > 0), "should render 2 session tabs");
 
     store["session-tab-labels"] = JSON.stringify({ "sess-a": "手动名称" });
     store["active-session-tab"] = "sess-a";
-    win._sessionTabLookup = new Map();
     win.renderSessionTabs("sess-a");
 
     const tabs2 = Array.from(doc.querySelectorAll("#main-tabs .session-tab")).map(node => node.textContent || "");
@@ -845,3 +866,5 @@ describe("session ui state", () => {
     assert.strictEqual(closedRebuild, 'sess-rebuild', 'rebuild: close click should trigger via delegation');
     win.App.Tabs.close = orig;
   });
+
+

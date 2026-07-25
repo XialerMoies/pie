@@ -195,8 +195,14 @@ interface AppSettings {
   toggleCaseSensitive(): void;
 }
 // ─── TabBehavior / TabStoreAPI ──────────────────────
+/** Options 透传至 _applySessionMessages，控制会话激活后的副作用 */
+interface SessionActivationOptions {
+  scroll?: 'bottom' | 'none';
+  refreshSessions?: boolean;
+}
+
 interface TabBehavior {
-  activate(tab: AppTab): void;
+  activate(tab: AppTab, options?: SessionActivationOptions): void;
   close(tab: AppTab): void;
   contextMenu?(e: MouseEvent, tab: AppTab): void;
 }
@@ -221,7 +227,7 @@ interface TabStoreAPI {
 }
 
 interface AppTabs {
-  activate(id: string): void;
+  activate(id: string, options?: SessionActivationOptions): void;
   close(id: string): void;
   contextMenu(e: MouseEvent, id: string): void;
 }

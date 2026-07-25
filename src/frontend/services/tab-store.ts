@@ -242,7 +242,7 @@ export function getActiveFileTabId(): string | null {
 // ─── TabBehaviorRegistry ──────────────────────────────
 
 export interface TabBehavior {
-  activate(tab: AppTab): void;
+  activate(tab: AppTab, options?: SessionActivationOptions): void;
   close(tab: AppTab): void;
   contextMenu?(e: MouseEvent, tab: AppTab): void;
 }

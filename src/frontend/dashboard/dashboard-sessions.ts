@@ -23,6 +23,14 @@ type ThreadStatus = 'running' | 'error' | 'archived' | 'pinned' | 'success' | 'e
 let _loadRetries = 0;
 const MAX_LOAD_RETRIES = 8;
 let _lastSessionRenderKey = '';
+
+/** 会话列表缓存：fetchSessionIndex 写入，renderSessionPanel 读取 */
+interface SessionDataCache {
+  sessions: SessionInfo[];
+  others: { project: string; path?: string; sessions: SessionInfo[] }[];
+}
+let _sessionDataCache: SessionDataCache | null = null;
+
 let _sessionListSeq = 0;
 const SESSION_TABS_KEY = 'session-tabs';
 const SESSION_TAB_LABELS_KEY = 'session-tab-labels';
@@ -294,7 +302,7 @@ function saveUiState(): void {
 /** 启动时恢复完整 UI 状态：会话标签 + 活跃 session 消息 + 面板 */
 async function restoreSessionTabs(): Promise<void> {
   // 先拉取会话元数据索引，确保顶部标签尽早显示正确标题
-  fetchAndIndexSessions();
+  fetchSessionIndex().catch(() => {});
 
   // 从 UiStateStore hydrate（从服务端读，失败降级 localStorage）
   const uis = (window as any).__uiStateStore;
@@ -382,26 +390,34 @@ function _mapMessages(raw: any[]): Message[] {
   }));
 }
 
+/** 会话激活选项 */
+interface ApplySessionMessagesOptions {
+  scroll?: 'bottom' | 'none';
+  refreshSessions?: boolean;
+}
+
 /** 设置消息列表 + 刷新 UI + 记住会话 + 保存状态 */
-function _applySessionMessages(data: { activeSessionId?: string; messages?: any[] }, fallbackId: string): void {
+function _applySessionMessages(
+  data: { activeSessionId?: string; messages?: any[] },
+  fallbackId: string,
+  options?: ApplySessionMessagesOptions,
+): void {
   App.Chat?.resetMsgKeys?.();
   window.__state.M = _mapMessages(data.messages);
   focusChatView();
+  const opts = options || {};
   const msgsEl = $('ms');
   if (msgsEl) {
     msgsEl.innerHTML = window.__state.M.length > 0
       ? (window.msgs ? window.msgs() : '')
       : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
-    if (!(window as any).__suppressSessionScroll) {
+    if (opts.scroll !== 'none') {
       setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50);
     }
   }
   const activeId = data.activeSessionId || fallbackId;
   if (activeId) { rememberSessionTab(activeId); setActiveSessionTabId(activeId); renderSessionTabs(activeId); }
-  const _convActive = typeof (window as any).isConversationSearchActive === 'function'
-    ? (window as any).isConversationSearchActive()
-    : false;
-  if (!_convActive) loadSessions();
+  if (opts.refreshSessions !== false) loadSessions();
   saveUiState();
 }
 
@@ -631,126 +647,110 @@ function setSessionPanelStatus(text: string, kind: 'loading' | 'ready' | 'error'
 }
 
 /**
- * 仅拉取并索引会话元数据，不依赖 #sl DOM。
- * 启动时无论左栏是不是会话面板都调用，确保标签标题尽早回填。
+ * 拉取并索引会话元数据，存入 _sessionDataCache，不碰 #sl。
+ * 无论左侧面板是什么都调用，确保标签标题尽早回填。
  */
-function fetchAndIndexSessions(): Promise<void> {
+function fetchSessionIndex(): Promise<void> {
   const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
+  setSessionPanelStatus('正在刷新任务线程…', 'loading');
   return fetch('/api/sessions?workspace=' + encodeURIComponent(ws) + '&other=1')
-    .then(r => r.json())
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then((data: { sessions?: SessionInfo[]; other?: { project: string; path?: string; sessions: SessionInfo[] }[]; error?: string }) => {
-      if (data.error) return;
+      if (data.error) throw new Error(data.error);
       const sessions = (data.sessions || []).slice().sort((a, b) => getSessionTimeValue(b) - getSessionTimeValue(a));
       const others = data.other || [];
+      _sessionDataCache = { sessions, others };
       indexSessionTabs(sessions, others);
       const activeId = getActiveSessionTabId() || '';
       renderSessionTabs(activeId);
-    })
-    .catch(() => {});
+    });
+  // 注意：错误由调用方处理（loadSessions UI 路径 / 后台路径各自决定是否吞错）
 }
 
-function loadSessions(): void {
-  const t0 = Date.now();
+/**
+ * 从 _sessionDataCache 渲染 #sl（会话列表面板）。
+ * 搜索活跃时不执行。
+ */
+function renderSessionPanel(): void {
+  if ((window as any).isConversationSearchActive?.()) return;
   const el = $('sl');
-  if (!el) {
-    // #sl 不存在时仍拉取数据索引，确保标签标题能回填
-    fetchAndIndexSessions();
-    _loadRetries++; if (_loadRetries > MAX_LOAD_RETRIES) return; console.log(`⏳ loadSessions retry #${_loadRetries}: no #sl`); setTimeout(loadSessions, 500); return;
-  }
-  if ((window as any).isConversationSearchActive?.()) {
+  if (!el) return;
+  if (!_sessionDataCache) { loadSessions(); return; }
+
+  const { sessions, others } = _sessionDataCache;
+  const activeId = getActiveSessionTabId() || '';
+  const openSessionIds = readOpenRealSessionIds();
+
+  const renderKey = buildSessionRenderKey(sessions, others, openSessionIds);
+  const needsInitialRender = !el.querySelector('.session-toolbar') && !el.querySelector('.session-empty') && !el.querySelector('.session-group');
+  const hasChanged = needsInitialRender || renderKey !== _lastSessionRenderKey;
+  const totalSessions = sessions.length + others.reduce((sum, project) => sum + project.sessions.length, 0);
+  const pinnedSessions = sessions.filter(s => s.pinned);
+  const activeSessions = sessions.filter(s => isActiveSession(s, openSessionIds));
+
+  if (sessions.length === 0 && others.length === 0) {
+    _lastSessionRenderKey = renderKey;
+    el.classList.remove('is-loading');
+    setSessionPanelStatus('暂无任务线程', 'ready');
+    el.innerHTML = renderSessionEmptyState(
+      '暂无任务线程',
+      '新会话会出现在这里，按时间和活跃状态整理成可继续的任务线程。',
+      [`<button class="sa-btn primary" onclick="newSession()">+ 新会话</button>`],
+    );
     return;
   }
+
+  const statusBits = [
+    pinnedSessions.length > 0 ? `${pinnedSessions.length} 个固定` : '',
+    activeSessions.length > 0 ? `${activeSessions.length} 个已打开` : '',
+    others.length > 0 ? `${others.length} 个其他项目` : '',
+  ].filter(Boolean);
+  setSessionPanelStatus(statusBits.length > 0 ? `任务线程已刷新 · ${statusBits.join(' · ')}` : '任务线程已刷新', 'ready');
+  el.classList.remove('is-loading');
+  if (!hasChanged) return;
+
+  let html = '';
+  if (pinnedSessions.length > 0) html += renderSessionGroup('固定线程', '固定的重要任务会留在这里。', pinnedSessions, openSessionIds, '当前项目');
+  html += sessions.filter(s => !s.pinned).map(s => renderSessionCard(s, openSessionIds, '当前项目')).join('');
+
+  if (others.length > 0) {
+    html += `<div class="sess-other-header" data-label="其他项目 (${others.length})" onclick="toggleOtherSessions(this)">▸ 其他项目 (${others.length})</div>`;
+    html += `<div class="sess-other-list" style="display:none">`;
+    for (const proj of others) {
+      const projLabel = proj.project === "未分类" ? "未分类（旧会话）" : E(proj.project);
+      const projPath = proj.path ? ` <span class="sess-other-path">${E(proj.path)}</span>` : '';
+      const ordered = proj.sessions.slice().sort((a, b) => getSessionTimeValue(b) - getSessionTimeValue(a));
+      html += `<div class="sess-other-project"><div class="sess-other-title">${projLabel}${projPath}</div>`;
+      html += ordered.map(s => renderSessionCard(s, openSessionIds, projLabel)).join('');
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  el.innerHTML = html;
+  _lastSessionRenderKey = renderKey;
+}
+
+/** 组合函数：先取数据、索引，再渲染会话面板 */
+function loadSessions(): void {
+  const el = $('sl');
+  if (!el) {
+    fetchSessionIndex().catch(() => {});
+    _loadRetries++; if (_loadRetries > MAX_LOAD_RETRIES) return;
+    console.log(`⏳ loadSessions retry #${_loadRetries}: no #sl`);
+    setTimeout(loadSessions, 500);
+    return;
+  }
+  if ((window as any).isConversationSearchActive?.()) return;
   _loadRetries = 0;
-  const seq = bumpSessionListSeq();
-  const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
-  setSessionPanelStatus('正在刷新任务线程…', 'loading');
   el.classList.add('is-loading');
-  console.log(`📋 loadSessions ws="${ws}"`);
-  fetch('/api/sessions?workspace=' + encodeURIComponent(ws) + '&other=1').then(r => r.json()).then((data: { sessions?: SessionInfo[]; other?: { project: string; path?: string; sessions: SessionInfo[] }[]; activeSessionId?: string | null; error?: string }) => {
-    if (!isCurrentSessionListSeq(seq)) return;
-    console.log(`📋 loadSessions done in ${Date.now()-t0}ms, sessions=${data.sessions?.length}, other=${data.other?.length}`);
-    if (!el) return;
-    if (data.error) {
+  fetchSessionIndex().then(() => renderSessionPanel()).catch(() => {
+    const list = $('sl');
+    if (list) {
       _lastSessionRenderKey = '';
       el.classList.remove('is-loading');
       setSessionPanelStatus('加载失败', 'error');
-      el.innerHTML = renderSessionEmptyState(
-        '任务线程加载失败',
-        data.error,
-        [`<button class="sa-btn primary" onclick="loadSessions()">重新加载</button>`, `<button class="sa-btn" onclick="newSession()">+ 新会话</button>`],
-      );
-      return;
-    }
-    const activeId = getActiveSessionTabId() || '';
-    const openSessionIds = readOpenRealSessionIds();
-    const sessions = (data.sessions || []).slice().sort((a, b) => getSessionTimeValue(b) - getSessionTimeValue(a));
-    const others = data.other || [];
-    indexSessionTabs(sessions, others);
-    renderSessionTabs(activeId);
-    const renderKey = buildSessionRenderKey(sessions, others, openSessionIds);
-      const needsInitialRender = !el.querySelector('.session-toolbar') && !el.querySelector('.session-empty') && !el.querySelector('.session-group');
-      const hasChanged = needsInitialRender || renderKey !== _lastSessionRenderKey;
-    const totalSessions = sessions.length + others.reduce((sum, project) => sum + project.sessions.length, 0);
-    const pinnedSessions = sessions.filter(session => session.pinned);
-    const activeSessions = sessions.filter(session => isActiveSession(session, openSessionIds));
-    if (sessions.length === 0 && others.length === 0) {
-      _lastSessionRenderKey = renderKey;
-      el.classList.remove('is-loading');
-      setSessionPanelStatus('暂无任务线程', 'ready');
-      el.innerHTML = renderSessionEmptyState(
-        '暂无任务线程',
-        '新会话会出现在这里，按时间和活跃状态整理成可继续的任务线程。',
-        [
-          `<button class="sa-btn primary" onclick="newSession()">+ 新会话</button>`,
-        ].filter(Boolean) as string[],
-      );
-      return;
-    }
-
-    const currentHint = activeSessions.length > 0
-      ? '当前工作区里已打开的线程会高亮显示。'
-      : '当前工作区还没有打开的线程。';
-
-    const statusBits = [
-      pinnedSessions.length > 0 ? `${pinnedSessions.length} 个固定` : '',
-      activeSessions.length > 0 ? `${activeSessions.length} 个已打开` : '',
-      others.length > 0 ? `${others.length} 个其他项目` : '',
-    ].filter(Boolean);
-    setSessionPanelStatus(statusBits.length > 0 ? `任务线程已刷新 · ${statusBits.join(' · ')}` : '任务线程已刷新', 'ready');
-    el.classList.remove('is-loading');
-    if (hasChanged) {
-      let html = '';
-      if (pinnedSessions.length > 0) html += renderSessionGroup('固定线程', '固定的重要任务会留在这里。', pinnedSessions, openSessionIds, '当前项目');
-      html += sessions.filter(s => !s.pinned).map(s => renderSessionCard(s, openSessionIds, '当前项目')).join('');
-
-      if (others.length > 0) {
-        html += `<div class="sess-other-header" data-label="其他项目 (${others.length})" onclick="toggleOtherSessions(this)">▸ 其他项目 (${others.length})</div>`;
-        html += `<div class="sess-other-list" style="display:none">`;
-        for (const proj of others) {
-          const projLabel = proj.project === "未分类" ? "未分类（旧会话）" : E(proj.project);
-          const projPath = proj.path ? ` <span class="sess-other-path">${E(proj.path)}</span>` : '';
-          const otherSessions = proj.sessions.slice().sort((a, b) => getSessionTimeValue(b) - getSessionTimeValue(a));
-          html += `<div class="sess-other-project"><div class="sess-other-title">${projLabel}${projPath}</div>`;
-          html += otherSessions.map(s => renderSessionCard(s, openSessionIds, projLabel)).join('');
-          html += `</div>`;
-        }
-        html += `</div>`;
-      }
-
-      el.innerHTML = html;
-      _lastSessionRenderKey = renderKey;
-    }
-    if (!hasChanged) {
-      console.log(`📋 loadSessions skipped redraw (${totalSessions} sessions unchanged)`);
-    }
-  }).catch(() => {
-    if (!isCurrentSessionListSeq(seq)) return;
-    const el = $('sl');
-    if (el) {
-      _lastSessionRenderKey = '';
-      el.classList.remove('is-loading');
-      setSessionPanelStatus('加载失败', 'error');
-      el.innerHTML = renderSessionEmptyState(
+      list.innerHTML = renderSessionEmptyState(
         '网络错误',
         '会话列表暂时无法加载，可能是后端未启动或网络被中断。',
         [`<button class="sa-btn primary" onclick="loadSessions()">重新加载</button>`, `<button class="sa-btn" onclick="newSession()">+ 新会话</button>`],
@@ -897,13 +897,13 @@ function branchSession(id: string): void {
 }
 
 /** App.Tabs.activate 的降级入口（当 handler/fallback 调用时保留完整逻辑） */
-function switchSession(id: string): void {
+function switchSession(id: string, options?: ApplySessionMessagesOptions): void {
   const T = (window as any).App?.Tabs;
   const ts = (window as any).__tabs;
   const tab = ts?.getTab?.(id);
   if (tab && (tab.kind === 'session' || tab.kind === 'chat')) {
     const handler = ts?.getTabBehavior?.(tab.kind);
-    if (handler?.activate) { handler.activate(tab); return; }
+    if (handler?.activate) { handler.activate(tab, options); return; }
   }
   // 降级：TabStore 无此 tab 时直接执行（兼容测试/未迁移场景）
   if (isDraftSessionId(id)) { _setupDraftSession(id); return; }
@@ -913,7 +913,7 @@ function switchSession(id: string): void {
     .then((data: any) => {
       if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
       _disposeActiveStream();
-      _applySessionMessages(data, id);
+      _applySessionMessages(data, id, options);
       toast('已切换到会话 (' + window.__state.M.length + ' 条消息)');
     }).catch(() => { _activateFailReset(); toast('会话已失效'); loadSessions(); });
 }
@@ -958,7 +958,7 @@ if (AppSess) {
 }
 
 // ─── Session/Chat handler（Phase 2：真实行为入口）────────
-function _sessionActivate(tab: AppTab): void {
+function _sessionActivate(tab: AppTab, options?: ApplySessionMessagesOptions): void {
   if (tab.kind === 'chat' || isDraftSessionId(tab.id)) {
     _setupDraftSession(tab.id);
     return;
@@ -974,7 +974,7 @@ function _sessionActivate(tab: AppTab): void {
   }).then((data: { ok: boolean; activeSessionId?: string; messages?: any[]; error?: string }) => {
     if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
     _disposeActiveStream();
-    _applySessionMessages(data, tab.id);
+    _applySessionMessages(data, tab.id, options);
     toast('已切换到会话 (' + window.__state.M.length + ' 条消息)');
   }).catch(() => { _activateFailReset(); toast('会话已失效'); loadSessions(); });
 }
@@ -1014,11 +1014,11 @@ function _sessionClose(tab: AppTab): void {
 { const tabs = (window as any).__tabs;
   if (tabs?.registerTabBehavior) {
     tabs.registerTabBehavior('chat', {
-      activate(tab: AppTab) { _sessionActivate(tab); },
+      activate(tab: AppTab, options?: ApplySessionMessagesOptions) { _sessionActivate(tab, options); },
       close(tab: AppTab) { _sessionClose(tab); },
     });
     tabs.registerTabBehavior('session', {
-      activate(tab: AppTab) { _sessionActivate(tab); },
+      activate(tab: AppTab, options?: ApplySessionMessagesOptions) { _sessionActivate(tab, options); },
       close(tab: AppTab) { _sessionClose(tab); },
     });
   }

@@ -135,20 +135,17 @@ function highlightOccurrence(root: Element, query: string, ordinal: number): HTM
 
 /** 打开会话并滚动到指定消息 */
 function openConvMatch(sessionId: string, msgIndex?: number, matchOrdinal?: number): void {
-  App.Tabs.activate(sessionId);
+  // 传 options 通知 _applySessionMessages：不 auto-scroll、不刷新会话列表
+  App.Tabs.activate(sessionId, { scroll: 'none', refreshSessions: false });
   if (msgIndex === undefined || msgIndex < 0) return;
 
   const startedAt = Date.now();
   let observer: MutationObserver | null = null;
   let cleanupTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // 阻止 _applySessionMessages 的 auto-scroll
-  (window as any).__suppressSessionScroll = true;
-
   const finish = (): void => {
     observer?.disconnect();
     if (cleanupTimer) clearTimeout(cleanupTimer);
-    (window as any).__suppressSessionScroll = false;
   };
 
   const doScroll = (): boolean => {
