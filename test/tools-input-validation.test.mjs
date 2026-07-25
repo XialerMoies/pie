@@ -222,6 +222,28 @@ describe("str_replace_editor tool", () => {
     assert.strictEqual(content, "x b x b");
   });
 
+  it("单项 edits 遇到多处匹配且未开启 replace_all 时拒绝", async () => {
+    writeFileSync(resolve(dir, "test.txt"), "a a a", "utf-8");
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "test.txt", edits: [{ old_string: "a", new_string: "x" }] },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("replace_all"));
+    const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
+    assert.strictEqual(content, "a a a");
+  });
+
+  it("单项 edits 的 replace_all 回显准确计数", async () => {
+    writeFileSync(resolve(dir, "test.txt"), "a a a", "utf-8");
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "test.txt", edits: [{ old_string: "a", new_string: "x", replace_all: true }] },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("3 处替换"));
+    const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
+    assert.strictEqual(content, "x x x");
+  });
+
   it("拒绝路径穿越", async () => {
     writeFileSync(resolve(dir, "test.txt"), "hello", "utf-8");
     const r = await strReplaceEditorTool.execute(
@@ -237,6 +259,51 @@ describe("str_replace_editor tool", () => {
       workspaceCtx(),
     );
     assert.ok(r.includes("不存在"));
+  });
+
+  it("批量 edits 替换多个位置", async () => {
+    writeFileSync(resolve(dir, "test.txt"), "a b c", "utf-8");
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "test.txt", edits: [{ old_string: "a", new_string: "x" }, { old_string: "c", new_string: "z" }] },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("已替换"));
+    const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
+    assert.strictEqual(content, "x b z");
+  });
+
+  it("批量 edits 反向偏移正确", async () => {
+    // 从后往前替换，前面的偏移不应受影响
+    writeFileSync(resolve(dir, "test.txt"), "111 222 333", "utf-8");
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "test.txt", edits: [{ old_string: "111", new_string: "aaa" }, { old_string: "333", new_string: "ccc" }] },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("已替换"));
+    const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
+    assert.strictEqual(content, "aaa 222 ccc");
+  });
+
+  it("old_string: '' 创建新文件", async () => {
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "newfile.txt", old_string: "", new_string: "hello" },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("已创建"));
+    const content = readFileSync(resolve(dir, "newfile.txt"), "utf-8");
+    assert.strictEqual(content, "hello");
+  });
+
+  it("反转义 <fnr> → <function_results>", async () => {
+    // 反转义在 findActualString 之前执行，所以文件内容用直引号
+    writeFileSync(resolve(dir, "test.txt"), "some <function_results> here", "utf-8");
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "test.txt", old_string: "<fnr>", new_string: "<x>" },
+      workspaceCtx(),
+    );
+    assert.ok(r.includes("已替换"));
+    const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
+    assert.strictEqual(content, "some <x> here");
   });
 });
 
