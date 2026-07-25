@@ -134,7 +134,7 @@ npm run typecheck   # TypeScript 类型检查
 
 | 套件 | 数量 | 覆盖 |
 |------|------|------|
-| unit | 201 | prompts / tree / explorer-service / tool 输入验证 / ui-state-store / usage-index / mcp-config / mcp-trust / mcp-client / mcp-client-service / tab-store / search-replace / agent-memory |
+| unit | 201 | prompts（14 节测试覆盖）/ tree / explorer-service / tool 输入验证 / ui-state-store / usage-index / mcp-config / mcp-trust / mcp-client / mcp-client-service / tab-store / search-replace / agent-memory |
 | routes | 115 | 全部 API handler / session / block 协议 / SSE / trace / code-actions / organize-imports / search-replace |
 | frontend | 79 | 消息渲染 / chat-ui / session-ui / workspace-ui / app-tabs / file-restore / problems-store / bottom-bar |
 | CSS | 20+20 | 变量定义完整性扫描（dark + light 各 20 项） |
