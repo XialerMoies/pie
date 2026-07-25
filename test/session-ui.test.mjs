@@ -219,10 +219,11 @@ describe("session ui state", () => {
     const activeItems = Array.from(doc.querySelectorAll("#sl .sess-item.active"));
     assert.strictEqual(activeItems.length, 0);
     assert.strictEqual(localStorage.getItem("last-session-id"), null);
-    const groupHeads = Array.from(doc.querySelectorAll("#sl .session-group-head")).map((node) => node.textContent || "");
-    assert.ok(groupHeads.some((text) => text.includes("当前工作区")));
     assert.strictEqual(doc.querySelector("#sl .thread-badge-running"), null);
-    assert.strictEqual(doc.querySelector("#sl .thread-badge-success"), null);
+	    // 非固定会话现在渲染为直接卡片（无 .session-group 包裹），仅有固定线程有 group head
+	    const groupHeads = Array.from(doc.querySelectorAll("#sl .session-group-head")).map((node) => node.textContent || "");
+	    assert.ok(groupHeads.some((text) => text.includes("固定线程")));
+	    assert.ok(doc.querySelectorAll("#sl .sess-item").length >= 3);
     assert.strictEqual(doc.querySelector("#sl .thread-badge-pinned"), null);
     assert.strictEqual(doc.querySelector("#sl .thread-badge-error"), null);
     assert.strictEqual(doc.querySelector("#sl .thread-badge-empty"), null);
@@ -546,6 +547,13 @@ describe("session ui state", () => {
       assert.ok(panel.textContent.includes("needle marker"));
       assert.ok(!panel.textContent.includes("过时线程"));
 
+      win.loadSessions();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      assert.ok(panel.textContent.includes("命中线程"), "active search results survive explicit loadSessions refresh");
+      assert.ok(panel.textContent.includes("needle marker"), "search hit remains after explicit loadSessions refresh");
+      assert.ok(!panel.textContent.includes("过时线程"), "explicit refresh does not restore stale session list");
+
       resolveSessions(staleSessions);
       await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -559,6 +567,176 @@ describe("session ui state", () => {
       pane?.remove();
       if (originalSl && originalSlParent) {
         originalSlParent.insertBefore(originalSl, originalSlNext || null);
+      }
+    }
+  });
+
+  it("聊天面板会渲染并跳转每一条会话搜索命中", async () => {
+    const originalSl = doc.querySelector("#sl");
+    const originalSlParent = originalSl?.parentNode;
+    const originalSlNext = originalSl?.nextSibling;
+    const originalFetch = global.fetch;
+    const originalWinFetch = win.fetch;
+    const chatRender = registeredPanes.get("chat");
+    assert.ok(chatRender, "chat pane should be registered");
+    let pane = null;
+
+    try {
+      originalSl?.remove();
+      pane = doc.createElement("div");
+      doc.body.appendChild(pane);
+      global.fetch = async (url) => {
+        const href = String(url);
+        if (href.includes("/api/sessions?")) {
+          return { ok: true, json: async () => ({ sessions: [], other: [], activeSessionId: null }) };
+        }
+        if (href.includes("/api/search/conversations")) {
+          return {
+            ok: true,
+            json: async () => ({
+              results: [{
+                sessionId: "multi-session",
+                sessionName: "0415scf",
+                workspace: "E:/my-code-agent",
+                file: "by-project/demo/2026-07-25.jsonl",
+                updatedAt: "2026-07-25T00:00:00.000Z",
+                matches: [0, 1, 2, 3, 4].map((idx) => ({
+                  line: 1,
+                  role: "assistant",
+                  text: `needle ${idx}`,
+                  msgIndex: 0,
+                  matchOrdinal: idx,
+                  matchPos: [{ start: 0, end: 6 }],
+                })),
+              }],
+              total: 5,
+              truncated: false,
+            }),
+          };
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      };
+      win.fetch = global.fetch;
+
+      chatRender(pane);
+      const input = doc.querySelector("#chat-search-input");
+      assert.ok(input, "chat search input exists");
+      input.value = "needle";
+      input.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const matches = Array.from(doc.querySelectorAll("#sl .cs-match"));
+      assert.strictEqual(matches.length, 5, "所有返回的匹配行都应可见可点");
+      assert.match(matches[4].getAttribute("onclick") || "", /openConvMatch\('multi-session', 0, 4\)/);
+    } finally {
+      global.fetch = originalFetch;
+      win.fetch = originalWinFetch;
+      pane?.remove();
+      if (originalSl && originalSlParent) {
+        originalSlParent.insertBefore(originalSl, originalSlNext || null);
+      }
+    }
+  });
+
+  it("openConvMatch 会立即滚动已渲染消息并高亮", async () => {
+    const originalActivate = win.App.Tabs.activate;
+    const originalMs = doc.querySelector("#ms");
+    const originalParent = originalMs?.parentNode;
+    const originalNext = originalMs?.nextSibling;
+    const originalTabs = win.__tabs;
+    win.__tabs = { getActiveTab: () => ({ id: "sess-a", kind: "session", title: "sess-a", order: 0 }) };
+    const tabs = win.__tabs;
+    const originalGetActiveTab = tabs.getActiveTab;
+
+    try {
+      win.App.Tabs.activate = () => {};
+      tabs.getActiveTab = () => ({ id: "sess-a", kind: "session", title: "sess-a", order: 0 });
+      originalMs?.remove();
+      const ms = doc.createElement("div");
+      ms.id = "ms";
+      ms.innerHTML = [
+        '<div class="m"><div class="ml">1</div><div class="block-text">one</div></div>',
+        '<div class="m"><div class="ml">2</div><div class="block-text">two</div></div>',
+        '<div class="m"><div class="ml">3</div><div class="block-text">three</div></div>',
+      ].join("");
+      doc.body.appendChild(ms);
+
+      const target = ms.querySelectorAll(".m")[1];
+      let scrolled = false;
+      const originalScrollIntoView = target.scrollIntoView;
+      Object.defineProperty(target, "scrollIntoView", {
+        configurable: true,
+        value: () => { scrolled = true; },
+      });
+
+      win.openConvMatch("sess-a", 1);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      assert.ok(scrolled, "已渲染消息应直接滚动到位");
+      assert.ok(target.classList.contains("msg-highlight"), "目标消息应被高亮");
+
+      Object.defineProperty(target, "scrollIntoView", {
+        configurable: true,
+        value: originalScrollIntoView,
+      });
+    } finally {
+      win.App.Tabs.activate = originalActivate;
+      tabs.getActiveTab = originalGetActiveTab;
+      win.__tabs = originalTabs;
+      doc.querySelector("#ms")?.remove();
+      if (originalMs && originalParent) {
+        originalParent.insertBefore(originalMs, originalNext || null);
+      }
+    }
+  });
+
+  it("openConvMatch 会等待切换后的会话渲染再滚动目标消息", async () => {
+    const originalActivate = win.App.Tabs.activate;
+    const originalMs = doc.querySelector("#ms");
+    const originalParent = originalMs?.parentNode;
+    const originalNext = originalMs?.nextSibling;
+    const originalTabs = win.__tabs;
+    const originalScrollIntoView = win.HTMLElement.prototype.scrollIntoView;
+    let activeId = "sess-old";
+    let scrolledText = "";
+
+    try {
+      win.__tabs = { getActiveTab: () => ({ id: activeId, kind: "session", title: activeId, order: 0 }) };
+      originalMs?.remove();
+      const ms = doc.createElement("div");
+      ms.id = "ms";
+      ms.innerHTML = '<div class="m"><div class="block-text">old newest reply</div></div>';
+      doc.body.appendChild(ms);
+      Object.defineProperty(win.HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        value() { scrolledText = this.textContent || ""; },
+      });
+      win.App.Tabs.activate = () => {
+        setTimeout(() => {
+          activeId = "sess-next";
+          ms.innerHTML = [
+            '<div class="m"><div class="block-text">first</div></div>',
+            '<div class="m"><div class="block-text">target needle reply</div></div>',
+            '<div class="m"><div class="block-text">latest reply</div></div>',
+          ].join("");
+        }, 10);
+      };
+
+      win.openConvMatch("sess-next", 1, 0);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+
+      assert.ok(scrolledText.includes("target needle reply") || scrolledText.includes("needle"), "应滚动到目标消息而不是最新回复");
+      assert.ok(!scrolledText.includes("latest reply"), "不应停在最新回复");
+    } finally {
+      win.App.Tabs.activate = originalActivate;
+      win.__tabs = originalTabs;
+      Object.defineProperty(win.HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        value: originalScrollIntoView,
+      });
+      doc.querySelector("#ms")?.remove();
+      if (originalMs && originalParent) {
+        originalParent.insertBefore(originalMs, originalNext || null);
       }
     }
   });

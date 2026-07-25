@@ -757,6 +757,132 @@ describe("search conversations route", () => {
     );
     assert.strictEqual(status, 400);
   });
+
+  it("POST /api/search/conversations 返回 0-based msgIndex", async () => {
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "conv-search-"));
+    const sessionsDir = resolve(tmpDir, "data", "pi", "sessions");
+    const projectDir = resolve(sessionsDir, "by-project", "demo");
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(resolve(projectDir, "sess-1.jsonl"), [
+      JSON.stringify({ type: "session", id: "sess-1", timestamp: "2026-07-25T00:00:00.000Z", workspace: "E:/my-code-agent" }),
+      JSON.stringify({ type: "session_info", timestamp: "2026-07-25T00:00:01.000Z", name: "needle session" }),
+      JSON.stringify({ type: "message", timestamp: "2026-07-25T00:00:02.000Z", message: { role: "user", content: [{ type: "text", text: "first needle hit" }] } }),
+      JSON.stringify({ type: "message", timestamp: "2026-07-25T00:00:03.000Z", message: { role: "assistant", content: [{ type: "text", text: "second message" }] } }),
+    ].join("\n") + "\n");
+
+    const ctx = mockContext({
+      paths: {
+        APP_ROOT: ROOT,
+        DATA_DIR: resolve(tmpDir, "data"),
+        PI_CONFIG_DIR: resolve(tmpDir, "data", "pi"),
+        SESSIONS_DIR: sessionsDir,
+        SETTINGS_FILE: resolve(tmpDir, "data", "pi", "settings.json"),
+        FRONTEND_DIR: resolve(ROOT, "dist", "frontend"),
+        FRONTEND_SRC_DIR: resolve(ROOT, "src", "frontend"),
+        HAS_BUILT_FRONTEND: false,
+        _tmpDir: tmpDir,
+      },
+    });
+
+    try {
+      const { status, body } = await callHandler(
+        handleSearch, "POST", "/api/search/conversations",
+        { query: "needle" },
+        ctx,
+      );
+      assert.strictEqual(status, 200);
+      const data = parseJSON(body);
+      assert.ok(Array.isArray(data.results) && data.results.length > 0, "应返回结果");
+      const msgIndexes = data.results.flatMap((result) => result.matches.map((match) => match.msgIndex).filter((value) => value !== undefined));
+      assert.ok(msgIndexes.includes(0), "应包含 0-based 的首条消息索引 0");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("POST /api/search/conversations 的 msgIndex 跟可见消息对齐", async () => {
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "conv-search-visible-"));
+    const sessionsDir = resolve(tmpDir, "data", "pi", "sessions");
+    const projectDir = resolve(sessionsDir, "by-project", "demo");
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(resolve(projectDir, "sess-visible.jsonl"), [
+      JSON.stringify({ type: "session", id: "sess-visible", timestamp: "2026-07-25T00:00:00.000Z", workspace: "E:/my-code-agent" }),
+      JSON.stringify({ type: "session_info", timestamp: "2026-07-25T00:00:01.000Z", name: "visible session" }),
+      JSON.stringify({ type: "message", timestamp: "2026-07-25T00:00:02.000Z", message: { role: "user", content: [{ type: "text", text: "first visible message" }] } }),
+      JSON.stringify({ type: "message", timestamp: "2026-07-25T00:00:03.000Z", message: { role: "toolResult", toolName: "shell", content: [{ type: "text", text: "hidden tool output" }] } }),
+      JSON.stringify({ type: "message", timestamp: "2026-07-25T00:00:04.000Z", message: { role: "assistant", content: [{ type: "text", text: "target needle reply" }] } }),
+    ].join("\n") + "\n");
+
+    const ctx = mockContext({
+      paths: {
+        APP_ROOT: ROOT,
+        DATA_DIR: resolve(tmpDir, "data"),
+        PI_CONFIG_DIR: resolve(tmpDir, "data", "pi"),
+        SESSIONS_DIR: sessionsDir,
+        SETTINGS_FILE: resolve(tmpDir, "data", "pi", "settings.json"),
+        FRONTEND_DIR: resolve(ROOT, "dist", "frontend"),
+        FRONTEND_SRC_DIR: resolve(ROOT, "src", "frontend"),
+        HAS_BUILT_FRONTEND: false,
+        _tmpDir: tmpDir,
+      },
+    });
+
+    try {
+      const { status, body } = await callHandler(
+        handleSearch, "POST", "/api/search/conversations",
+        { query: "needle" },
+        ctx,
+      );
+      assert.strictEqual(status, 200);
+      const data = parseJSON(body);
+      const hit = data.results[0]?.matches.find((match) => match.text.includes("needle"));
+      assert.ok(hit, "应返回 assistant 命中的结果");
+      assert.strictEqual(hit.msgIndex, 1, "toolResult 不应占用前端可见消息索引");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("POST /api/search/conversations 同一消息多处命中返回多条可定位结果", async () => {
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "conv-search-multi-"));
+    const sessionsDir = resolve(tmpDir, "data", "pi", "sessions");
+    const projectDir = resolve(sessionsDir, "by-project", "demo");
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(resolve(projectDir, "sess-multi.jsonl"), [
+      JSON.stringify({ type: "session", id: "sess-multi", timestamp: "2026-07-25T00:00:00.000Z", workspace: "E:/my-code-agent" }),
+      JSON.stringify({ type: "session_info", timestamp: "2026-07-25T00:00:01.000Z", name: "multi session" }),
+      JSON.stringify({ type: "message", timestamp: "2026-07-25T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "needle one, then needle two, then needle three" }] } }),
+    ].join("\n") + "\n");
+
+    const ctx = mockContext({
+      paths: {
+        APP_ROOT: ROOT,
+        DATA_DIR: resolve(tmpDir, "data"),
+        PI_CONFIG_DIR: resolve(tmpDir, "data", "pi"),
+        SESSIONS_DIR: sessionsDir,
+        SETTINGS_FILE: resolve(tmpDir, "data", "pi", "settings.json"),
+        FRONTEND_DIR: resolve(ROOT, "dist", "frontend"),
+        FRONTEND_SRC_DIR: resolve(ROOT, "src", "frontend"),
+        HAS_BUILT_FRONTEND: false,
+        _tmpDir: tmpDir,
+      },
+    });
+
+    try {
+      const { status, body } = await callHandler(
+        handleSearch, "POST", "/api/search/conversations",
+        { query: "needle" },
+        ctx,
+      );
+      assert.strictEqual(status, 200);
+      const data = parseJSON(body);
+      const hits = data.results[0]?.matches.filter((match) => match.msgIndex === 0) || [];
+      assert.strictEqual(hits.length, 3, "同一可见消息内的每处命中都应独立返回");
+      assert.deepStrictEqual(hits.map((hit) => hit.matchOrdinal), [0, 1, 2]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
   it("GET /api/explorer 返回目录内容", async () => {

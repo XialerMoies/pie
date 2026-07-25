@@ -392,11 +392,16 @@ function _applySessionMessages(data: { activeSessionId?: string; messages?: any[
     msgsEl.innerHTML = window.__state.M.length > 0
       ? (window.msgs ? window.msgs() : '')
       : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
-    setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50);
+    if (!(window as any).__suppressSessionScroll) {
+      setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50);
+    }
   }
   const activeId = data.activeSessionId || fallbackId;
   if (activeId) { rememberSessionTab(activeId); setActiveSessionTabId(activeId); renderSessionTabs(activeId); }
-  loadSessions();
+  const _convActive = typeof (window as any).isConversationSearchActive === 'function'
+    ? (window as any).isConversationSearchActive()
+    : false;
+  if (!_convActive) loadSessions();
   saveUiState();
 }
 
@@ -458,7 +463,6 @@ function closeSessionTab(id: string): void {
       if (nextTab.kind === 'file') {
         setActiveSessionTabId(null);
         ts?.activateTab(nextTab.id);
-        renderSessionTabs();
         loadSessions();
         saveUiState();
         return;
@@ -653,6 +657,9 @@ function loadSessions(): void {
     fetchAndIndexSessions();
     _loadRetries++; if (_loadRetries > MAX_LOAD_RETRIES) return; console.log(`⏳ loadSessions retry #${_loadRetries}: no #sl`); setTimeout(loadSessions, 500); return;
   }
+  if ((window as any).isConversationSearchActive?.()) {
+    return;
+  }
   _loadRetries = 0;
   const seq = bumpSessionListSeq();
   const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
@@ -712,9 +719,9 @@ function loadSessions(): void {
     setSessionPanelStatus(statusBits.length > 0 ? `任务线程已刷新 · ${statusBits.join(' · ')}` : '任务线程已刷新', 'ready');
     el.classList.remove('is-loading');
     if (hasChanged) {
-      let html = `<div class="session-toolbar">${renderSessionActions()}</div>`;
+      let html = '';
       if (pinnedSessions.length > 0) html += renderSessionGroup('固定线程', '固定的重要任务会留在这里。', pinnedSessions, openSessionIds, '当前项目');
-      html += renderSessionGroup('当前工作区', currentHint, sessions.filter(session => !session.pinned), openSessionIds, '当前项目');
+      html += sessions.filter(s => !s.pinned).map(s => renderSessionCard(s, openSessionIds, '当前项目')).join('');
 
       if (others.length > 0) {
         html += `<div class="sess-other-header" data-label="其他项目 (${others.length})" onclick="toggleOtherSessions(this)">▸ 其他项目 (${others.length})</div>`;
@@ -1041,3 +1048,8 @@ migrateSessionTabLabels();
 
 // 窗口关闭前保存 UI 状态
 try { window.addEventListener('beforeunload', () => saveUiState()); } catch {}
+
+
+
+
+

@@ -3,6 +3,7 @@
  */
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "fs";
 import { resolve, relative, sep } from "path";
+import { parseSessionMessages } from "./sessions";
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -268,6 +269,12 @@ export interface ConvMatch {
   line: number;
   role: string;
   text: string;
+  /** 0-based 消息索引，用于前端定位 */
+  msgIndex?: number;
+  /** 同一条消息内第几处匹配，用于前端定位具体命中 */
+  matchOrdinal?: number;
+  /** 查询词在 text 中的匹配起止位置，用于前端高亮 */
+  matchPos?: { start: number; end: number }[];
 }
 
 export interface ConvResult {
@@ -275,6 +282,7 @@ export interface ConvResult {
   sessionName: string;
   workspace: string;
   file: string;
+  updatedAt?: string;
   matches: ConvMatch[];
 }
 
@@ -284,12 +292,32 @@ export interface ConvResponse {
   truncated: boolean;
 }
 
-function extractConvText(content: any[]): string {
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((c: any) => c.type === "text" && c.text)
-    .map((c: any) => c.text)
-    .join("\n");
+/** 在 text 中找出 query 的所有匹配起止位置（不区分大小写） */
+function findAllMatchPositions(text: string, query: string, cs: boolean): { start: number; end: number }[] {
+  const positions: { start: number; end: number }[] = [];
+  const src = cs ? text : text.toLowerCase();
+  const needle = cs ? query : query.toLowerCase();
+  const qLen = query.length;
+  let idx = 0;
+  while ((idx = src.indexOf(needle, idx)) !== -1) {
+    positions.push({ start: idx, end: idx + qLen });
+    idx += 1;
+  }
+  return positions;
+}
+
+function makeConvSnippet(text: string, match: { start: number; end: number }): { text: string; matchPos: { start: number; end: number }[] } {
+  const radius = 80;
+  const start = Math.max(0, match.start - radius);
+  const end = Math.min(text.length, match.end + radius);
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < text.length ? "…" : "";
+  const snippet = prefix + text.slice(start, end) + suffix;
+  const offset = prefix.length - start;
+  return {
+    text: snippet,
+    matchPos: [{ start: match.start + offset, end: match.end + offset }],
+  };
 }
 
 export function searchConversations(
@@ -297,7 +325,7 @@ export function searchConversations(
   sessionsDir: string,
   cs: boolean,
   maxSessions = 50,
-  maxMatchesPerSession = 5,
+  maxMatchesPerSession = 20,
 ): ConvResponse {
   const query = cs ? q : q.toLowerCase();
   const byProjectDir = resolve(sessionsDir, "by-project");
@@ -324,6 +352,7 @@ export function searchConversations(
             let sessionName = "";
             let workspace = project;
             const matches: ConvMatch[] = [];
+            let updatedAt = "";
 
             for (let i = 0; i < lines.length && matches.length < maxMatchesPerSession; i++) {
               const line = lines[i].trim();
@@ -333,6 +362,7 @@ export function searchConversations(
               if (entryJson.type === "session") {
                 if (entryJson.id) sessionId = entryJson.id;
                 if (entryJson.workspace) workspace = entryJson.workspace;
+                if (entryJson.timestamp && !updatedAt) updatedAt = entryJson.timestamp;
                 continue;
               }
               if (entryJson.type === "session_info" && entryJson.name) {
@@ -341,20 +371,33 @@ export function searchConversations(
                   ? sessionName.includes(query)
                   : sessionName.toLowerCase().includes(query);
                 if (nameMatch) {
-                  matches.push({ line: i + 1, role: "session_info", text: sessionName });
+                  matches.push({ line: i + 1, role: "session_info", text: sessionName, matchPos: [{ start: 0, end: sessionName.length }] });
                 }
+                if (entryJson.timestamp && !updatedAt) updatedAt = entryJson.timestamp;
                 continue;
               }
-              if (entryJson.type === "message" && entryJson.message) {
-                const msg = entryJson.message;
-                const role = msg.role || "unknown";
-                const text = extractConvText(msg.content);
-                const searchText = cs ? text : text.toLowerCase();
-                if (searchText.includes(query)) {
-                  const snippet = text.length > 200 ? text.slice(0, 200) + "…" : text;
-                  matches.push({ line: i + 1, role, text: snippet });
-                }
+            }
+
+            const visibleMessages = parseSessionMessages(content);
+            for (let msgIndex = 0; msgIndex < visibleMessages.length && matches.length < maxMatchesPerSession; msgIndex++) {
+              const msg = visibleMessages[msgIndex];
+              const text = msg.content || "";
+              const positions = findAllMatchPositions(text, q, cs);
+              for (let matchOrdinal = 0; matchOrdinal < positions.length && matches.length < maxMatchesPerSession; matchOrdinal++) {
+                const snippet = makeConvSnippet(text, positions[matchOrdinal]);
+                matches.push({
+                  line: msgIndex + 1,
+                  role: msg.role || "unknown",
+                  text: snippet.text,
+                  matchPos: snippet.matchPos,
+                  msgIndex,
+                  matchOrdinal,
+                });
               }
+            }
+
+            if (!updatedAt) {
+              try { const st = statSync(filePath); updatedAt = st.mtime.toISOString(); } catch {}
             }
 
             if (matches.length > 0) {
@@ -363,6 +406,7 @@ export function searchConversations(
                 sessionName: sessionName || sessionId.slice(0, 8),
                 workspace,
                 file: `${project}/${entry}`,
+                updatedAt: updatedAt || undefined,
                 matches,
               });
             }

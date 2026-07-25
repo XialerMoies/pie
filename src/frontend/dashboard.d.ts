@@ -276,6 +276,7 @@ interface Window {
   ExplorerService: typeof ExplorerService;
   bumpSessionListSeq?: () => number;
   isCurrentSessionListSeq?: (seq: number) => boolean;
+  isConversationSearchActive?: () => boolean;
 }
 
 // 公共函数声明（在 HTML onclick 中用）
@@ -321,6 +322,7 @@ declare function provDrop(ev: DragEvent, idx: number): void;
 declare function loadSessions(): void;
 declare function bumpSessionListSeq(): number;
 declare function isCurrentSessionListSeq(seq: number): boolean;
+declare function isConversationSearchActive(): boolean;
 declare function loadMonaco(): Promise<void>;
 declare function newSession(): void;
 declare function renameSession(el: HTMLElement, id: string): void;

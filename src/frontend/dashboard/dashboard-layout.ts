@@ -65,7 +65,7 @@ function buildTopBar(): string {
 function buildSideBar(): string {
   return `<div class="sbar">
     <button class="b" data-side="explorer" onclick="togglePanel('explorer')" title="资源管理器">${S('ifolder',20)}</button>
-    <button class="b" data-side="chat" onclick="togglePanel('chat')" title="任务线程">${S('imsg',20)}</button>
+    <button class="b" data-side="chat" onclick="togglePanel('chat')" title="会话资源管理器">${S('imsg',20)}</button>
     <button class="b" data-side="search" onclick="togglePanel('search')" title="搜索">${S('isearch',20)}</button>
     <button class="b" data-side="git" onclick="togglePanel('git')" title="Git">${S('igit',20)}</button>
     <button class="b" data-side="mcp" onclick="togglePanel('mcp')" title="MCP">${S('iatom',20)}</button>
