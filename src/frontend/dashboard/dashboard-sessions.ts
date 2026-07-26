@@ -419,7 +419,51 @@ function _applySessionMessages(
   if (activeId) { rememberSessionTab(activeId); setActiveSessionTabId(activeId); renderSessionTabs(activeId); }
   if (opts.refreshSessions !== false) loadSessions();
   saveUiState();
+  // 通知订阅者（仅消费匹配目标 session 的订阅）
+  if (activeId) emitSessionActivated(activeId);
 }
+
+// ─── 会话激活通知系统（session-aware，只消费匹配的订阅）──
+interface _ActivationSub {
+  sessionId: string | null; // null = 匹配任意 session
+  cb: (sessionId: string) => void;
+  active: boolean;
+}
+let _activationSubs: _ActivationSub[] = [];
+
+/** 订阅下次会话激活（只触发一次，匹配目标 session 后清理） */
+function onceSessionActivated(cb: _ActivationSub['cb']): (() => void);
+function onceSessionActivated(sessionId: string, cb: _ActivationSub['cb']): (() => void);
+function onceSessionActivated(sessionIdOrCb: string | _ActivationSub['cb'], cb?: _ActivationSub['cb']): (() => void) {
+  if (typeof sessionIdOrCb !== 'function' && !cb) return () => {};
+  const sub: _ActivationSub = typeof sessionIdOrCb === 'function'
+    ? { sessionId: null, cb: sessionIdOrCb, active: true }
+    : { sessionId: sessionIdOrCb, cb: cb as _ActivationSub['cb'], active: true };
+  _activationSubs.push(sub);
+  // 返回取消函数
+  return () => {
+    sub.active = false;
+    const idx = _activationSubs.indexOf(sub);
+    if (idx >= 0) _activationSubs.splice(idx, 1);
+  };
+}
+/** 触发全部待处理的激活订阅（仅消费匹配的，不匹配的保留） */
+function emitSessionActivated(sessionId: string): void {
+  const snapshot = _activationSubs.slice();
+  const remaining: _ActivationSub[] = [];
+  for (const sub of snapshot) {
+    if (!sub.active) continue;
+    if (sub.sessionId === null || sub.sessionId === sessionId) {
+      sub.active = false;
+      try { sub.cb(sessionId); } catch {}
+    } else {
+      remaining.push(sub);
+    }
+  }
+  _activationSubs = remaining.filter(sub => sub.active);
+}
+window.onceSessionActivated = onceSessionActivated;
+window.emitSessionActivated = emitSessionActivated;
 
 /** 激活失败时的状态回滚 */
 function _activateFailReset(): void {
@@ -561,7 +605,7 @@ function renderSessionEmptyState(title: string, message: string, actions: string
 }
 
 function renderSessionActions(): string {
-  return `<div class="session-actions"><button class="sa-btn primary" onclick="newSession()">+ 新会话</button></div>`;
+  return `<div class="session-actions"><button class="sa-btn primary" data-action="new-session">+ 新会话</button></div>`;
 }
 
 function renderSessionCard(session: SessionInfo, openSessionIds: Set<string>, scopeLabel: string): string {
@@ -575,7 +619,7 @@ function renderSessionCard(session: SessionInfo, openSessionIds: Set<string>, sc
   const pinIcon = session.pinned ? S('ipin-off', 14) : S('ipin', 14);
   const branchText = session.branchFrom?.name ? `从 ${session.branchFrom.name} 分支` : session.branchFrom?.id ? '分支线程' : '';
   const hint = [threadStatusHint(status), messageText, scopeLabel, branchText].filter(Boolean).join(' · ');
-  return `<div class="${className}" title="${E(hint)}" onclick="App.Tabs.activate('${session.id}')">
+  return `<div class="${className}" title="${E(hint)}" data-session-id="${session.id}">
     <div class="thread-row">
       <div class="sess-info thread-info">
         <div class="sess-name thread-name">
@@ -584,10 +628,10 @@ function renderSessionCard(session: SessionInfo, openSessionIds: Set<string>, sc
       </div>
       <div class="thread-time">${E(timeText)}</div>
       <div class="sess-ops thread-ops">
-        <button class="sess-pin" title="${pinTitle}" aria-label="${pinTitle}" onclick="event.stopPropagation();pinSession('${session.id}',${session.pinned ? false : true})">${pinIcon}</button>
-        <button class="sess-branch" title="创建分支" aria-label="创建分支" onclick="event.stopPropagation();branchSession('${session.id}')">${S('ibranch', 14)}</button>
-        <button class="sess-rename" title="重命名" aria-label="重命名" onclick="event.stopPropagation();renameSession(this,'${session.id}')">${S('iedit', 14)}</button>
-        <button class="sess-del" title="删除" aria-label="删除" onclick="event.stopPropagation();deleteSession('${session.id}')">${S('itrash', 14)}</button>
+        <button class="sess-pin" title="${pinTitle}" aria-label="${pinTitle}" data-action="pin" data-session-id="${session.id}" data-pinned="${session.pinned ? 'true' : 'false'}">${pinIcon}</button>
+        <button class="sess-branch" title="创建分支" aria-label="创建分支" data-action="branch" data-session-id="${session.id}">${S('ibranch', 14)}</button>
+        <button class="sess-rename" title="重命名" aria-label="重命名" data-action="rename" data-session-id="${session.id}">${S('iedit', 14)}</button>
+        <button class="sess-del" title="删除" aria-label="删除" data-action="delete" data-session-id="${session.id}">${S('itrash', 14)}</button>
       </div>
     </div>
   </div>`;
@@ -695,8 +739,9 @@ function renderSessionPanel(): void {
     el.innerHTML = renderSessionEmptyState(
       '暂无任务线程',
       '新会话会出现在这里，按时间和活跃状态整理成可继续的任务线程。',
-      [`<button class="sa-btn primary" onclick="newSession()">+ 新会话</button>`],
+      [`<button class="sa-btn primary" data-action="new-session">+ 新会话</button>`],
     );
+    setupSessionListHandler();
     return;
   }
 
@@ -714,7 +759,7 @@ function renderSessionPanel(): void {
   html += sessions.filter(s => !s.pinned).map(s => renderSessionCard(s, openSessionIds, '当前项目')).join('');
 
   if (others.length > 0) {
-    html += `<div class="sess-other-header" data-label="其他项目 (${others.length})" onclick="toggleOtherSessions(this)">▸ 其他项目 (${others.length})</div>`;
+    html += `<div class="sess-other-header" data-action="toggle-other" data-label="其他项目 (${others.length})">▸ 其他项目 (${others.length})</div>`;
     html += `<div class="sess-other-list" style="display:none">`;
     for (const proj of others) {
       const projLabel = proj.project === "未分类" ? "未分类（旧会话）" : E(proj.project);
@@ -729,6 +774,7 @@ function renderSessionPanel(): void {
 
   el.innerHTML = html;
   _lastSessionRenderKey = renderKey;
+  setupSessionListHandler();
 }
 
 /** 组合函数：先取数据、索引，再渲染会话面板 */
@@ -753,8 +799,9 @@ function loadSessions(): void {
       list.innerHTML = renderSessionEmptyState(
         '网络错误',
         '会话列表暂时无法加载，可能是后端未启动或网络被中断。',
-        [`<button class="sa-btn primary" onclick="loadSessions()">重新加载</button>`, `<button class="sa-btn" onclick="newSession()">+ 新会话</button>`],
+        [`<button class="sa-btn primary" data-action="retry">重新加载</button>`, `<button class="sa-btn" data-action="new-session">+ 新会话</button>`],
       );
+      setupSessionListHandler();
     }
     toast('加载会话列表失败', 'error');
   });
@@ -918,6 +965,47 @@ function switchSession(id: string, options?: ApplySessionMessagesOptions): void 
     }).catch(() => { _activateFailReset(); toast('会话已失效'); loadSessions(); });
 }
 
+// ─── 会话列表事件委托（替代 inline onclick）────────────────
+let _boundSessionListEl: HTMLElement | null = null;
+
+function setupSessionListHandler(): void {
+  const sl = document.getElementById("sl");
+  if (!sl || _boundSessionListEl === sl) return;
+  _boundSessionListEl = sl;
+  sl.addEventListener("click", (e: Event) => {
+    const target = e.target as HTMLElement;
+    // 1. action buttons
+    const actionBtn = target.closest("[data-action]") as HTMLElement | null;
+    if (actionBtn) {
+      e.stopPropagation();
+      const action = actionBtn.dataset.action;
+      const sid = actionBtn.dataset.sessionId;
+      if (action === "pin" && sid) {
+        const pinned = actionBtn.dataset.pinned === "true";
+        pinSession(sid, !pinned);
+      } else if (action === "branch" && sid) {
+        branchSession(sid);
+      } else if (action === "rename" && sid) {
+        renameSession(actionBtn, sid);
+      } else if (action === "delete" && sid) {
+        deleteSession(sid);
+      } else if (action === "toggle-other") {
+        toggleOtherSessions(actionBtn);
+      } else if (action === "new-session") {
+        newSession();
+      } else if (action === "retry") {
+        loadSessions();
+      }
+      return;
+    }
+    // 2. session card（搜索结果卡片由 chat pane 委托处理）
+    const card = target.closest(".sess-item") as HTMLElement | null;
+    if (card && card.dataset.sessionId && !card.dataset.msgIndex) {
+      App.Tabs.activate(card.dataset.sessionId);
+    }
+  });
+}
+
 // 公开 API
 window.loadSessions = loadSessions;
 (window as any).bumpSessionListSeq = bumpSessionListSeq;
@@ -930,6 +1018,7 @@ window.renameSession = renameSession as any;
 window.deleteSession = deleteSession;
 window.pinSession = pinSession as any;
 window.branchSession = branchSession as any;
+(window as any).toggleOtherSessions = toggleOtherSessions;
 (window as any).commitSessionTab = commitSessionTab;
 (window as any).getActiveSessionTabId = getActiveSessionTabId;
 (window as any).setActiveSessionTabId = setActiveSessionTabId;

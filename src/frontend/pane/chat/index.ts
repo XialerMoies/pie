@@ -12,6 +12,7 @@ let _convCacheQuery = "";
 let _convPendingQuery = "";
 let _convSearching = false;
 let _lastInlineHighlight: HTMLElement | null = null;
+let _convClickSeq = 0;
 
 async function doConvSearch(): Promise<void> {
   const list = document.getElementById("sl");
@@ -135,72 +136,54 @@ function highlightOccurrence(root: Element, query: string, ordinal: number): HTM
 
 /** 打开会话并滚动到指定消息 */
 function openConvMatch(sessionId: string, msgIndex?: number, matchOrdinal?: number): void {
-  // 传 options 通知 _applySessionMessages：不 auto-scroll、不刷新会话列表
-  App.Tabs.activate(sessionId, { scroll: 'none', refreshSessions: false });
-  if (msgIndex === undefined || msgIndex < 0) return;
+  if (msgIndex === undefined || msgIndex < 0) { App.Tabs.activate(sessionId, { scroll: 'none', refreshSessions: false }); return; }
 
-  const startedAt = Date.now();
-  let observer: MutationObserver | null = null;
+  const seq = ++_convClickSeq;
+  let settled = false;
+  let cancel: (() => void) | null = null;
+  let delayTimer: ReturnType<typeof setTimeout> | null = null;
   let cleanupTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const finish = (): void => {
-    observer?.disconnect();
-    if (cleanupTimer) clearTimeout(cleanupTimer);
+  const cleanup = (): void => {
+    if (cancel) { cancel(); cancel = null; }
+    if (delayTimer) { clearTimeout(delayTimer); delayTimer = null; }
+    if (cleanupTimer) { clearTimeout(cleanupTimer); cleanupTimer = null; }
   };
 
-  const doScroll = (): boolean => {
-    if (!isActiveSession(sessionId)) return false;
+  const scrollOnce = (behavior: ScrollBehavior): boolean => {
+    if (settled || seq !== _convClickSeq || !isActiveSession(sessionId)) return false;
     const msgsEl = document.getElementById("ms");
     if (!msgsEl) return false;
     const msgs = msgsEl.querySelectorAll(".m");
-    if (msgs.length > msgIndex) {
-      const target = msgs[msgIndex];
-      const inlineTarget = highlightOccurrence(target, _convQuery, matchOrdinal ?? 0);
-      (inlineTarget || target).scrollIntoView({ behavior: "smooth", block: "center" });
-      target.classList.add("msg-highlight");
-      setTimeout(() => target.classList.remove("msg-highlight"), 2200);
-      finish();
-      return true;
-    }
-    return false;
+    if (msgs.length <= msgIndex) return false;
+
+    settled = true;
+    cleanup();
+    const target = msgs[msgIndex];
+    const inlineTarget = highlightOccurrence(target, _convQuery, matchOrdinal ?? 0);
+    (inlineTarget || target).scrollIntoView({ behavior, block: "center" });
+    target.classList.add("msg-highlight");
+    setTimeout(() => target.classList.remove("msg-highlight"), 2200);
+    return true;
   };
 
-  // 先尝试一次：消息可能已经渲染（同会话、面板重建等）
-  if (doScroll()) return;
-
-  // 没找到 → 等异步渲染完成
-  if (typeof MutationObserver !== "undefined") {
-    const tryObserve = (): boolean => {
-      const msgsEl = document.getElementById("ms");
-      if (!msgsEl) return false;
-      observer = new MutationObserver(() => {
-        setTimeout(() => {
-          if (doScroll()) observer?.disconnect();
-        }, 60); // 60ms > 50ms auto-scroll
-      });
-      observer.observe(msgsEl, { childList: true, subtree: false });
-      return true;
-    };
-    if (!tryObserve()) {
-      const retrySetup = () => {
-        if (tryObserve() || Date.now() - startedAt > 4500) return;
-        setTimeout(retrySetup, 100);
-      };
-      retrySetup();
-    }
-  } else {
-    // Fallback retry loop（测试环境无 MutationObserver）
-    const retry = () => {
-      if (doScroll()) return;
-      if (Date.now() - startedAt < 4500) setTimeout(retry, 50);
-    };
-    retry();
+  // 先订阅再 activate（session 限定，只消费匹配的）
+  if (typeof window.onceSessionActivated === "function") {
+    cancel = window.onceSessionActivated(sessionId, () => {
+      if (settled || seq !== _convClickSeq) { cleanup(); return; }
+      delayTimer = setTimeout(() => {
+        delayTimer = null;
+        if (!scrollOnce("smooth")) cleanup();
+      }, 60);
+    });
+    cleanupTimer = setTimeout(cleanup, 5000);
   }
 
-  // 兜底超时（observer 分支才有实际作用）
-  cleanupTimer = setTimeout(() => {
-    if (!doScroll()) finish();
-  }, 5000);
+  // 传 options 通知 _applySessionMessages
+  App.Tabs.activate(sessionId, { scroll: 'none', refreshSessions: false });
+
+  // 立即尝试：目标会话已激活且消息已渲染
+  scrollOnce("auto");
 }
 
 /** 打开搜索命中的会话（不退出搜索状态） */
@@ -241,7 +224,7 @@ function renderConvResults(list: HTMLElement, data: any): void {
     const matchCount = r.matches.length;
     const timeStr = r.updatedAt ? shortRelTime(r.updatedAt) : "";
     const firstMsgIdx = firstMessageMatchIndex(r.matches || []);
-    html += `<div class="sess-item thread-item thread-success" onclick="openConvResult('${E(r.sessionId)}', ${firstMsgIdx !== undefined ? firstMsgIdx : 'undefined'}, 0)">`;
+    html += `<div class="sess-item thread-item thread-success" data-session-id="${E(r.sessionId)}" data-msg-index="${firstMsgIdx !== undefined ? firstMsgIdx : ''}">`;
     html += `<div class="thread-row cs-result-row">`;
     html += `<div class="sess-info thread-info">`;
     html += `<div class="sess-name thread-name"><span class="thread-title">${E(r.sessionName)}</span></div>`;
@@ -256,7 +239,7 @@ function renderConvResults(list: HTMLElement, data: any): void {
         icon = m.role === "user" ? "→" : "←";
       }
       const highlighted = highlightTextWithPositions(m.text, m.matchPos);
-      html += `<div class="cs-match" onclick="event.stopPropagation();openConvMatch('${E(r.sessionId)}', ${m.msgIndex !== undefined ? m.msgIndex : 'undefined'}, ${m.matchOrdinal !== undefined ? m.matchOrdinal : '0'})"><span class="cs-match-role">${icon}</span><span class="cs-match-text">${highlighted}</span></div>`;
+      html += `<div class="cs-match" data-session-id="${E(r.sessionId)}" data-msg-index="${m.msgIndex !== undefined ? m.msgIndex : ''}" data-match-ordinal="${m.matchOrdinal !== undefined ? m.matchOrdinal : 0}"><span class="cs-match-role">${icon}</span><span class="cs-match-text">${highlighted}</span></div>`;
     }
     html += `</div>`;
   }
@@ -266,20 +249,17 @@ function renderConvResults(list: HTMLElement, data: any): void {
 
 function chatPaneRender(container: HTMLElement): void {
   container.style.cssText = "display:flex;flex-direction:column;height:100%;min-height:0";
-  container.innerHTML = [
-    // 1. 新会话
-    `<div class="ch-new" onclick="App.Session?.newSession?.() || newSession?.()">
+  container.innerHTML = `
+    <div class="ch-new" id="ch-new-btn">
       <span class="ch-new-icon">+</span> 开启新对话
-    </div>`,
-    // 2. 搜索
-    `<div class="ch-search">
+    </div>
+    <div class="ch-search">
       <span class="ch-search-icon">${S('isearch', 14)}</span>
       <input class="ch-search-input" id="chat-search-input" placeholder="搜索会话…">
-      <button class="ch-search-clear" id="chat-search-clear" onclick="clearConvSearch()" title="清除搜索">✕</button>
-    </div>`,
-    // 3. 列表
-    `<div class="session-list" id="sl">加载中...</div>`,
-  ].join("");
+      <button class="ch-search-clear" id="ch-search-clear">✕</button>
+    </div>
+    <div class="session-list" id="sl">加载中...</div>
+  `.trim();
 
   // 恢复搜索状态（面板重建时保持搜索结果）
   const q = _convQuery.trim();
@@ -293,9 +273,53 @@ function chatPaneRender(container: HTMLElement): void {
     loadSessions();
   }
 
+  // ─── 事件绑定（无 inline onclick）─────────────────────
+
+  // 新会话按钮
+  const newBtn = document.getElementById("ch-new-btn");
+  if (newBtn) {
+    newBtn.addEventListener("click", () => {
+      (window as any).App?.Session?.newSession?.() || newSession();
+    });
+  }
+
+  // 清除搜索按钮
+  const clearBtn = document.getElementById("ch-search-clear");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", clearConvSearch);
+  }
+
+  // 搜索结果点击委托（cs-match / sess-item with data-msg-index）
+  const sl = document.getElementById("sl");
+  if (sl) {
+    sl.addEventListener("click", (e: MouseEvent) => {
+      // 1. search match line
+      const matchLine = (e.target as HTMLElement).closest(".cs-match") as HTMLElement | null;
+      if (matchLine) {
+        e.stopPropagation();
+        const sid = matchLine.dataset.sessionId;
+        const msgIdx = matchLine.dataset.msgIndex;
+        const ordinal = matchLine.dataset.matchOrdinal;
+        if (sid) {
+          openConvMatch(sid, msgIdx !== "" ? Number(msgIdx) : undefined, ordinal !== "" ? Number(ordinal) : 0);
+          return;
+        }
+      }
+      // 2. search result card（仅处理带 data-msg-index 的 sess-item）
+      const card = (e.target as HTMLElement).closest(".sess-item") as HTMLElement | null;
+      if (card && card.dataset.msgIndex !== undefined && card.dataset.msgIndex !== "") {
+        const sid = card.dataset.sessionId;
+        if (sid) {
+          openConvResult(sid, Number(card.dataset.msgIndex), 0);
+        }
+      }
+    });
+  }
+
+  // 搜索输入
   const input = document.getElementById("chat-search-input") as HTMLInputElement | null;
   if (input) {
-    input.value = _convQuery; // 回填搜索框
+    input.value = _convQuery;
     input.addEventListener("input", () => {
       _convQuery = input.value;
       if (_convTimer) clearTimeout(_convTimer);
@@ -310,11 +334,10 @@ function chatPaneRender(container: HTMLElement): void {
   }
 }
 
-// 暴露给 onclick 使用
+// 暴露给外部模块和测试
 (window as any).openConvResult = openConvResult;
 (window as any).openConvMatch = openConvMatch;
 (window as any).isConversationSearchActive = isConversationSearchActive;
-(window as any).clearConvSearch = clearConvSearch;
 
 registerPane('chat', chatPaneRender);
 

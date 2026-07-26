@@ -272,6 +272,13 @@ interface MonacoAPI {
   isReady(): boolean;
 }
 
+type SessionActivatedCallback = (sessionId: string) => void;
+type CancelSessionActivationSubscription = () => void;
+interface OnceSessionActivated {
+  (cb: SessionActivatedCallback): CancelSessionActivationSubscription;
+  (sessionId: string, cb: SessionActivatedCallback): CancelSessionActivationSubscription;
+}
+
 interface Window {
   electronAPI?: ElectronAPI;
   _provOrder?: string[];
@@ -283,6 +290,8 @@ interface Window {
   bumpSessionListSeq?: () => number;
   isCurrentSessionListSeq?: (seq: number) => boolean;
   isConversationSearchActive?: () => boolean;
+  onceSessionActivated?: OnceSessionActivated;
+  emitSessionActivated?: SessionActivatedCallback;
 }
 
 // 公共函数声明（在 HTML onclick 中用）

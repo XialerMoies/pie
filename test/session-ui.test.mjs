@@ -353,7 +353,9 @@ describe("session ui state", () => {
     assert.ok(!ops?.textContent.includes('✎'));
     assert.ok(!ops?.textContent.includes('✕'));
 
-    assert.ok(pinButton?.getAttribute("onclick")?.includes("pinSession('sess-b',false)"));
+    assert.strictEqual(pinButton?.dataset.action, "pin", "pin button data-action");
+    assert.strictEqual(pinButton?.dataset.sessionId, "sess-b", "pin button data-session-id");
+    assert.strictEqual(pinButton?.dataset.pinned, "true", "pin button data-pinned (当前固定)");
   });
 
   it("pinSession 会调用固定接口并刷新列表", async () => {
@@ -650,7 +652,9 @@ describe("session ui state", () => {
 
       const matches = Array.from(doc.querySelectorAll("#sl .cs-match"));
       assert.strictEqual(matches.length, 5, "所有返回的匹配行都应可见可点");
-      assert.match(matches[4].getAttribute("onclick") || "", /openConvMatch\('multi-session', 0, 4\)/);
+      assert.strictEqual(matches[4].dataset.sessionId, "multi-session", "cs-match data-session-id");
+      assert.strictEqual(matches[4].dataset.msgIndex, "0", "cs-match data-msg-index");
+      assert.strictEqual(matches[4].dataset.matchOrdinal, "4", "cs-match data-match-ordinal 对应第 5 处命中");
     } finally {
       global.fetch = originalFetch;
       win.fetch = originalWinFetch;
@@ -672,7 +676,9 @@ describe("session ui state", () => {
     const originalGetActiveTab = tabs.getActiveTab;
 
     try {
-      win.App.Tabs.activate = () => {};
+      win.App.Tabs.activate = () => {
+        if (typeof win.emitSessionActivated === "function") win.emitSessionActivated("sess-a");
+      };
       tabs.getActiveTab = () => ({ id: "sess-a", kind: "session", title: "sess-a", order: 0 });
       originalMs?.remove();
       const ms = doc.createElement("div");
@@ -685,17 +691,17 @@ describe("session ui state", () => {
       doc.body.appendChild(ms);
 
       const target = ms.querySelectorAll(".m")[1];
-      let scrolled = false;
+      let scrolled = 0;
       const originalScrollIntoView = target.scrollIntoView;
       Object.defineProperty(target, "scrollIntoView", {
         configurable: true,
-        value: () => { scrolled = true; },
+        value: () => { scrolled += 1; },
       });
 
       win.openConvMatch("sess-a", 1);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
-      assert.ok(scrolled, "已渲染消息应直接滚动到位");
+      assert.strictEqual(scrolled, 1, "同步激活通知和立即路径应只滚动一次");
       assert.ok(target.classList.contains("msg-highlight"), "目标消息应被高亮");
 
       Object.defineProperty(target, "scrollIntoView", {
@@ -742,6 +748,8 @@ describe("session ui state", () => {
             '<div class="m"><div class="block-text">target needle reply</div></div>',
             '<div class="m"><div class="block-text">latest reply</div></div>',
           ].join("");
+          // 模拟 _applySessionMessages 完成后的激活通知
+          if (typeof win.emitSessionActivated === "function") win.emitSessionActivated("sess-next");
         }, 10);
       };
 
@@ -763,7 +771,74 @@ describe("session ui state", () => {
       }
     }
   });
-});
+
+  it("openConvMatch 多次调用不会残留 hook 或重复触发", async () => {
+    const originalActivate = win.App.Tabs.activate;
+    const originalMs = doc.querySelector("#ms");
+    const originalParent = originalMs?.parentNode;
+    const originalNext = originalMs?.nextSibling;
+    const originalTabs = win.__tabs;
+    const originalScrollIntoView = win.HTMLElement.prototype.scrollIntoView;
+    const scrolled = [];
+    let activeId = "";
+
+    try {
+      originalMs?.remove();
+      win.App.Tabs.activate = () => {};
+      win.__tabs = { getActiveTab: () => activeId ? ({ id: activeId, kind: "session", title: activeId, order: 0 }) : null };
+
+      Object.defineProperty(win.HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        value() { scrolled.push(this.textContent || ""); },
+      });
+
+      // 连续注册两次（#ms 还不存在 -> doScroll 失败 -> 注册 hook）
+      win.openConvMatch("sess-first", 0);
+      win.openConvMatch("sess-second", 1);
+
+      // 现在创建 #ms（hook 已注册，等待激活通知）
+      const ms = doc.createElement("div");
+      ms.id = "ms";
+      ms.innerHTML = [
+        '<div class="m"><div class="block-text">alpha</div></div>',
+        '<div class="m"><div class="block-text">beta</div></div>',
+      ].join("");
+      doc.body.appendChild(ms);
+
+      // 先激活较早点击的会话：应消费旧 hook，但保留最新 sess-second hook
+  activeId = "sess-first";
+      if (typeof win.emitSessionActivated === "function") win.emitSessionActivated("sess-first");
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.strictEqual(scrolled.length, 0, "较早点击先完成不应吞掉最新点击的订阅");
+
+      // 激活第二个（最新点击）— 只有它应触发 scroll
+  activeId = "sess-second";
+      if (typeof win.emitSessionActivated === "function") win.emitSessionActivated("sess-second");
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      assert.strictEqual(scrolled.length, 1, "只触发一次 scroll，非两次");
+      assert.ok(scrolled[0].includes("beta"), "最新点击 sess-second 滚到 beta");
+      assert.ok(!scrolled.some(t => t.includes("alpha")), "较早点击 sess-first 未滚动");
+
+      // 激活第一个 — sess-first 的 hook 已被 latest-click 跳过且一发即焚清空
+      if (typeof win.emitSessionActivated === "function") win.emitSessionActivated("sess-first");
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      assert.strictEqual(scrolled.length, 1, "再次激活后无额外 scroll（hook 已清空）");
+    } finally {
+      win.App.Tabs.activate = originalActivate;
+      win.__tabs = originalTabs;
+      Object.defineProperty(win.HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        value: originalScrollIntoView,
+      });
+      doc.querySelector("#ms")?.remove();
+      if (originalMs && originalParent) {
+        originalParent.insertBefore(originalMs, originalNext || null);
+      }
+    }
+  });
+
   it("重启后会话标题从缓存恢复", async () => {
     store["session-tabs"] = JSON.stringify(["sess-a", "sess-b"]);
     store["session-tab-labels"] = JSON.stringify({});
@@ -866,5 +941,7 @@ describe("session ui state", () => {
     assert.strictEqual(closedRebuild, 'sess-rebuild', 'rebuild: close click should trigger via delegation');
     win.App.Tabs.close = orig;
   });
+});
+
 
 
