@@ -7,11 +7,18 @@ let _monacoLoadPromise: Promise<void> | null = null;
 
 async function loadMonaco(): Promise<void> {
   if ((window as any).__monaco) return;
+  mark("monaco-import-start");
   if (!_monacoLoadPromise) {
-    _monacoLoadPromise = import("../editor/monaco-setup").then(() => undefined).catch((err) => {
+    _monacoLoadPromise = import("../editor/monaco-setup").then(() => {
+      mark("monaco-import-end");
+      return undefined;
+    }).catch((err) => {
       _monacoLoadPromise = null;
       throw err;
     });
+  } else {
+    // 已经在加载中，但还没标记结束 → 等 promise 结束时标记
+    _monacoLoadPromise.then(() => mark("monaco-import-end"));
   }
   await _monacoLoadPromise;
 }
@@ -240,6 +247,7 @@ function tabMoreMenu(e: MouseEvent): void {
 
 // ─── File handler ────────────────────────────
 async function _fileActivate(tab: AppTab): Promise<void> {
+  mark("file-activate-start");
   const ts = (window as any).__tabs;
   if (ts) ts.activateTab(tab.id);
   const editorEl = $('fc-editor');
@@ -262,24 +270,41 @@ async function _fileActivate(tab: AppTab): Promise<void> {
   }
 
   // 文本 — Monaco 编辑器（懒加载）
-  // 确保容器在 Monaco 创建前可见，防止 0x0 尺寸渲染
   const fc = $('file-content');
   if (fc) fc.style.display = '';
+  mark("monaco-load-start");
   if (!(window as any).__monaco) {
     await loadMonaco()
   }
+  mark("monaco-load-end");
   const m = (window as any).__monaco;
   if (m) {
+    mark("editor-create-start");
     if (!editorEl.dataset.monacoReady) {
       editorEl.innerHTML = '';
       m.create(editorEl);
       editorEl.dataset.monacoReady = '1';
     }
+    mark("editor-create-end");
     m.setValue(tab.content || '');
     m.setLang(tab.id);
   }
+  mark("file-activate-end");
   renderTabs();
   _syncTabsToStore();
+  // 打印性能摘要
+  logTiming();
+  try {
+    performance.measure("file-activate-total", "file-activate-start", "file-activate-end");
+    performance.measure("monaco-load", "monaco-load-start", "monaco-load-end");
+    performance.measure("editor-create", "editor-create-start", "editor-create-end");
+    console.log("[perf] 文件打开耗时分解:");
+    ["file-activate-total", "monaco-load", "editor-create"].forEach(name => {
+      const m = performance.getEntriesByName(name, "measure")[0];
+      if (m) console.log(`  ${name}: ${m.duration.toFixed(0)}ms`);
+    });
+    performance.clearMeasures("file-activate-total", "monaco-load", "editor-create");
+  } catch {}
 }
 
 function _fileClose(tab: AppTab): void {

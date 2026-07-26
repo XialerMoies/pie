@@ -781,10 +781,8 @@ function renderSessionPanel(): void {
 function loadSessions(): void {
   const el = $('sl');
   if (!el) {
+    // #sl 不存在时仅后台索引，不 retry（chatPaneRender 挂载后会主动调）
     fetchSessionIndex().catch(() => {});
-    _loadRetries++; if (_loadRetries > MAX_LOAD_RETRIES) return;
-    console.log(`⏳ loadSessions retry #${_loadRetries}: no #sl`);
-    setTimeout(loadSessions, 500);
     return;
   }
   if ((window as any).isConversationSearchActive?.()) return;

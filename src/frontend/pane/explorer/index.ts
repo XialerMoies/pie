@@ -160,40 +160,68 @@ function initTree(container: HTMLElement): void {
     } catch (e: unknown) { const msg = e instanceof Error ? e.message : String(e); toast('移动失败: ' + msg, 'error'); }
   };
 
+  const _pendingFetches = new Map<string, Promise<string>>();
   tree.onSelect = async (node) => {
-    console.log("[explorer] onSelect:", node.id, node.isDir);
+    const path = node.id;
+    console.log("[explorer] onSelect:", path, node.isDir);
     if (!ws()) { console.log("[explorer] no workspace"); return; }
-    // 检测图片/视频类型
+    const ext = '.' + (path.split('.').pop() || '').toLowerCase();
     const imageExt = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico', '.bmp']);
     const videoExt = new Set(['.mp4', '.webm']);
     const unsupportedVideoExt = new Set(['.avi', '.mov', '.mkv', '.wmv', '.flv']);
-    const ext = '.' + (node.id.split('.').pop() || '').toLowerCase();
-    if (imageExt.has(ext)) {
-      openFileTab(node.id, '', ext, 'image');
+    if (imageExt.has(ext)) { openFileTab(path, '', ext, 'image'); return; }
+    if (videoExt.has(ext)) { openFileTab(path, '', ext, 'video'); return; }
+    if (unsupportedVideoExt.has(ext)) { toast(`${ext} 格式不支持浏览器预览，建议用外部播放器打开`, 'info'); openFileTab(path, `[二进制文件，不支持预览: ${ext}]`, ext, 'text'); return; }
+
+    // 文本文件
+    const tabs = (window as any).__tabs;
+    const existingTab = tabs?.getTab?.(path);
+
+    // 已打开且有内容 → 只激活，不重新读
+    if (existingTab && existingTab.content && existingTab.content !== "加载中...") {
+      console.log("[explorer] tab already open, activate:", path);
+      mark("file-click");
+      (window as any).App?.Tabs?.activate(path);
       return;
     }
-    if (videoExt.has(ext)) {
-      openFileTab(node.id, '', ext, 'video');
+
+    // 正在读取中 → 复用 pending Promise，不重复 fetch
+    if (_pendingFetches.has(path)) {
+      console.log("[explorer] reuse pending fetch:", path);
+      const content = await _pendingFetches.get(path)!;
+      openFileTab(path, content, path.split('.').pop() || '');
       return;
     }
-    if (unsupportedVideoExt.has(ext)) {
-      toast(`${ext} 格式不支持浏览器预览，建议用外部播放器打开`, 'info');
-      openFileTab(node.id, `[二进制文件，不支持预览: ${ext}]`, ext, 'text');
-      return;
-    }
-    // 文本文件，走原始读取流程
-    try {
-      const r = await fetch(`/api/file/read?root=${encodeURIComponent(ws())}&path=${encodeURIComponent(node.id)}`);
-      const d = await r.json();
-      if (!r.ok) { toast(d.error || '读取失败', 'error'); return; }
-      const content = d.content;
-      const lang = d.path?.split('.').pop() || '';
-      console.log("[explorer] calling openFileTab:", node.id);
-      openFileTab(node.id, content, lang);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error("[explorer] read failed:", e);
-      toast('读取失败: ' + msg, 'error');
+
+    // 新文件 → 先开 tab 显示 loading，后台读取
+    const lang = path.split('.').pop() || '';
+    openFileTab(path, "加载中...", lang);
+    mark("file-click");
+    mark("file-read-start");
+
+    const fetchPromise = (async (): Promise<string> => {
+      try {
+        const r = await fetch(`/api/file/read?root=${encodeURIComponent(ws())}&path=${encodeURIComponent(path)}`);
+        const d = await r.json();
+        if (!r.ok) { toast(d.error || '读取失败', 'error'); return ""; }
+        mark("file-read-end");
+        return d.content || "";
+      } catch (e: unknown) {
+        console.error("[explorer] read failed:", e);
+        toast('读取失败', 'error');
+        return "";
+      }
+    })();
+
+    _pendingFetches.set(path, fetchPromise);
+    const content = await fetchPromise;
+    _pendingFetches.delete(path);
+
+    if (content) {
+      console.log("[explorer] calling openFileTab:", path);
+      mark("openFileTab-start");
+      openFileTab(path, content, lang);
+      mark("openFileTab-end");
     }
   };
 

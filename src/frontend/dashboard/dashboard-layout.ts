@@ -45,6 +45,12 @@ function layout(): void {
   (window as any).App?.Session?.restoreSessionTabs?.();
   // Problems 底部栏初始化（DOM 已就绪）
   _initProblemsBar();
+  // 空闲预加载 Monaco，让首次文件打开不卡（首屏稳定后 1s）
+  setTimeout(() => {
+    if (typeof loadMonaco === 'function' && !(window as any).__monaco) {
+      loadMonaco().catch(() => {});
+    }
+  }, 1000);
 }
 
 // ─── Top Bar ──────────────────────────────────────────────────
