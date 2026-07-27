@@ -25,6 +25,10 @@ export interface ToolContext {
   toolCallId?: string
   /** 中间输出回调（工具执行中产生 stdout 时调用） */
   onUpdate?: (chunk: string) => void
+  /** 权限模式：由宿主/UI 设置，模型不可控 */
+  permissionMode?: "default" | "plan" | "acceptEdits" | "dontAsk"
+  /** 用户确认回调：返回 true=允许，false/undefined=拒绝。无此回调时默认拒绝（fail-closed） */
+  confirmCommand?: (cmd: string, reason: string) => Promise<boolean | undefined>
 }
 
 export type ToolTraceEmitter = (event: {
@@ -89,7 +93,11 @@ export class ToolRegistry {
   }
 
   /** 转换为 PI SDK 需要的 ToolDefinition[] */
-  toPITools(workspace?: string, emitTrace?: ToolTraceEmitter) {
+  toPITools(
+    workspace?: string,
+    emitTrace?: ToolTraceEmitter,
+    extraCtx?: { permissionMode?: ToolContext["permissionMode"]; confirmCommand?: ToolContext["confirmCommand"] },
+  ) {
     return this.getAll().map((tool) => ({
       name: tool.name,
       label: tool.name,
@@ -118,6 +126,7 @@ export class ToolRegistry {
             workspace,
             toolCallId: _toolCallId,
             onUpdate,
+            ...extraCtx,
           })
           emitTrace?.({
             type: "tool_execution_end",

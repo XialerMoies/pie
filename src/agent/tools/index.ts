@@ -8,7 +8,7 @@
  * PI SDK 需要的 ToolDefinition[] 格式，传给 createAgentSession()。
  */
 
-import { ToolRegistry, type AgentTool, type ToolTraceEmitter } from "../types"
+import { ToolRegistry, type AgentTool, type ToolContext, type ToolTraceEmitter } from "../types"
 import { gitStatusTool } from "./git-status.js"
 import { searchTool } from "./search.js"
 import { fileReadTool } from "./file-read.js"
@@ -55,9 +55,11 @@ export function registerTool(
   toolRegistry.register(tool)
 }
 
+type ExtraCtx = { permissionMode?: ToolContext["permissionMode"]; confirmCommand?: ToolContext["confirmCommand"] }
+
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */
-export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter) {
-  return toolRegistry.toPITools(workspace, emitTrace)
+export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ExtraCtx) {
+  return toolRegistry.toPITools(workspace, emitTrace, extraCtx)
 }
 
 /**
@@ -68,6 +70,7 @@ export function agentToolToPiTool(
   tool: AgentTool,
   workspace?: string,
   emitTrace?: ToolTraceEmitter,
+  extraCtx?: ExtraCtx,
 ) {
   return {
     name: tool.name,
@@ -97,6 +100,7 @@ export function agentToolToPiTool(
           workspace,
           toolCallId: _toolCallId,
           onUpdate,
+          ...extraCtx,
         })
         emitTrace?.({
           type: "tool_execution_end",
@@ -151,15 +155,15 @@ export function _setMcpCache(workspace: string, tools: any[]): void {
   _mcpCache = tools
 }
 
-export async function reconnectMcp(workspace: string, emitTrace?: ToolTraceEmitter): Promise<void> {
+export async function reconnectMcp(workspace: string, emitTrace?: ToolTraceEmitter, extraCtx?: ExtraCtx): Promise<void> {
   // 等已有的后台连接完成
   while (_mcpConnecting) {
     await new Promise((r) => setTimeout(r, 10))
   }
-  _connectMcpInBackground(workspace, emitTrace)
+  _connectMcpInBackground(workspace, emitTrace, extraCtx)
 }
 
-async function _connectMcpInBackground(workspace: string, emitTrace?: ToolTraceEmitter): Promise<void> {
+async function _connectMcpInBackground(workspace: string, emitTrace?: ToolTraceEmitter, extraCtx?: ExtraCtx): Promise<void> {
   if (_mcpConnecting) return
   _mcpConnecting = true
   const { connectAll, currentGeneration } = await import("../mcp/MCPClientService")
@@ -167,7 +171,7 @@ async function _connectMcpInBackground(workspace: string, emitTrace?: ToolTraceE
   try {
     const mcpTools = await connectAll(workspace ?? "", emitTrace)
     if (gen === currentGeneration()) {
-      _mcpCache = mcpTools.map((t) => agentToolToPiTool(t, workspace, emitTrace))
+      _mcpCache = mcpTools.map((t) => agentToolToPiTool(t, workspace, emitTrace, extraCtx))
       _mcpWorkspace = workspace ?? ""
       console.log(`[tools] MCP ${_mcpCache.length} 个工具已就绪`)
     } else {
@@ -191,9 +195,10 @@ async function _connectMcpInBackground(workspace: string, emitTrace?: ToolTraceE
 export async function getCustomToolsAsync(
   workspace?: string,
   emitTrace?: ToolTraceEmitter,
+  extraCtx?: ExtraCtx,
 ): Promise<ReturnType<typeof toolRegistry.toPITools>> {
   // 1. 内置自定义工具
-  const builtin = getCustomTools(workspace, emitTrace)
+  const builtin = getCustomTools(workspace, emitTrace, extraCtx)
 
   // 2. MCP 工具：缓存命中或 workspace 未变直接使用
   const ws = workspace ?? ""
@@ -203,7 +208,7 @@ export async function getCustomToolsAsync(
 
   // 3. 后台连接 MCP，本次先返回内置工具
   console.log(`[tools] MCP 后台连接中...`)
-  _connectMcpInBackground(ws, emitTrace)
+  _connectMcpInBackground(ws, emitTrace, extraCtx)
 
   return builtin
 }

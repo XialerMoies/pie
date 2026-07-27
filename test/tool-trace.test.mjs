@@ -94,7 +94,7 @@ describe("custom tool trace emitter", () => {
     const chunks = [];
     const result = await commandTool.execute(
       { command: 'node -e "console.log(\'quoted-ok\')"' },
-      { cwd: process.cwd(), sessionId: "", onUpdate: (chunk) => chunks.push(chunk) },
+      { cwd: process.cwd(), sessionId: "", permissionMode: "dontAsk", onUpdate: (chunk) => chunks.push(chunk) },
     );
     assert.ok(result.includes("quoted-ok"), "result 应包含 node -e 输出");
     assert.ok(chunks.join("").includes("quoted-ok"), "实时输出应包含 node -e 输出");
@@ -106,7 +106,7 @@ describe("custom tool trace emitter", () => {
     const chunks = [];
     const result = await commandTool.execute(
       { command: 'node -e "process.stderr.write(Buffer.from([0xce,0xc4,0xbc,0xfe]))"' },
-      { cwd: process.cwd(), sessionId: "", onUpdate: (chunk) => chunks.push(chunk) },
+      { cwd: process.cwd(), sessionId: "", permissionMode: "dontAsk", onUpdate: (chunk) => chunks.push(chunk) },
     );
     assert.ok(result.includes("文件"), "result 应正确解码 GBK/GB18030 输出");
     assert.ok(chunks.join("").includes("文件"), "实时输出也应正确解码");

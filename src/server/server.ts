@@ -13,6 +13,7 @@ import { resolve, dirname } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { appendFileSync, readFileSync, writeFileSync, existsSync, statSync, watch } from "fs";
 import { dispatchRoute } from "./routes/index";
+import { createCommandConfirmCallback } from "./routes/chat";
 import type { ServerContext, ChatStreamState, TraceEvent, AssistantBlock } from "./routes/types";
 import { TsserverManager } from "./ts-server";
 import { mark, logTiming } from "./timing";
@@ -447,12 +448,17 @@ async function main() {
   mark("server_start");
   console.log("Starting Pi server...");
 
+  // ─── 共享可变状态 ────────────────────────────────────────────
+  const chatStream: ChatStreamState = { textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "", response: null, turnId: "", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0 };
+
   const runtime = await initAgent({
     agentDir: PI_CONFIG_DIR,
     cwd: APP_ROOT,
     sessionsDir: SESSIONS_DIR,
     authFile: resolve(PI_CONFIG_DIR, "auth.json"),
     modelsFile: resolve(PI_CONFIG_DIR, "models.json"),
+    permissionMode: "default",
+    confirmCommand: createCommandConfirmCallback(chatStream),
   });
 
   console.log("Pi session ready");
@@ -484,8 +490,6 @@ async function main() {
     console.log(`[startup] 恢复失败: ${e}`);
   }
 
-  // ─── 共享可变状态 ────────────────────────────────────────────
-  const chatStream: ChatStreamState = { textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "", response: null, turnId: "", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0 };
   attachSessionEvents(runtime, chatStream);
 
   // ─── SSE 客户端集合（用于文件变更推送）──────────────────────────

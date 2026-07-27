@@ -110,6 +110,12 @@ interface EditOp {
   replace_all: boolean;
 }
 
+interface EditApplyResult {
+  content: string;
+  applied: number;
+  missed?: string[];
+}
+
 /**
  * 对 content 执行一组替换。
  *
@@ -119,7 +125,7 @@ interface EditOp {
  *   - 支持 replace_all 替换该 old_string 的所有匹配
  *   - 检测重叠：如果两个 edit 在原文中命中相同或交叉范围，拒绝并报错
  */
-function applyEdits(content: string, edits: EditOp[]): { content: string; applied: number } {
+function applyEdits(content: string, edits: EditOp[]): EditApplyResult {
   if (edits.length === 0) return { content, applied: 0 };
 
   // ── 单次编辑（支持 replace_all，计数准确） ─────────────
@@ -298,8 +304,8 @@ export const strReplaceEditorTool: AgentTool = {
       const r = applyEdits(content, editsToApply);
       updated = r.content;
       applied = r.applied;
-      if ((r as any).missed?.length > 0) {
-        return `以下编辑项在文件中未找到匹配：${(r as any).missed.join(", ")}。请检查后重试。`;
+      if (r.missed?.length) {
+        return `以下编辑项在文件中未找到匹配：${r.missed.join(", ")}。请检查后重试。`;
       }
     } catch (e: any) {
       return e.message || "替换失败：编辑项之间存在冲突。";

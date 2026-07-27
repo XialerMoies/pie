@@ -16,10 +16,13 @@ const ROOT = resolve(__dirname, "..");
 
 describe("Chat SSE", () => {
   let handleChat;
+  let createCommandConfirmCallback;
 
   before(async () => {
     const ts = Date.now();
-    handleChat = (await import(`../src/server/routes/chat.ts?t=${ts}`)).handleChat;
+    const chatRoute = await import(`../src/server/routes/chat.ts?t=${ts}`);
+    handleChat = chatRoute.handleChat;
+    createCommandConfirmCallback = chatRoute.createCommandConfirmCallback;
   });
 
   it("GET /api/chat/stream 设置 chatStream.response", async () => {
@@ -138,5 +141,36 @@ describe("Chat SSE", () => {
     assert.strictEqual(res._headers["Content-Type"], "text/event-stream");
     assert.strictEqual(res._headers["Cache-Control"], "no-cache");
     assert.strictEqual(res._headers["Connection"], "keep-alive");
+  });
+
+  it("command confirm 通过 SSE 发起并由 POST 回传结果", async () => {
+    const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" };
+    const ctx = {
+      runtime: { session: { model: {} }, currentWorkspace: "", switchWorkspace: async () => {}, onEvent: () => () => {} },
+      paths: { APP_ROOT: ROOT },
+      chatStream,
+      sseClients: [],
+    };
+    const sseRes = makeResWithEvents();
+    await handleChat(makeReq("GET", "/api/chat/stream"), sseRes, ctx);
+
+    const confirmed = createCommandConfirmCallback(chatStream)("node --version", "该命令不是只读操作，是否允许执行？");
+    const line = sseRes._body.split("\n").find((part) => part.startsWith("data: "));
+    assert.ok(line, "应向 SSE 写入 command_confirm 事件");
+    const event = JSON.parse(line.slice("data: ".length));
+    assert.strictEqual(event.type, "command_confirm");
+    assert.strictEqual(event.command, "node --version");
+
+    const res = makeResWithEvents();
+    await handleChat(makeReq("POST", "/api/chat/command-confirm", { id: event.id, allow: true }), res, ctx);
+    assert.strictEqual(res._status, 200);
+    assert.deepStrictEqual(JSON.parse(res._body), { ok: true });
+    assert.strictEqual(await confirmed, true);
+  });
+
+  it("command confirm 无 SSE 连接时 fail-closed", async () => {
+    const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" };
+    const confirmed = await createCommandConfirmCallback(chatStream)("node --version", "需要确认");
+    assert.strictEqual(confirmed, false);
   });
 });

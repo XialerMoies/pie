@@ -8,6 +8,7 @@
  */
 import { describe, it, before, beforeEach } from "node:test";
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 
 const win = new Window();
@@ -18,6 +19,19 @@ global.logTiming = () => {};
 global.document = win.document;
 global.self = win;
 global.MouseEvent = win.MouseEvent;
+
+function cssBlocks(css, selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [...css.matchAll(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, "g"))].map((m) => m[1]);
+  assert.ok(matches.length > 0, `${selector} rule should exist`);
+  return matches.join(";");
+}
+
+function assertCssDecl(block, prop, value) {
+  const escapedProp = prop.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(block, new RegExp(`${escapedProp}\\s*:\\s*${escapedValue}(?:;|$)`), `${prop}: ${value}`);
+}
 
 const storage = {};
 global.localStorage = {
@@ -53,17 +67,82 @@ describe("App.Tabs dispatch", () => {
     win.ExplorerService = global.ExplorerService;
     await import("../src/frontend/services/tab-store.ts");
     await import("../src/frontend/dashboard/dashboard-helpers.ts");
+    global.placeContextMenu = win.placeContextMenu;
+    await import("../src/frontend/dashboard/layout-tabs.ts");
     global.App = win.App;
   });
 
   beforeEach(() => {
     win.__tabs.reset();
+    win.document.querySelectorAll(".ctx-menu, #toast-el").forEach((el) => el.remove());
     // 清除 __state.tabs 以防 re-init 读到旧数据
     delete win.__state.tabs;
     win.__state._sessionTabs = [];
     win.__state._fileTabs = [];
     win.__state._activeFileTab = null;
     win.__state._activeSessionTabId = null;
+    delete win.sessionTabLabel;
+  });
+
+  it("toast 不拦截标签栏点击且淡出后移除 DOM", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    const toastCss = cssBlocks(css, ".toast-el");
+    assertCssDecl(toastCss, "pointer-events", "none");
+
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const timers = [];
+    globalThis.setTimeout = (callback, delay) => {
+      const timer = { callback, delay, cancelled: false, ran: false };
+      timers.push(timer);
+      return timer;
+    };
+    globalThis.clearTimeout = (timer) => {
+      if (timer) timer.cancelled = true;
+    };
+    const runTimer = (delay) => {
+      const timer = timers.find((item) => item.delay === delay && !item.cancelled && !item.ran);
+      assert.ok(timer, `timer ${delay}ms should exist`);
+      timer.ran = true;
+      timer.callback();
+    };
+
+    try {
+      win.toast("已开启新会话", "success");
+      const toast = win.document.getElementById("toast-el");
+      assert.ok(toast, "toast should be created");
+      assert.strictEqual(toast.textContent, "已开启新会话");
+      assert.ok(toast.classList.contains("success"));
+      assert.ok(!toast.classList.contains("out"));
+
+      runTimer(3000);
+      assert.ok(toast.classList.contains("out"), "toast should fade out after timeout");
+      assert.strictEqual(win.document.getElementById("toast-el"), toast, "toast remains during fade transition");
+
+      runTimer(300);
+      assert.strictEqual(win.document.getElementById("toast-el"), null, "toast should be removed after fade transition");
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+      globalThis.clearTimeout = realClearTimeout;
+    }
+  });
+
+  it("标签栏保留底部细滚动条", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    const tabScrollCss = cssBlocks(css, ".tb-scroll::-webkit-scrollbar");
+    assertCssDecl(tabScrollCss, "height", "3px");
+    assert.doesNotMatch(css, /\.tb-scroll::-webkit-scrollbar\s*\{[^}]*height\s*:\s*0(?:;|\})/);
+  });
+
+  it("更多菜单中的会话标签使用实时标题", () => {
+    const ts = win.__tabs;
+    ts.openTab({ kind: "session", id: "sess-real-title", title: "新会话", sessionId: "sess-real-title" });
+    win.sessionTabLabel = (id) => id === "sess-real-title" ? "真实会话标题" : "新会话";
+
+    win.tabMoreMenu(new MouseEvent("click", { clientX: 12, clientY: 12 }));
+
+    const labels = [...win.document.querySelectorAll(".ctx-tab-label")].map((el) => el.textContent);
+    assert.deepStrictEqual(labels, ["真实会话标题"]);
   });
 
   // ─── Activate dispatch ──────────────────────────────

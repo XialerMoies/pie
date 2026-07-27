@@ -1,13 +1,95 @@
 /**
  * Chat routes — POST /api/chat, GET /api/chat/stream (SSE)
  */
-import type { RouteHandler } from "./types";
+import type { ServerResponse } from "http";
+import type { ChatStreamState, RouteHandler } from "./types";
 import { processAttachments, buildContextBlock } from "./attach";
+
+const COMMAND_CONFIRM_TIMEOUT_MS = 120_000;
+
+type PendingCommandConfirmation = {
+  response: ServerResponse;
+  resolve: (allowed: boolean) => void;
+  timeout: ReturnType<typeof setTimeout>;
+};
+
+const pendingCommandConfirmations = new Map<string, PendingCommandConfirmation>();
+
+function commandConfirmationId(): string {
+  return "cmd-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
+
+export function createCommandConfirmCallback(chatStream: ChatStreamState) {
+  return async (cmd: string, reason: string): Promise<boolean> => {
+    const response = chatStream.response;
+    if (!response) return false;
+
+    const id = commandConfirmationId();
+    return new Promise<boolean>((resolve) => {
+      const finish = (allowed: boolean) => {
+        const pending = pendingCommandConfirmations.get(id);
+        if (pending) {
+          clearTimeout(pending.timeout);
+          pendingCommandConfirmations.delete(id);
+        }
+        resolve(allowed === true);
+      };
+      const timeout = setTimeout(() => finish(false), COMMAND_CONFIRM_TIMEOUT_MS);
+      pendingCommandConfirmations.set(id, { response, resolve: finish, timeout });
+
+      try {
+        response.write(`data: ${JSON.stringify({ type: "command_confirm", id, command: cmd, reason })}\n\n`);
+      } catch {
+        finish(false);
+      }
+    });
+  };
+}
+
+export function resolveCommandConfirmation(id: string, allowed: boolean): boolean {
+  const pending = pendingCommandConfirmations.get(id);
+  if (!pending) return false;
+  pending.resolve(allowed === true);
+  return true;
+}
+
+export function cancelCommandConfirmationsForResponse(response: ServerResponse): void {
+  for (const [id, pending] of pendingCommandConfirmations) {
+    if (pending.response === response) {
+      clearTimeout(pending.timeout);
+      pendingCommandConfirmations.delete(id);
+      pending.resolve(false);
+    }
+  }
+}
 
 export const handleChat: RouteHandler = (req, res, ctx) => {
   const { url, method } = req;
   const cors = { "Access-Control-Allow-Origin": "*" };
   const { runtime, chatStream, paths: p } = ctx;
+
+  if (url === "/api/chat/command-confirm" && method === "POST") {
+    let body = "";
+    req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+    req.on("end", () => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const id = typeof parsed.id === "string" ? parsed.id : "";
+        if (!id) {
+          res.writeHead(400, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: false, error: "Missing confirmation id" }));
+          return;
+        }
+        const settled = resolveCommandConfirmation(id, parsed.allow === true);
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: settled }));
+      } catch (err: unknown) {
+        res.writeHead(400, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+      }
+    });
+    return true;
+  }
 
   // Switch workspace（重建整个 AgentSession）
   if (url === "/api/workspace/switch" && method === "POST") {
@@ -119,11 +201,15 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
       "Connection": "keep-alive",
       ...cors,
     });
+    if (chatStream.response && chatStream.response !== res) {
+      cancelCommandConfirmationsForResponse(chatStream.response);
+    }
     chatStream.response = res;
     console.log(`[chat] SSE connected`);
     req.on("close", () => {
       console.log(`[chat] SSE disconnected`);
-      chatStream.response = null;
+      cancelCommandConfirmationsForResponse(res);
+      if (chatStream.response === res) chatStream.response = null;
     });
     return true;
   }

@@ -10,6 +10,7 @@ import type { AgentSession } from "@xiamol/pi-coding-agent"
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from "@xiamol/pi-coding-agent"
 import { resolveSystemPrompt } from "./prompts"
 import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools"
+import type { ToolContext } from "./types"
 import { wsDir } from "../server/routes/session-dir"
 
 const _pendingOpens = new Map<string, Promise<void>>()
@@ -25,6 +26,20 @@ export interface RuntimeConfig {
   sessionsDir: string
   authFile: string
   modelsFile: string
+  /** 权限模式：由宿主设置，传递给工具执行上下文 */
+  permissionMode?: ToolContext["permissionMode"]
+  /** 用户确认回调：返回 true=允许，false/undefined=拒绝 */
+  confirmCommand?: ToolContext["confirmCommand"]
+}
+
+type RuntimeToolExtraContext = Pick<ToolContext, "permissionMode" | "confirmCommand">
+
+export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraContext | undefined {
+  if (!config.permissionMode && !config.confirmCommand) return undefined
+  return {
+    permissionMode: config.permissionMode,
+    confirmCommand: config.confirmCommand,
+  }
 }
 
 export type SessionEventCallback = (event: any) => void
@@ -259,7 +274,11 @@ export class AgentRuntime {
         this.sessionManager = SessionManager.create(cwd, wsSessionsDir)
       }
     }
-    const customTools = await getCustomToolsAsync(cwd, (event) => this.emitEvent(event))
+    const customTools = await getCustomToolsAsync(
+      cwd,
+      (event) => this.emitEvent(event),
+      buildToolContextExtra(this.config),
+    )
 
     console.log(`[runtime] 自定义 Tool: ${customTools.map((t: { name: string }) => t.name).join(", ") || "（无）"}`)
 
@@ -277,3 +296,8 @@ export class AgentRuntime {
     this.session = session
   }
 }
+
+
+
+
+

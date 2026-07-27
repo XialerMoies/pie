@@ -261,6 +261,27 @@ describe("agentToolToPiTool", () => {
     );
   });
 
+  it("agentToolToPiTool 透传 extraCtx 到 AgentTool", async () => {
+    const confirmCommand = async () => true;
+    let seenCtx;
+    const agentTool = {
+      name: "t",
+      description: "",
+      parameters: { type: "object", properties: {} },
+      isReadOnly: true,
+      execute: async (_args, ctx) => {
+        seenCtx = ctx;
+        return "ok";
+      },
+    };
+
+    const piTool = piHelper.agentToolToPiTool(agentTool, "/repo", undefined, { permissionMode: "plan", confirmCommand });
+    await piTool.execute("call-extra", {});
+
+    assert.strictEqual(seenCtx.permissionMode, "plan");
+    assert.strictEqual(seenCtx.confirmCommand, confirmCommand);
+  });
+
 // ─── MCP 工具生命周期测试 ─────────────────────────
 
 it("bumpGeneration / currentGeneration 基本行为", async () => {
