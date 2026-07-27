@@ -154,7 +154,13 @@ function toast(msg: string, type?: 'info' | 'error' | 'success'): void {
   t.textContent = msg;
   t.className = 'toast-el' + (type ? ' ' + type : '');
   clearTimeout((t as any)._t);
-  (t as any)._t = setTimeout(() => { t.className = 'toast-el' + (type ? ' ' + type : '') + ' out'; }, 3000);
+  clearTimeout((t as any)._removeT);
+  (t as any)._t = setTimeout(() => {
+    t.className = 'toast-el' + (type ? ' ' + type : '') + ' out';
+    (t as any)._removeT = setTimeout(() => {
+      if (t?.parentNode && t.classList.contains('out')) t.remove();
+    }, 300);
+  }, 3000);
 }
 
 // ═══════════════════════════════════════════════════════════════════

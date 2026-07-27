@@ -158,7 +158,6 @@ body{background:var(--bg);height:100vh}
 /* ─── Main Area Tabs (VS Code style) ──────────────────────── */
 .main-tabs{display:flex;align-items:center;height:35px;flex-shrink:0;background:var(--bg);border-bottom:1px solid var(--bd);gap:0;overflow:hidden}
 .tb-scroll{display:flex;align-items:center;flex:1;overflow-x:auto;overflow-y:hidden;height:100%}
-.tb-scroll::-webkit-scrollbar{height:0}
 .tb-item{display:flex;align-items:center;gap:4px;padding:0 10px;height:100%;font-size:12px;color:var(--ts);border-right:1px solid var(--bd);cursor:pointer;white-space:nowrap;flex-shrink:0;border-bottom:2px solid transparent;transition:background .1s,border-color .1s;min-width:0}
 .tb-item:hover{background:var(--bc);color:var(--tx)}
 .tb-item.active{color:var(--tx);border-bottom-color:var(--am);background:var(--bc)}
@@ -487,7 +486,7 @@ body{background:var(--bg);height:100vh}
 @keyframes sp{to{transform:rotate(360deg)}}
 
 /* ─── Toast ──────────────────────────────────────────────────── */
-.toast-el{position:fixed;top:48px;right:24px;padding:8px 14px;border-radius:8px;font-size:.78rem;z-index:9999;box-shadow:0 8px 32px var(--sd);transition:opacity .25s;opacity:1;border:1px solid var(--bd);background:var(--be);color:var(--tx);max-width:360px;word-break:break-word}
+.toast-el{position:fixed;top:48px;right:24px;padding:8px 14px;border-radius:8px;font-size:.78rem;z-index:9999;box-shadow:0 8px 32px var(--sd);transition:opacity .25s;opacity:1;border:1px solid var(--bd);background:var(--be);color:var(--tx);max-width:360px;word-break:break-word;pointer-events:none}
 .toast-el.out{opacity:0}
 .toast-el.error{background:rgba(239,68,68,.12);border-color:var(--rs);color:var(--rs)}
 .toast-el.success{background:rgba(52,211,153,.1);border-color:var(--em);color:var(--em)}
