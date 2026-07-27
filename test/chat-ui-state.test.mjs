@@ -386,6 +386,51 @@ describe("chat ui state", () => {
     assert.ok(!fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/delete") && method === "POST"));
   });
 
+  it("done 后为默认标题的持久会话自动生成标题", async () => {
+    env.win.__state.M = [];
+    env.win.__state._sessionTabs = ["draft:auto-title"];
+    env.win.__state._sessionTabLabels = {};
+    env.win.__state._sessionTitleSources = {};
+    localStorage.setItem("session-tabs", JSON.stringify(["draft:auto-title"]));
+    localStorage.setItem("active-session-tab", "draft:auto-title");
+    const streams = [];
+    class MockEventSource {
+      constructor() { this.onmessage = null; this.onerror = null; streams.push(this); }
+      close() {}
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+
+    const fetchCalls = [];
+    global.fetch = async (url, init = {}) => {
+      fetchCalls.push([url, init.method || "GET", init]);
+      if (String(url).includes("/api/sessions/new")) return { ok: true, json: async () => ({ ok: true, id: "auto-session" }) };
+      if (String(url).includes("/api/sessions/rename")) return { ok: true, json: async () => ({ ok: true }) };
+      if (String(url).includes("/api/sessions?")) return { ok: true, json: async () => ({ sessions: [], other: [] }) };
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+    env.win.fetch = global.fetch;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "请帮我修复标签栏关闭按钮无法点击的问题";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    streams[0].onmessage({ data: JSON.stringify({ type: "done", text: "已修复这个标签栏问题。", sessionId: "auto-session" }) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const renameCall = fetchCalls.find(([url, method]) => String(url).includes("/api/sessions/rename") && method === "POST");
+    assert.ok(renameCall, "默认标题会话完成后应自动重命名");
+    const body = JSON.parse(renameCall[2].body);
+    assert.strictEqual(body.id, "auto-session");
+    assert.strictEqual(body.titleSource, "auto");
+    assert.ok(body.name.includes("标签栏关闭按钮无法点击"));
+    assert.strictEqual(env.win.__state._sessionTabLabels?.["auto-session"], body.name);
+    assert.strictEqual(env.win.__state._sessionTitleSources?.["auto-session"], "auto");
+  });
+
   it("legacy localStorage keys no longer written by session functions", () => {
     const LEGACY_KEYS = ["session-tabs", "active-session-tab", "last-session-id", "session-tab-labels"];
     for (const key of LEGACY_KEYS) localStorage.removeItem(key);

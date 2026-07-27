@@ -1,5 +1,6 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 
 const win = new Window();
@@ -29,6 +30,19 @@ global.registerPane = (name, render) => {
 global.$ = (id) => doc.getElementById(id);
 global.E = (value) => String(value ?? "");
 global.S = (name, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24"><use href="#${name}"/></svg>`;
+
+function cssBlocks(css, selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [...css.matchAll(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, "g"))].map((m) => m[1]);
+  assert.ok(matches.length > 0, `${selector} rule should exist`);
+  return matches.join(";");
+}
+
+function assertCssDecl(block, prop, value) {
+  const escapedProp = prop.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(block, new RegExp(`${escapedProp}\\s*:\\s*${escapedValue}(?:;|$)`), `${prop}: ${value}`);
+}
 
 global.toast = () => {};
 global.confirmAsync = async () => true;
@@ -333,6 +347,37 @@ describe("session ui state", () => {
     assert.ok(doc.querySelector("#main-tabs .session-tab")?.textContent.includes("手动标题"));
   });
 
+  it("手动重命名后自动标题不会覆盖", async () => {
+    store["session-tabs"] = JSON.stringify(["sess-new-empty"]);
+    store["session-tab-labels"] = JSON.stringify({ "sess-new-empty": "新会话" });
+    win.__state._sessionTabs = ["sess-new-empty"];
+    win.__state._sessionTabLabels = {};
+    win.__state._sessionTitleSources = {};
+    win.renderSessionTabs("sess-new-empty");
+    doc.querySelector("#sl").innerHTML = '<div class="sess-item"><span class="thread-title">新会话</span></div>';
+    const button = doc.createElement("button");
+    doc.querySelector("#sl .sess-item").appendChild(button);
+
+    win.renameSession(button, "sess-new-empty");
+    const input = doc.querySelector(".sess-rename-input");
+    input.value = "手动标题";
+    input.blur();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    fetchCalls.length = 0;
+    win.__state.M = [
+      { role: "user", content: "请帮我实现自动会话标题" },
+      { role: "assistant", content: "已完成" },
+    ];
+
+    const title = await win.maybeAutoTitleSession("sess-new-empty", "已完成");
+
+    assert.strictEqual(title, null);
+    assert.strictEqual(win.__state._sessionTabLabels?.["sess-new-empty"], "手动标题");
+    assert.strictEqual(win.__state._sessionTitleSources?.["sess-new-empty"], "manual");
+    assert.ok(!fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/rename") && method === "POST"));
+  });
+
   it("线程操作按钮使用 SVG，取消固定传递布尔 false", async () => {
     sessionListState = 0;
     await win.loadSessions();
@@ -356,6 +401,27 @@ describe("session ui state", () => {
     assert.strictEqual(pinButton?.dataset.action, "pin", "pin button data-action");
     assert.strictEqual(pinButton?.dataset.sessionId, "sess-b", "pin button data-session-id");
     assert.strictEqual(pinButton?.dataset.pinned, "true", "pin button data-pinned (当前固定)");
+  });
+
+  it("会话行默认显示时间，悬停或聚焦时显示操作图标", async () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    assertCssDecl(cssBlocks(css, ".thread-row"), "padding-right", "104px");
+    assertCssDecl(cssBlocks(css, ".thread-time"), "right", "0");
+    const opsCss = cssBlocks(css, ".thread-ops");
+    assertCssDecl(opsCss, "opacity", "0");
+    assertCssDecl(opsCss, "pointer-events", "none");
+    const revealCss = cssBlocks(css, ".sess-item:hover .thread-ops,.sess-item:focus-within .thread-ops");
+    assertCssDecl(revealCss, "opacity", "1");
+    assertCssDecl(revealCss, "pointer-events", "auto");
+    assertCssDecl(cssBlocks(css, ".sess-item:hover .thread-time,.sess-item:focus-within .thread-time"), "opacity", "0");
+
+    sessionListState = 0;
+    await win.loadSessions();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const firstItem = doc.querySelector("#sl .sess-item");
+    assert.ok(firstItem?.querySelector(".thread-time"), "默认内容应包含时间");
+    assert.strictEqual(firstItem?.querySelectorAll(".thread-ops button").length, 4, "悬停操作区保留四个功能按钮");
   });
 
   it("pinSession 会调用固定接口并刷新列表", async () => {

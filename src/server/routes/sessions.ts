@@ -113,6 +113,7 @@ type SessionBranchInfo = { id: string; name?: string };
 
 type SessionMeta = {
   name: string;
+  titleSource?: "auto" | "manual";
   pinned: boolean;
   archived?: boolean;
   branchFrom?: SessionBranchInfo;
@@ -126,6 +127,7 @@ function readSessionMeta(lines: string[]): SessionMeta {
       const entry = JSON.parse(line);
       if (entry.type !== "session_info") continue;
       if (typeof entry.name === "string") meta.name = entry.name;
+      if (entry.titleSource === "auto" || entry.titleSource === "manual") meta.titleSource = entry.titleSource;
       if (typeof entry.pinned === "boolean") meta.pinned = entry.pinned;
       if (typeof entry.archived === "boolean") meta.archived = entry.archived;
       if (entry.branchFrom && typeof entry.branchFrom.id === "string") {
@@ -469,6 +471,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
             file: basename(fullPath),
             workspace: header.workspace || "",
             pinned: meta.pinned,
+            titleSource: meta.titleSource,
             archived: Boolean(meta.archived),
             hasError,
             isRunning: id === runningSessionId,
@@ -681,10 +684,12 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
   // Rename session
   if (url === "/api/sessions/rename" && method === "POST") {
     try {
-      const { id, name } = await parseBody(req);
+      const parsed = await parseBody(req);
+      const { id, name } = parsed;
+      const titleSource = parsed.titleSource === "auto" || parsed.titleSource === "manual" ? parsed.titleSource : undefined;
       const sessionFile = findSessionFileById(p.SESSIONS_DIR, id);
       if (sessionFile) {
-        appendSessionInfo(sessionFile, { name });
+        appendSessionInfo(sessionFile, titleSource ? { name, titleSource } : { name });
       }
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));

@@ -24,6 +24,7 @@ export interface WorkspaceUiState {
     files: FileTabState[];
     chatOpen: boolean;
     labels: Record<string, string>;
+    titleSources?: Record<string, "auto" | "manual">;
     // 新格式（可选，与旧字段共存）
     items?: AppTab[];
     activeId?: string | null;
@@ -35,7 +36,7 @@ export interface WorkspaceUiState {
 type Listener = (state: WorkspaceUiState) => void;
 
 function makeDefaultTabs() {
-  return { sessions: [], files: [], chatOpen: true, labels: {} };
+  return { sessions: [], files: [], chatOpen: true, labels: {}, titleSources: {} };
 }
 
 const DEFAULT_STATE: WorkspaceUiState = {
@@ -71,7 +72,7 @@ function readLS(key: string): string | null {
 
 function readLegacyState(): Partial<WorkspaceUiState> {
   const partial: Partial<WorkspaceUiState> = {};
-  partial.tabs = { sessions: [], files: [], chatOpen: readLS(OLD.CHAT_TAB) !== "0", labels: {} };
+  partial.tabs = { sessions: [], files: [], chatOpen: readLS(OLD.CHAT_TAB) !== "0", labels: {}, titleSources: {} };
 
   const rawTabs = readLS(OLD.SESSION_TABS);
   const sessions: string[] = rawTabs ? JSON.parse(rawTabs).filter((id: unknown) => typeof id === "string") : [];
@@ -208,6 +209,8 @@ function serializeStateForSave(state: WorkspaceUiState): WorkspaceUiState {
   return {
     ...state,
     tabs: {
+      labels: tabs.labels ?? {},
+      titleSources: tabs.titleSources ?? {},
       items: tabs.items.map(tab => ({ ...tab })),
       activeId: tabs.activeId ?? null,
     } as any,

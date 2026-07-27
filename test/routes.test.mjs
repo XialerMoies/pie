@@ -625,6 +625,45 @@ describe("sessions routes", () => {
     assert.strictEqual(status, 200);
     assert.ok(parseJSON(body).ok);
   });
+
+  it("POST /api/sessions/rename 持久化 titleSource 并在列表返回", async () => {
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "session-title-source-"));
+    const sessionsDir = resolve(tmpDir, "data", "pi", "sessions");
+    const workspace = resolve(tmpDir, "project-title-source");
+    const projectDir = resolve(sessionsDir, "by-project", "project-title-source");
+    mkdirSync(projectDir, { recursive: true });
+    const sessionFile = resolve(projectDir, "sess-title-source.jsonl");
+    writeFileSync(sessionFile, [
+      JSON.stringify({ type: "session", id: "sess-title-source", timestamp: "2026-07-27T00:00:00.000Z", workspace }),
+      JSON.stringify({ type: "message", timestamp: "2026-07-27T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "帮我自动命名会话" }] } }),
+    ].join("\n") + "\n");
+
+    try {
+      const ctx = mockContext({
+        paths: {
+          ...mockPaths(),
+          APP_ROOT: ROOT,
+          DATA_DIR: resolve(tmpDir, "data"),
+          PI_CONFIG_DIR: resolve(tmpDir, "data", "pi"),
+          SESSIONS_DIR: sessionsDir,
+        },
+      });
+      const renamed = await callHandler(handleSessions, "POST", "/api/sessions/rename", { id: "sess-title-source", name: "自动标题", titleSource: "auto" }, ctx);
+      assert.strictEqual(renamed.status, 200);
+      assert.ok(parseJSON(renamed.body).ok);
+      assert.match(readFileSync(sessionFile, "utf-8"), /"titleSource":"auto"/);
+
+      const listed = await callHandler(handleSessions, "GET", `/api/sessions?workspace=${encodeURIComponent(workspace)}`, undefined, ctx);
+      assert.strictEqual(listed.status, 200);
+      const data = parseJSON(listed.body);
+      const item = data.sessions.find((session) => session.id === "sess-title-source");
+      assert.ok(item, "应返回重命名的会话");
+      assert.strictEqual(item.name, "自动标题");
+      assert.strictEqual(item.titleSource, "auto");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("search routes", () => {

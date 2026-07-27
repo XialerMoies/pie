@@ -115,22 +115,23 @@ body{background:var(--bg);height:100vh}
 .sess-item.active::before{background:var(--am)}
 .thread-running::before{background:linear-gradient(180deg,transparent 0%,rgba(245,158,11,.95) 48%,transparent 100%);animation:thread-edge-loop 1.4s linear infinite}
 @keyframes thread-edge-loop{from{transform:translateY(-100%)}to{transform:translateY(100%)}}
-.thread-row{display:flex;align-items:center;gap:8px;min-width:0;position:relative;padding-right:162px}
+.thread-row{display:flex;align-items:center;gap:8px;min-width:0;position:relative;padding-right:104px}
+.thread-row.cs-result-row{padding-right:0}
 .thread-info{min-width:0;flex:1}
 .thread-name{display:flex;align-items:center;min-width:0}
 .thread-title{font-size:.78rem;font-weight:500;color:var(--tx);word-break:break-word;min-width:0}
-.thread-time{color:var(--tm);font-family:var(--fb);font-size:.68rem;line-height:1;white-space:nowrap;position:absolute;right:106px;top:50%;transform:translateY(-50%);transition:opacity .1s}
+.thread-time{color:var(--tm);font-family:var(--fb);font-size:.68rem;line-height:1;white-space:nowrap;position:absolute;right:0;top:50%;transform:translateY(-50%);transition:opacity .12s}
 .thread-error .thread-title{color:var(--tx)}
 .thread-archived{opacity:.72}
 .sess-info{flex:1;min-width:0}
 .sess-name{word-break:break-word;cursor:pointer}
 .sess-name:hover{color:var(--am)}
 .sess-ops{display:flex;gap:4px;flex-shrink:0;align-self:center;margin-left:2px}
-.thread-ops{position:absolute;right:0;top:50%;transform:translateY(-50%)}
+.thread-ops{position:absolute;right:0;top:50%;transform:translateY(-50%);opacity:0;pointer-events:none;transition:opacity .12s}
 .thread-ops .sess-pin,.thread-ops .sess-branch,.thread-ops .sess-rename,.thread-ops .sess-del{width:22px;height:22px;opacity:1;border-radius:6px}
 .sess-pin,.sess-branch,.sess-rename,.sess-del{width:24px;height:24px;border:none;border-radius:5px;background:0 0;color:var(--tm);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .1s;opacity:0}
-.sess-item:hover .thread-time{opacity:0}
-.sess-item:hover .sess-pin,.sess-item:hover .sess-branch,.sess-item:hover .sess-rename,.sess-item:hover .sess-del{opacity:.9}
+.sess-item:hover .thread-time,.sess-item:focus-within .thread-time{opacity:0}
+.sess-item:hover .thread-ops,.sess-item:focus-within .thread-ops{opacity:1;pointer-events:auto}
 .sess-pin:hover{background:rgba(245,158,11,.1);color:var(--am)}
 .sess-branch:hover{background:rgba(99,102,241,.1);color:var(--in)}
 .sess-rename:hover{background:var(--bc);color:var(--am)}

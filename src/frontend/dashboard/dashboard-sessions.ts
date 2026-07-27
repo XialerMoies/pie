@@ -12,6 +12,7 @@ interface SessionInfo {
   file: string;
   workspace?: string;
   pinned?: boolean;
+  titleSource?: SessionTitleSource;
   archived?: boolean;
   hasError?: boolean;
   isRunning?: boolean;
@@ -19,6 +20,7 @@ interface SessionInfo {
 }
 
 type ThreadStatus = 'running' | 'error' | 'archived' | 'pinned' | 'success' | 'empty';
+type SessionTitleSource = 'auto' | 'manual';
 
 let _loadRetries = 0;
 const MAX_LOAD_RETRIES = 8;
@@ -72,6 +74,12 @@ function readSessionTabIds(): string[] {
   if (tabs) { const ids = tabs.getSessionTabIds(); if (ids.length > 0) return ids; }
   // 降级：store → __state → localStorage
   const store = window.__state?._uiStateStore;
+  if (Array.isArray(store?.tabs?.items)) {
+    const ids = store.tabs.items
+      .filter((tab: AppTab) => tab.kind === 'session' || tab.kind === 'chat')
+      .map((tab: AppTab) => tab.id);
+    if (ids.length > 0) return ids;
+  }
   if (store?.tabs?.sessions && Array.isArray(store.tabs.sessions)) return store.tabs.sessions;
   const stateIds = window.__state._sessionTabs;
   if (Array.isArray(stateIds) && stateIds.length > 0) return stateIds;
@@ -150,7 +158,53 @@ function readSessionTabLabels(): Record<string, string> {
   return result;
 }
 
-function writeSessionTabLabel(id: string, label: string): void {
+function normalizeTitleSource(value: unknown): SessionTitleSource | undefined {
+  return value === 'auto' || value === 'manual' ? value : undefined;
+}
+
+function readSessionTitleSources(): Record<string, SessionTitleSource> {
+  let result: Record<string, SessionTitleSource> = {};
+  const store = window.__state?._uiStateStore;
+  const storeSources = (store?.tabs as any)?.titleSources;
+  if (storeSources && typeof storeSources === 'object') {
+    for (const [id, source] of Object.entries(storeSources)) {
+      const normalized = normalizeTitleSource(source);
+      if (normalized) result[id] = normalized;
+    }
+  }
+  const stateSources = (window.__state as any)._sessionTitleSources;
+  if (stateSources && typeof stateSources === 'object') {
+    for (const [id, source] of Object.entries(stateSources)) {
+      const normalized = normalizeTitleSource(source);
+      if (normalized) result[id] = normalized;
+    }
+  }
+  return result;
+}
+
+function writeSessionTitleSources(sources: Record<string, SessionTitleSource>): void {
+  (window.__state as any)._sessionTitleSources = sources;
+  const store = window.__state?._uiStateStore as any;
+  if (store) {
+    store.tabs = store.tabs || { sessions: [], files: [], chatOpen: true, labels: {}, titleSources: {} };
+    store.tabs.titleSources = sources;
+    if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
+  }
+}
+
+function writeSessionTitleSource(id: string, source: SessionTitleSource): void {
+  if (!id) return;
+  writeSessionTitleSources({ ...readSessionTitleSources(), [id]: source });
+}
+
+function removeSessionTitleSource(id: string): void {
+  const sources = { ...readSessionTitleSources() };
+  if (!(id in sources)) return;
+  delete sources[id];
+  writeSessionTitleSources(sources);
+}
+
+function writeSessionTabLabel(id: string, label: string, source?: SessionTitleSource): void {
   if (!id || !label.trim()) return;
   const labels = { ...readSessionTabLabels(), [id]: label.trim() };
   (window.__state as any)._sessionTabLabels = labels;
@@ -159,13 +213,18 @@ function writeSessionTabLabel(id: string, label: string): void {
   // 同步到 TabStore 标题
   const tabs = (window as any).__tabs;
   if (tabs) tabs.replaceTab(id, { title: label.trim() });
+  if (source) writeSessionTitleSource(id, source);
 }
 
 function removeSessionTabLabel(id: string): void {
-  const labels = { ...readSessionTabLabels() }; if (!(id in labels)) return; delete labels[id];
-  (window.__state as any)._sessionTabLabels = labels;
-  const store = window.__state?._uiStateStore;
-  if (store) { store.tabs.labels = labels; if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave(); }
+  const labels = { ...readSessionTabLabels() };
+  if (id in labels) {
+    delete labels[id];
+    (window.__state as any)._sessionTabLabels = labels;
+    const store = window.__state?._uiStateStore;
+    if (store) { store.tabs.labels = labels; if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave(); }
+  }
+  removeSessionTitleSource(id);
 }
 
 function commitSessionTab(draftId: string, sessionId: string, label?: string): void {
@@ -182,14 +241,24 @@ function commitSessionTab(draftId: string, sessionId: string, label?: string): v
   writeSessionTabIds(next);
 
   const labels = readSessionTabLabels();
+  const sources = readSessionTitleSources();
   const nextLabel = (label || labels[draftId] || '').trim();
+  const nextSource = sources[draftId] || (label && nextLabel !== '新会话' ? 'manual' : undefined);
   delete labels[draftId];
+  delete sources[draftId];
   if (nextLabel && nextLabel !== '新会话') labels[sessionId] = nextLabel;
   else delete labels[sessionId];
+  if (nextSource && nextLabel && nextLabel !== '新会话') sources[sessionId] = nextSource;
+  else delete sources[sessionId];
   (window.__state as any)._sessionTabLabels = labels;
+  (window.__state as any)._sessionTitleSources = sources;
   // 同步到 UiStateStore
   const store = window.__state?._uiStateStore;
-  if (store) { store.tabs.labels = labels; if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave(); }
+  if (store) {
+    (store.tabs as any).labels = labels;
+    (store.tabs as any).titleSources = sources;
+    if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
+  }
 
   setActiveSessionTabId(sessionId);
   renderSessionTabs(sessionId);
@@ -234,6 +303,113 @@ function sessionTabLabel(id: string): string {
   const session = _sessionTabLookup.get(id);
   if (session?.name && session.name.trim() !== '新会话') return session.name.trim();
   return '新会话';
+}
+
+function isGenericSessionTitle(title: string): boolean {
+  const clean = title.trim();
+  return !clean
+    || clean === '新会话'
+    || clean === '未命名会话'
+    || /^会话\s+[a-f0-9]{4,}$/i.test(clean)
+    || /^新的?(任务|会话|对话)$/.test(clean);
+}
+
+function isLowValueTitleCandidate(text: string): boolean {
+  const clean = text.replace(/\s+/g, '').replace(/[。.!！?？,，、；;:：]+/g, '');
+  return clean.length < 3
+    || /^(可以|好|好的|嗯|对|是的|行|继续|做吧|改吧|试试|修|收到|完成了|什么意思|真的吗)$/.test(clean);
+}
+
+function truncateSessionTitle(title: string, max = 28): string {
+  const clean = title.trim();
+  return clean.length > max ? clean.slice(0, max).trimEnd() + '…' : clean;
+}
+
+function cleanTitleCandidate(text: string): string {
+  let clean = String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
+    .replace(/\[[^\]]*]\([^)]*\)/g, ' ')
+    .replace(/[*_#>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  clean = clean
+    .replace(/^仅解释，不要修改任何文件或执行命令。/, '')
+    .replace(/^不要执行任何操作。输出结构化方案：目标 → 步骤 → 涉及文件 → 风险。/, '')
+    .replace(/^请进行?深度分析，考虑多种可能性和边界情况。/, '')
+    .replace(/^请深入分析，考虑边界情况。/, '')
+    .replace(/^简要回答即可。/, '')
+    .trim();
+  clean = clean
+    .replace(/^注意到.*?了吗[，,]\s*/, '')
+    .replace(/^(请帮我|请帮忙|麻烦你?|帮我|帮忙|可以|能不能|能否|看看|看一下|审查一下|分析一下|实现一下|改一下|修一下|请)\s*/, '')
+    .replace(/^[。.!！?？,，、；;:：\s]+/g, '')
+    .trim();
+  const sentenceParts = clean.split(/[。！？!?]\s*/).filter(Boolean);
+  if (sentenceParts.length > 0) clean = sentenceParts[0].trim();
+  clean = clean
+    .replace(/^(关于|有关)\s*/, '')
+    .replace(/[。.!！?？,，、；;:：\s]+$/g, '')
+    .trim();
+  return truncateSessionTitle(clean);
+}
+
+function scoreTitleCandidate(candidate: string, recency: number): number {
+  if (!candidate || isLowValueTitleCandidate(candidate)) return -100;
+  let score = recency;
+  if (candidate.length >= 6 && candidate.length <= 36) score += 5;
+  if (/[A-Za-z_][\w.-]*/.test(candidate)) score += 2;
+  if (/(bug|问题|报错|失败|修复|实现|优化|重构|安全|权限|标题|标签|会话|菜单|测试|方案|架构|搜索|文件|命令|解析)/i.test(candidate)) score += 4;
+  if (/[\u4e00-\u9fff]/.test(candidate)) score += 1;
+  if (candidate.length > 48) score -= 4;
+  return score;
+}
+
+function deriveAutoSessionTitle(messages: Message[], assistantText?: string): string {
+  let best = '';
+  let bestScore = -Infinity;
+  const recentUsers = messages
+    .map((msg, index) => ({ msg, index }))
+    .filter(item => item.msg.role === 'user' && item.msg.content.trim())
+    .slice(-8);
+  for (let i = recentUsers.length - 1; i >= 0; i--) {
+    const candidate = cleanTitleCandidate(recentUsers[i].msg.content);
+    const score = scoreTitleCandidate(candidate, recentUsers.length - i);
+    if (score > bestScore) { best = candidate; bestScore = score; }
+  }
+  if (bestScore > -100 && best) return best;
+  const fallback = cleanTitleCandidate(assistantText || '');
+  return isLowValueTitleCandidate(fallback) ? '' : fallback;
+}
+
+function canAutoTitleSession(id: string): boolean {
+  if (!id || isDraftSessionId(id)) return false;
+  const source = readSessionTitleSources()[id];
+  if (source === 'manual') return false;
+  const indexedSource = _sessionTabLookup.get(id)?.titleSource;
+  if (indexedSource === 'manual') return false;
+  const label = sessionTabLabel(id);
+  if (!isGenericSessionTitle(label)) return false;
+  return true;
+}
+
+async function maybeAutoTitleSession(id: string, assistantText?: string): Promise<string | null> {
+  if (!canAutoTitleSession(id)) return null;
+  const title = deriveAutoSessionTitle(window.__state.M, assistantText);
+  if (!title || isGenericSessionTitle(title)) return null;
+  writeSessionTabLabel(id, title, 'auto');
+  _lastSessionRenderKey = '';
+  renderSessionTabs(id);
+  try {
+    await fetch('/api/sessions/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, name: title, titleSource: 'auto' }),
+    });
+  } catch {}
+  return title;
 }
 
 /** @deprecated _syncMainArea 已接管主区切换，不再影响 activeId */
@@ -838,9 +1014,9 @@ function renameSession(el: HTMLElement, id: string): void {
   function save(): void {
     const val = input.value.trim();
     if (val && val !== oldName) {
-      fetch('/api/sessions/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name: val }) })
+      fetch('/api/sessions/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name: val, titleSource: 'manual' }) })
         .then(r => r.json()).then((r: { ok: boolean }) => {
-          if (r.ok) { _lastSessionRenderKey = ''; writeSessionTabLabel(id, val); renderSessionTabs(id); toast('已重命名'); loadSessions(); }
+          if (r.ok) { _lastSessionRenderKey = ''; writeSessionTabLabel(id, val, 'manual'); renderSessionTabs(id); toast('已重命名'); loadSessions(); }
           else { nm.textContent = oldName; toast('重命名失败'); }
         }).catch(() => { nm.textContent = oldName; toast('重命名失败'); });
     } else { nm.textContent = oldName; }
@@ -1018,6 +1194,7 @@ window.pinSession = pinSession as any;
 window.branchSession = branchSession as any;
 (window as any).toggleOtherSessions = toggleOtherSessions;
 (window as any).commitSessionTab = commitSessionTab;
+(window as any).maybeAutoTitleSession = maybeAutoTitleSession;
 (window as any).getActiveSessionTabId = getActiveSessionTabId;
 (window as any).setActiveSessionTabId = setActiveSessionTabId;
 (window as any).renderSessionTabs = renderSessionTabs;
@@ -1036,6 +1213,7 @@ if (AppSess) {
   AppSess.pinSession = pinSession;
   AppSess.branchSession = branchSession;
   AppSess.commitSessionTab = commitSessionTab;
+  AppSess.maybeAutoTitleSession = maybeAutoTitleSession;
   AppSess.getActiveSessionTabId = getActiveSessionTabId;
   AppSess.setActiveSessionTabId = setActiveSessionTabId;
   AppSess.renderSessionTabs = renderSessionTabs;
@@ -1117,17 +1295,24 @@ function _sessionClose(tab: AppTab): void {
 function migrateSessionTabLabels(): void {
   try {
     const labels = readSessionTabLabels();
+    const sources = readSessionTitleSources();
     let changed = false;
     for (const [id, label] of Object.entries(labels)) {
       if (label === '新会话' || /^会话 [a-f0-9]{6}$/.test(label)) {
         delete (labels as Record<string, string>)[id];
+        delete sources[id];
         changed = true;
       }
     }
     if (changed) {
       (window.__state as any)._sessionTabLabels = labels;
+      (window.__state as any)._sessionTitleSources = sources;
       const store = window.__state?._uiStateStore;
-      if (store) { store.tabs.labels = labels; if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave(); }
+      if (store) {
+        (store.tabs as any).labels = labels;
+        (store.tabs as any).titleSources = sources;
+        if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
+      }
     }
   } catch {}
 }

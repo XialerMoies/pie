@@ -334,9 +334,25 @@ function bind(): void {
     st.CS.onmessage = (e: MessageEvent) => {
       if (_streamGen !== gen) return;
       try {
-        if (!window.___sseFirst) { window.___sseFirst = true; mark('sse_first_event'); } const d = JSON.parse(e.data) as { type: string; text?: string; thinking?: boolean; turnId?: string; sessionId?: string; message?: string; block?: any; blocks?: any[] };
+        if (!window.___sseFirst) { window.___sseFirst = true; mark('sse_first_event'); } const d = JSON.parse(e.data) as { type: string; id?: string; command?: string; reason?: string; text?: string; thinking?: boolean; turnId?: string; sessionId?: string; message?: string; block?: any; blocks?: any[] };
         const last = st.M[st.M.length - 1];
-        if (d.type === 'block') {
+        if (d.type === 'command_confirm') {
+          const id = d.id || '';
+          if (!id) return;
+          void (async () => {
+            const ok = await confirmAsync(`
+              <div style="font-weight:700;margin-bottom:8px">确认执行命令</div>
+              <div style="font-size:.76rem;color:var(--ts);margin-bottom:10px">${E(d.reason || '该命令需要确认')}</div>
+              <pre style="margin:0;max-width:560px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.18);border:1px solid var(--bd);border-radius:7px;padding:10px;font-family:var(--fm);font-size:.74rem;color:var(--tx)">${E(d.command || '')}</pre>
+            `);
+            await fetch('/api/chat/command-confirm', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id, allow: ok }),
+            }).catch(() => undefined);
+          })();
+          return;
+        } else if (d.type === 'block') {
           if (last?.streaming && d.block) {
             if (!last.blocks) last.blocks = [];
             const idx = last.blocks.findIndex((b: any) => b.blockId === d.block.blockId);
@@ -382,7 +398,12 @@ function bind(): void {
           if (sendContext && !sendContext.persistent && sessionId) {
             void deleteEphemeralSession(sessionId).then(() => loadSessions());
           } else {
-            loadSessions();
+            const titleFn = (window as any).maybeAutoTitleSession;
+            if (sendContext?.persistent && sessionId && typeof titleFn === 'function') {
+              void Promise.resolve(titleFn(sessionId, d.text || '')).finally(() => loadSessions());
+            } else {
+              loadSessions();
+            }
           }
           sb('ms');
         } else if (d.type === 'error') {

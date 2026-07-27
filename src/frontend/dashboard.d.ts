@@ -102,6 +102,7 @@ interface AppState {
   _activeFileTab: string | null;
   _sessionTabs: string[];
   _sessionTabLabels?: Record<string, string>;
+  _sessionTitleSources?: Record<string, 'auto' | 'manual'>;
   _activeSessionTabId?: string | null;
   tabs?: TabsState;
   _uiStateStore?: any;
@@ -172,6 +173,7 @@ interface AppSession {
   pinSession(id: string, pinned: boolean): void;
   branchSession(id: string): void;
   commitSessionTab(oldId: string, newId: string): void;
+  maybeAutoTitleSession(id: string, assistantText?: string): Promise<string | null>;
   getActiveSessionTabId(): string | null;
   setActiveSessionTabId(id: string | null): void;
   renderSessionTabs(activeId?: string): void;
@@ -298,6 +300,7 @@ interface Window {
 declare function $(id: string): HTMLElement | null;
 declare function S(name: string, size?: number): string;
 declare function E(s: unknown): string;
+declare function confirmAsync(msg: string): Promise<boolean>;
 declare function F(s: number): string;
 declare function sb(id: string): void;
 declare function toast(msg: string, type?: 'info' | 'error' | 'success'): void;
@@ -345,6 +348,7 @@ declare function deleteSession(id: string): Promise<void>;
 declare function pinSession(id: string, pinned: boolean): void;
 declare function branchSession(id: string): void;
 declare function commitSessionTab(oldId: string, newId: string): void;
+declare function maybeAutoTitleSession(id: string, assistantText?: string): Promise<string | null>;
 declare function getActiveSessionTabId(): string | null;
 declare function setActiveSessionTabId(id: string | null): void;
 declare function openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video'): void;

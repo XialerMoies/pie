@@ -92,7 +92,7 @@ describe("UiStateStore", () => {
     assert.strictEqual(s.activeView.type, "chat");
   });
 
-  it("saveNow 只持久化新 tabs 格式", async () => {
+  it("saveNow 持久化新 tabs 格式和标题元数据", async () => {
     storage["workspace_path"] = "/project-alpha";
     storage["session-tabs"] = JSON.stringify(["sess-a"]);
     storage["session-tab-labels"] = JSON.stringify({ "sess-a": "手动名称" });
@@ -109,7 +109,7 @@ describe("UiStateStore", () => {
           schemaVersion: 2,
           workspacePath: "/project-alpha",
           activeView: { type: "session", id: "sess-a" },
-          tabs: { sessions: ["sess-a"], files: [], chatOpen: true, labels: { "sess-a": "手动名称" } },
+          tabs: { sessions: ["sess-a"], files: [], chatOpen: true, labels: { "sess-a": "手动名称" }, titleSources: { "sess-a": "manual" } },
           panel: { active: "explorer", closed: false, width: 260 },
           recent: { sessions: {} },
         }),
@@ -122,10 +122,11 @@ describe("UiStateStore", () => {
     assert.ok(Array.isArray(savedBody.tabs.items), "保存体应携带 tabs.items");
     assert.strictEqual(savedBody.tabs.items.length, 1, "保存体保留标签项");
     assert.strictEqual(savedBody.tabs.activeId, "sess-a", "保存体保留 activeId");
+    assert.strictEqual(savedBody.tabs.labels["sess-a"], "手动名称", "保存体保留标题缓存");
+    assert.strictEqual(savedBody.tabs.titleSources["sess-a"], "manual", "保存体保留标题来源");
     assert.strictEqual("sessions" in savedBody.tabs, false, "不再写 sessions 旧字段");
     assert.strictEqual("files" in savedBody.tabs, false, "不再写 files 旧字段");
     assert.strictEqual("chatOpen" in savedBody.tabs, false, "不再写 chatOpen 旧字段");
-    assert.strictEqual("labels" in savedBody.tabs, false, "不再写 labels 旧字段");
   });
 
   it("panel.closed 恢复", async () => {
