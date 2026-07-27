@@ -138,6 +138,223 @@ describe("validateCommandPaths", () => {
       workspaceRoot: process.cwd(),
     })
     equal(insideMove.allowed, true)
+
+    const targetDirectoryOutside = validateCommandPaths("mv -t ../outside-dir inside.txt", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(targetDirectoryOutside.allowed, false)
+    ok(!targetDirectoryOutside.allowed && targetDirectoryOutside.reason.includes("写入路径"))
+  })
+
+  it("只读命令的 workspace 外路径应要求确认", () => {
+    for (const cmd of [
+      "cat ../outside.txt",
+      "head -n 10 ../outside.log",
+      "ls ../outside-dir",
+      "diff src/a.ts ../outside.ts",
+    ]) {
+      const result = validateCommandPaths(cmd, {
+        cwd: process.cwd(),
+        workspaceRoot: process.cwd(),
+      })
+      equal(result.allowed, false, `${cmd} 应被路径检查拦下`)
+      ok(!result.allowed && result.reason.includes("读取路径"))
+    }
+  })
+
+  it("read glob 只校验 base 目录，write glob 应要求确认", () => {
+    const readInside = validateCommandPaths("cat src/*.ts", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(readInside.allowed, true)
+
+    const readOutside = validateCommandPaths("cat ../*.ts", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(readOutside.allowed, false)
+    ok(!readOutside.allowed && readOutside.reason.includes("读取路径"))
+
+    const writeGlob = validateCommandPaths("touch src/*.ts", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(writeGlob.allowed, false)
+    ok(!writeGlob.allowed && writeGlob.reason.includes("通配符"))
+  })
+
+  it("-- 后以 - 开头的路径仍应参与验证", () => {
+    const result = validateCommandPaths("rm -- ../outside.txt", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(result.allowed, false)
+    ok(!result.allowed && result.reason.includes("删除路径"))
+  })
+
+  it("输入重定向和变量重定向路径应验证", () => {
+    const input = validateCommandPaths("node script.js < ../secret.txt", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(input.allowed, false)
+    ok(!input.allowed && input.reason.includes("读取路径"))
+
+    const outputVar = validateCommandPaths("echo hi > $OUT_FILE", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(outputVar.allowed, false)
+    ok(!outputVar.allowed && outputVar.reason.includes("变量"))
+  })
+
+  it("find/rg 按命令语义提取路径参数", () => {
+    const findRoot = validateCommandPaths("find ../outside -name package.json", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(findRoot.allowed, false)
+    ok(!findRoot.allowed && findRoot.reason.includes("读取路径"))
+
+    const findFlagPath = validateCommandPaths("find . -newer ../marker", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(findFlagPath.allowed, false)
+
+    const rgOutside = validateCommandPaths("rg -e TODO ../outside", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(rgOutside.allowed, false)
+
+    const grepPatternFile = validateCommandPaths("grep -f ../patterns.txt src/file.ts", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(grepPatternFile.allowed, false)
+    ok(!grepPatternFile.allowed && grepPatternFile.reason.includes("读取路径"))
+
+    const rgPatternFile = validateCommandPaths("rg --file ../patterns.txt src", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(rgPatternFile.allowed, false)
+    ok(!rgPatternFile.allowed && rgPatternFile.reason.includes("读取路径"))
+
+    const rgDefault = validateCommandPaths("rg TODO", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(rgDefault.allowed, true)
+  })
+
+  it("sed/jq/git diff --no-index 提取文件路径", () => {
+    const sedRead = validateCommandPaths("sed -n '1p' ../outside.txt", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(sedRead.allowed, false)
+
+    const sedWriteInside = validateCommandPaths("sed -i 's/a/b/' src/a.txt", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(sedWriteInside.allowed, true)
+
+    const sedWriteOutside = validateCommandPaths("sed -i 's/a/b/' ../outside.txt", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(sedWriteOutside.allowed, false)
+    ok(!sedWriteOutside.allowed && sedWriteOutside.reason.includes("写入路径"))
+
+    const sortWriteOutside = validateCommandPaths("sort -o ../sorted.txt src/input.txt", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(sortWriteOutside.allowed, false)
+    ok(!sortWriteOutside.allowed && sortWriteOutside.reason.includes("写入路径"))
+
+    const jqFilter = validateCommandPaths("jq -f ../filter.jq data.json", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(jqFilter.allowed, false)
+
+    const gitNoIndex = validateCommandPaths("git diff --no-index src/a.ts ../outside.ts", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(gitNoIndex.allowed, false)
+  })
+
+  it("tar 归档和解包路径按读写语义验证", () => {
+    const readArchiveOutside = validateCommandPaths("tar -xf ../archive.tar -C out", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(readArchiveOutside.allowed, false)
+    ok(!readArchiveOutside.allowed && readArchiveOutside.reason.includes("读取路径"))
+
+    const writeDirectoryOutside = validateCommandPaths("tar -xf archive.tar -C ../out", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(writeDirectoryOutside.allowed, false)
+    ok(!writeDirectoryOutside.allowed && writeDirectoryOutside.reason.includes("写入路径"))
+  })
+
+  it("UNC 和无法静态解析的 tilde 变体应要求确认", () => {
+    const unc = validateCommandPaths(String.raw`cat '\\server\share\secret.txt'`, {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(unc.allowed, false)
+    ok(!unc.allowed && unc.reason.includes("UNC"))
+
+    const tildeUser = validateCommandPaths("cat ~root/.ssh/id_rsa", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(tildeUser.allowed, false)
+    ok(!tildeUser.allowed && tildeUser.reason.includes("用户目录"))
+  })
+
+  it("cd 后接只读命令不因 cd 本身误杀，接写入仍要求确认", () => {
+    const readAfterCd = validateCommandPaths("cd src && ls", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(readAfterCd.allowed, true)
+
+    const readRelativeAfterCd = validateCommandPaths("cd src && cat ../package.json", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(readRelativeAfterCd.allowed, true)
+
+    const readAfterFailedCdBranch = validateCommandPaths("cd src || cat ../outside.txt", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(readAfterFailedCdBranch.allowed, false)
+
+    const writeAfterCd = validateCommandPaths("cd src && touch generated.txt", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(writeAfterCd.allowed, false)
+    ok(!writeAfterCd.allowed && writeAfterCd.reason.includes("cd"))
+
+    const previousDirectory = validateCommandPaths("cd - && ls", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(previousDirectory.allowed, false)
+    ok(!previousDirectory.allowed && previousDirectory.reason.includes("上一次目录"))
   })
 })
 

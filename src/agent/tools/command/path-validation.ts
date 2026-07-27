@@ -1,3 +1,4 @@
+import os from "os"
 import path from "path"
 import { parseShellCommand, tokensWithoutRedirects, type ShellSegment } from "./shell-parser.js"
 
@@ -10,16 +11,96 @@ export interface PathValidationOptions {
   workspaceRoot?: string
 }
 
-type PathOperation = "read" | "write" | "remove"
+type PathOperation = "read" | "write" | "create" | "remove"
+
+type PathCommand =
+  | "cd"
+  | "pushd"
+  | "ls"
+  | "find"
+  | "cat"
+  | "head"
+  | "tail"
+  | "sort"
+  | "uniq"
+  | "wc"
+  | "cut"
+  | "paste"
+  | "column"
+  | "tr"
+  | "file"
+  | "stat"
+  | "diff"
+  | "awk"
+  | "strings"
+  | "hexdump"
+  | "od"
+  | "base64"
+  | "nl"
+  | "grep"
+  | "rg"
+  | "sed"
+  | "jq"
+  | "git"
+  | "tar"
+  | "touch"
+  | "mkdir"
+  | "new-item"
+  | "cp"
+  | "copy"
+  | "mv"
+  | "move"
+  | "rm"
+  | "rmdir"
+  | "del"
+  | "erase"
+  | "rd"
+  | "remove-item"
+  | "set-content"
+  | "add-content"
+  | "out-file"
 
 interface CommandPathArg {
   token: string
   operation: PathOperation
+  source?: string
 }
 
-const WRITE_COMMANDS = new Set([
+type PathExtractor = (args: string[], command: PathCommand) => CommandPathArg[]
+
+const PATH_COMMANDS = new Set<PathCommand>([
+  "cd",
+  "pushd",
+  "ls",
+  "find",
+  "cat",
+  "head",
+  "tail",
+  "sort",
+  "uniq",
+  "wc",
+  "cut",
+  "paste",
+  "column",
+  "tr",
+  "file",
+  "stat",
+  "diff",
+  "awk",
+  "strings",
+  "hexdump",
+  "od",
+  "base64",
+  "nl",
+  "grep",
+  "rg",
+  "sed",
+  "jq",
+  "git",
+  "tar",
   "touch",
   "mkdir",
+  "new-item",
   "cp",
   "copy",
   "mv",
@@ -30,10 +111,139 @@ const WRITE_COMMANDS = new Set([
   "erase",
   "rd",
   "remove-item",
-  "new-item",
   "set-content",
   "add-content",
   "out-file",
+])
+
+const DEFAULT_OPERATION: Record<PathCommand, PathOperation> = {
+  cd: "read",
+  pushd: "read",
+  ls: "read",
+  find: "read",
+  cat: "read",
+  head: "read",
+  tail: "read",
+  sort: "read",
+  uniq: "read",
+  wc: "read",
+  cut: "read",
+  paste: "read",
+  column: "read",
+  tr: "read",
+  file: "read",
+  stat: "read",
+  diff: "read",
+  awk: "read",
+  strings: "read",
+  hexdump: "read",
+  od: "read",
+  base64: "read",
+  nl: "read",
+  grep: "read",
+  rg: "read",
+  sed: "read",
+  jq: "read",
+  git: "read",
+  tar: "read",
+  touch: "create",
+  mkdir: "create",
+  "new-item": "create",
+  cp: "write",
+  copy: "write",
+  mv: "write",
+  move: "write",
+  rm: "remove",
+  rmdir: "remove",
+  del: "remove",
+  erase: "remove",
+  rd: "remove",
+  "remove-item": "remove",
+  "set-content": "write",
+  "add-content": "write",
+  "out-file": "write",
+}
+
+const COMMON_VALUE_FLAGS = new Set([
+  "-b",
+  "-c",
+  "-d",
+  "-f",
+  "-F",
+  "-m",
+  "-n",
+  "-o",
+  "-s",
+  "-t",
+  "-w",
+  "--block-size",
+  "--bytes",
+  "--context",
+  "--format",
+  "--lines",
+  "--max-count",
+  "--output",
+  "--skip-bytes",
+  "--tabs",
+  "--width",
+])
+
+const GREP_VALUE_FLAGS = new Set([
+  "-A",
+  "-B",
+  "-C",
+  "-D",
+  "-d",
+  "-e",
+  "-f",
+  "-m",
+  "--after-context",
+  "--before-context",
+  "--binary-files",
+  "--context",
+  "--devices",
+  "--directories",
+  "--exclude",
+  "--exclude-dir",
+  "--exclude-from",
+  "--file",
+  "--include",
+  "--label",
+  "--max-count",
+  "--regexp",
+])
+
+const RG_VALUE_FLAGS = new Set([
+  "-A",
+  "-B",
+  "-C",
+  "-e",
+  "-f",
+  "-g",
+  "-m",
+  "-t",
+  "-T",
+  "--after-context",
+  "--before-context",
+  "--context",
+  "--engine",
+  "--field-context-separator",
+  "--field-match-separator",
+  "--file",
+  "--glob",
+  "--glob-case-insensitive",
+  "--iglob",
+  "--max-count",
+  "--max-depth",
+  "--max-filesize",
+  "--path-separator",
+  "--regexp",
+  "--sort",
+  "--sortr",
+  "--type",
+  "--type-add",
+  "--type-clear",
+  "--type-not",
 ])
 
 function normalizeForCompare(value: string): string {
@@ -50,168 +260,671 @@ function isInsidePath(candidate: string, root: string): boolean {
   return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel)
 }
 
-function isUnresolvedPathToken(token: string): boolean {
-  return /[$%{}*?]/.test(token) || token.startsWith("~")
-}
-
 function operationLabel(operation: PathOperation): string {
   if (operation === "read") return "读取"
+  if (operation === "create") return "创建"
   if (operation === "remove") return "删除"
   return "写入"
 }
 
-function resolveTargetPath(token: string, cwd: string): { path?: string; uncertain?: string } {
-  if (!token) return { uncertain: "缺少路径参数" }
-  const lowered = token.replace(/\\/g, "/").toLowerCase()
-  if (lowered === "/dev/null" || lowered === "nul") return {}
-  if (isUnresolvedPathToken(token)) return { uncertain: `路径包含变量、通配符或用户目录: ${token}` }
-  if (/^\/[A-Za-z0-9_.-]/.test(token)) return { path: token }
-  return { path: path.resolve(cwd, token) }
+function fail(reason: string): PathValidationResult {
+  return { allowed: false, reason, requiresConfirmation: true }
 }
 
-function validateTarget(token: string | undefined, operation: PathOperation, cwd: string, workspaceRoot: string): PathValidationResult {
+function stripSurroundingQuotes(value: string): string {
+  const trimmed = value.trim()
+  if (trimmed.length >= 2) {
+    const first = trimmed[0]
+    const last = trimmed[trimmed.length - 1]
+    if ((first === "'" && last === "'") || (first === "\"" && last === "\"")) return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
+function isSafeNullPath(token: string): boolean {
+  const normalized = token.replace(/\\/g, "/").toLowerCase()
+  return normalized === "/dev/null" || normalized === "nul"
+}
+
+function containsUnresolvedExpansion(token: string): boolean {
+  return token.includes("$") || token.includes("%") || token.includes("{") || token.includes("}") || token.startsWith("=")
+}
+
+function containsGlob(token: string): boolean {
+  return /[*?\[]/.test(token)
+}
+
+function containsUnexpandedTilde(token: string): boolean {
+  return token.startsWith("~")
+}
+
+function containsUncPath(token: string): boolean {
+  return /^\\\\[^\\]+\\[^\\]+/.test(token) || /^\/\/[^/]+\/[^/]+/.test(token)
+}
+
+function expandHome(token: string): string {
+  if (token === "~") return os.homedir()
+  if (token.startsWith("~/") || token.startsWith("~\\")) return path.join(os.homedir(), token.slice(2))
+  return token
+}
+
+function globBase(token: string): string {
+  const slash = Math.max(token.lastIndexOf("/"), token.lastIndexOf("\\"))
+  if (slash <= 0) return "."
+  return token.slice(0, slash)
+}
+
+function resolvePathToken(token: string, cwd: string): string {
+  const expanded = expandHome(token)
+  return path.isAbsolute(expanded) ? expanded : path.resolve(cwd, expanded)
+}
+
+function isDangerousRemovalPath(resolvedPath: string, workspaceRoot: string): boolean {
+  const normalized = normalizeForCompare(resolvedPath).replace(/[\\/]+/g, "/").replace(/\/$/, "")
+  const normalizedWorkspace = normalizeForCompare(workspaceRoot).replace(/[\\/]+/g, "/").replace(/\/$/, "")
+  const normalizedHome = normalizeForCompare(os.homedir()).replace(/[\\/]+/g, "/").replace(/\/$/, "")
+
+  if (normalized === "" || normalized === "/" || normalized === normalizedHome || normalized === normalizedWorkspace) return true
+  if (/^[a-z]:$/i.test(normalized) || /^[a-z]:\/?$/i.test(normalized)) return true
+  if (path.dirname(normalized) === "/" && normalized !== normalizedWorkspace) return true
+  if (/^[a-z]:\/[^/]+$/i.test(normalized)) return true
+  return false
+}
+
+function validatePathToken(token: string | undefined, operation: PathOperation, cwd: string, workspaceRoot: string, source?: string): PathValidationResult {
   const label = operationLabel(operation)
-  if (!token) {
-    return { allowed: false, reason: `命令包含缺少目标的${label}路径`, requiresConfirmation: true }
+  if (!token) return fail(`命令包含缺少目标的${label}路径`)
+
+  const clean = stripSurroundingQuotes(token)
+  if (!clean) return { allowed: true }
+  if (clean === "-") {
+    if (source === "cd target" || source === "pushd target") return fail(`${label}路径指向未知的上一次目录: ${token}`)
+    return { allowed: true }
   }
-  const resolved = resolveTargetPath(token, cwd)
-  if (resolved.uncertain) {
-    return { allowed: false, reason: `${label}${resolved.uncertain}`, requiresConfirmation: true }
+  if (isSafeNullPath(clean)) return { allowed: true }
+  if (containsUncPath(clean)) return fail(`${label}路径包含 UNC 网络路径，需要确认: ${token}`)
+  if (containsUnresolvedExpansion(clean)) return fail(`${label}路径包含变量或 shell 展开语法: ${token}`)
+
+  if (containsUnexpandedTilde(clean) && clean !== "~" && !clean.startsWith("~/") && !clean.startsWith("~\\")) {
+    return fail(`${label}路径包含无法静态解析的用户目录语法: ${token}`)
   }
-  if (!resolved.path) return { allowed: true }
-  if (!isInsidePath(resolved.path, workspaceRoot)) {
-    return {
-      allowed: false,
-      reason: `${label}路径不在 workspace 内: ${token}`,
-      requiresConfirmation: true,
-    }
+
+  if (containsGlob(clean)) {
+    if (operation !== "read") return fail(`${label}路径包含通配符，无法安全验证具体目标: ${token}`)
+    const base = globBase(clean)
+    const resolvedBase = resolvePathToken(base, cwd)
+    if (!isInsidePath(resolvedBase, workspaceRoot)) return fail(`${label}路径不在 workspace 内: ${token}`)
+    return { allowed: true }
   }
+
+  const resolved = resolvePathToken(clean, cwd)
+  if (operation === "remove" && isDangerousRemovalPath(resolved, workspaceRoot)) {
+    return fail(`删除路径指向高风险目录，需要确认: ${token}`)
+  }
+  if (!isInsidePath(resolved, workspaceRoot)) return fail(`${label}路径不在 workspace 内: ${token}`)
   return { allowed: true }
+}
+
+function isWindowsSwitch(cmd: string, arg: string): boolean {
+  if (!arg.startsWith("/")) return false
+  return ["copy", "move", "del", "erase", "rd", "rmdir"].includes(cmd) && /^\/[a-z?]+$/i.test(arg)
 }
 
 function isOptionToken(cmd: string, arg: string): boolean {
   if (arg === "-") return false
   if (arg.startsWith("-")) return true
-  if (!arg.startsWith("/")) return false
-  const windowsSwitchCommands = new Set(["copy", "move", "del", "erase", "rd", "rmdir"])
-  return windowsSwitchCommands.has(cmd) && /^\/[a-z?]+$/i.test(arg)
+  return isWindowsSwitch(cmd, arg)
 }
 
-function pathArgsOnly(cmd: string, args: string[]): string[] {
+function pathArgsOnly(cmd: string, args: string[], valueFlags: Set<string> = COMMON_VALUE_FLAGS): string[] {
   const result: string[] = []
+  let afterDoubleDash = false
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (!arg) continue
+    if (afterDoubleDash) {
+      result.push(arg)
+      continue
+    }
+    if (arg === "--") {
+      afterDoubleDash = true
+      continue
+    }
+    if (isOptionToken(cmd, arg)) {
+      const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg
+      if (!arg.includes("=") && valueFlags.has(flag)) i++
+      continue
+    }
+    result.push(arg)
+  }
+
+  return result
+}
+
+function mark(paths: string[], operation: PathOperation, source?: string): CommandPathArg[] {
+  return paths.map((token) => ({ token, operation, source }))
+}
+
+function simpleExtractor(args: string[], command: PathCommand): CommandPathArg[] {
+  return mark(pathArgsOnly(command, args), DEFAULT_OPERATION[command])
+}
+
+function defaultDotExtractor(args: string[], command: PathCommand): CommandPathArg[] {
+  const paths = pathArgsOnly(command, args)
+  return mark(paths.length > 0 ? paths : ["."], DEFAULT_OPERATION[command])
+}
+
+function cdExtractor(args: string[], command: PathCommand): CommandPathArg[] {
+  return [{ token: args.length === 0 ? "~" : args.join(" "), operation: DEFAULT_OPERATION[command], source: `${command} target` }]
+}
+
+function cpExtractor(args: string[], command: PathCommand): CommandPathArg[] {
+  const explicitTarget = args.findIndex((arg) => arg === "-t" || arg === "--target-directory")
+  if (explicitTarget !== -1 && args[explicitTarget + 1]) {
+    const remaining = args.filter((_, index) => index !== explicitTarget && index !== explicitTarget + 1)
+    return [
+      { token: args[explicitTarget + 1]!, operation: "write", source: `${command} target-directory` },
+      ...mark(pathArgsOnly(command, remaining), "read", `${command} source`),
+    ]
+  }
+
+  const inlineTarget = args.find((arg) => arg.startsWith("--target-directory="))
+  if (inlineTarget) {
+    const remaining = args.filter((arg) => arg !== inlineTarget)
+    return [
+      { token: inlineTarget.slice("--target-directory=".length), operation: "write", source: `${command} target-directory` },
+      ...mark(pathArgsOnly(command, remaining), "read", `${command} source`),
+    ]
+  }
+
+  const paths = pathArgsOnly(command, args)
+  if (paths.length <= 1) return mark(paths, "read", `${command} source`)
+  return [
+    ...mark(paths.slice(0, -1), "read", `${command} source`),
+    { token: paths[paths.length - 1]!, operation: "write", source: `${command} destination` },
+  ]
+}
+
+function mvExtractor(args: string[], command: PathCommand): CommandPathArg[] {
+  const explicitTarget = args.findIndex((arg) => arg === "-t" || arg === "--target-directory")
+  if (explicitTarget !== -1 && args[explicitTarget + 1]) {
+    const remaining = args.filter((_, index) => index !== explicitTarget && index !== explicitTarget + 1)
+    return [
+      { token: args[explicitTarget + 1]!, operation: "write", source: `${command} target-directory` },
+      ...mark(pathArgsOnly(command, remaining), "remove", `${command} source`),
+    ]
+  }
+
+  const inlineTarget = args.find((arg) => arg.startsWith("--target-directory="))
+  if (inlineTarget) {
+    const remaining = args.filter((arg) => arg !== inlineTarget)
+    return [
+      { token: inlineTarget.slice("--target-directory=".length), operation: "write", source: `${command} target-directory` },
+      ...mark(pathArgsOnly(command, remaining), "remove", `${command} source`),
+    ]
+  }
+
+  const paths = pathArgsOnly(command, args)
+  if (paths.length <= 1) return mark(paths, "remove", `${command} source`)
+  return [
+    ...mark(paths.slice(0, -1), "remove", `${command} source`),
+    { token: paths[paths.length - 1]!, operation: "write", source: `${command} destination` },
+  ]
+}
+
+function findExtractor(args: string[]): CommandPathArg[] {
+  const paths: string[] = []
+  const pathFlags = new Set([
+    "-newer",
+    "-anewer",
+    "-cnewer",
+    "-samefile",
+  ])
+  const newerPattern = /^-newer[acmBt][acmtB]$/
+  let foundPredicate = false
+  let afterDoubleDash = false
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (!arg) continue
+    if (afterDoubleDash) {
+      paths.push(arg)
+      continue
+    }
+    if (arg === "--") {
+      afterDoubleDash = true
+      continue
+    }
+    if (arg.startsWith("-")) {
+      foundPredicate = true
+      if ((pathFlags.has(arg) || newerPattern.test(arg)) && args[i + 1]) {
+        paths.push(args[i + 1]!)
+        i++
+      }
+      continue
+    }
+    if (!foundPredicate) paths.push(arg)
+  }
+
+  return mark(paths.length > 0 ? paths : ["."], "read", "find path")
+}
+
+function patternCommandExtractor(args: string[], valueFlags: Set<string>, defaultPaths: string[] = []): CommandPathArg[] {
+  const paths: string[] = []
+  let patternFound = false
+  let afterDoubleDash = false
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (!arg) continue
+
+    if (!afterDoubleDash && arg === "--") {
+      afterDoubleDash = true
+      continue
+    }
+
+    if (!afterDoubleDash && arg.startsWith("-")) {
+      const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg
+      if (arg.startsWith("-f") && !arg.startsWith("--") && arg.length > 2) {
+        paths.push(arg.slice(2))
+        patternFound = true
+        continue
+      }
+      if (flag === "-f" || flag === "--file") {
+        const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : args[i + 1]
+        if (value) paths.push(value)
+        if (!arg.includes("=")) i++
+        patternFound = true
+        continue
+      }
+      if (flag === "-e" || flag === "--regexp" || flag === "-f" || flag === "--file") patternFound = true
+      if (!arg.includes("=") && valueFlags.has(flag)) i++
+      continue
+    }
+
+    if (!patternFound) {
+      patternFound = true
+      continue
+    }
+    paths.push(arg)
+  }
+
+  return mark(paths.length > 0 ? paths : defaultPaths, "read")
+}
+
+function sortExtractor(args: string[]): CommandPathArg[] {
+  const outputs: CommandPathArg[] = []
+  let afterDoubleDash = false
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (!arg) continue
     if (arg === "--") {
-      result.push(...args.slice(i + 1))
-      break
+      afterDoubleDash = true
+      continue
     }
-    if (isOptionToken(cmd, arg)) continue
-    result.push(arg)
+    if (afterDoubleDash) continue
+    if ((arg === "-o" || arg === "--output") && args[i + 1]) {
+      outputs.push({ token: args[i + 1]!, operation: "write", source: "sort output" })
+      i++
+      continue
+    }
+    if (arg.startsWith("--output=")) {
+      outputs.push({ token: arg.slice("--output=".length), operation: "write", source: "sort output" })
+      continue
+    }
+    if (arg.startsWith("-o") && arg.length > 2) {
+      outputs.push({ token: arg.slice(2), operation: "write", source: "sort output" })
+    }
   }
-  return result
+  return [...outputs, ...mark(pathArgsOnly("sort", args), "read", "sort input")]
+}
+
+function sedExtractor(args: string[]): CommandPathArg[] {
+  const paths: CommandPathArg[] = []
+  let scriptFound = false
+  let inPlace = false
+  let afterDoubleDash = false
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (!arg) continue
+
+    if (!afterDoubleDash && arg === "--") {
+      afterDoubleDash = true
+      continue
+    }
+
+    if (!afterDoubleDash && arg.startsWith("-")) {
+      const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg
+      if (flag === "-i" || flag.startsWith("-i") || flag === "--in-place") inPlace = true
+      if ((flag === "-e" || flag === "--expression") && !arg.includes("=")) {
+        i++
+        scriptFound = true
+      } else if ((flag === "-f" || flag === "--file") && !arg.includes("=") && args[i + 1]) {
+        paths.push({ token: args[i + 1]!, operation: "read", source: "sed script file" })
+        i++
+        scriptFound = true
+      } else if ((flag === "-f" || flag === "--file") && arg.includes("=")) {
+        paths.push({ token: arg.slice(arg.indexOf("=") + 1), operation: "read", source: "sed script file" })
+        scriptFound = true
+      }
+      continue
+    }
+
+    if (!scriptFound) {
+      scriptFound = true
+      continue
+    }
+    paths.push({ token: arg, operation: inPlace ? "write" : "read", source: "sed file" })
+  }
+
+  return paths
+}
+
+function jqExtractor(args: string[]): CommandPathArg[] {
+  const paths: CommandPathArg[] = []
+  let filterFound = false
+  let afterDoubleDash = false
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (!arg) continue
+
+    if (!afterDoubleDash && arg === "--") {
+      afterDoubleDash = true
+      continue
+    }
+
+    if (!afterDoubleDash && arg.startsWith("-")) {
+      const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg
+      if ((flag === "-f" || flag === "--from-file") && args[i + 1] && !arg.includes("=")) {
+        paths.push({ token: args[i + 1]!, operation: "read", source: "jq filter file" })
+        i++
+        filterFound = true
+      } else if ((flag === "-f" || flag === "--from-file") && arg.includes("=")) {
+        paths.push({ token: arg.slice(arg.indexOf("=") + 1), operation: "read", source: "jq filter file" })
+        filterFound = true
+      } else if ((flag === "--slurpfile" || flag === "--rawfile") && args[i + 2]) {
+        paths.push({ token: args[i + 2]!, operation: "read", source: "jq bound file" })
+        i += 2
+      } else if ((flag === "--arg" || flag === "--argjson") && args[i + 2]) {
+        i += 2
+      } else if (!arg.includes("=") && COMMON_VALUE_FLAGS.has(flag)) {
+        i++
+      }
+      continue
+    }
+
+    if (!filterFound) {
+      filterFound = true
+      continue
+    }
+    paths.push({ token: arg, operation: "read", source: "jq input file" })
+  }
+
+  return paths
+}
+
+function gitExtractor(args: string[]): CommandPathArg[] {
+  if (args[0] !== "diff" || !args.includes("--no-index")) return []
+  const paths = pathArgsOnly("git", args.slice(1), COMMON_VALUE_FLAGS).filter((arg) => arg !== "--no-index")
+  return mark(paths.slice(0, 2), "read", "git diff --no-index")
+}
+
+function tarExtractor(args: string[]): CommandPathArg[] {
+  const modeText = args.filter((arg) => arg.startsWith("-")).join("")
+  const extracts = /(^|[^a-zA-Z])x/.test(modeText) || args.includes("--extract")
+  const createsArchive = /(^|[^a-zA-Z])c/.test(modeText) || args.includes("--create")
+  const consumed = new Set<number>()
+  const archives: CommandPathArg[] = []
+  const directories: CommandPathArg[] = []
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (!arg) continue
+    if ((arg === "-f" || arg === "--file") && args[i + 1]) {
+      archives.push({ token: args[i + 1]!, operation: createsArchive ? "write" : "read", source: "tar archive" })
+      consumed.add(i)
+      consumed.add(i + 1)
+      i++
+      continue
+    }
+    if (/^-[A-Za-z]*f/.test(arg)) {
+      const inline = arg.slice(arg.indexOf("f") + 1)
+      if (inline) {
+        archives.push({ token: inline, operation: createsArchive ? "write" : "read", source: "tar archive" })
+        consumed.add(i)
+      } else if (args[i + 1]) {
+        archives.push({ token: args[i + 1]!, operation: createsArchive ? "write" : "read", source: "tar archive" })
+        consumed.add(i)
+        consumed.add(i + 1)
+        i++
+      }
+      continue
+    }
+    if (arg.startsWith("--file=")) {
+      archives.push({ token: arg.slice("--file=".length), operation: createsArchive ? "write" : "read", source: "tar archive" })
+      consumed.add(i)
+      continue
+    }
+    if ((arg === "-C" || arg === "--directory") && args[i + 1]) {
+      directories.push({ token: args[i + 1]!, operation: extracts ? "write" : "read", source: "tar directory" })
+      consumed.add(i)
+      consumed.add(i + 1)
+      i++
+      continue
+    }
+  }
+
+  if (extracts) return [...archives, ...directories]
+
+  const paths = pathArgsOnly("tar", args.filter((_, index) => !consumed.has(index)), new Set(["-C", "--directory", "-f", "--file"]))
+  for (const token of paths) {
+    if (token === "x" || token === "c") continue
+    archives.push({ token, operation: createsArchive ? "read" : "read", source: "tar path" })
+  }
+  return [...archives, ...directories]
+}
+
+function powershellContentExtractor(args: string[], command: PathCommand): CommandPathArg[] {
+  const explicitPath = args.findIndex((arg) => /^-(filepath|literalpath|path)$/i.test(arg))
+  if (explicitPath !== -1 && args[explicitPath + 1]) return [{ token: args[explicitPath + 1]!, operation: DEFAULT_OPERATION[command] }]
+  const positional = pathArgsOnly(command, args)
+  return positional[0] ? [{ token: positional[0], operation: DEFAULT_OPERATION[command] }] : []
+}
+
+const PATH_EXTRACTORS: Record<PathCommand, PathExtractor> = {
+  cd: cdExtractor,
+  pushd: cdExtractor,
+  ls: defaultDotExtractor,
+  find: findExtractor,
+  cat: simpleExtractor,
+  head: simpleExtractor,
+  tail: simpleExtractor,
+  sort: sortExtractor,
+  uniq: simpleExtractor,
+  wc: simpleExtractor,
+  cut: simpleExtractor,
+  paste: simpleExtractor,
+  column: simpleExtractor,
+  tr: simpleExtractor,
+  file: simpleExtractor,
+  stat: simpleExtractor,
+  diff: simpleExtractor,
+  awk: simpleExtractor,
+  strings: simpleExtractor,
+  hexdump: simpleExtractor,
+  od: simpleExtractor,
+  base64: simpleExtractor,
+  nl: simpleExtractor,
+  grep: (args) => patternCommandExtractor(args, GREP_VALUE_FLAGS),
+  rg: (args) => patternCommandExtractor(args, RG_VALUE_FLAGS, ["."]),
+  sed: sedExtractor,
+  jq: jqExtractor,
+  git: gitExtractor,
+  tar: tarExtractor,
+  touch: simpleExtractor,
+  mkdir: simpleExtractor,
+  "new-item": powershellContentExtractor,
+  cp: cpExtractor,
+  copy: cpExtractor,
+  mv: mvExtractor,
+  move: mvExtractor,
+  rm: simpleExtractor,
+  rmdir: simpleExtractor,
+  del: simpleExtractor,
+  erase: simpleExtractor,
+  rd: simpleExtractor,
+  "remove-item": simpleExtractor,
+  "set-content": powershellContentExtractor,
+  "add-content": powershellContentExtractor,
+  "out-file": powershellContentExtractor,
+}
+
+function stripSafeWrappers(tokens: string[]): string[] {
+  let current = tokens
+  let changed = true
+  while (changed && current.length > 0) {
+    changed = false
+    const cmd = current[0]?.toLowerCase()
+    if (!cmd) break
+
+    if (cmd === "nohup" || cmd === "time" || cmd === "command" || cmd === "builtin" || cmd === "exec") {
+      current = current.slice(1)
+      changed = true
+      continue
+    }
+
+    if (cmd === "env") {
+      let i = 1
+      while (i < current.length) {
+        const arg = current[i]!
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) { i++; continue }
+        if (arg === "-i" || arg === "--ignore-environment") { i++; continue }
+        if ((arg === "-u" || arg === "--unset") && current[i + 1]) { i += 2; continue }
+        break
+      }
+      if (i > 1) {
+        current = current.slice(i)
+        changed = true
+      }
+      continue
+    }
+
+    if (cmd === "timeout") {
+      let i = 1
+      while (i < current.length && current[i]?.startsWith("-")) {
+        const arg = current[i]!
+        if (arg === "--foreground" || arg === "--preserve-status" || arg === "--verbose") i++
+        else if ((arg === "-k" || arg === "--kill-after" || arg === "-s" || arg === "--signal") && current[i + 1]) i += 2
+        else if (/^--(?:kill-after|signal)=/.test(arg)) i++
+        else break
+      }
+      if (current[i]) {
+        current = current.slice(i + 1)
+        changed = true
+      }
+      continue
+    }
+
+    if (cmd === "nice") {
+      let i = 1
+      if (current[i] === "-n" && current[i + 1]) i += 2
+      else if (/^-\d+$/.test(current[i] ?? "")) i++
+      if (i > 1 || current[i]) {
+        current = current.slice(i)
+        changed = true
+      }
+      continue
+    }
+
+    if (cmd === "stdbuf") {
+      let i = 1
+      while (i < current.length && /^-[ioe]/.test(current[i] ?? "")) {
+        if (/^-[ioe]$/.test(current[i]!) && current[i + 1]) i += 2
+        else i++
+      }
+      if (i > 1) {
+        current = current.slice(i)
+        changed = true
+      }
+    }
+  }
+  return current
 }
 
 function commandPathArgs(tokens: string[]): CommandPathArg[] {
-  const cmd = tokens[0]?.toLowerCase()
-  const args = tokens.slice(1)
-  if (!cmd || !WRITE_COMMANDS.has(cmd)) return []
+  const stripped = stripSafeWrappers(tokens)
+  const cmd = stripped[0]?.toLowerCase() as PathCommand | undefined
+  if (!cmd || !PATH_COMMANDS.has(cmd)) return []
+  return PATH_EXTRACTORS[cmd](stripped.slice(1), cmd)
+}
 
-  if (cmd === "out-file" || cmd === "set-content" || cmd === "add-content") {
-    const explicitPath = args.findIndex((arg) => /^-(filepath|literalpath|path)$/i.test(arg))
-    if (explicitPath !== -1 && args[explicitPath + 1]) return [{ token: args[explicitPath + 1], operation: "write" }]
-    const positional = pathArgsOnly(cmd, args)
-    return positional[0] ? [{ token: positional[0], operation: "write" }] : []
-  }
-
-  if (cmd === "cp" || cmd === "copy") {
-    const explicitTarget = args.findIndex((arg) => arg === "-t" || arg === "--target-directory")
-    if (explicitTarget !== -1 && args[explicitTarget + 1]) {
-      const paths = pathArgsOnly(cmd, args.filter((_, index) => index !== explicitTarget && index !== explicitTarget + 1))
-      return [
-        { token: args[explicitTarget + 1], operation: "write" },
-        ...paths.map((token) => ({ token, operation: "read" as const })),
-      ]
-    }
-    const inlineTarget = args.find((arg) => arg.startsWith("--target-directory="))
-    if (inlineTarget) {
-      const target = inlineTarget.slice("--target-directory=".length)
-      const paths = pathArgsOnly(cmd, args.filter((arg) => arg !== inlineTarget))
-      return [
-        { token: target, operation: "write" },
-        ...paths.map((token) => ({ token, operation: "read" as const })),
-      ]
-    }
-    const paths = pathArgsOnly(cmd, args)
-    if (paths.length <= 1) return paths.map((token) => ({ token, operation: "read" }))
-    return [
-      ...paths.slice(0, -1).map((token) => ({ token, operation: "read" as const })),
-      { token: paths[paths.length - 1], operation: "write" },
-    ]
-  }
-
-  if (cmd === "mv" || cmd === "move") {
-    const paths = pathArgsOnly(cmd, args)
-    if (paths.length <= 1) return paths.map((token) => ({ token, operation: "remove" }))
-    return [
-      ...paths.slice(0, -1).map((token) => ({ token, operation: "remove" as const })),
-      { token: paths[paths.length - 1], operation: "write" },
-    ]
-  }
-
-  const operation: PathOperation = ["rm", "rmdir", "del", "erase", "rd", "remove-item"].includes(cmd)
-    ? "remove"
-    : "write"
-  return pathArgsOnly(cmd, args).map((token) => ({ token, operation }))
+function segmentCommand(segment: ShellSegment): string | undefined {
+  return stripSafeWrappers(tokensWithoutRedirects(segment))[0]?.toLowerCase()
 }
 
 function segmentChangesDirectory(segment: ShellSegment): boolean {
-  const tokens = tokensWithoutRedirects(segment)
-  const cmd = tokens[0]?.toLowerCase()
+  const cmd = segmentCommand(segment)
   return cmd === "cd" || cmd === "pushd"
+}
+
+function segmentHasWriteLikeOperation(segment: ShellSegment): boolean {
+  if (segment.redirects.some((redirect) => redirect.isOutput && !redirect.isSafeReadOnlySink)) return true
+  const tokens = tokensWithoutRedirects(segment)
+  return commandPathArgs(tokens).some((arg) => arg.operation !== "read")
+}
+
+function compoundCdWithWrite(parsed: ReturnType<typeof parseShellCommand>): boolean {
+  const cdIndex = parsed.segments.findIndex((segment) => segmentChangesDirectory(segment) && segment.nextOperator)
+  if (cdIndex === -1) return false
+  return parsed.segments.slice(cdIndex + 1).some(segmentHasWriteLikeOperation)
+}
+
+function nextCwdAfterSegment(segment: ShellSegment, cwd: string): string | undefined {
+  if (segment.nextOperator !== "and") return undefined
+  const cdTarget = commandPathArgs(tokensWithoutRedirects(segment))
+    .find((arg) => arg.source === "cd target" || arg.source === "pushd target")
+  if (!cdTarget) return undefined
+
+  const clean = stripSurroundingQuotes(cdTarget.token)
+  if (!clean || clean === "-") return undefined
+  if (containsUncPath(clean) || containsUnresolvedExpansion(clean) || containsGlob(clean)) return undefined
+  if (containsUnexpandedTilde(clean) && clean !== "~" && !clean.startsWith("~/") && !clean.startsWith("~\\")) return undefined
+  return resolvePathToken(clean, cwd)
 }
 
 export function validateCommandPaths(command: string, options: PathValidationOptions): PathValidationResult {
   const cwd = path.resolve(options.cwd || process.cwd())
   const workspaceRoot = path.resolve(options.workspaceRoot || cwd)
 
-  if (!isInsidePath(cwd, workspaceRoot)) {
-    return {
-      allowed: false,
-      reason: `工作目录不在 workspace 内: ${cwd}`,
-      requiresConfirmation: true,
-    }
-  }
+  if (!isInsidePath(cwd, workspaceRoot)) return fail(`工作目录不在 workspace 内: ${cwd}`)
 
   const parsed = parseShellCommand(command)
-  if (!parsed.ok) {
-    return {
-      allowed: false,
-      reason: parsed.error ?? "命令解析失败，无法验证路径",
-      requiresConfirmation: true,
-    }
+  if (!parsed.ok) return fail(parsed.error ?? "命令解析失败，无法验证路径")
+
+  if (compoundCdWithWrite(parsed)) {
+    return fail("命令包含 cd/pushd 后继续执行写入操作，无法静态确认后续写入路径")
   }
 
-  for (const segment of parsed.segments) {
-    if (segmentChangesDirectory(segment) && segment.nextOperator) {
-      return {
-        allowed: false,
-        reason: "命令包含 cd/pushd 后继续执行，无法静态确认后续写入路径",
-        requiresConfirmation: true,
-      }
-    }
+  let effectiveCwd = cwd
 
+  for (const segment of parsed.segments) {
     for (const redirect of segment.redirects) {
-      if (!redirect.isOutput || redirect.isSafeReadOnlySink) continue
-      const result = validateTarget(redirect.target, "write", cwd, workspaceRoot)
+      if (redirect.isSafeReadOnlySink) continue
+      const operation: PathOperation = redirect.isOutput ? "write" : "read"
+      const result = validatePathToken(redirect.target, operation, effectiveCwd, workspaceRoot)
       if (!result.allowed) return result
     }
 
     const tokens = tokensWithoutRedirects(segment)
     for (const target of commandPathArgs(tokens)) {
-      const result = validateTarget(target.token, target.operation, cwd, workspaceRoot)
+      const result = validatePathToken(target.token, target.operation, effectiveCwd, workspaceRoot, target.source)
       if (!result.allowed) return result
     }
+
+    effectiveCwd = nextCwdAfterSegment(segment, effectiveCwd) ?? effectiveCwd
   }
 
   return { allowed: true }
