@@ -17,6 +17,8 @@
  * - inputSchema（Zod 类型校验）
  */
 
+export type ShellDialect = "cmd" | "posix-bash" | "powershell"
+
 /** Tool 执行上下文 */
 export interface ToolContext {
   cwd: string
@@ -27,6 +29,8 @@ export interface ToolContext {
   onUpdate?: (chunk: string) => void
   /** 权限模式：由宿主/UI 设置，模型不可控 */
   permissionMode?: "default" | "plan" | "acceptEdits" | "dontAsk"
+  /** 实际 shell 方言：由宿主/UI 设置，模型不可控 */
+  shellDialect?: ShellDialect
   /** 用户确认回调：返回 true=允许，false/undefined=拒绝。无此回调时默认拒绝（fail-closed） */
   confirmCommand?: (cmd: string, reason: string) => Promise<boolean | undefined>
 }
@@ -96,7 +100,11 @@ export class ToolRegistry {
   toPITools(
     workspace?: string,
     emitTrace?: ToolTraceEmitter,
-    extraCtx?: { permissionMode?: ToolContext["permissionMode"]; confirmCommand?: ToolContext["confirmCommand"] },
+    extraCtx?: {
+      permissionMode?: ToolContext["permissionMode"]
+      confirmCommand?: ToolContext["confirmCommand"]
+      shellDialect?: ToolContext["shellDialect"]
+    },
   ) {
     return this.getAll().map((tool) => ({
       name: tool.name,

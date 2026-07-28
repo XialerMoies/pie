@@ -55,7 +55,11 @@ export function registerTool(
   toolRegistry.register(tool)
 }
 
-type ExtraCtx = { permissionMode?: ToolContext["permissionMode"]; confirmCommand?: ToolContext["confirmCommand"] }
+type ExtraCtx = {
+  permissionMode?: ToolContext["permissionMode"]
+  confirmCommand?: ToolContext["confirmCommand"]
+  shellDialect?: ToolContext["shellDialect"]
+}
 
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */
 export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ExtraCtx) {

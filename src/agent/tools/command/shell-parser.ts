@@ -1,3 +1,5 @@
+import type { ShellDialect } from "../../types.js"
+
 export type ShellSegmentOperator = "pipe" | "and" | "or" | "sequence" | "background"
 
 export interface ShellToken {
@@ -37,6 +39,7 @@ export interface ShellParseResult {
 }
 
 export interface ShellParseOptions {
+  shellDialect?: ShellDialect
   windowsShell?: boolean
 }
 
@@ -45,6 +48,10 @@ interface SegmentSlice {
   start: number
   end: number
   nextOperator?: ShellSegmentOperator
+}
+
+function dialectUsesWindowsBackslash(dialect: ShellDialect): boolean {
+  return dialect === "cmd" || dialect === "powershell"
 }
 
 function shouldTreatBackslashAsEscape(inSingle: boolean, windowsShell: boolean): boolean {
@@ -242,8 +249,10 @@ function hasShellExpansion(text: string): boolean {
 }
 
 export function parseShellCommand(command: string, options: ShellParseOptions = {}): ShellParseResult {
+  const inferredDialect: ShellDialect = options.shellDialect ?? (process.platform === "win32" ? "cmd" : "posix-bash")
   const parseOptions: Required<ShellParseOptions> = {
-    windowsShell: options.windowsShell ?? process.platform === "win32",
+    shellDialect: inferredDialect,
+    windowsShell: options.windowsShell ?? dialectUsesWindowsBackslash(inferredDialect),
   }
   const slices = splitSegments(command, parseOptions)
   const segments: ShellSegment[] = []

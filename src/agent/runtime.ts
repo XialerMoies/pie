@@ -28,17 +28,20 @@ export interface RuntimeConfig {
   modelsFile: string
   /** 权限模式：由宿主设置，传递给工具执行上下文 */
   permissionMode?: ToolContext["permissionMode"]
+  /** 实际 shell 方言：由宿主设置，传递给命令安全解析 */
+  shellDialect?: ToolContext["shellDialect"]
   /** 用户确认回调：返回 true=允许，false/undefined=拒绝 */
   confirmCommand?: ToolContext["confirmCommand"]
 }
 
-type RuntimeToolExtraContext = Pick<ToolContext, "permissionMode" | "confirmCommand">
+type RuntimeToolExtraContext = Pick<ToolContext, "permissionMode" | "confirmCommand" | "shellDialect">
 
 export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraContext | undefined {
-  if (!config.permissionMode && !config.confirmCommand) return undefined
+  if (!config.permissionMode && !config.confirmCommand && !config.shellDialect) return undefined
   return {
     permissionMode: config.permissionMode,
     confirmCommand: config.confirmCommand,
+    shellDialect: config.shellDialect,
   }
 }
 

@@ -1,6 +1,8 @@
 import os from "os"
 import path from "path"
 import { parseShellCommand, tokensWithoutRedirects, type ShellSegment } from "./shell-parser.js"
+import { parseCommandForSecurity } from "./security-parser.js"
+import type { SecurityParseResult, SecurityRedirect, ShellDialect, SimpleCommand } from "./security-ast.js"
 
 export type PathValidationResult =
   | { allowed: true }
@@ -10,6 +12,8 @@ export type PathValidationResult =
 export interface PathValidationOptions {
   cwd: string
   workspaceRoot?: string
+  shellDialect?: ShellDialect
+  parsed?: SecurityParseResult
 }
 
 type PathOperation = "read" | "write" | "create" | "remove"
@@ -72,7 +76,11 @@ interface CommandPathArg {
   source?: string
 }
 
-type PathExtractor = (args: string[], command: PathCommand) => CommandPathArg[]
+interface PathExtractorContext {
+  shellDialect?: ShellDialect
+}
+
+type PathExtractor = (args: string[], command: PathCommand, context: PathExtractorContext) => CommandPathArg[]
 
 const PATH_COMMANDS = new Set<PathCommand>([
   "cd",
@@ -437,8 +445,9 @@ function defaultDotExtractor(args: string[], command: PathCommand): CommandPathA
   return mark(paths.length > 0 ? paths : ["."], DEFAULT_OPERATION[command])
 }
 
-function cdExtractor(args: string[], command: PathCommand): CommandPathArg[] {
-  const targetArgs = command === "cd" && args[0]?.toLowerCase() === "/d" ? args.slice(1) : args
+function cdExtractor(args: string[], command: PathCommand, context: PathExtractorContext): CommandPathArg[] {
+  const targetArgs = command === "cd" && context.shellDialect === "cmd" && args[0]?.toLowerCase() === "/d" ? args.slice(1) : args
+  if (command === "cd" && context.shellDialect === "cmd" && targetArgs.length === 0) return []
   return [{ token: targetArgs.length === 0 ? "~" : targetArgs.join(" "), operation: DEFAULT_OPERATION[command], source: `${command} target` }]
 }
 
@@ -909,37 +918,40 @@ function stripSafeWrappers(tokens: string[]): string[] {
   return current
 }
 
-function commandPathArgs(tokens: string[]): CommandPathArg[] {
+function commandPathArgs(tokens: string[], context: PathExtractorContext = {}): CommandPathArg[] {
   const stripped = stripSafeWrappers(tokens)
   const cmd = stripped[0]?.toLowerCase() as PathCommand | undefined
   if (!cmd || !PATH_COMMANDS.has(cmd)) return []
-  return PATH_EXTRACTORS[cmd](stripped.slice(1), cmd)
+  return PATH_EXTRACTORS[cmd](stripped.slice(1), cmd, context)
 }
 
 function segmentCommand(segment: ShellSegment): string | undefined {
   return stripSafeWrappers(tokensWithoutRedirects(segment))[0]?.toLowerCase()
 }
 
-function segmentChangesDirectory(segment: ShellSegment): boolean {
+function segmentChangesDirectory(segment: ShellSegment, shellDialect?: ShellDialect): boolean {
   const cmd = segmentCommand(segment)
+  if (cmd === "cd" && shellDialect === "cmd") {
+    return commandPathArgs(tokensWithoutRedirects(segment), { shellDialect }).length > 0
+  }
   return cmd === "cd" || cmd === "pushd"
 }
 
-function segmentHasWriteLikeOperation(segment: ShellSegment): boolean {
+function segmentHasWriteLikeOperation(segment: ShellSegment, shellDialect?: ShellDialect): boolean {
   if (segment.redirects.some((redirect) => redirect.isOutput && !redirect.isSafeReadOnlySink)) return true
   const tokens = tokensWithoutRedirects(segment)
-  return commandPathArgs(tokens).some((arg) => arg.operation !== "read")
+  return commandPathArgs(tokens, { shellDialect }).some((arg) => arg.operation !== "read")
 }
 
-function compoundCdWithWrite(parsed: ReturnType<typeof parseShellCommand>): boolean {
-  const cdIndex = parsed.segments.findIndex((segment) => segmentChangesDirectory(segment) && segment.nextOperator)
+function compoundCdWithWrite(parsed: ReturnType<typeof parseShellCommand>, shellDialect?: ShellDialect): boolean {
+  const cdIndex = parsed.segments.findIndex((segment) => segmentChangesDirectory(segment, shellDialect) && segment.nextOperator)
   if (cdIndex === -1) return false
-  return parsed.segments.slice(cdIndex + 1).some(segmentHasWriteLikeOperation)
+  return parsed.segments.slice(cdIndex + 1).some((segment) => segmentHasWriteLikeOperation(segment, shellDialect))
 }
 
-function nextCwdAfterSegment(segment: ShellSegment, cwd: string): string | undefined {
+function nextCwdAfterSegment(segment: ShellSegment, cwd: string, shellDialect?: ShellDialect): string | undefined {
   if (segment.nextOperator !== "and") return undefined
-  const cdTarget = commandPathArgs(tokensWithoutRedirects(segment))
+  const cdTarget = commandPathArgs(tokensWithoutRedirects(segment), { shellDialect })
     .find((arg) => arg.source === "cd target" || arg.source === "pushd target")
   if (!cdTarget) return undefined
 
@@ -950,16 +962,93 @@ function nextCwdAfterSegment(segment: ShellSegment, cwd: string): string | undef
   return resolvePathToken(clean, cwd)
 }
 
+function simpleCommandName(command: SimpleCommand): string | undefined {
+  return stripSafeWrappers(command.argv)[0]?.toLowerCase()
+}
+
+function simpleCommandChangesDirectory(command: SimpleCommand): boolean {
+  const cmd = simpleCommandName(command)
+  if (cmd === "cd" && command.dialect === "cmd") {
+    return commandPathArgs(command.argv, { shellDialect: command.dialect }).length > 0
+  }
+  return cmd === "cd" || cmd === "pushd"
+}
+
+function simpleCommandHasWriteLikeOperation(command: SimpleCommand): boolean {
+  if (command.redirects.some((redirect) => redirect.isOutput && !redirect.isSafeReadOnlySink)) return true
+  return commandPathArgs(command.argv, { shellDialect: command.dialect }).some((arg) => arg.operation !== "read")
+}
+
+function compoundCdWithWriteCommands(commands: readonly SimpleCommand[]): boolean {
+  const cdIndex = commands.findIndex((command) => simpleCommandChangesDirectory(command) && command.nextOperator)
+  if (cdIndex === -1) return false
+  return commands.slice(cdIndex + 1).some(simpleCommandHasWriteLikeOperation)
+}
+
+function nextCwdAfterSimpleCommand(command: SimpleCommand, cwd: string): string | undefined {
+  if (command.nextOperator !== "and") return undefined
+  const cdTarget = commandPathArgs(command.argv, { shellDialect: command.dialect })
+    .find((arg) => arg.source === "cd target" || arg.source === "pushd target")
+  if (!cdTarget) return undefined
+
+  const clean = stripSurroundingQuotes(cdTarget.token)
+  if (!clean || clean === "-") return undefined
+  if (containsUncPath(clean) || containsUnresolvedExpansion(clean) || containsGlob(clean)) return undefined
+  if (containsUnexpandedTilde(clean) && clean !== "~" && !clean.startsWith("~/") && !clean.startsWith("~\\")) return undefined
+  return resolvePathToken(clean, cwd)
+}
+
+function validateRedirect(redirect: SecurityRedirect, cwd: string, workspaceRoot: string): PathValidationResult {
+  if (redirect.isSafeReadOnlySink) return { allowed: true }
+  const operation: PathOperation = redirect.isOutput ? "write" : "read"
+  return validatePathToken(redirect.target, operation, cwd, workspaceRoot)
+}
+
+function validateParsedCommands(
+  parsed: SecurityParseResult,
+  cwd: string,
+  workspaceRoot: string,
+): PathValidationResult | null {
+  if (parsed.kind === "parse-unavailable") return null
+  if (parsed.kind === "too-complex") return fail(parsed.reason || "命令过于复杂，无法验证路径")
+
+  if (compoundCdWithWriteCommands(parsed.commands)) {
+    return fail("命令包含 cd/pushd 后继续执行写入操作，无法静态确认后续写入路径", true)
+  }
+
+  let effectiveCwd = cwd
+  for (const command of parsed.commands) {
+    for (const redirect of command.redirects) {
+      const result = validateRedirect(redirect, effectiveCwd, workspaceRoot)
+      if (!result.allowed) return result
+    }
+
+    for (const target of commandPathArgs(command.argv, { shellDialect: command.dialect })) {
+      const result = validatePathToken(target.token, target.operation, effectiveCwd, workspaceRoot, target.source)
+      if (!result.allowed) return result
+    }
+
+    effectiveCwd = nextCwdAfterSimpleCommand(command, effectiveCwd) ?? effectiveCwd
+  }
+
+  return { allowed: true }
+}
+
 export function validateCommandPaths(command: string, options: PathValidationOptions): PathValidationResult {
   const cwd = path.resolve(options.cwd || process.cwd())
   const workspaceRoot = path.resolve(options.workspaceRoot || cwd)
 
   if (!isInsidePath(cwd, workspaceRoot)) return fail(`工作目录不在 workspace 内: ${cwd}`, true)
 
-  const parsed = parseShellCommand(command)
+  const securityParsed = options.parsed ?? parseCommandForSecurity(command, { shellDialect: options.shellDialect })
+  const parsedResult = validateParsedCommands(securityParsed, cwd, workspaceRoot)
+  if (parsedResult) return parsedResult
+
+  const shellDialect = options.shellDialect ?? (process.platform === "win32" ? "cmd" : "posix-bash")
+  const parsed = parseShellCommand(command, { shellDialect })
   if (!parsed.ok) return fail(parsed.error ?? "命令解析失败，无法验证路径")
 
-  if (compoundCdWithWrite(parsed)) {
+  if (compoundCdWithWrite(parsed, shellDialect)) {
     return fail("命令包含 cd/pushd 后继续执行写入操作，无法静态确认后续写入路径", true)
   }
 
@@ -974,12 +1063,12 @@ export function validateCommandPaths(command: string, options: PathValidationOpt
     }
 
     const tokens = tokensWithoutRedirects(segment)
-    for (const target of commandPathArgs(tokens)) {
+    for (const target of commandPathArgs(tokens, { shellDialect })) {
       const result = validatePathToken(target.token, target.operation, effectiveCwd, workspaceRoot, target.source)
       if (!result.allowed) return result
     }
 
-    effectiveCwd = nextCwdAfterSegment(segment, effectiveCwd) ?? effectiveCwd
+    effectiveCwd = nextCwdAfterSegment(segment, effectiveCwd, shellDialect) ?? effectiveCwd
   }
 
   return { allowed: true }

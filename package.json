@@ -14,7 +14,7 @@
     "build:electron": "tsc -p tsconfig.electron.json && node scripts/compile-preload.mjs",
     "typecheck:frontend": "tsc -p src/frontend/tsconfig.frontend.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit && tsc -p src/frontend/tsconfig.frontend.json --noEmit",
-    "build": "tsc -p tsconfig.electron.json && node scripts/build-frontend.mjs",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.electron.json && node scripts/build-frontend.mjs",
     "dist:portable": "npm run build && electron-builder --win portable",
     "dist:dir": "npm run build && electron-builder --win dir",
     "test": "npm run test:unit && npm run test:routes && npm run test:frontend && node test/css-vars.mjs",
@@ -35,7 +35,16 @@
       "dist/**/*",
       "dist-electron/**/*"
     ],
-    "extraResources": [],
+    "extraResources": [
+      {
+        "from": "node_modules/web-tree-sitter/web-tree-sitter.wasm",
+        "to": "tree-sitter/web-tree-sitter.wasm"
+      },
+      {
+        "from": "node_modules/tree-sitter-bash/tree-sitter-bash.wasm",
+        "to": "tree-sitter/tree-sitter-bash.wasm"
+      }
+    ],
     "win": {
       "target": [
         {
@@ -60,7 +69,9 @@
     "happy-dom": "^20.10.6",
     "marked": "^18.0.5",
     "monaco-editor": "^0.55.1",
-    "source-map": "^0.7.6"
+    "source-map": "^0.7.6",
+    "tree-sitter-bash": "^0.25.1",
+    "web-tree-sitter": "^0.26.11"
   },
   "devDependencies": {
     "chokidar": "^4.0.0",

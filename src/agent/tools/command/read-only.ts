@@ -1,5 +1,6 @@
 import { isCommandSafeViaFlagParsing } from "./read-only-command-validation.js"
-import { parseShellCommand, tokensWithoutRedirects, type ShellSegment } from "./shell-parser.js"
+import { parseCommandForSecurity } from "./security-parser.js"
+import type { SecurityParseOptions, SecurityParseResult, SecurityRedirect, SimpleCommand } from "./security-ast.js"
 
 const READONLY_SIMPLE = new Set([
   "ls", "cat", "head", "tail", "less", "more",
@@ -15,15 +16,14 @@ const READONLY_SIMPLE = new Set([
   "dir", "fc", "findstr", "where",
 ])
 
-function segmentHasUnsafeOutput(segment: ShellSegment): boolean {
-  return segment.redirects.some((redirect) => redirect.isOutput && !redirect.isSafeReadOnlySink)
+function hasUnsafeOutput(redirects: readonly SecurityRedirect[]): boolean {
+  return redirects.some((redirect) => redirect.isOutput && !redirect.isSafeReadOnlySink)
 }
 
-function isSegmentReadOnly(segment: ShellSegment): boolean {
-  if (segment.parseError || segment.hasNewline || segment.hasShellExpansion) return false
-  if (segmentHasUnsafeOutput(segment)) return false
+function isSimpleCommandReadOnly(command: SimpleCommand): boolean {
+  if (hasUnsafeOutput(command.redirects)) return false
 
-  const tokens = tokensWithoutRedirects(segment)
+  const tokens = command.argv
   if (!tokens.length) return false
   const cmd = tokens[0]?.toLowerCase()
   const firstArg = tokens[1]
@@ -36,11 +36,14 @@ function isSegmentReadOnly(segment: ShellSegment): boolean {
   return isCommandSafeViaFlagParsing(tokens)
 }
 
-export function isCommandReadOnly(command: string): boolean {
+export function isCommandReadOnly(
+  command: string,
+  options: SecurityParseOptions & { parsed?: SecurityParseResult } = {},
+): boolean {
   const trimmed = command.trim()
   if (!trimmed) return false
 
-  const parsed = parseShellCommand(trimmed)
-  if (!parsed.ok) return false
-  return parsed.segments.every((segment) => isSegmentReadOnly(segment))
+  const parsed = options.parsed ?? parseCommandForSecurity(trimmed, options)
+  if (parsed.kind !== "simple") return false
+  return parsed.commands.every((command) => isSimpleCommandReadOnly(command))
 }
