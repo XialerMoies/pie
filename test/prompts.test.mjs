@@ -154,6 +154,14 @@ describe("prompts", () => {
       assert.ok(r.includes("代码风格"), "code_style（permanent）");
     });
 
+    it("tools_guidance 要求安全测试逐条调用 Command", async () => {
+      const mod = await import("../src/agent/prompts.ts");
+      const r = mod.resolveSystemPrompt();
+      assert.ok(r.includes("安全 smoke test"), "应覆盖安全 smoke 测试场景");
+      assert.ok(r.includes("每一条命令都原样逐条调用 Command"), "应要求逐条原样调用 Command");
+      assert.ok(r.includes("危险命令也应交给 Command 的内置安全层处理"), "危险命令应由工具安全层返回拦截");
+    });
+
     it("resolveSystemPrompt 返回非空字符串", async () => {
       const mod = await import("../src/agent/prompts.ts");
       const r = mod.resolveSystemPrompt();

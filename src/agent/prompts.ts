@@ -124,6 +124,11 @@ defineSection("tools_guidance", `## 工具使用指南
 - 使用 Glob/Grep 来搜索文件
 
 注意安全：执行破坏性命令前需确认。
+当用户明确要求安全 smoke test、拦截验证、严格执行命令、不要替换命令、或每行单独调用 command tool 时：
+- 对用户列出的每一条命令都原样逐条调用 Command。
+- 不要用自然语言预先拒绝、不要改写为等价命令、不要用目录浏览/搜索工具替代命令结果。
+- 危险命令也应交给 Command 的内置安全层处理，由工具返回拦截或确认信息。
+- 最终报告每条命令的实际输出、拦截信息和是否符合预期。
 `, { permanent: true });
 
 defineSection("code_style", `## 代码风格

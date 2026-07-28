@@ -54,6 +54,15 @@ function dialectUsesWindowsBackslash(dialect: ShellDialect): boolean {
   return dialect === "cmd" || dialect === "powershell"
 }
 
+export function shellDialectFromEnv(): ShellDialect | undefined {
+  const raw = process.env.MY_CODE_AGENT_SHELL_DIALECT?.trim().toLowerCase()
+  if (!raw) return undefined
+  if (raw === "cmd" || raw === "cmd.exe") return "cmd"
+  if (raw === "posix" || raw === "bash" || raw === "posix-bash" || raw === "git-bash") return "posix-bash"
+  if (raw === "powershell" || raw === "pwsh" || raw === "pwsh.exe" || raw === "powershell.exe") return "powershell"
+  return undefined
+}
+
 function shouldTreatBackslashAsEscape(inSingle: boolean, windowsShell: boolean): boolean {
   return !windowsShell && !inSingle
 }
@@ -249,7 +258,7 @@ function hasShellExpansion(text: string): boolean {
 }
 
 export function parseShellCommand(command: string, options: ShellParseOptions = {}): ShellParseResult {
-  const inferredDialect: ShellDialect = options.shellDialect ?? (process.platform === "win32" ? "cmd" : "posix-bash")
+  const inferredDialect: ShellDialect = options.shellDialect ?? shellDialectFromEnv() ?? (process.platform === "win32" ? "cmd" : "posix-bash")
   const parseOptions: Required<ShellParseOptions> = {
     shellDialect: inferredDialect,
     windowsShell: options.windowsShell ?? dialectUsesWindowsBackslash(inferredDialect),

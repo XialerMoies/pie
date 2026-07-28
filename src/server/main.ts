@@ -13,6 +13,7 @@ import { initAgent } from "../agent/index";
 import { createInterface } from "readline";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import { shellDialectFromEnv } from "../agent/tools/command/shell-parser";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(__dirname, "..");
@@ -30,6 +31,7 @@ async function main() {
     sessionsDir: SESSIONS_DIR,
     authFile: resolve(PI_CONFIG_DIR, "auth.json"),
     modelsFile: resolve(PI_CONFIG_DIR, "models.json"),
+    shellDialect: shellDialectFromEnv(),
   });
 
   console.log(`使用模型: ${session.model?.provider ?? "?"} / ${session.model?.id ?? "?"}`);

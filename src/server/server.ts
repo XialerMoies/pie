@@ -17,6 +17,7 @@ import { createCommandConfirmCallback } from "./routes/chat";
 import type { ServerContext, ChatStreamState, TraceEvent, AssistantBlock } from "./routes/types";
 import { TsserverManager } from "./ts-server";
 import { mark, logTiming } from "./timing";
+import { shellDialectFromEnv } from "../agent/tools/command/shell-parser";
 // 不再移动活跃 session 文件——只在 header 标记 workspace
 export function tagSessionHeader(sessionFile: string | undefined, ws: string): void {
   if (!sessionFile) return
@@ -458,6 +459,7 @@ async function main() {
     authFile: resolve(PI_CONFIG_DIR, "auth.json"),
     modelsFile: resolve(PI_CONFIG_DIR, "models.json"),
     permissionMode: "default",
+    shellDialect: shellDialectFromEnv(),
     confirmCommand: createCommandConfirmCallback(chatStream),
   });
 

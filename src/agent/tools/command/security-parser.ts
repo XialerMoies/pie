@@ -1,4 +1,4 @@
-import { parseShellCommand, tokensWithoutRedirects, type ShellRedirect, type ShellSegment } from "./shell-parser.js"
+import { parseShellCommand, shellDialectFromEnv, tokensWithoutRedirects, type ShellRedirect, type ShellSegment } from "./shell-parser.js"
 import type { SecurityParseOptions, SecurityParseResult, SecurityRedirect, ShellDialect, SimpleCommand } from "./security-ast.js"
 import { parseBashCommandWithTreeSitter } from "./tree-sitter-bash-parser.js"
 
@@ -9,7 +9,7 @@ const UNICODE_WHITESPACE_RE = /[\u00A0\u1680\u180E\u2000-\u200B\u2028\u2029\u202
 const POSIX_SHELLS = new Set(["bash", "bash.exe", "sh", "sh.exe", "zsh", "zsh.exe"])
 
 export function defaultShellDialect(): ShellDialect {
-  return process.platform === "win32" ? "cmd" : "posix-bash"
+  return shellDialectFromEnv() ?? (process.platform === "win32" ? "cmd" : "posix-bash")
 }
 
 function envAssignment(token: string): { name: string; value: string } | null {
@@ -259,4 +259,21 @@ export async function parseCommandForSecurityAsync(
 
   const result = parseWithLegacyAdapter(command, dialect)
   return parseShellWrapperIfPresentAsync(result, depth)
+}
+
+export async function parseCommandForSecurityWithTreeSitterAsync(
+  command: string,
+  options: SecurityParseOptions = {},
+  depth = 0,
+): Promise<SecurityParseResult> {
+  const dialect = options.shellDialect ?? defaultShellDialect()
+  const precheck = precheckCommand(command, dialect)
+  if (precheck) return precheck
+  if (dialect !== "posix-bash") {
+    return { kind: "parse-unavailable", reason: "Tree-sitter bash parser only supports POSIX shell" }
+  }
+  return parseShellWrapperIfPresentAsync(
+    await parseBashCommandWithTreeSitter(command, { shellDialect: dialect }, depth),
+    depth,
+  )
 }

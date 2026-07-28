@@ -33,10 +33,23 @@ import { ok, deepEqual, equal } from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { isReadOnlyCommand, isDangerousCommand } from "../src/agent/tools/command.ts"
+import {
+  commandSecurityVerdictShadowDiff,
+  commandTool,
+  isDangerousCommand,
+  isReadOnlyCommand,
+  resolveBashExecutable,
+  shellDialectForCommand,
+} from "../src/agent/tools/command.ts"
 import { validateCommandPaths } from "../src/agent/tools/command/path-validation.ts"
 import { isCommandReadOnly } from "../src/agent/tools/command/read-only.ts"
-import { parseCommandForSecurity, parseCommandForSecurityAsync, securityParseResultsDifferForShadow } from "../src/agent/tools/command/security-parser.ts"
+import {
+  defaultShellDialect,
+  parseCommandForSecurity,
+  parseCommandForSecurityAsync,
+  parseCommandForSecurityWithTreeSitterAsync,
+  securityParseResultsDifferForShadow,
+} from "../src/agent/tools/command/security-parser.ts"
 import { parseShellCommand, tokensWithoutRedirects } from "../src/agent/tools/command/shell-parser.ts"
 
 function tempWorkspace() {
@@ -44,6 +57,32 @@ function tempWorkspace() {
   const workspace = join(root, "workspace")
   mkdirSync(workspace, { recursive: true })
   return { root, workspace }
+}
+
+async function withEnvVar(name, value, fn) {
+  const previous = process.env[name]
+  if (value === undefined) delete process.env[name]
+  else process.env[name] = value
+  try {
+    return await fn()
+  } finally {
+    if (previous === undefined) delete process.env[name]
+    else process.env[name] = previous
+  }
+}
+
+function configuredBashPath() {
+  const configured = (process.env.MY_CODE_AGENT_BASH_PATH || "").replace(/^["']|["']$/g, "")
+  if (configured && existsSync(configured)) return configured
+  for (const candidate of [
+    "C:\\Program Files\\Git\\bin\\bash.exe",
+    "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+    "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+    "C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe",
+  ]) {
+    if (existsSync(candidate)) return candidate
+  }
+  return undefined
 }
 
 // ─── shell parser ─────────────────────────────────────
@@ -104,6 +143,15 @@ describe("shell parser", () => {
 // ─── security parser facade ────────────────────────────
 
 describe("security parser facade", () => {
+  it("defaultShellDialect should respect MY_CODE_AGENT_SHELL_DIALECT", async () => {
+    await withEnvVar("MY_CODE_AGENT_SHELL_DIALECT", "posix-bash", async () => {
+      equal(defaultShellDialect(), "posix-bash")
+      const parsed = parseShellCommand(String.raw`cat foo\ bar`)
+      equal(parsed.ok, true)
+      deepEqual(tokensWithoutRedirects(parsed.segments[0]), ["cat", "foo bar"])
+    })
+  })
+
   it("应输出 SimpleCommand/env/redirect 合约", () => {
     const parsed = parseCommandForSecurity('FOO=bar grep "a|b" file.txt | wc -l', { shellDialect: "posix-bash" })
     equal(parsed.kind, "simple")
@@ -155,6 +203,12 @@ describe("security parser facade", () => {
     equal(parsed.kind, "too-complex")
   })
 
+  it("Tree-sitter facade 应先执行安全预检查", async () => {
+    const parsed = await parseCommandForSecurityWithTreeSitterAsync("echo\u00a0hi", { shellDialect: "posix-bash" })
+    equal(parsed.kind, "too-complex")
+    ok(parsed.kind === "too-complex" && parsed.reason.includes("Unicode whitespace"))
+  })
+
   it("Tree-sitter async 入口应解析 bash -lc 的静态内层命令", async () => {
     const parsed = await parseCommandForSecurityAsync('bash -lc "echo hi > out.txt"', { shellDialect: "posix-bash" })
     equal(parsed.kind, "simple")
@@ -170,6 +224,15 @@ describe("security parser facade", () => {
 
     const tooComplex = await parseCommandForSecurityAsync("echo $(touch marker)", { shellDialect: "posix-bash" })
     equal(securityParseResultsDifferForShadow(treeSitter, tooComplex), true)
+  })
+
+  it("verdict shadow helper compares danger/readOnly/path results", async () => {
+    const diff = await commandSecurityVerdictShadowDiff("cat package.json", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+      shellDialect: "posix-bash",
+    })
+    equal(diff, null)
   })
 
   it("too-complex parsed results fail closed for readOnly and path validation", () => {
@@ -1289,6 +1352,11 @@ describe("isDangerousCommand", () => {
 // ─── execute 集成拦截 ───────────────────────────────────
 
 describe("commandTool.execute 安全拦截", () => {
+  it("command tool description should tell model to use tool for security tests", () => {
+    ok(commandTool.description.includes("安全测试时也要原样调用本工具"), commandTool.description)
+    ok(commandTool.description.includes("危险命令由工具内置安全层返回拦截"), commandTool.description)
+  })
+
   it("危险命令应被拦截而不执行", async () => {
     const { commandTool } = await import("../src/agent/tools/command.ts")
     const result = await commandTool.execute(
@@ -1363,10 +1431,62 @@ describe("commandTool.execute 安全拦截", () => {
     try {
       const result = await commandTool.execute(
         { command: "mkdir -p src data out" },
-        { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
+        { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk", shellDialect: "cmd" },
       )
       ok(result.includes("Windows"), "应提示 Windows cmd.exe 兼容性问题")
       equal(existsSync(join(workspace, "-p")), false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("Windows 未显式配置 shell 时应为明显 POSIX 命令自动选择 Git Bash", async () => {
+    if (process.platform !== "win32") return
+    const bashPath = configuredBashPath()
+    if (!bashPath) return
+
+    const { root, workspace } = tempWorkspace()
+    try {
+      await withEnvVar("MY_CODE_AGENT_SHELL_DIALECT", undefined, async () => {
+        await withEnvVar("MY_CODE_AGENT_BASH_PATH", bashPath, async () => {
+          equal(shellDialectForCommand("pwd"), "posix-bash")
+          equal(shellDialectForCommand("mkdir -p data"), "posix-bash")
+          equal(shellDialectForCommand("cat data/out.txt"), "posix-bash")
+          equal(shellDialectForCommand('bash -lc "echo hi > data/bash.txt"'), "posix-bash")
+          equal(shellDialectForCommand("echo hello > data/out.txt"), "cmd")
+          equal(shellDialectForCommand("mkdir -p data", { shellDialect: "cmd" }), "cmd")
+
+          const mkdirResult = await commandTool.execute(
+            { command: "mkdir -p data" },
+            { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
+          )
+          ok(!mkdirResult.includes("Windows"), mkdirResult)
+
+          const writeResult = await commandTool.execute(
+            { command: "echo hello > data/out.txt" },
+            { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
+          )
+          ok(!writeResult.includes("No such file"), writeResult)
+
+          const catResult = await commandTool.execute(
+            { command: "cat data/out.txt" },
+            { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
+          )
+          ok(catResult.includes("hello"), catResult)
+
+          const bashWriteResult = await commandTool.execute(
+            { command: 'bash -lc "echo hi > data/bash.txt"' },
+            { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
+          )
+          ok(!bashWriteResult.includes("No such file"), bashWriteResult)
+
+          const bashCatResult = await commandTool.execute(
+            { command: 'bash -lc "cat data/bash.txt"' },
+            { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
+          )
+          ok(bashCatResult.includes("hi"), bashCatResult)
+        })
+      })
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1383,6 +1503,37 @@ describe("commandTool.execute 安全拦截", () => {
       )
       ok(result.includes(workspace), "bare cd should print the current workspace path")
       ok(!result.includes("⛔"), "bare cd should not be blocked by path validation")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("Windows cmd mode should reject PowerShell-style MY_CODE_AGENT env setup", async () => {
+    if (process.platform !== "win32") return
+    const { root, workspace } = tempWorkspace()
+    try {
+      const result = await commandTool.execute(
+        { command: "echo $env:MY_CODE_AGENT_TREE_SITTER_SHADOW" },
+        { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk", shellDialect: "cmd" },
+      )
+      ok(result.includes("cmd.exe"), result)
+      ok(result.includes("$env:"), result)
+      ok(result.includes("启动桌面端前"), result)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("Windows cmd mode should warn that set MY_CODE_AGENT only affects child cmd", async () => {
+    if (process.platform !== "win32") return
+    const { root, workspace } = tempWorkspace()
+    try {
+      const result = await commandTool.execute(
+        { command: "set MY_CODE_AGENT_TREE_SITTER_SHADOW=1 && echo %MY_CODE_AGENT_TREE_SITTER_SHADOW%" },
+        { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk", shellDialect: "cmd" },
+      )
+      ok(result.includes("本次 cmd 子进程"), result)
+      ok(result.includes("启动桌面端前"), result)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1505,6 +1656,59 @@ describe("commandTool 权限模式", () => {
       ok(result.includes("⛔"), "workspace 外写入不应在 dontAsk 下静默执行")
       ok(result.includes("路径安全检查"), "应提示路径安全检查")
       equal(existsSync(join(root, "outside-command-security-test.txt")), false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("posix-bash shellDialect should execute through configured Git Bash on Windows", async () => {
+    const bashPath = configuredBashPath()
+    if (!bashPath) return
+
+    const { root, workspace } = tempWorkspace()
+    try {
+      await withEnvVar("MY_CODE_AGENT_BASH_PATH", bashPath, async () => {
+        equal(resolveBashExecutable(), bashPath)
+        const result = await commandTool.execute(
+          { command: "mkdir -p data && echo bash-ok > data/out.txt && cat data/out.txt" },
+          {
+            cwd: workspace,
+            workspace,
+            sessionId: "",
+            permissionMode: "dontAsk",
+            shellDialect: "posix-bash",
+          },
+        )
+        ok(result.includes("bash-ok"), result)
+        equal(existsSync(join(workspace, "data", "out.txt")), true)
+
+        if (process.platform === "win32") {
+          const whereResult = await commandTool.execute(
+            { command: "where bash" },
+            {
+              cwd: workspace,
+              workspace,
+              sessionId: "",
+              permissionMode: "dontAsk",
+              shellDialect: "cmd",
+            },
+          )
+          ok(whereResult.toLowerCase().includes("bash.exe"), whereResult)
+
+          const cmdBashResult = await commandTool.execute(
+            { command: "bash -lc \"echo cmd-bash-ok > data/from-cmd-bash.txt && cat data/from-cmd-bash.txt\"" },
+            {
+              cwd: workspace,
+              workspace,
+              sessionId: "",
+              permissionMode: "dontAsk",
+              shellDialect: "cmd",
+            },
+          )
+          ok(cmdBashResult.includes("cmd-bash-ok"), cmdBashResult)
+          equal(existsSync(join(workspace, "data", "from-cmd-bash.txt")), true)
+        }
+      })
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1635,9 +1839,10 @@ describe("runtime 集成链路", () => {
   it("RuntimeConfig 权限字段应转换为工具 extraCtx", async () => {
     const { buildToolContextExtra } = await import("../src/agent/runtime.ts")
     const confirmCommand = async () => true
-    const extraCtx = buildToolContextExtra(runtimeConfig({ permissionMode: "plan", confirmCommand }))
+    const extraCtx = buildToolContextExtra(runtimeConfig({ permissionMode: "plan", confirmCommand, shellDialect: "posix-bash" }))
     equal(extraCtx?.permissionMode, "plan")
     equal(extraCtx?.confirmCommand, confirmCommand)
+    equal(extraCtx?.shellDialect, "posix-bash")
   })
 
   it("getCustomTools + extraCtx 不传时应 fail-closed", async () => {

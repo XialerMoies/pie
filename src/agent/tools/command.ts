@@ -13,13 +13,15 @@
  */
 import type { AgentTool, ToolContext } from "../types.js"
 import { spawn } from "child_process"
+import { existsSync } from "fs"
+import { dirname } from "path"
 import { StringDecoder } from "string_decoder"
 import { TextDecoder } from "util"
 import { validateCommandPaths } from "./command/path-validation.js"
 import { isCommandReadOnly } from "./command/read-only.js"
-import { defaultShellDialect, parseCommandForSecurity, parseCommandForSecurityAsync } from "./command/security-parser.js"
+import { defaultShellDialect, parseCommandForSecurity, parseCommandForSecurityAsync, parseCommandForSecurityWithTreeSitterAsync } from "./command/security-parser.js"
 import type { SecurityParseResult, SecurityRedirect, ShellDialect, SimpleCommand } from "./command/security-ast.js"
-import { parseShellCommand, tokensWithoutRedirects } from "./command/shell-parser.js"
+import { parseShellCommand, shellDialectFromEnv, tokensWithoutRedirects } from "./command/shell-parser.js"
 
 const MAX_OUTPUT = 100 * 1024 // 100KB 总输出上限
 const COMMAND_TIMEOUT = 300_000 // 5 分钟
@@ -723,6 +725,44 @@ export function isDangerousCommand(cmd: string, options: DangerousCommandOptions
 
 function isWindows(): boolean { return process.platform === "win32" }
 
+function stripOuterQuotes(value: string): string {
+  const trimmed = value.trim()
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
+export function resolveBashExecutable(): string | undefined {
+  const configured = stripOuterQuotes(process.env.MY_CODE_AGENT_BASH_PATH ?? "")
+  if (configured) return existsSync(configured) ? configured : undefined
+  if (!isWindows()) return process.env.SHELL || "bash"
+
+  const candidates = [
+    "C:\\Program Files\\Git\\bin\\bash.exe",
+    "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+    "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+    "C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe",
+  ]
+  return candidates.find((candidate) => existsSync(candidate))
+}
+
+function commandExecutionEnv(): NodeJS.ProcessEnv {
+  if (!isWindows()) return process.env
+
+  const bashExecutable = resolveBashExecutable()
+  if (!bashExecutable) return process.env
+
+  const env: NodeJS.ProcessEnv = { ...process.env }
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "Path"
+  const currentPath = env[pathKey] ?? ""
+  const bashDir = dirname(bashExecutable)
+  const pathParts = currentPath.split(";").filter(Boolean)
+  const hasBashDir = pathParts.some((part) => part.toLowerCase() === bashDir.toLowerCase())
+  if (!hasBashDir) env[pathKey] = [bashDir, ...pathParts].join(";")
+  return env
+}
+
 function decodeCommandChunk(data: Buffer, decoder: StringDecoder): string {
   const text = decoder.write(data)
   if (!isWindows() || !text.includes("�")) return text
@@ -731,6 +771,13 @@ function decodeCommandChunk(data: Buffer, decoder: StringDecoder): string {
 
 function windowsCompatibilityWarning(cmd: string, shellDialect = defaultShellDialect()): string | undefined {
   if (shellDialect !== "cmd") return undefined
+  if (/\$env:MY_CODE_AGENT_[A-Z0-9_]+/i.test(cmd)) {
+    return "⚠ 当前 command tool 使用 cmd.exe，$env:... 是 PowerShell 语法；并且在对话里设置环境变量不会影响已经启动的桌面端。请在启动桌面端前的 PowerShell 窗口设置 MY_CODE_AGENT_*。"
+  }
+  if (/^\s*set\s+MY_CODE_AGENT_[A-Z0-9_]+\s*=/i.test(cmd)) {
+    return "⚠ set MY_CODE_AGENT_* 只会影响本次 cmd 子进程，不会改变已经启动的桌面端进程。请在启动桌面端前设置环境变量。"
+  }
+
   const parsed = parseShellCommand(cmd, { shellDialect: "cmd" })
   if (!parsed.ok) return undefined
 
@@ -744,6 +791,149 @@ function windowsCompatibilityWarning(cmd: string, shellDialect = defaultShellDia
   return undefined
 }
 
+function firstCommandTokens(cmd: string, shellDialect: ShellDialect): string[] {
+  const parsed = parseShellCommand(cmd, { shellDialect })
+  for (const segment of parsed.segments) {
+    const tokens = tokensWithoutRedirects(segment)
+    if (tokens.length > 0) return tokens
+  }
+  return []
+}
+
+function commandLooksPosixForWindows(cmd: string): boolean {
+  const tokens = firstCommandTokens(cmd, "posix-bash")
+  let commandIndex = 0
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[commandIndex] ?? "")) commandIndex++
+
+  const command = baseCommandName(tokens[commandIndex])
+  if (!command) return false
+  if (["pwd", "ls", "cat", "bash", "sh", "zsh"].includes(command)) return true
+  if (command === "mkdir" && tokens.slice(commandIndex + 1).some((token) => token === "-p" || token === "--parents")) {
+    return true
+  }
+  return false
+}
+
+export function shellDialectForCommand(cmd: string, ctx?: Pick<ToolContext, "shellDialect">): ShellDialect {
+  const configured = ctx?.shellDialect ?? shellDialectFromEnv()
+  if (configured) return configured
+
+  const fallback = defaultShellDialect()
+  if (!isWindows() || fallback !== "cmd") return fallback
+  if (!resolveBashExecutable()) return fallback
+  return commandLooksPosixForWindows(cmd) ? "posix-bash" : fallback
+}
+
+export interface CommandSecurityVerdictsForShadow {
+  danger: DangerResult
+  readOnly: boolean
+  path: ReturnType<typeof validateCommandPaths>
+}
+
+export interface CommandSecurityVerdictShadowDiff {
+  legacy: CommandSecurityVerdictsForShadow
+  treeSitter: CommandSecurityVerdictsForShadow
+}
+
+export interface CommandSecurityVerdictShadowOptions {
+  cwd: string
+  workspaceRoot?: string
+  shellDialect?: ShellDialect
+}
+
+function commandSecurityEnvFlagEnabled(name: string): boolean {
+  const value = process.env[name]?.toLowerCase()
+  return value === "1" || value === "true" || value === "yes" || value === "on"
+}
+
+function treeSitterVerdictShadowEnabled(): boolean {
+  return commandSecurityEnvFlagEnabled("MY_CODE_AGENT_TREE_SITTER_SHADOW") ||
+    commandSecurityEnvFlagEnabled("MY_CODE_AGENT_TREE_SITTER_SHADOW_ONLY")
+}
+
+function normalizeDangerForShadow(result: DangerResult): object {
+  return result.dangerous
+    ? { dangerous: true, reason: result.reason }
+    : { dangerous: false }
+}
+
+function normalizePathForShadow(result: ReturnType<typeof validateCommandPaths>): object {
+  if (result.allowed) return { allowed: true }
+  return {
+    allowed: false,
+    reason: result.reason,
+    requiresConfirmation: result.requiresConfirmation,
+    hardDeny: result.hardDeny === true,
+  }
+}
+
+function normalizeVerdictsForShadow(verdicts: CommandSecurityVerdictsForShadow): object {
+  return {
+    danger: normalizeDangerForShadow(verdicts.danger),
+    readOnly: verdicts.readOnly,
+    path: normalizePathForShadow(verdicts.path),
+  }
+}
+
+function securityVerdictsForShadow(
+  command: string,
+  parsed: SecurityParseResult,
+  options: Required<CommandSecurityVerdictShadowOptions>,
+): CommandSecurityVerdictsForShadow {
+  return {
+    danger: isDangerousCommand(command, { parsed, shellDialect: options.shellDialect }),
+    readOnly: isCommandReadOnly(command, { parsed, shellDialect: options.shellDialect }),
+    path: validateCommandPaths(command, {
+      cwd: options.cwd,
+      workspaceRoot: options.workspaceRoot,
+      shellDialect: options.shellDialect,
+      parsed,
+    }),
+  }
+}
+
+export function securityVerdictsDifferForShadow(
+  left: CommandSecurityVerdictsForShadow,
+  right: CommandSecurityVerdictsForShadow,
+): boolean {
+  return JSON.stringify(normalizeVerdictsForShadow(left)) !== JSON.stringify(normalizeVerdictsForShadow(right))
+}
+
+export async function commandSecurityVerdictShadowDiff(
+  command: string,
+  options: CommandSecurityVerdictShadowOptions,
+): Promise<CommandSecurityVerdictShadowDiff | null> {
+  const shellDialect = options.shellDialect ?? defaultShellDialect()
+  if (shellDialect !== "posix-bash") return null
+
+  const normalizedOptions: Required<CommandSecurityVerdictShadowOptions> = {
+    cwd: options.cwd,
+    workspaceRoot: options.workspaceRoot ?? options.cwd,
+    shellDialect,
+  }
+  const legacyParsed = parseCommandForSecurity(command, { shellDialect })
+  const treeSitterParsed = await parseCommandForSecurityWithTreeSitterAsync(command, { shellDialect })
+  if (treeSitterParsed.kind === "parse-unavailable") return null
+
+  const legacy = securityVerdictsForShadow(command, legacyParsed, normalizedOptions)
+  const treeSitter = securityVerdictsForShadow(command, treeSitterParsed, normalizedOptions)
+  return securityVerdictsDifferForShadow(legacy, treeSitter) ? { legacy, treeSitter } : null
+}
+
+async function maybeLogSecurityVerdictShadowDiff(
+  command: string,
+  options: CommandSecurityVerdictShadowOptions,
+): Promise<void> {
+  if (!treeSitterVerdictShadowEnabled()) return
+  const diff = await commandSecurityVerdictShadowDiff(command, options)
+  if (!diff) return
+  console.debug("[command-security] Tree-sitter verdict shadow diff", {
+    command,
+    legacy: normalizeVerdictsForShadow(diff.legacy),
+    treeSitter: normalizeVerdictsForShadow(diff.treeSitter),
+  })
+}
+
 // ─── 权限模式 ───────────────────────────────────────────
 
 async function askUser(cmd: string, reason: string, ctx?: ToolContext): Promise<boolean> {
@@ -754,14 +944,23 @@ async function askUser(cmd: string, reason: string, ctx?: ToolContext): Promise<
   } catch { return false }
 }
 
-async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: ToolContext): Promise<string> {
+async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: ToolContext, shellDialect = shellDialectForCommand(cmd, ctx)): Promise<string> {
   const cwd = String(args.cwd || ctx?.cwd || process.cwd())
   const timeout = Number(args.timeout) || COMMAND_TIMEOUT
 
   return new Promise<string>((resolve, reject) => {
     const isWin = isWindows()
+    const bashExecutable = shellDialect === "posix-bash" ? resolveBashExecutable() : undefined
+    if (shellDialect === "posix-bash" && !bashExecutable) {
+      resolve("⛔ POSIX Bash shell 未找到。请设置 MY_CODE_AGENT_BASH_PATH 指向 Git Bash 的 bash.exe。")
+      return
+    }
+
+    const env = commandExecutionEnv()
     const shellCommand = isWin ? `chcp 65001>nul && ${cmd}` : cmd
-    const child = spawn(shellCommand, [], { cwd, stdio: ["pipe", "pipe", "pipe"], shell: true, timeout, windowsHide: true })
+    const child = bashExecutable
+      ? spawn(bashExecutable, ["-lc", cmd], { cwd, env, stdio: ["pipe", "pipe", "pipe"], shell: false, timeout, windowsHide: true })
+      : spawn(shellCommand, [], { cwd, env, stdio: ["pipe", "pipe", "pipe"], shell: true, timeout, windowsHide: true })
     let stdout = "", stderr = ""
     const stdoutDecoder = new StringDecoder("utf8"), stderrDecoder = new StringDecoder("utf8")
     const pushUpdate = (chunk: string) => ctx?.onUpdate?.(chunk)
@@ -796,7 +995,7 @@ async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: Tool
 
 export const commandTool: AgentTool = {
   name: "command",
-  description: "执行 shell 命令，支持流式实时 stdout/stderr。Windows 默认使用 cmd.exe 语法（dir/type/copy/move/mkdir；不要用 mkdir -p，cat/rg 仅在已安装时可用）。readOnly=true 时仅可执行查看命令。",
+  description: "执行 shell 命令，支持流式实时 stdout/stderr。Windows 未显式配置 shell 时默认使用 cmd.exe；明显 POSIX 的 pwd/ls/cat/mkdir -p/bash -lc 命令会自动走 Git Bash（如已安装）。readOnly=true 时仅可执行查看命令。安全测试时也要原样调用本工具；危险命令由工具内置安全层返回拦截或确认信息，不要在调用前改写或自然语言拒绝。",
   parameters: {
     type: "object",
     properties: {
@@ -814,11 +1013,15 @@ export const commandTool: AgentTool = {
     const cmd = String(args.command ?? "").trim()
     if (!cmd) return "请输入要执行的命令"
     const executionCwd = String(args.cwd || ctx?.cwd || process.cwd())
-    const shellDialect = ctx?.shellDialect ?? defaultShellDialect()
+    const workspaceRoot = String(ctx?.workspace || ctx?.cwd || process.cwd())
+    const shellDialect = shellDialectForCommand(cmd, ctx)
     const parsed = await parseCommandForSecurityAsync(cmd, { shellDialect })
 
     const danger = isDangerousCommand(cmd, { parsed, shellDialect })
-    if (danger.dangerous) return `⛔ 危险命令已拦截: ${danger.reason}\n如需执行该命令，请在终端中手动运行。`
+    if (danger.dangerous) {
+      await maybeLogSecurityVerdictShadowDiff(cmd, { cwd: executionCwd, workspaceRoot, shellDialect })
+      return `⛔ 危险命令已拦截: ${danger.reason}\n如需执行该命令，请在终端中手动运行。`
+    }
 
     const compatibilityWarning = windowsCompatibilityWarning(cmd, shellDialect)
     if (compatibilityWarning) return compatibilityWarning
@@ -827,10 +1030,11 @@ export const commandTool: AgentTool = {
     const readOnlyRequested = args.readOnly === true
     const pathResult = validateCommandPaths(cmd, {
       cwd: executionCwd,
-      workspaceRoot: ctx?.workspace || ctx?.cwd || process.cwd(),
+      workspaceRoot,
       shellDialect,
       parsed,
     })
+    await maybeLogSecurityVerdictShadowDiff(cmd, { cwd: executionCwd, workspaceRoot, shellDialect })
 
     if (!pathResult.allowed && pathResult.hardDeny) {
       return `⛔ 路径安全检查未通过: ${pathResult.reason}`
@@ -842,7 +1046,7 @@ export const commandTool: AgentTool = {
       if (ctx?.permissionMode === "plan") {
         if (!(await askUser(cmd, "当前为 plan 模式，所有命令需确认", ctx))) return "⛔ 用户已取消执行"
       }
-      return executeCmd(cmd, args, ctx)
+      return executeCmd(cmd, args, ctx, shellDialect)
     }
 
     const mode = ctx?.permissionMode ?? "default"
@@ -870,6 +1074,6 @@ export const commandTool: AgentTool = {
       }
     }
 
-    return executeCmd(cmd, args, ctx)
+    return executeCmd(cmd, args, ctx, shellDialect)
   },
 }

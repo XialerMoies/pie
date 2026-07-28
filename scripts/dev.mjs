@@ -202,7 +202,8 @@ function startElectron() {
 // ─── 文件监听 ─────────────────────────────────────────────────
 function setupWatcher() {
   const serverWatcher = watch([
-    path.join(ELECTRON_SRC, "server", "server.ts"),
+    path.join(ELECTRON_SRC, "server"),
+    path.join(ELECTRON_SRC, "agent"),
     path.join(ELECTRON_SRC, "frontend", "dashboard.html"),
   ], { ignoreInitial: true });
 
