@@ -36,11 +36,19 @@ export interface ShellParseResult {
   error?: string
 }
 
+export interface ShellParseOptions {
+  windowsShell?: boolean
+}
+
 interface SegmentSlice {
   text: string
   start: number
   end: number
   nextOperator?: ShellSegmentOperator
+}
+
+function shouldTreatBackslashAsEscape(inSingle: boolean, windowsShell: boolean): boolean {
+  return !windowsShell && !inSingle
 }
 
 function operatorAt(command: string, index: number): { length: number; operator: ShellSegmentOperator } | null {
@@ -54,7 +62,7 @@ function operatorAt(command: string, index: number): { length: number; operator:
   return null
 }
 
-function splitSegments(command: string): SegmentSlice[] {
+function splitSegments(command: string, options: Required<ShellParseOptions>): SegmentSlice[] {
   const segments: SegmentSlice[] = []
   let inSingle = false
   let inDouble = false
@@ -67,7 +75,7 @@ function splitSegments(command: string): SegmentSlice[] {
       escaped = false
       continue
     }
-    if (c === "\\" && !inSingle) {
+    if (c === "\\" && shouldTreatBackslashAsEscape(inSingle, options.windowsShell)) {
       escaped = true
       continue
     }
@@ -116,7 +124,7 @@ function quoteKind(hasSingle: boolean, hasDouble: boolean): ShellToken["quote"] 
   return "none"
 }
 
-function tokenizeSegment(text: string, absoluteStart: number): { tokens: ShellToken[]; error?: string } {
+function tokenizeSegment(text: string, absoluteStart: number, options: Required<ShellParseOptions>): { tokens: ShellToken[]; error?: string } {
   const tokens: ShellToken[] = []
   let i = 0
 
@@ -149,7 +157,7 @@ function tokenizeSegment(text: string, absoluteStart: number): { tokens: ShellTo
         i++
         continue
       }
-      if (c === "\\" && !inSingle) {
+      if (c === "\\" && shouldTreatBackslashAsEscape(inSingle, options.windowsShell)) {
         const next = text[i + 1]
         if (next !== undefined) {
           raw += next
@@ -233,11 +241,14 @@ function hasShellExpansion(text: string): boolean {
   return /\$\(|`|[<>]\(/.test(text)
 }
 
-export function parseShellCommand(command: string): ShellParseResult {
-  const slices = splitSegments(command)
+export function parseShellCommand(command: string, options: ShellParseOptions = {}): ShellParseResult {
+  const parseOptions: Required<ShellParseOptions> = {
+    windowsShell: options.windowsShell ?? process.platform === "win32",
+  }
+  const slices = splitSegments(command, parseOptions)
   const segments: ShellSegment[] = []
   for (const slice of slices) {
-    const tokenized = tokenizeSegment(slice.text, slice.start)
+    const tokenized = tokenizeSegment(slice.text, slice.start, parseOptions)
     const segment: ShellSegment = {
       text: slice.text,
       start: slice.start,

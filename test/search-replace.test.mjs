@@ -17,7 +17,7 @@ import { resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 // 从 search-core 导入
-const { doReplace } = await import("../src/server/routes/search-core.js");
+const { doSearch, doReplace } = await import("../src/server/routes/search-core.js");
 
 function createTempDir() {
   return mkdtempSync(resolve(tmpdir(), "srtest-"));
@@ -166,6 +166,26 @@ describe("doReplace — skips binary files", () => {
 
     assert.strictEqual(result.files.length, 1);
     assert.strictEqual(result.files[0].file, "text.txt");
+  });
+});
+
+describe("doSearch — includes ordinary data directories", () => {
+  let dir;
+
+  before(() => {
+    dir = createTempDir();
+    write(dir, "src/index.ts", "const greeting = 'hello';");
+    write(dir, "data/input.txt", "apple\nhello\nbanana");
+  });
+
+  after(() => rmSync(dir, { recursive: true }));
+
+  it("searches text files under data/", () => {
+    const result = doSearch("hello", dir, "text", false, 20);
+    const files = result.results.map((r) => r.file).sort();
+
+    assert.deepStrictEqual(files, ["data/input.txt", "src/index.ts"]);
+    assert.strictEqual(result.total, 2);
   });
 });
 

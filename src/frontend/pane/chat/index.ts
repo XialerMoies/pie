@@ -279,7 +279,7 @@ function chatPaneRender(container: HTMLElement): void {
   const newBtn = document.getElementById("ch-new-btn");
   if (newBtn) {
     newBtn.addEventListener("click", () => {
-      (window as any).App?.Session?.newSession?.() || newSession();
+      (window as any).App?.Session?.newSession?.();
     });
   }
 

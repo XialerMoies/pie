@@ -69,7 +69,7 @@ export const BINARY_EXT = new Set([
 
 export const SKIP_DIRS = new Set([
   "node_modules", ".git", ".svn", ".claude",
-  "dist", "dist-electron", ".vscode", "data",
+  "dist", "dist-electron", ".vscode",
 ]);
 
 export const MAX_FILE_SIZE = 1 * 1024 * 1024;  // 1 MB

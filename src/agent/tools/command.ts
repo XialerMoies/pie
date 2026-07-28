@@ -17,6 +17,7 @@ import { StringDecoder } from "string_decoder"
 import { TextDecoder } from "util"
 import { validateCommandPaths } from "./command/path-validation.js"
 import { isCommandReadOnly } from "./command/read-only.js"
+import { parseShellCommand, tokensWithoutRedirects } from "./command/shell-parser.js"
 
 const MAX_OUTPUT = 100 * 1024 // 100KB 总输出上限
 const COMMAND_TIMEOUT = 300_000 // 5 分钟
@@ -425,6 +426,21 @@ function decodeCommandChunk(data: Buffer, decoder: StringDecoder): string {
   try { return new TextDecoder("gb18030").decode(data) } catch { return text }
 }
 
+function windowsCompatibilityWarning(cmd: string): string | undefined {
+  if (!isWindows()) return undefined
+  const parsed = parseShellCommand(cmd, { windowsShell: true })
+  if (!parsed.ok) return undefined
+
+  for (const segment of parsed.segments) {
+    const tokens = tokensWithoutRedirects(segment)
+    const command = tokens[0]?.toLowerCase()
+    if ((command === "mkdir" || command === "md") && tokens.slice(1).some((token) => token === "-p" || token === "--parents")) {
+      return "⚠ Windows 默认 shell 是 cmd.exe，不支持 mkdir -p；请改用: mkdir src data out"
+    }
+  }
+  return undefined
+}
+
 // ─── 权限模式 ───────────────────────────────────────────
 
 async function askUser(cmd: string, reason: string, ctx?: ToolContext): Promise<boolean> {
@@ -477,7 +493,7 @@ async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: Tool
 
 export const commandTool: AgentTool = {
   name: "command",
-  description: "执行 shell 命令，支持流式实时 stdout/stderr。readOnly=true 时仅可执行 ls/cat/grep 等查看命令。",
+  description: "执行 shell 命令，支持流式实时 stdout/stderr。Windows 默认使用 cmd.exe 语法（dir/type/copy/move/mkdir；不要用 mkdir -p，cat/rg 仅在已安装时可用）。readOnly=true 时仅可执行查看命令。",
   parameters: {
     type: "object",
     properties: {
@@ -498,6 +514,9 @@ export const commandTool: AgentTool = {
     const danger = isDangerousCommand(cmd)
     if (danger.dangerous) return `⛔ 危险命令已拦截: ${danger.reason}\n如需执行该命令，请在终端中手动运行。`
 
+    const compatibilityWarning = windowsCompatibilityWarning(cmd)
+    if (compatibilityWarning) return compatibilityWarning
+
     const cmdIsReadOnly = isReadOnlyCommand(cmd)
     const readOnlyRequested = args.readOnly === true
     const executionCwd = String(args.cwd || ctx?.cwd || process.cwd())
@@ -505,6 +524,10 @@ export const commandTool: AgentTool = {
       cwd: executionCwd,
       workspaceRoot: ctx?.workspace || ctx?.cwd || process.cwd(),
     })
+
+    if (!pathResult.allowed && pathResult.hardDeny) {
+      return `⛔ 路径安全检查未通过: ${pathResult.reason}`
+    }
 
     if (readOnlyRequested) {
       if (!cmdIsReadOnly) return `⛔ 当前处于只读模式，不允许执行非只读命令: ${cmd.slice(0, 100)}`

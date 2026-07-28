@@ -30,9 +30,19 @@
  */
 import { describe, it } from "node:test"
 import { ok, deepEqual, equal } from "node:assert/strict"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { isReadOnlyCommand, isDangerousCommand } from "../src/agent/tools/command.ts"
 import { validateCommandPaths } from "../src/agent/tools/command/path-validation.ts"
 import { parseShellCommand, tokensWithoutRedirects } from "../src/agent/tools/command/shell-parser.ts"
+
+function tempWorkspace() {
+  const root = mkdtempSync(join(tmpdir(), "cmd-security-"))
+  const workspace = join(root, "workspace")
+  mkdirSync(workspace, { recursive: true })
+  return { root, workspace }
+}
 
 // ─── shell parser ─────────────────────────────────────
 
@@ -70,6 +80,13 @@ describe("shell parser", () => {
     deepEqual(tokensWithoutRedirects(parsed.segments[1]), ["touch", "x"])
     equal(parsed.segments[0].nextOperator, "sequence")
   })
+
+  it("Windows shell 模式应保留路径反斜杠", () => {
+    const parsed = parseShellCommand(String.raw`type C:\tmp\input.txt > out\result.txt`, { windowsShell: true })
+    equal(parsed.ok, true)
+    deepEqual(tokensWithoutRedirects(parsed.segments[0]), ["type", String.raw`C:\tmp\input.txt`])
+    equal(parsed.segments[0].redirects[0].target, String.raw`out\result.txt`)
+  })
 })
 
 // ─── path validation ──────────────────────────────────
@@ -83,30 +100,33 @@ describe("validateCommandPaths", () => {
     equal(result.allowed, true)
   })
 
-  it("workspace 外写入路径应要求确认", () => {
+  it("workspace 外写入路径应硬拒绝", () => {
     const result = validateCommandPaths("echo hi > ../outside.txt", {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
     })
     equal(result.allowed, false)
+    equal(!result.allowed && result.hardDeny, true)
     ok(!result.allowed && result.reason.includes("workspace"))
   })
 
-  it("cd 后继续执行写入时应要求确认", () => {
+  it("cd 后继续执行写入时应硬拒绝", () => {
     const result = validateCommandPaths("cd subdir && echo hi > out.txt", {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
     })
     equal(result.allowed, false)
+    equal(!result.allowed && result.hardDeny, true)
     ok(!result.allowed && result.reason.includes("cd"))
   })
 
-  it("变量或通配符写入路径应要求确认", () => {
+  it("变量或通配符写入路径应硬拒绝", () => {
     const result = validateCommandPaths("touch %TEMP%\\agent-test.txt", {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
     })
     equal(result.allowed, false)
+    equal(!result.allowed && result.hardDeny, true)
   })
 
   it("cp 源路径和目标路径应按 read/write 分开验证", () => {
@@ -147,7 +167,7 @@ describe("validateCommandPaths", () => {
     ok(!targetDirectoryOutside.allowed && targetDirectoryOutside.reason.includes("写入路径"))
   })
 
-  it("只读命令的 workspace 外路径应要求确认", () => {
+  it("只读命令的 workspace 外路径应硬拒绝", () => {
     for (const cmd of [
       "cat ../outside.txt",
       "head -n 10 ../outside.log",
@@ -159,11 +179,13 @@ describe("validateCommandPaths", () => {
         workspaceRoot: process.cwd(),
       })
       equal(result.allowed, false, `${cmd} 应被路径检查拦下`)
+      equal(!result.allowed && result.hardDeny, true)
+      equal(!result.allowed && result.requiresConfirmation, false)
       ok(!result.allowed && result.reason.includes("读取路径"))
     }
   })
 
-  it("read glob 只校验 base 目录，write glob 应要求确认", () => {
+  it("read glob 只校验 base 目录，write glob 应硬拒绝", () => {
     const readInside = validateCommandPaths("cat src/*.ts", {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
@@ -182,6 +204,7 @@ describe("validateCommandPaths", () => {
       workspaceRoot: process.cwd(),
     })
     equal(writeGlob.allowed, false)
+    equal(!writeGlob.allowed && writeGlob.hardDeny, true)
     ok(!writeGlob.allowed && writeGlob.reason.includes("通配符"))
   })
 
@@ -207,7 +230,16 @@ describe("validateCommandPaths", () => {
       workspaceRoot: process.cwd(),
     })
     equal(outputVar.allowed, false)
+    equal(!outputVar.allowed && outputVar.hardDeny, true)
     ok(!outputVar.allowed && outputVar.reason.includes("变量"))
+
+    const windowsOutputVar = validateCommandPaths("echo hi > %OUT_FILE%", {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    })
+    equal(windowsOutputVar.allowed, false)
+    equal(!windowsOutputVar.allowed && windowsOutputVar.hardDeny, true)
+    ok(!windowsOutputVar.allowed && windowsOutputVar.reason.includes("变量"))
   })
 
   it("find/rg 按命令语义提取路径参数", () => {
@@ -307,12 +339,13 @@ describe("validateCommandPaths", () => {
     ok(!writeDirectoryOutside.allowed && writeDirectoryOutside.reason.includes("写入路径"))
   })
 
-  it("UNC 和无法静态解析的 tilde 变体应要求确认", () => {
+  it("UNC 应硬拒绝，无法静态解析的 tilde 读取应要求确认", () => {
     const unc = validateCommandPaths(String.raw`cat '\\server\share\secret.txt'`, {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
     })
     equal(unc.allowed, false)
+    equal(!unc.allowed && unc.hardDeny, true)
     ok(!unc.allowed && unc.reason.includes("UNC"))
 
     const tildeUser = validateCommandPaths("cat ~root/.ssh/id_rsa", {
@@ -320,10 +353,53 @@ describe("validateCommandPaths", () => {
       workspaceRoot: process.cwd(),
     })
     equal(tildeUser.allowed, false)
+    equal(!tildeUser.allowed && tildeUser.requiresConfirmation, true)
+    ok(!tildeUser.allowed && !tildeUser.hardDeny)
     ok(!tildeUser.allowed && tildeUser.reason.includes("用户目录"))
   })
 
-  it("cd 后接只读命令不因 cd 本身误杀，接写入仍要求确认", () => {
+  it("Windows 原生命令路径应参与 workspace 边界验证", () => {
+    const opts = {
+      cwd: process.cwd(),
+      workspaceRoot: process.cwd(),
+    }
+
+    equal(validateCommandPaths(String.raw`type package.json`, opts).allowed, true)
+    equal(validateCommandPaths(String.raw`dir src`, opts).allowed, true)
+    equal(validateCommandPaths(String.raw`findstr /s /m hello src\*`, opts).allowed, true)
+    equal(validateCommandPaths(String.raw`copy data\input.txt out\copy.txt`, opts).allowed, true)
+    equal(validateCommandPaths(String.raw`move out\copy.txt out\moved.txt`, opts).allowed, true)
+
+    const typeOutside = validateCommandPaths(String.raw`type ..\outside.txt`, opts)
+    equal(typeOutside.allowed, false)
+    ok(!typeOutside.allowed && typeOutside.reason.includes("读取路径"))
+
+    const dirOutside = validateCommandPaths(String.raw`dir ..\outside`, opts)
+    equal(dirOutside.allowed, false)
+    ok(!dirOutside.allowed && dirOutside.reason.includes("读取路径"))
+
+    const findstrOutside = validateCommandPaths(String.raw`findstr /s /m hello ..\*`, opts)
+    equal(findstrOutside.allowed, false)
+    ok(!findstrOutside.allowed && findstrOutside.reason.includes("读取路径"))
+
+    const findstrListFile = validateCommandPaths(String.raw`findstr /g:..\patterns.txt src\*`, opts)
+    equal(findstrListFile.allowed, false)
+    ok(!findstrListFile.allowed && findstrListFile.reason.includes("读取路径"))
+
+    const fcOutside = validateCommandPaths(String.raw`fc src\a.txt ..\b.txt`, opts)
+    equal(fcOutside.allowed, false)
+    ok(!fcOutside.allowed && fcOutside.reason.includes("读取路径"))
+
+    const copyOutside = validateCommandPaths(String.raw`copy data\input.txt ..\copy.txt`, opts)
+    equal(copyOutside.allowed, false)
+    ok(!copyOutside.allowed && copyOutside.reason.includes("写入路径"))
+
+    const uncType = validateCommandPaths(String.raw`type \\server\share\secret.txt`, opts)
+    equal(uncType.allowed, false)
+    ok(!uncType.allowed && uncType.reason.includes("UNC"))
+  })
+
+  it("cd 后接只读命令不因 cd 本身误杀，接写入应硬拒绝", () => {
     const readAfterCd = validateCommandPaths("cd src && ls", {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
@@ -347,6 +423,7 @@ describe("validateCommandPaths", () => {
       workspaceRoot: process.cwd(),
     })
     equal(writeAfterCd.allowed, false)
+    equal(!writeAfterCd.allowed && writeAfterCd.hardDeny, true)
     ok(!writeAfterCd.allowed && writeAfterCd.reason.includes("cd"))
 
     const previousDirectory = validateCommandPaths("cd - && ls", {
@@ -355,6 +432,27 @@ describe("validateCommandPaths", () => {
     })
     equal(previousDirectory.allowed, false)
     ok(!previousDirectory.allowed && previousDirectory.reason.includes("上一次目录"))
+  })
+
+  it("Windows cd /d 开关不应被当成路径，但目标仍需在 workspace 内", () => {
+    if (process.platform !== "win32") return
+    const { root, workspace } = tempWorkspace()
+    try {
+      const inside = validateCommandPaths(`cd /d "${workspace}" && dir`, {
+        cwd: workspace,
+        workspaceRoot: workspace,
+      })
+      equal(inside.allowed, true)
+
+      const outside = validateCommandPaths(`cd /d "${root}" && dir`, {
+        cwd: workspace,
+        workspaceRoot: workspace,
+      })
+      equal(outside.allowed, false)
+      ok(!outside.allowed && outside.reason.includes("读取路径"))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
@@ -452,6 +550,8 @@ describe("isReadOnlyCommand", () => {
     "ls -la | grep ts", "cat file | head -5 | tail -3",
     "git status && git log --oneline -3",
     "echo hello | grep hello",
+    "cd src && cat ../package.json",
+    "cd src && type ..\\package.json",
   ]) {
     it(`链式只读命令应全部通过: ${cmd}`, () => {
       ok(isReadOnlyCommand(cmd), `${cmd} 的所有分段应都是只读的`)
@@ -1016,6 +1116,59 @@ describe("commandTool.execute 安全拦截", () => {
     )
     ok(result.includes("read-only-ok"), "只读命令应正常执行")
   })
+
+  it("Windows 下 mkdir -p 应提示兼容性问题且不创建 -p 目录", async () => {
+    if (process.platform !== "win32") return
+    const { commandTool } = await import("../src/agent/tools/command.ts")
+    const { root, workspace } = tempWorkspace()
+    try {
+      const result = await commandTool.execute(
+        { command: "mkdir -p src data out" },
+        { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
+      )
+      ok(result.includes("Windows"), "应提示 Windows cmd.exe 兼容性问题")
+      equal(existsSync(join(workspace, "-p")), false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("只读模式下 cd 后继续读取 workspace 内文件应允许", async () => {
+    const { commandTool } = await import("../src/agent/tools/command.ts")
+    const { root, workspace } = tempWorkspace()
+    try {
+      mkdirSync(join(workspace, "src"), { recursive: true })
+      writeFileSync(join(workspace, "package.json"), "{\"name\":\"readonly-cd\"}\n", "utf-8")
+      const command = process.platform === "win32"
+        ? "cd src && type ..\\package.json"
+        : "cd src && cat ../package.json"
+      const result = await commandTool.execute(
+        { command, readOnly: true },
+        { cwd: workspace, workspace, sessionId: "" },
+      )
+      ok(result.includes("readonly-cd"), "cd 后读取 workspace 内文件应正常执行")
+      ok(!result.includes("⛔"), "不应被只读模式误拦截")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("Windows 只读模式下 cd /d workspace 后查看目录应允许", async () => {
+    if (process.platform !== "win32") return
+    const { commandTool } = await import("../src/agent/tools/command.ts")
+    const { root, workspace } = tempWorkspace()
+    try {
+      writeFileSync(join(workspace, "package.json"), "{\"name\":\"cd-d\"}\n", "utf-8")
+      const result = await commandTool.execute(
+        { command: `cd /d "${workspace}" && dir /b`, readOnly: true },
+        { cwd: workspace, workspace, sessionId: "" },
+      )
+      ok(result.includes("package.json"), "cd /d 后查看 workspace 目录应正常执行")
+      ok(!result.includes("⛔"), "不应把 /d 当成越界路径")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 // ─── 权限模式测试 ───────────────────────────────────
@@ -1079,18 +1232,77 @@ describe("commandTool 权限模式", () => {
     ok(result.includes("dontask-ok"), "dontAsk 模式应直接放行")
   })
 
-  it("dontAsk 模式 + workspace 外写入应要求确认并 fail-closed", async () => {
+  it("dontAsk 模式 + workspace 外写入应硬拒绝", async () => {
     const { commandTool } = await import("../src/agent/tools/command.ts")
-    const result = await commandTool.execute(
-      { command: "echo outside > ../outside-command-security-test.txt" },
-      {
-        cwd: process.cwd(), sessionId: "",
-        workspace: process.cwd(),
-        permissionMode: "dontAsk",
-      },
-    )
-    ok(result.includes("⛔"), "workspace 外写入不应在 dontAsk 下静默执行")
-    ok(result.includes("路径安全检查"), "应提示路径安全检查")
+    const { root, workspace } = tempWorkspace()
+    try {
+      const outsideTarget = process.platform === "win32"
+        ? "..\\outside-command-security-test.txt"
+        : "../outside-command-security-test.txt"
+      const result = await commandTool.execute(
+        { command: `echo outside > ${outsideTarget}` },
+        {
+          cwd: workspace, sessionId: "",
+          workspace,
+          permissionMode: "dontAsk",
+        },
+      )
+      ok(result.includes("⛔"), "workspace 外写入不应在 dontAsk 下静默执行")
+      ok(result.includes("路径安全检查"), "应提示路径安全检查")
+      equal(existsSync(join(root, "outside-command-security-test.txt")), false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("高风险路径失败应硬拒绝，确认回调也不能放行", async () => {
+    const { commandTool } = await import("../src/agent/tools/command.ts")
+    const { root, workspace } = tempWorkspace()
+    mkdirSync(join(workspace, "src"), { recursive: true })
+    let confirmCalls = 0
+
+    const outsideTarget = process.platform === "win32"
+      ? "..\\outside-write-command-security-test.txt"
+      : "../outside-write-command-security-test.txt"
+    const outsideRead = process.platform === "win32"
+      ? "type ..\\outside-read-command-security-test.txt"
+      : "cat ../outside-read-command-security-test.txt"
+    const variableTarget = process.platform === "win32"
+      ? "%OUT_FILE%"
+      : "$OUT_FILE"
+
+    try {
+      writeFileSync(join(root, "outside-read-command-security-test.txt"), "outside\n")
+
+      for (const command of [
+        outsideRead,
+        `echo outside > ${outsideTarget}`,
+        `echo variable > ${variableTarget}`,
+        "cd src && echo generated > generated.txt",
+      ]) {
+        const result = await commandTool.execute(
+          { command },
+          {
+            cwd: workspace, sessionId: "",
+            workspace,
+            permissionMode: "default",
+            confirmCommand: async () => {
+              confirmCalls++
+              return true
+            },
+          },
+        )
+        ok(result.includes("⛔"), `${command} 应被硬拒绝`)
+        ok(result.includes("路径安全检查"), `${command} 应提示路径安全检查`)
+      }
+
+      equal(confirmCalls, 0, "硬拒绝不应进入确认回调")
+      equal(existsSync(join(root, "outside-write-command-security-test.txt")), false)
+      equal(existsSync(join(workspace, "%OUT_FILE%")), false)
+      equal(existsSync(join(workspace, "src", "generated.txt")), false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it("acceptEdits 模式 + 只读命令应自动放行", async () => {

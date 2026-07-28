@@ -4,7 +4,8 @@ import { parseShellCommand, tokensWithoutRedirects, type ShellSegment } from "./
 
 export type PathValidationResult =
   | { allowed: true }
-  | { allowed: false; reason: string; requiresConfirmation: true }
+  | { allowed: false; reason: string; requiresConfirmation: true; hardDeny?: false }
+  | { allowed: false; reason: string; requiresConfirmation: false; hardDeny: true }
 
 export interface PathValidationOptions {
   cwd: string
@@ -17,10 +18,14 @@ type PathCommand =
   | "cd"
   | "pushd"
   | "ls"
+  | "dir"
   | "find"
+  | "findstr"
   | "cat"
+  | "type"
   | "head"
   | "tail"
+  | "more"
   | "sort"
   | "uniq"
   | "wc"
@@ -31,6 +36,7 @@ type PathCommand =
   | "file"
   | "stat"
   | "diff"
+  | "fc"
   | "awk"
   | "strings"
   | "hexdump"
@@ -72,10 +78,14 @@ const PATH_COMMANDS = new Set<PathCommand>([
   "cd",
   "pushd",
   "ls",
+  "dir",
   "find",
+  "findstr",
   "cat",
+  "type",
   "head",
   "tail",
+  "more",
   "sort",
   "uniq",
   "wc",
@@ -86,6 +96,7 @@ const PATH_COMMANDS = new Set<PathCommand>([
   "file",
   "stat",
   "diff",
+  "fc",
   "awk",
   "strings",
   "hexdump",
@@ -120,10 +131,14 @@ const DEFAULT_OPERATION: Record<PathCommand, PathOperation> = {
   cd: "read",
   pushd: "read",
   ls: "read",
+  dir: "read",
   find: "read",
+  findstr: "read",
   cat: "read",
+  type: "read",
   head: "read",
   tail: "read",
+  more: "read",
   sort: "read",
   uniq: "read",
   wc: "read",
@@ -134,6 +149,7 @@ const DEFAULT_OPERATION: Record<PathCommand, PathOperation> = {
   file: "read",
   stat: "read",
   diff: "read",
+  fc: "read",
   awk: "read",
   strings: "read",
   hexdump: "read",
@@ -267,8 +283,13 @@ function operationLabel(operation: PathOperation): string {
   return "写入"
 }
 
-function fail(reason: string): PathValidationResult {
+function fail(reason: string, hardDeny = false): PathValidationResult {
+  if (hardDeny) return { allowed: false, reason, requiresConfirmation: false, hardDeny: true }
   return { allowed: false, reason, requiresConfirmation: true }
+}
+
+function shouldHardDeny(operation: PathOperation): boolean {
+  return operation === "write" || operation === "create" || operation === "remove"
 }
 
 function stripSurroundingQuotes(value: string): string {
@@ -333,41 +354,42 @@ function isDangerousRemovalPath(resolvedPath: string, workspaceRoot: string): bo
 
 function validatePathToken(token: string | undefined, operation: PathOperation, cwd: string, workspaceRoot: string, source?: string): PathValidationResult {
   const label = operationLabel(operation)
-  if (!token) return fail(`命令包含缺少目标的${label}路径`)
+  if (!token) return fail(`命令包含缺少目标的${label}路径`, shouldHardDeny(operation))
 
   const clean = stripSurroundingQuotes(token)
   if (!clean) return { allowed: true }
   if (clean === "-") {
-    if (source === "cd target" || source === "pushd target") return fail(`${label}路径指向未知的上一次目录: ${token}`)
+    if (source === "cd target" || source === "pushd target") return fail(`${label}路径指向未知的上一次目录: ${token}`, true)
     return { allowed: true }
   }
   if (isSafeNullPath(clean)) return { allowed: true }
-  if (containsUncPath(clean)) return fail(`${label}路径包含 UNC 网络路径，需要确认: ${token}`)
-  if (containsUnresolvedExpansion(clean)) return fail(`${label}路径包含变量或 shell 展开语法: ${token}`)
+  if (containsUncPath(clean)) return fail(`${label}路径包含 UNC 网络路径: ${token}`, true)
+  if (containsUnresolvedExpansion(clean)) return fail(`${label}路径包含变量或 shell 展开语法: ${token}`, shouldHardDeny(operation))
 
   if (containsUnexpandedTilde(clean) && clean !== "~" && !clean.startsWith("~/") && !clean.startsWith("~\\")) {
-    return fail(`${label}路径包含无法静态解析的用户目录语法: ${token}`)
+    return fail(`${label}路径包含无法静态解析的用户目录语法: ${token}`, shouldHardDeny(operation))
   }
 
   if (containsGlob(clean)) {
-    if (operation !== "read") return fail(`${label}路径包含通配符，无法安全验证具体目标: ${token}`)
+    if (operation !== "read") return fail(`${label}路径包含通配符，无法安全验证具体目标: ${token}`, true)
     const base = globBase(clean)
     const resolvedBase = resolvePathToken(base, cwd)
-    if (!isInsidePath(resolvedBase, workspaceRoot)) return fail(`${label}路径不在 workspace 内: ${token}`)
+    if (!isInsidePath(resolvedBase, workspaceRoot)) return fail(`${label}路径不在 workspace 内: ${token}`, true)
     return { allowed: true }
   }
 
   const resolved = resolvePathToken(clean, cwd)
   if (operation === "remove" && isDangerousRemovalPath(resolved, workspaceRoot)) {
-    return fail(`删除路径指向高风险目录，需要确认: ${token}`)
+    return fail(`删除路径指向高风险目录: ${token}`, true)
   }
-  if (!isInsidePath(resolved, workspaceRoot)) return fail(`${label}路径不在 workspace 内: ${token}`)
+  if (!isInsidePath(resolved, workspaceRoot)) return fail(`${label}路径不在 workspace 内: ${token}`, true)
   return { allowed: true }
 }
 
 function isWindowsSwitch(cmd: string, arg: string): boolean {
   if (!arg.startsWith("/")) return false
-  return ["copy", "move", "del", "erase", "rd", "rmdir"].includes(cmd) && /^\/[a-z?]+$/i.test(arg)
+  return ["copy", "move", "del", "erase", "rd", "rmdir", "dir", "findstr", "fc", "more", "type"].includes(cmd)
+    && /^\/[a-z0-9?:+-]+$/i.test(arg)
 }
 
 function isOptionToken(cmd: string, arg: string): boolean {
@@ -416,7 +438,8 @@ function defaultDotExtractor(args: string[], command: PathCommand): CommandPathA
 }
 
 function cdExtractor(args: string[], command: PathCommand): CommandPathArg[] {
-  return [{ token: args.length === 0 ? "~" : args.join(" "), operation: DEFAULT_OPERATION[command], source: `${command} target` }]
+  const targetArgs = command === "cd" && args[0]?.toLowerCase() === "/d" ? args.slice(1) : args
+  return [{ token: targetArgs.length === 0 ? "~" : targetArgs.join(" "), operation: DEFAULT_OPERATION[command], source: `${command} target` }]
 }
 
 function cpExtractor(args: string[], command: PathCommand): CommandPathArg[] {
@@ -508,6 +531,33 @@ function findExtractor(args: string[]): CommandPathArg[] {
   }
 
   return mark(paths.length > 0 ? paths : ["."], "read", "find path")
+}
+
+function findstrExtractor(args: string[]): CommandPathArg[] {
+  const paths: CommandPathArg[] = []
+  let patternFound = false
+
+  for (const arg of args) {
+    if (!arg) continue
+
+    if (/^\/[fg]:/i.test(arg)) {
+      paths.push({ token: arg.slice(3), operation: "read", source: "findstr list file" })
+      continue
+    }
+    if (/^\/c:/i.test(arg)) {
+      patternFound = true
+      continue
+    }
+    if (arg.startsWith("/")) continue
+
+    if (!patternFound) {
+      patternFound = true
+      continue
+    }
+    paths.push({ token: arg, operation: "read", source: "findstr file" })
+  }
+
+  return paths
 }
 
 function patternCommandExtractor(args: string[], valueFlags: Set<string>, defaultPaths: string[] = []): CommandPathArg[] {
@@ -738,10 +788,14 @@ const PATH_EXTRACTORS: Record<PathCommand, PathExtractor> = {
   cd: cdExtractor,
   pushd: cdExtractor,
   ls: defaultDotExtractor,
+  dir: defaultDotExtractor,
   find: findExtractor,
+  findstr: findstrExtractor,
   cat: simpleExtractor,
+  type: simpleExtractor,
   head: simpleExtractor,
   tail: simpleExtractor,
+  more: simpleExtractor,
   sort: sortExtractor,
   uniq: simpleExtractor,
   wc: simpleExtractor,
@@ -752,6 +806,7 @@ const PATH_EXTRACTORS: Record<PathCommand, PathExtractor> = {
   file: simpleExtractor,
   stat: simpleExtractor,
   diff: simpleExtractor,
+  fc: simpleExtractor,
   awk: simpleExtractor,
   strings: simpleExtractor,
   hexdump: simpleExtractor,
@@ -899,13 +954,13 @@ export function validateCommandPaths(command: string, options: PathValidationOpt
   const cwd = path.resolve(options.cwd || process.cwd())
   const workspaceRoot = path.resolve(options.workspaceRoot || cwd)
 
-  if (!isInsidePath(cwd, workspaceRoot)) return fail(`工作目录不在 workspace 内: ${cwd}`)
+  if (!isInsidePath(cwd, workspaceRoot)) return fail(`工作目录不在 workspace 内: ${cwd}`, true)
 
   const parsed = parseShellCommand(command)
   if (!parsed.ok) return fail(parsed.error ?? "命令解析失败，无法验证路径")
 
   if (compoundCdWithWrite(parsed)) {
-    return fail("命令包含 cd/pushd 后继续执行写入操作，无法静态确认后续写入路径")
+    return fail("命令包含 cd/pushd 后继续执行写入操作，无法静态确认后续写入路径", true)
   }
 
   let effectiveCwd = cwd

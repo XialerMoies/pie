@@ -28,6 +28,7 @@ function isSegmentReadOnly(segment: ShellSegment): boolean {
   const cmd = tokens[0]?.toLowerCase()
   const firstArg = tokens[1]
 
+  if (cmd === "cd" || cmd === "pushd") return true
   if (READONLY_SIMPLE.has(cmd)) return true
   if (cmd === "env") return tokens.length === 1
   if (cmd === "command") return tokens.length >= 2 && firstArg === "-v"
