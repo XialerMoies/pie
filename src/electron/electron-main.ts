@@ -17,7 +17,8 @@ const __dirname = path.dirname(__filename);
 
 // ─── 便携路径 ──────────────────────────────────────────────────────
 const APP_ROOT = app.getAppPath();
-const DATA_DIR = path.join(APP_ROOT, "data");
+const RUNTIME_ROOT = app.isPackaged ? path.dirname(process.execPath) : APP_ROOT;
+const DATA_DIR = path.join(RUNTIME_ROOT, "data");
 const PI_CONFIG_DIR = path.join(DATA_DIR, "pi");
 const SESSIONS_DIR = path.join(PI_CONFIG_DIR, "sessions");
 const AUTH_FILE = path.join(PI_CONFIG_DIR, "auth.json");
@@ -34,16 +35,19 @@ let restartCount = 0;
 const MAX_RESTART_COUNT = 5;
 let healthCheckTimer: ReturnType<typeof setInterval> | null = null;
 
-function getServerScript(): string {
-  return path.join(APP_ROOT, "src", "server", "server.ts");
+function getAppIconPath(): string | undefined {
+  const candidates = [
+    path.join(APP_ROOT, "build", "icon.ico"),
+    path.join(RUNTIME_ROOT, "build", "icon.ico"),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate));
 }
 
-function getNodeExe(): string {
-  const local = path.join(APP_ROOT, "node_modules", ".bin", "node");
-  if (fs.existsSync(local)) return local;
-  const npx = path.join(APP_ROOT, "node_modules", ".bin", "npx");
-  if (fs.existsSync(npx)) return npx;
-  return "npx";
+function getServerScript(): string {
+  if (app.isPackaged) {
+    return path.join(APP_ROOT, "dist", "server", "server.js");
+  }
+  return path.join(APP_ROOT, "src", "server", "server.ts");
 }
 
 function startPiServer(): Promise<number> {
@@ -62,7 +66,6 @@ function startPiServer(): Promise<number> {
     }
 
     const script = getServerScript();
-    const nodeCmd = getNodeExe();
     const env = {
       ...process.env,
       PI_DESKTOP_DATA: DATA_DIR,
@@ -71,11 +74,20 @@ function startPiServer(): Promise<number> {
     };
 
     const isWin = process.platform === "win32";
-    serverProcess = spawn(
-      isWin ? "cmd" : "npx",
-      isWin ? ["/c", "npx", "tsx", script] : ["tsx", script],
-      { env, stdio: ["pipe", "pipe", "pipe"], cwd: APP_ROOT, shell: isWin },
-    );
+    if (app.isPackaged) {
+      serverProcess = spawn(process.execPath, [script], {
+        env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd: RUNTIME_ROOT,
+        shell: false,
+      });
+    } else {
+      serverProcess = spawn(
+        isWin ? "cmd" : "npx",
+        isWin ? ["/c", "npx", "tsx", script] : ["tsx", script],
+        { env, stdio: ["pipe", "pipe", "pipe"], cwd: APP_ROOT, shell: isWin },
+      );
+    }
 
     let output = "";
 
@@ -201,12 +213,14 @@ function createWindow() {
     return;
   }
 
+  const windowIcon = getAppIconPath();
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 760,
     minWidth: 600,
     minHeight: 400,
     title: "My Code Agent",
+    ...(windowIcon ? { icon: windowIcon } : {}),
     backgroundColor: "#06080F",
     titleBarStyle: "hidden",
     webPreferences: {
@@ -283,9 +297,11 @@ ipcMain.handle("dialog-open-folder", async () => {
   return result.filePaths[0] || null;
 });
 ipcMain.on("window-new", () => {
+  const windowIcon = getAppIconPath();
   const win = new BrowserWindow({
     width: 1100, height: 760, minWidth: 600, minHeight: 400,
     title: "My Code Agent", backgroundColor: "#06080F",
+    ...(windowIcon ? { icon: windowIcon } : {}),
     titleBarStyle: "hidden", autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(APP_ROOT, "dist-electron", "electron", "preload.js"),

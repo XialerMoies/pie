@@ -2,6 +2,7 @@
   "name": "my-code-agent",
   "version": "0.0.1",
   "private": true,
+  "author": "My Code Agent Contributors",
   "description": "基于 PI 架构的自定义 Code Agent — 桌面端为主，CLI 为辅",
   "type": "module",
   "main": "dist-electron/electron/electron-main.js",
@@ -34,7 +35,8 @@
     },
     "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "build/icon.ico"
     ],
     "extraResources": [
       {
@@ -55,12 +57,12 @@
           ]
         }
       ],
-      "icon": null
+      "icon": "build/icon.ico"
     },
     "portable": {
       "artifactName": "MyCodeAgent-${version}.exe"
     },
-    "asar": false
+    "asar": true
   },
   "dependencies": {
     "@mdi/font": "^7.4.47",
