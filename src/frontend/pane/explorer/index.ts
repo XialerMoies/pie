@@ -56,7 +56,7 @@ function initTree(container: HTMLElement): void {
   tree.onExpand = async (node, cb) => {
     try {
       const d = await ExplorerService.fetchDir(ws(), node.id);
-      cb(ExplorerService.toTreeNodes(d.items));
+      cb(ExplorerService.reconcilePendingDeletes(node.id, ExplorerService.toTreeNodes(d.items)));
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes('Access denied') || msg.includes('403')) toast('无权限访问: ' + node.id, 'error');
@@ -117,7 +117,11 @@ function initTree(container: HTMLElement): void {
           } else {
             await ExplorerService.fileOp('delete', ws(), n.id);
           }
-          ExplorerService.refreshTree();
+          // 先从树上移除节点，再后台刷新（不等 HTTP 往返）
+          ExplorerService.markDeleted(n.id);
+          const tr = ExplorerService._getTree();
+          tr?.removeNode(n.id);
+          void ExplorerService.refreshTree();
           toast('已删除', 'success');
         } catch (e: unknown) { const msg = e instanceof Error ? e.message : String(e); toast('删除失败: ' + msg, 'error'); }
       },
@@ -144,9 +148,9 @@ function initTree(container: HTMLElement): void {
         if (dstParent && dstParent !== srcParent) tr._childCache?.delete(dstParent);
         // 刷新根目录
         const d = await ExplorerService.fetchDir(ws(), '');
-        const rootItems = ExplorerService.toTreeNodes(d.items);
+        const rootItems = ExplorerService.reconcilePendingDeletes('', ExplorerService.toTreeNodes(d.items));
         tr.setData(rootItems);
-        (ExplorerService as any)._lastRefreshKey = JSON.stringify(rootItems.map(item => `${item.isDir ? 'd' : 'f'}:${item.id}:${item.label}`));
+        (ExplorerService as any)._lastRefreshKey = ExplorerService._makeRefreshKey(rootItems, ws());
         // 展开受影响的两个目录
         for (const pid of [srcParent, dstParent].filter(Boolean)) {
           tr._expanded?.add(pid);
@@ -227,9 +231,9 @@ function initTree(container: HTMLElement): void {
 
   ExplorerService.fetchDir(ws(), '')
     .then(d => {
-      const items = ExplorerService.toTreeNodes(d.items);
+      const items = ExplorerService.reconcilePendingDeletes('', ExplorerService.toTreeNodes(d.items));
       tree.setData(items);
-      (ExplorerService as any)._lastRefreshKey = JSON.stringify(items.map(item => `${item.isDir ? 'd' : 'f'}:${item.id}:${item.label}`));
+      (ExplorerService as any)._lastRefreshKey = ExplorerService._makeRefreshKey(items, ws());
     })
     .catch((e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e);

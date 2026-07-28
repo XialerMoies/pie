@@ -6,6 +6,16 @@ const WS_KEY = (window as any).App?.Constants?.WS_KEY || 'workspace_path';
 export class ExplorerService {
   static _filterEnabled = true;
   static _lastRefreshKey = '';
+  static _pendingDeletedPaths = new Set<string>();
+
+  static _makeRefreshKey(items: TreeNode[], workspacePath?: string): string {
+    const ws = workspacePath ?? ExplorerService.getWorkspacePath();
+    return JSON.stringify({
+      ws,
+      filter: ExplorerService._filterEnabled,
+      items: items.map(item => `${item.isDir ? 'd' : 'f'}:${item.id}:${item.label}`),
+    });
+  }
 
   static setFilterEnabled(v: boolean): void {
     this._filterEnabled = v;
@@ -152,6 +162,53 @@ export class ExplorerService {
       isDir: it.isDir,
     }));
   }
+
+  static markDeleted(path: string): void {
+    const normalized = ExplorerService._normalizeTreePath(path);
+    if (normalized) ExplorerService._pendingDeletedPaths.add(normalized);
+  }
+
+  static clearDeletedMark(path: string): void {
+    const normalized = ExplorerService._normalizeTreePath(path);
+    if (normalized) ExplorerService._pendingDeletedPaths.delete(normalized);
+  }
+
+  static reconcilePendingDeletes(parentPath: string, nodes: TreeNode[]): TreeNode[] {
+    const parent = ExplorerService._normalizeTreePath(parentPath);
+    const ids = new Set(nodes.map(node => ExplorerService._normalizeTreePath(node.id)));
+    for (const deletedPath of Array.from(ExplorerService._pendingDeletedPaths)) {
+      if (ExplorerService._parentPath(deletedPath) === parent && !ids.has(deletedPath)) {
+        ExplorerService._pendingDeletedPaths.delete(deletedPath);
+      }
+    }
+    return ExplorerService.filterPendingDeletedNodes(nodes);
+  }
+
+  static filterPendingDeletedNodes(nodes: TreeNode[]): TreeNode[] {
+    return nodes
+      .filter(node => !ExplorerService._isPendingDeleted(node.id))
+      .map(node => node.children
+        ? { ...node, children: ExplorerService.filterPendingDeletedNodes(node.children) }
+        : node);
+  }
+
+  private static _isPendingDeleted(path: string): boolean {
+    const normalized = ExplorerService._normalizeTreePath(path);
+    for (const deletedPath of ExplorerService._pendingDeletedPaths) {
+      if (normalized === deletedPath || normalized.startsWith(deletedPath + '/')) return true;
+    }
+    return false;
+  }
+
+  private static _parentPath(path: string): string {
+    const normalized = ExplorerService._normalizeTreePath(path);
+    const idx = normalized.lastIndexOf('/');
+    return idx >= 0 ? normalized.slice(0, idx) : '';
+  }
+
+  private static _normalizeTreePath(path: string): string {
+    return String(path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  }
 }
 
 function setExplorerStatus(text: string, kind: 'loading' | 'ready' | 'error' = 'ready'): void {
@@ -167,7 +224,10 @@ try { const v = localStorage.getItem('explorer-filter'); if (v === '0') Explorer
 
 // 当前 explorer 的 Tree 实例引用（SSE 刷新时不重建）
 let _explorerTree: Tree | null = null;
-ExplorerService._setTree = (t: Tree | null) => { _explorerTree = t; };
+ExplorerService._setTree = (t: Tree | null) => {
+  _explorerTree = t;
+  ExplorerService._lastRefreshKey = '';
+};
 ExplorerService._getTree = ((): Tree | null => _explorerTree) as typeof ExplorerService._getTree;
 
 /** 软刷新：重新加载根目录，保留展开状态 */
@@ -179,14 +239,15 @@ ExplorerService.refreshTree = async function (): Promise<void> {
   if ((_explorerTree as any)._editingNode) return;
   try {
     const d = await ExplorerService.fetchDir(ws, '');
-    const items = ExplorerService.toTreeNodes(d.items);
-    const refreshKey = JSON.stringify(items.map(item => `${item.isDir ? 'd' : 'f'}:${item.id}:${item.label}`));
+    const items = ExplorerService.reconcilePendingDeletes('', ExplorerService.toTreeNodes(d.items));
+    const refreshKey = ExplorerService._makeRefreshKey(items, ws);
     if (refreshKey === ExplorerService._lastRefreshKey) {
-      setExplorerStatus(`目录已同步 · ${items.length} 项未变化`, 'ready');
+      setExplorerStatus(`目录已刷新 · ${items.length} 项`, 'ready');
       return;
     }
-    ExplorerService._lastRefreshKey = refreshKey;
+    _explorerTree.clearChildCache?.();
     _explorerTree.setData(items);
+    ExplorerService._lastRefreshKey = refreshKey;
     setExplorerStatus(`目录已刷新 · ${items.length} 项`, 'ready');
   } catch {
     setExplorerStatus('目录刷新失败', 'error');

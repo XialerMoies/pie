@@ -199,4 +199,30 @@ describe("Tree 内部状态", () => {
     assert.strictEqual(tree._data.length, 1);
     assert.strictEqual(tree._data[0].id, "src");
   });
+
+  it("removeNode 删除根节点并清理子缓存", () => {
+    const tree = new Tree(mockContainer());
+    let renders = 0;
+    tree.render = () => { renders += 1; };
+    tree.setData([{ id: "src", label: "src", icon: "", isDir: true }]);
+    tree.setChildren("src", [{ id: "src/a.ts", label: "a.ts", icon: "", isDir: false }]);
+    renders = 0;
+
+    assert.strictEqual(tree.removeNode("src"), true);
+    assert.deepStrictEqual(tree._data, []);
+    assert.strictEqual(tree._childCache.has("src"), false);
+    assert.strictEqual(renders, 1);
+  });
+
+  it("removeNode 删除嵌套缓存节点", () => {
+    const tree = new Tree(mockContainer());
+    tree.setData([{ id: "src", label: "src", icon: "", isDir: true }]);
+    tree.setChildren("src", [
+      { id: "src/a.ts", label: "a.ts", icon: "", isDir: false },
+      { id: "src/b.ts", label: "b.ts", icon: "", isDir: false },
+    ]);
+
+    assert.strictEqual(tree.removeNode("src/a.ts"), true);
+    assert.deepStrictEqual(tree._childCache.get("src").map(node => node.id), ["src/b.ts"]);
+  });
 });

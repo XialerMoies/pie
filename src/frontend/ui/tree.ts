@@ -107,6 +107,39 @@ export class Tree {
     this.render();
   }
 
+  removeNode(id: string): boolean {
+    const targetId = String(id || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (!targetId) return false;
+
+    const isTargetOrDescendant = (nodeId: string) => nodeId === targetId || nodeId.startsWith(targetId + '/');
+    const removeFrom = (nodes: TreeNode[]): boolean => {
+      const next = nodes.filter(node => !isTargetOrDescendant(node.id));
+      if (next.length === nodes.length) return false;
+      nodes.splice(0, nodes.length, ...next);
+      return true;
+    };
+
+    let removed = removeFrom(this._data);
+    for (const [parentId, children] of Array.from(this._childCache.entries())) {
+      if (isTargetOrDescendant(parentId)) {
+        this._childCache.delete(parentId);
+        removed = true;
+        continue;
+      }
+      if (removeFrom(children)) {
+        this._childCache.set(parentId, children);
+        removed = true;
+      }
+    }
+
+    for (const expandedId of Array.from(this._expanded)) {
+      if (isTargetOrDescendant(expandedId)) this._expanded.delete(expandedId);
+    }
+    if (this._selected && isTargetOrDescendant(this._selected)) this._selected = '';
+    if (removed) this.render();
+    return removed;
+  }
+
   set onDragMove(cb: ((nodeId: string, targetParentId: string) => void) | null) { this._onDragMove = cb; }
   get onDragMove() { return this._onDragMove; }
 

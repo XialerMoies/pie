@@ -365,6 +365,7 @@ declare class Tree {
   constructor(container: HTMLElement, opts?: { indent?: number });
   setData(data: TreeNode[]): void;
   setChildren(parentId: string, children: TreeNode[]): void;
+  removeNode(id: string): boolean;
   onSelect: ((node: TreeNode) => void) | null;
   onExpand: ((node: TreeNode, cb: (children?: TreeNode[]) => void) => void) | null;
   contextMenu: { label: string; action: (node: TreeNode, tree: Tree) => void; disabled?: (node: TreeNode) => boolean }[];
@@ -456,6 +457,11 @@ declare class ExplorerService {
   static applyWorkspace(): Promise<void>;
   static iconFor(name: string, dir: boolean): string;
   static toTreeNodes(items: ExplorerItem[]): TreeNode[];
+  static _makeRefreshKey(items: TreeNode[], workspacePath?: string): string;
+  static markDeleted(path: string): void;
+  static clearDeletedMark(path: string): void;
+  static reconcilePendingDeletes(parentPath: string, nodes: TreeNode[]): TreeNode[];
+  static filterPendingDeletedNodes(nodes: TreeNode[]): TreeNode[];
   static fileOp(op: 'new' | 'rename' | 'delete' | 'move', root: string, path: string, newPath?: string): Promise<void>;
   static _setTree(t: Tree | null): void;
   static _getTree(): Tree | null;

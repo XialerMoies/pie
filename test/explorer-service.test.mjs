@@ -183,13 +183,68 @@ describe("ExplorerService", () => {
           relativePath: "",
         }),
       });
-      ExplorerService._setTree({ setData: (data) => calls.push(data), render: () => {}, _findNodeById: () => null });
+      ExplorerService._setTree({
+        clearChildCache: () => {},
+        setData: (data) => calls.push(data),
+        render: () => {},
+        _findNodeById: () => null,
+      });
       ExplorerService.setWorkspacePath("/test");
 
       await ExplorerService.refreshTree();
       await ExplorerService.refreshTree();
 
       assert.strictEqual(calls.length, 1);
+    });
+
+    it("刷新时过滤刚删除但被 stale fetch 拉回的节点", async () => {
+      const calls = [];
+      global.fetch = async () => ({
+        ok: true,
+        json: async () => ({
+          items: [{ path: "647", name: "647", isDir: true }],
+          rootDir: "/test",
+          relativePath: "",
+        }),
+      });
+      ExplorerService._setTree({
+        clearChildCache: () => {},
+        setData: (data) => calls.push(data),
+        render: () => {},
+        _findNodeById: () => null,
+      });
+      ExplorerService.setWorkspacePath("/test");
+      ExplorerService._pendingDeletedPaths.clear();
+      ExplorerService.markDeleted("647");
+
+      await ExplorerService.refreshTree();
+
+      assert.strictEqual(calls.length, 1);
+      assert.deepStrictEqual(calls[0], []);
+      assert.strictEqual(ExplorerService._pendingDeletedPaths.has("647"), true);
+    });
+
+    it("父目录确认节点不存在后清理删除标记", async () => {
+      const calls = [];
+      global.fetch = async () => ({
+        ok: true,
+        json: async () => ({ items: [], rootDir: "/test", relativePath: "" }),
+      });
+      ExplorerService._setTree({
+        clearChildCache: () => {},
+        setData: (data) => calls.push(data),
+        render: () => {},
+        _findNodeById: () => null,
+      });
+      ExplorerService.setWorkspacePath("/test");
+      ExplorerService._pendingDeletedPaths.clear();
+      ExplorerService.markDeleted("647");
+
+      await ExplorerService.refreshTree();
+
+      assert.strictEqual(calls.length, 1);
+      assert.deepStrictEqual(calls[0], []);
+      assert.strictEqual(ExplorerService._pendingDeletedPaths.has("647"), false);
     });
   });
 });
