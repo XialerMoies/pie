@@ -103,6 +103,7 @@ function buildMainArea(): string {
         <div class="fc-editor" id="fc-editor"></div>
       </div>
       <div class="fi-area" id="fi">
+        <div class="command-confirm-slot" id="command-confirm-slot" aria-live="polite"></div>
         <div class="fi-box" id="fi-box">
           <div class="fi-drop-zone" id="fi-drop-zone">松开添加文件引用</div>
           <div class="fi-slash" id="fi-slash" style="display:none">

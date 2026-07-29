@@ -204,6 +204,8 @@ function confirmAsync(msg: string): Promise<boolean> {
 }
 
 type CommandConfirmChoice = 'once' | 'session' | 'deny';
+let _activeCommandConfirmResolve: ((choice: CommandConfirmChoice) => void) | null = null;
+let _activeCommandConfirmHost: HTMLElement | null = null;
 
 function commandSuggestionLabel(suggestion: any): string {
   if (!suggestion || typeof suggestion !== 'object') return '';
@@ -215,14 +217,9 @@ function commandSuggestionLabel(suggestion: any): string {
   return '';
 }
 
-function confirmCommandAsync(input: { command: string; reason: string; permissionSuggestions?: any[] }): Promise<CommandConfirmChoice> {
-  return new Promise((resolve) => {
-    const suggestions = Array.isArray(input.permissionSuggestions) ? input.permissionSuggestions : [];
-    const suggestionLabels = suggestions.map(commandSuggestionLabel).filter(Boolean);
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay command-confirm-overlay';
-    overlay.innerHTML = `
-      <div class="command-confirm-box" role="dialog" aria-modal="true" aria-labelledby="command-confirm-title">
+function commandConfirmBoxHTML(input: { command: string; reason: string; permissionSuggestions?: any[] }, suggestionLabels: string[], inline = false): string {
+  return `
+      <div class="command-confirm-box${inline ? ' command-confirm-inline' : ''}" role="dialog" ${inline ? '' : 'aria-modal="true" '}aria-labelledby="command-confirm-title">
         <div class="command-confirm-head">
           <div id="command-confirm-title" class="command-confirm-title">确认执行命令</div>
           <div class="command-confirm-reason">${E(input.reason || '该命令需要确认')}</div>
@@ -245,6 +242,57 @@ function confirmCommandAsync(input: { command: string; reason: string; permissio
           <button type="button" class="command-confirm-btn primary" data-choice="session">本会话允许</button>
         </div>
       </div>`;
+}
+
+function clearActiveCommandConfirm(choice?: CommandConfirmChoice): void {
+  const resolve = _activeCommandConfirmResolve;
+  const host = _activeCommandConfirmHost;
+  _activeCommandConfirmResolve = null;
+  _activeCommandConfirmHost = null;
+  if (host) {
+    host.classList.remove('on');
+    host.innerHTML = '';
+  }
+  if (choice && resolve) resolve(choice);
+}
+
+function commandConfirmInlineHost(): HTMLElement | null {
+  const slot = $('command-confirm-slot') as HTMLElement | null;
+  if (slot) return slot;
+  const fi = $('fi') as HTMLElement | null;
+  const box = $('fi-box') as HTMLElement | null;
+  if (!fi || !box) return null;
+  const created = document.createElement('div');
+  created.id = 'command-confirm-slot';
+  created.className = 'command-confirm-slot';
+  created.setAttribute('aria-live', 'polite');
+  fi.insertBefore(created, box);
+  return created;
+}
+
+function confirmCommandAsync(input: { command: string; reason: string; permissionSuggestions?: any[] }): Promise<CommandConfirmChoice> {
+  return new Promise((resolve) => {
+    const suggestions = Array.isArray(input.permissionSuggestions) ? input.permissionSuggestions : [];
+    const suggestionLabels = suggestions.map(commandSuggestionLabel).filter(Boolean);
+    clearActiveCommandConfirm('deny');
+    const inlineHost = commandConfirmInlineHost();
+    if (inlineHost) {
+      _activeCommandConfirmResolve = resolve;
+      _activeCommandConfirmHost = inlineHost;
+      inlineHost.innerHTML = commandConfirmBoxHTML(input, suggestionLabels, true);
+      inlineHost.classList.add('on');
+      inlineHost.querySelectorAll<HTMLButtonElement>('[data-choice]').forEach((button) => {
+        const choice = button.dataset.choice as CommandConfirmChoice;
+        button.addEventListener('click', () => clearActiveCommandConfirm(choice));
+      });
+      const defaultButton = inlineHost.querySelector<HTMLButtonElement>('[data-choice="once"]');
+      setTimeout(() => defaultButton?.focus(), 0);
+      return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay command-confirm-overlay';
+    overlay.innerHTML = commandConfirmBoxHTML(input, suggestionLabels);
     document.body.appendChild(overlay);
     const close = (choice: CommandConfirmChoice) => { overlay.remove(); resolve(choice); };
     overlay.querySelectorAll<HTMLButtonElement>('[data-choice]').forEach((button) => {

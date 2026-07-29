@@ -10,6 +10,14 @@ function fmt(n: number | null | undefined): string {
   return (n / 1000000).toFixed(1) + 'M';
 }
 
+function formatPercent(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '--%';
+  const clamped = Math.max(0, Math.min(100, value));
+  if (clamped > 0 && clamped < 0.1) return '<0.1%';
+  const digits = clamped < 10 && !Number.isInteger(clamped) ? 1 : 0;
+  return clamped.toFixed(digits).replace(/\.0$/, '') + '%';
+}
+
 // ─── Currency helpers ────────────────────────────────────
 const CNY_PER_USD = 7.2;
 
@@ -75,13 +83,13 @@ function updateRail(data: UsageCurrentResponse): void {
 
   // 上下文百分比
   const pct = data.contextUsage?.percent;
-  pctEl.textContent = pct != null ? pct + '%' : '--%';
+  pctEl.textContent = formatPercent(pct);
   // 警戒色（使用 CSS 类而非 inline style，确保 --uw/--ud 变量生效）
   pctEl.classList.toggle('danger', pct != null && pct >= 85);
   pctEl.classList.toggle('warn', pct != null && pct >= 70 && pct < 85);
 
   // 缓存命中率
-  crEl.textContent = data.cacheHitRate != null ? data.cacheHitRate + '%' : '--%';
+  crEl.textContent = formatPercent(data.cacheHitRate);
 
   // 压缩按钮
   if (btnEl) {
@@ -176,7 +184,7 @@ function renderCurrentSessionUsage(container: HTMLElement): void {
 
   // 三指标卡片
   const pct = d.contextUsage?.percent;
-  const pctDisplay = pct != null ? pct + '%' : '--';
+  const pctDisplay = formatPercent(pct);
   const pctClass = pct != null && pct >= 85 ? 'usage-danger' : pct != null && pct >= 70 ? 'usage-warn' : '';
 
   container.innerHTML = `
@@ -187,7 +195,7 @@ function renderCurrentSessionUsage(container: HTMLElement): void {
         <div style="font-size:.65rem;color:var(--tm);margin-top:2px">${d.contextUsage?.tokens != null ? fmt(d.contextUsage.tokens) : '--'} / ${d.contextUsage?.contextWindow ? fmt(d.contextUsage.contextWindow) : '--'}</div>
       </div>
       <div class="usage-card">
-        <div class="usage-card-val">${d.cacheHitRate != null ? d.cacheHitRate + '%' : '--'}</div>
+        <div class="usage-card-val">${formatPercent(d.cacheHitRate)}</div>
         <div class="usage-card-lb">缓存命中率</div>
       </div>
       <div class="usage-card">
