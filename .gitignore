@@ -17,3 +17,6 @@ event-stream-demo.html
 layout-designer.html
 scripts/patch-sdk.mjs
 .git-rewrite/
+.codex/
+AGENTS.md
+build/
