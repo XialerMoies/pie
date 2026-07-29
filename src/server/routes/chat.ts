@@ -4,12 +4,13 @@
 import type { ServerResponse } from "http";
 import type { ChatStreamState, RouteHandler } from "./types";
 import { processAttachments, buildContextBlock } from "./attach";
+import type { CommandConfirmationRequest, CommandConfirmationResult } from "../../agent/types";
 
 const COMMAND_CONFIRM_TIMEOUT_MS = 120_000;
 
 type PendingCommandConfirmation = {
   response: ServerResponse;
-  resolve: (allowed: boolean) => void;
+  resolve: (decision: CommandConfirmationResult) => void;
   timeout: ReturnType<typeof setTimeout>;
 };
 
@@ -20,36 +21,42 @@ function commandConfirmationId(): string {
 }
 
 export function createCommandConfirmCallback(chatStream: ChatStreamState) {
-  return async (cmd: string, reason: string): Promise<boolean> => {
+  return async (cmd: string, reason: string, request?: CommandConfirmationRequest): Promise<CommandConfirmationResult> => {
     const response = chatStream.response;
-    if (!response) return false;
+    if (!response) return { allow: false };
 
     const id = commandConfirmationId();
-    return new Promise<boolean>((resolve) => {
-      const finish = (allowed: boolean) => {
+    return new Promise<CommandConfirmationResult>((resolve) => {
+      const finish = (decision: CommandConfirmationResult) => {
         const pending = pendingCommandConfirmations.get(id);
         if (pending) {
           clearTimeout(pending.timeout);
           pendingCommandConfirmations.delete(id);
         }
-        resolve(allowed === true);
+        resolve(decision.allow === true ? decision : { allow: false });
       };
-      const timeout = setTimeout(() => finish(false), COMMAND_CONFIRM_TIMEOUT_MS);
+      const timeout = setTimeout(() => finish({ allow: false }), COMMAND_CONFIRM_TIMEOUT_MS);
       pendingCommandConfirmations.set(id, { response, resolve: finish, timeout });
 
       try {
-        response.write(`data: ${JSON.stringify({ type: "command_confirm", id, command: cmd, reason })}\n\n`);
+        response.write(`data: ${JSON.stringify({
+          type: "command_confirm",
+          id,
+          command: cmd,
+          reason,
+          permissionSuggestions: request?.permissionSuggestions ?? [],
+        })}\n\n`);
       } catch {
-        finish(false);
+        finish({ allow: false });
       }
     });
   };
 }
 
-export function resolveCommandConfirmation(id: string, allowed: boolean): boolean {
+export function resolveCommandConfirmation(id: string, decision: CommandConfirmationResult): boolean {
   const pending = pendingCommandConfirmations.get(id);
   if (!pending) return false;
-  pending.resolve(allowed === true);
+  pending.resolve(decision.allow === true ? decision : { allow: false });
   return true;
 }
 
@@ -58,7 +65,7 @@ export function cancelCommandConfirmationsForResponse(response: ServerResponse):
     if (pending.response === response) {
       clearTimeout(pending.timeout);
       pendingCommandConfirmations.delete(id);
-      pending.resolve(false);
+      pending.resolve({ allow: false });
     }
   }
 }
@@ -80,7 +87,9 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
           res.end(JSON.stringify({ ok: false, error: "Missing confirmation id" }));
           return;
         }
-        const settled = resolveCommandConfirmation(id, parsed.allow === true);
+        const allow = parsed.allow === true;
+        const scope = parsed.scope === "once" ? "once" : "session";
+        const settled = resolveCommandConfirmation(id, allow ? { allow: true, scope } : { allow: false });
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: settled }));
       } catch (err: unknown) {

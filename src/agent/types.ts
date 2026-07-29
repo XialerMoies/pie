@@ -19,6 +19,52 @@
 
 export type ShellDialect = "cmd" | "posix-bash" | "powershell"
 
+export type CommandConfirmationScope = "once" | "session"
+
+export interface CommandConfirmationResult {
+  allow: boolean
+  scope?: CommandConfirmationScope
+}
+
+export interface CommandConfirmationRequest {
+  permissionSuggestions?: PermissionSuggestion[]
+}
+
+export type CommandConfirmationResponse = boolean | CommandConfirmationResult | undefined
+
+export type PermissionDestination = "session"
+export type PermissionToolName = "Read" | "Command"
+
+export interface PermissionRule {
+  toolName: PermissionToolName
+  ruleContent: string
+}
+
+export interface AdditionalWorkingDirectory {
+  path: string
+  source: PermissionDestination
+}
+
+export type PermissionSuggestion =
+  | {
+      type: "addReadRule"
+      directory: string
+      rule: PermissionRule
+      destination: PermissionDestination
+    }
+  | {
+      type: "addWorkingDirectory"
+      directory: string
+      destination: PermissionDestination
+    }
+
+export interface SessionPermissionState {
+  additionalWorkingDirectories: Map<string, AdditionalWorkingDirectory>
+  alwaysAllowRules: Record<PermissionDestination, PermissionRule[]>
+  alwaysDenyRules: Record<PermissionDestination, PermissionRule[]>
+  alwaysAskRules: Record<PermissionDestination, PermissionRule[]>
+}
+
 /** Tool 执行上下文 */
 export interface ToolContext {
   cwd: string
@@ -31,8 +77,17 @@ export interface ToolContext {
   permissionMode?: "default" | "plan" | "acceptEdits" | "dontAsk"
   /** 实际 shell 方言：由宿主/UI 设置，模型不可控 */
   shellDialect?: ShellDialect
-  /** 用户确认回调：返回 true=允许，false/undefined=拒绝。无此回调时默认拒绝（fail-closed） */
-  confirmCommand?: (cmd: string, reason: string) => Promise<boolean | undefined>
+  /** 用户确认回调：返回 true/allow=允许，false/undefined=拒绝。无此回调时默认拒绝（fail-closed） */
+  confirmCommand?: (
+    cmd: string,
+    reason: string,
+    request?: CommandConfirmationRequest,
+  ) => Promise<CommandConfirmationResponse>
+  additionalWorkingDirectories?: SessionPermissionState["additionalWorkingDirectories"]
+  alwaysAllowRules?: SessionPermissionState["alwaysAllowRules"]
+  alwaysDenyRules?: SessionPermissionState["alwaysDenyRules"]
+  alwaysAskRules?: SessionPermissionState["alwaysAskRules"]
+  applyPermissionSuggestions?: (suggestions: PermissionSuggestion[]) => void
 }
 
 export type ToolTraceEmitter = (event: {
@@ -104,6 +159,11 @@ export class ToolRegistry {
       permissionMode?: ToolContext["permissionMode"]
       confirmCommand?: ToolContext["confirmCommand"]
       shellDialect?: ToolContext["shellDialect"]
+      additionalWorkingDirectories?: ToolContext["additionalWorkingDirectories"]
+      alwaysAllowRules?: ToolContext["alwaysAllowRules"]
+      alwaysDenyRules?: ToolContext["alwaysDenyRules"]
+      alwaysAskRules?: ToolContext["alwaysAskRules"]
+      applyPermissionSuggestions?: ToolContext["applyPermissionSuggestions"]
     },
   ) {
     return this.getAll().map((tool) => ({

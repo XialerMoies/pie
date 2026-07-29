@@ -154,23 +154,26 @@ describe("Chat SSE", () => {
     const sseRes = makeResWithEvents();
     await handleChat(makeReq("GET", "/api/chat/stream"), sseRes, ctx);
 
-    const confirmed = createCommandConfirmCallback(chatStream)("node --version", "该命令不是只读操作，是否允许执行？");
+    const confirmed = createCommandConfirmCallback(chatStream)("node --version", "该命令不是只读操作，是否允许执行？", {
+      permissionSuggestions: [{ type: "addWorkingDirectory", directory: ROOT, destination: "session" }],
+    });
     const line = sseRes._body.split("\n").find((part) => part.startsWith("data: "));
     assert.ok(line, "应向 SSE 写入 command_confirm 事件");
     const event = JSON.parse(line.slice("data: ".length));
     assert.strictEqual(event.type, "command_confirm");
     assert.strictEqual(event.command, "node --version");
+    assert.deepStrictEqual(event.permissionSuggestions, [{ type: "addWorkingDirectory", directory: ROOT, destination: "session" }]);
 
     const res = makeResWithEvents();
-    await handleChat(makeReq("POST", "/api/chat/command-confirm", { id: event.id, allow: true }), res, ctx);
+    await handleChat(makeReq("POST", "/api/chat/command-confirm", { id: event.id, allow: true, scope: "once" }), res, ctx);
     assert.strictEqual(res._status, 200);
     assert.deepStrictEqual(JSON.parse(res._body), { ok: true });
-    assert.strictEqual(await confirmed, true);
+    assert.deepStrictEqual(await confirmed, { allow: true, scope: "once" });
   });
 
   it("command confirm 无 SSE 连接时 fail-closed", async () => {
     const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" };
     const confirmed = await createCommandConfirmCallback(chatStream)("node --version", "需要确认");
-    assert.strictEqual(confirmed, false);
+    assert.deepStrictEqual(confirmed, { allow: false });
   });
 });

@@ -1,22 +1,34 @@
 import os from "os"
 import path from "path"
+import { existsSync, statSync } from "fs"
 import { parseShellCommand, tokensWithoutRedirects, type ShellSegment } from "./shell-parser.js"
 import { parseCommandForSecurity } from "./security-parser.js"
 import type { SecurityParseResult, SecurityRedirect, ShellDialect, SimpleCommand } from "./security-ast.js"
+import type { AdditionalWorkingDirectory, PermissionRule, PermissionSuggestion } from "../../types.js"
+
+type PathOperation = "read" | "write" | "create" | "remove"
+
+interface PathValidationFailureMeta {
+  operation?: PathOperation
+  blockedPath?: string
+  suggestions?: PermissionSuggestion[]
+}
 
 export type PathValidationResult =
   | { allowed: true }
-  | { allowed: false; reason: string; requiresConfirmation: true; hardDeny?: false }
-  | { allowed: false; reason: string; requiresConfirmation: false; hardDeny: true }
+  | ({ allowed: false; reason: string; requiresConfirmation: true; hardDeny?: false } & PathValidationFailureMeta)
+  | ({ allowed: false; reason: string; requiresConfirmation: false; hardDeny: true } & PathValidationFailureMeta)
 
 export interface PathValidationOptions {
   cwd: string
   workspaceRoot?: string
   shellDialect?: ShellDialect
   parsed?: SecurityParseResult
+  additionalWorkingDirectories?: ReadonlyMap<string, AdditionalWorkingDirectory>
+  alwaysAllowRules?: Record<"session", PermissionRule[]>
+  alwaysDenyRules?: Record<"session", PermissionRule[]>
+  alwaysAskRules?: Record<"session", PermissionRule[]>
 }
-
-type PathOperation = "read" | "write" | "create" | "remove"
 
 type PathCommand =
   | "cd"
@@ -284,6 +296,44 @@ function isInsidePath(candidate: string, root: string): boolean {
   return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel)
 }
 
+interface PathValidationScope {
+  workspaceRoot: string
+  allowedWorkingRoots: string[]
+  alwaysAllowRules?: Record<"session", PermissionRule[]>
+  alwaysDenyRules?: Record<"session", PermissionRule[]>
+  alwaysAskRules?: Record<"session", PermissionRule[]>
+}
+
+function addUniquePath(paths: string[], seen: Set<string>, value: string): void {
+  const resolved = path.resolve(value)
+  const key = normalizeForCompare(resolved)
+  if (seen.has(key)) return
+  seen.add(key)
+  paths.push(resolved)
+}
+
+function buildValidationScope(workspaceRoot: string, options: PathValidationOptions): PathValidationScope {
+  const allowedWorkingRoots: string[] = []
+  const seen = new Set<string>()
+  addUniquePath(allowedWorkingRoots, seen, workspaceRoot)
+
+  for (const directory of options.additionalWorkingDirectories?.values() ?? []) {
+    if (directory.path) addUniquePath(allowedWorkingRoots, seen, directory.path)
+  }
+
+  return {
+    workspaceRoot,
+    allowedWorkingRoots,
+    alwaysAllowRules: options.alwaysAllowRules,
+    alwaysDenyRules: options.alwaysDenyRules,
+    alwaysAskRules: options.alwaysAskRules,
+  }
+}
+
+function isInsideAnyPath(candidate: string, roots: readonly string[]): boolean {
+  return roots.some((root) => isInsidePath(candidate, root))
+}
+
 function operationLabel(operation: PathOperation): string {
   if (operation === "read") return "读取"
   if (operation === "create") return "创建"
@@ -291,13 +341,69 @@ function operationLabel(operation: PathOperation): string {
   return "写入"
 }
 
-function fail(reason: string, hardDeny = false): PathValidationResult {
-  if (hardDeny) return { allowed: false, reason, requiresConfirmation: false, hardDeny: true }
-  return { allowed: false, reason, requiresConfirmation: true }
+function fail(reason: string, hardDeny = false, meta: PathValidationFailureMeta = {}): PathValidationResult {
+  if (hardDeny) return { allowed: false, reason, requiresConfirmation: false, hardDeny: true, ...meta }
+  return { allowed: false, reason, requiresConfirmation: true, ...meta }
 }
 
 function shouldHardDeny(operation: PathOperation): boolean {
   return operation === "write" || operation === "create" || operation === "remove"
+}
+
+function readRuleContentForDirectory(directory: string): string {
+  return `Read(${path.join(path.resolve(directory), "**")})`
+}
+
+function stripReadRuleWrapper(ruleContent: string): string {
+  const trimmed = ruleContent.trim()
+  if (trimmed.startsWith("Read(") && trimmed.endsWith(")")) {
+    return trimmed.slice("Read(".length, -1)
+  }
+  return trimmed
+}
+
+function readRuleDirectory(rule: PermissionRule): string | undefined {
+  if (rule.toolName !== "Read") return undefined
+  let content = stripSurroundingQuotes(stripReadRuleWrapper(rule.ruleContent))
+  content = content.replace(/[\\/]\*\*$/, "")
+  if (!content) return undefined
+  return path.resolve(content)
+}
+
+function matchingReadRule(resolvedPath: string, rules: readonly PermissionRule[] = []): PermissionRule | undefined {
+  return rules.find((rule) => {
+    const directory = readRuleDirectory(rule)
+    return directory ? isInsidePath(resolvedPath, directory) : false
+  })
+}
+
+function permissionDirectoryForPath(resolvedPath: string, operation: PathOperation, assumeDirectory = false): string {
+  if (assumeDirectory) return resolvedPath
+  try {
+    if (existsSync(resolvedPath) && statSync(resolvedPath).isDirectory()) return resolvedPath
+  } catch {}
+  if (operation === "read") return path.dirname(resolvedPath)
+  return path.dirname(resolvedPath)
+}
+
+function externalPathSuggestions(directory: string, operation: PathOperation): PermissionSuggestion[] {
+  const resolvedDirectory = path.resolve(directory)
+  if (operation === "read") {
+    return [{
+      type: "addReadRule",
+      directory: resolvedDirectory,
+      rule: {
+        toolName: "Read",
+        ruleContent: readRuleContentForDirectory(resolvedDirectory),
+      },
+      destination: "session",
+    }]
+  }
+  return [{
+    type: "addWorkingDirectory",
+    directory: resolvedDirectory,
+    destination: "session",
+  }]
 }
 
 function stripSurroundingQuotes(value: string): string {
@@ -360,7 +466,35 @@ function isDangerousRemovalPath(resolvedPath: string, workspaceRoot: string): bo
   return false
 }
 
-function validatePathToken(token: string | undefined, operation: PathOperation, cwd: string, workspaceRoot: string, source?: string): PathValidationResult {
+function isSensitiveExternalPath(resolvedPath: string, workspaceRoot: string): boolean {
+  if (isInsidePath(resolvedPath, workspaceRoot)) return false
+
+  const home = os.homedir()
+  const sensitiveHomeDirs = [
+    ".ssh",
+    ".aws",
+    ".azure",
+    ".gnupg",
+    ".kube",
+    ".docker",
+  ].map((entry) => path.join(home, entry))
+
+  if (sensitiveHomeDirs.some((directory) => isInsidePath(resolvedPath, directory))) return true
+
+  const base = path.basename(resolvedPath).toLowerCase()
+  return [
+    ".env",
+    ".env.local",
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+    "id_rsa",
+    "id_ed25519",
+  ].includes(base)
+}
+
+function validatePathToken(token: string | undefined, operation: PathOperation, cwd: string, scope: PathValidationScope, source?: string): PathValidationResult {
+  const workspaceRoot = scope.workspaceRoot
   const label = operationLabel(operation)
   if (!token) return fail(`命令包含缺少目标的${label}路径`, shouldHardDeny(operation))
 
@@ -382,11 +516,56 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
     if (operation !== "read") return fail(`${label}路径包含通配符，无法安全验证具体目标: ${token}`, true)
     const base = globBase(clean)
     const resolvedBase = resolvePathToken(base, cwd)
+    if (!isInsidePath(resolvedBase, workspaceRoot)) {
+      if (isSensitiveExternalPath(resolvedBase, workspaceRoot)) {
+        return fail(`${label}路径指向敏感路径: ${token}`, true, { operation, blockedPath: resolvedBase })
+      }
+      if (matchingReadRule(resolvedBase, scope.alwaysDenyRules?.session)) {
+        return fail(`${label}路径被本会话规则拒绝: ${token}`, true, { operation, blockedPath: resolvedBase })
+      }
+      if (isInsideAnyPath(resolvedBase, scope.allowedWorkingRoots) || matchingReadRule(resolvedBase, scope.alwaysAllowRules?.session)) {
+        return { allowed: true }
+      }
+      const directory = permissionDirectoryForPath(resolvedBase, operation, true)
+      return fail(`${label}路径不在 workspace/授权目录内: ${token}`, false, {
+        operation,
+        blockedPath: resolvedBase,
+        suggestions: externalPathSuggestions(directory, operation),
+      })
+    }
     if (!isInsidePath(resolvedBase, workspaceRoot)) return fail(`${label}路径不在 workspace 内: ${token}`, true)
     return { allowed: true }
   }
 
   const resolved = resolvePathToken(clean, cwd)
+  if (!isInsidePath(resolved, workspaceRoot)) {
+    if (operation === "remove" && isDangerousRemovalPath(resolved, workspaceRoot)) {
+      return fail(`删除路径指向高风险目录: ${token}`, true)
+    }
+    if (isSensitiveExternalPath(resolved, workspaceRoot)) {
+      return fail(`${label}路径指向敏感路径: ${token}`, true, { operation, blockedPath: resolved })
+    }
+    if (operation === "read" && matchingReadRule(resolved, scope.alwaysDenyRules?.session)) {
+      return fail(`${label}路径被本会话规则拒绝: ${token}`, true, { operation, blockedPath: resolved })
+    }
+    if (operation === "read" && matchingReadRule(resolved, scope.alwaysAskRules?.session)) {
+      const directory = permissionDirectoryForPath(resolved, operation)
+      return fail(`${label}路径需要本会话规则确认: ${token}`, false, {
+        operation,
+        blockedPath: resolved,
+        suggestions: externalPathSuggestions(directory, operation),
+      })
+    }
+    if (isInsideAnyPath(resolved, scope.allowedWorkingRoots)) return { allowed: true }
+    if (operation === "read" && matchingReadRule(resolved, scope.alwaysAllowRules?.session)) return { allowed: true }
+
+    const directory = permissionDirectoryForPath(resolved, operation)
+    return fail(`${label}路径不在 workspace/授权目录内: ${token}`, false, {
+      operation,
+      blockedPath: resolved,
+      suggestions: externalPathSuggestions(directory, operation),
+    })
+  }
   if (operation === "remove" && isDangerousRemovalPath(resolved, workspaceRoot)) {
     return fail(`删除路径指向高风险目录: ${token}`, true)
   }
@@ -998,16 +1177,16 @@ function nextCwdAfterSimpleCommand(command: SimpleCommand, cwd: string): string 
   return resolvePathToken(clean, cwd)
 }
 
-function validateRedirect(redirect: SecurityRedirect, cwd: string, workspaceRoot: string): PathValidationResult {
+function validateRedirect(redirect: SecurityRedirect, cwd: string, scope: PathValidationScope): PathValidationResult {
   if (redirect.isSafeReadOnlySink) return { allowed: true }
   const operation: PathOperation = redirect.isOutput ? "write" : "read"
-  return validatePathToken(redirect.target, operation, cwd, workspaceRoot)
+  return validatePathToken(redirect.target, operation, cwd, scope)
 }
 
 function validateParsedCommands(
   parsed: SecurityParseResult,
   cwd: string,
-  workspaceRoot: string,
+  scope: PathValidationScope,
 ): PathValidationResult | null {
   if (parsed.kind === "parse-unavailable") return null
   if (parsed.kind === "too-complex") return fail(parsed.reason || "命令过于复杂，无法验证路径")
@@ -1019,12 +1198,12 @@ function validateParsedCommands(
   let effectiveCwd = cwd
   for (const command of parsed.commands) {
     for (const redirect of command.redirects) {
-      const result = validateRedirect(redirect, effectiveCwd, workspaceRoot)
+      const result = validateRedirect(redirect, effectiveCwd, scope)
       if (!result.allowed) return result
     }
 
     for (const target of commandPathArgs(command.argv, { shellDialect: command.dialect })) {
-      const result = validatePathToken(target.token, target.operation, effectiveCwd, workspaceRoot, target.source)
+      const result = validatePathToken(target.token, target.operation, effectiveCwd, scope, target.source)
       if (!result.allowed) return result
     }
 
@@ -1037,11 +1216,21 @@ function validateParsedCommands(
 export function validateCommandPaths(command: string, options: PathValidationOptions): PathValidationResult {
   const cwd = path.resolve(options.cwd || process.cwd())
   const workspaceRoot = path.resolve(options.workspaceRoot || cwd)
+  const scope = buildValidationScope(workspaceRoot, options)
 
-  if (!isInsidePath(cwd, workspaceRoot)) return fail(`工作目录不在 workspace 内: ${cwd}`, true)
+  if (!isInsideAnyPath(cwd, scope.allowedWorkingRoots)) {
+    if (isSensitiveExternalPath(cwd, workspaceRoot)) {
+      return fail(`工作目录指向敏感路径: ${cwd}`, true, { operation: "read", blockedPath: cwd })
+    }
+    return fail(`工作目录不在 workspace/授权目录内: ${cwd}`, false, {
+      operation: "read",
+      blockedPath: cwd,
+      suggestions: externalPathSuggestions(cwd, "write"),
+    })
+  }
 
   const securityParsed = options.parsed ?? parseCommandForSecurity(command, { shellDialect: options.shellDialect })
-  const parsedResult = validateParsedCommands(securityParsed, cwd, workspaceRoot)
+  const parsedResult = validateParsedCommands(securityParsed, cwd, scope)
   if (parsedResult) return parsedResult
 
   const shellDialect = options.shellDialect ?? (process.platform === "win32" ? "cmd" : "posix-bash")
@@ -1058,13 +1247,13 @@ export function validateCommandPaths(command: string, options: PathValidationOpt
     for (const redirect of segment.redirects) {
       if (redirect.isSafeReadOnlySink) continue
       const operation: PathOperation = redirect.isOutput ? "write" : "read"
-      const result = validatePathToken(redirect.target, operation, effectiveCwd, workspaceRoot)
+      const result = validatePathToken(redirect.target, operation, effectiveCwd, scope)
       if (!result.allowed) return result
     }
 
     const tokens = tokensWithoutRedirects(segment)
     for (const target of commandPathArgs(tokens, { shellDialect })) {
-      const result = validatePathToken(target.token, target.operation, effectiveCwd, workspaceRoot, target.source)
+      const result = validatePathToken(target.token, target.operation, effectiveCwd, scope, target.source)
       if (!result.allowed) return result
     }
 

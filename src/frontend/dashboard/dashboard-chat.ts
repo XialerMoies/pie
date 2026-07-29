@@ -334,21 +334,31 @@ function bind(): void {
     st.CS.onmessage = (e: MessageEvent) => {
       if (_streamGen !== gen) return;
       try {
-        if (!window.___sseFirst) { window.___sseFirst = true; mark('sse_first_event'); } const d = JSON.parse(e.data) as { type: string; id?: string; command?: string; reason?: string; text?: string; thinking?: boolean; turnId?: string; sessionId?: string; message?: string; block?: any; blocks?: any[] };
+        if (!window.___sseFirst) { window.___sseFirst = true; mark('sse_first_event'); } const d = JSON.parse(e.data) as { type: string; id?: string; command?: string; reason?: string; permissionSuggestions?: any[]; text?: string; thinking?: boolean; turnId?: string; sessionId?: string; message?: string; block?: any; blocks?: any[] };
         const last = st.M[st.M.length - 1];
         if (d.type === 'command_confirm') {
           const id = d.id || '';
           if (!id) return;
           void (async () => {
-            const ok = await confirmAsync(`
-              <div style="font-weight:700;margin-bottom:8px">确认执行命令</div>
-              <div style="font-size:.76rem;color:var(--ts);margin-bottom:10px">${E(d.reason || '该命令需要确认')}</div>
-              <pre style="margin:0;max-width:560px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.18);border:1px solid var(--bd);border-radius:7px;padding:10px;font-family:var(--fm);font-size:.74rem;color:var(--tx)">${E(d.command || '')}</pre>
-            `);
+            const choice = typeof confirmCommandAsync === 'function'
+              ? await confirmCommandAsync({
+                command: d.command || '',
+                reason: d.reason || '该命令需要确认',
+                permissionSuggestions: d.permissionSuggestions || [],
+              })
+              : ((await confirmAsync(`
+                <div style="font-weight:700;margin-bottom:8px">确认执行命令</div>
+                <div style="font-size:.76rem;color:var(--ts);margin-bottom:10px">${E(d.reason || '该命令需要确认')}</div>
+                <pre style="margin:0;max-width:560px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.18);border:1px solid var(--bd);border-radius:7px;padding:10px;font-family:var(--fm);font-size:.74rem;color:var(--tx)">${E(d.command || '')}</pre>
+              `)) ? 'session' : 'deny');
             await fetch('/api/chat/command-confirm', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ id, allow: ok }),
+              body: JSON.stringify({
+                id,
+                allow: choice !== 'deny',
+                scope: choice === 'session' ? 'session' : 'once',
+              }),
             }).catch(() => undefined);
           })();
           return;

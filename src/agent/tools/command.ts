@@ -11,7 +11,7 @@
  *
  * 适用场景：单用户桌面开发环境，非企业级多用户权限治理。
  */
-import type { AgentTool, ToolContext } from "../types.js"
+import type { AgentTool, CommandConfirmationRequest, CommandConfirmationResponse, ToolContext } from "../types.js"
 import { spawn } from "child_process"
 import { existsSync } from "fs"
 import { dirname } from "path"
@@ -936,12 +936,112 @@ async function maybeLogSecurityVerdictShadowDiff(
 
 // ─── 权限模式 ───────────────────────────────────────────
 
-async function askUser(cmd: string, reason: string, ctx?: ToolContext): Promise<boolean> {
-  if (!ctx?.confirmCommand) return false
+type ConfirmationOutcome = "allowed" | "rejected" | "unavailable" | "failed"
+
+interface ConfirmationState {
+  outcome?: ConfirmationOutcome
+  scope?: "once" | "session"
+  applyPermissionSuggestions?: boolean
+}
+
+function confirmationOutcomeText(state: ConfirmationState): string {
+  if (state.outcome === "allowed") {
+    if (state.scope === "once") return "✅ 用户已允许命令执行（仅本次）。"
+    if (state.scope === "session") return "✅ 用户已允许命令执行（本会话）。"
+    return "✅ 用户已允许命令执行。"
+  }
+  if (state.outcome === "rejected") return "⛔ 用户已拒绝命令执行。"
+  if (state.outcome === "unavailable") return "⛔ 命令需要确认，但当前没有确认通道，已拒绝。"
+  if (state.outcome === "failed") return "⛔ 命令确认失败，已拒绝执行。"
+  return ""
+}
+
+function withConfirmationOutcome(result: string, state: ConfirmationState): string {
+  const text = confirmationOutcomeText(state)
+  return text ? `${text}\n${result}` : result
+}
+
+function cancelledWithConfirmationOutcome(result: string, state: ConfirmationState): string {
+  return withConfirmationOutcome(result, state)
+}
+
+function normalizeConfirmationResponse(result: CommandConfirmationResponse): { allowed: boolean; scope?: "once" | "session"; applyPermissionSuggestions: boolean } {
+  if (typeof result === "boolean") {
+    return result
+      ? { allowed: true, scope: "session", applyPermissionSuggestions: true }
+      : { allowed: false, applyPermissionSuggestions: false }
+  }
+  if (!result) return { allowed: false, applyPermissionSuggestions: false }
+  const allowed = result.allow === true
+  const scope = result.scope === "session" ? "session" : "once"
+  return {
+    allowed,
+    scope: allowed ? scope : undefined,
+    applyPermissionSuggestions: allowed && scope === "session",
+  }
+}
+
+async function askUser(
+  cmd: string,
+  reason: string,
+  ctx?: ToolContext,
+  state?: ConfirmationState,
+  request?: CommandConfirmationRequest,
+): Promise<boolean> {
+  if (!ctx?.confirmCommand) {
+    state && (state.outcome = "unavailable")
+    ctx?.onUpdate?.(`${confirmationOutcomeText({ outcome: "unavailable" })}\n`)
+    return false
+  }
+  const summary = reason.replace(/\s+/g, " ").trim()
+  ctx.onUpdate?.(`⏳ 等待用户确认命令执行: ${summary}\n`)
   try {
-    const result = await ctx.confirmCommand(cmd, reason)
-    return result === true
-  } catch { return false }
+    const result = normalizeConfirmationResponse(await ctx.confirmCommand(cmd, reason, request))
+    if (state) {
+      state.outcome = result.allowed ? "allowed" : "rejected"
+      state.scope = result.scope
+      state.applyPermissionSuggestions = result.applyPermissionSuggestions
+    }
+    ctx.onUpdate?.(`${confirmationOutcomeText({ outcome: result.allowed ? "allowed" : "rejected", scope: result.scope })}\n`)
+    return result.allowed
+  } catch {
+    state && (state.outcome = "failed")
+    ctx.onUpdate?.(`${confirmationOutcomeText({ outcome: "failed" })}\n`)
+    return false
+  }
+}
+
+type CommandPathValidationResult = ReturnType<typeof validateCommandPaths>
+
+function permissionSuggestionText(pathResult: CommandPathValidationResult): string {
+  if (pathResult.allowed || !pathResult.suggestions?.length) return ""
+  const rendered = pathResult.suggestions.map((suggestion) => {
+    if (suggestion.type === "addWorkingDirectory") {
+      return `本会话加入工作目录: ${suggestion.directory}`
+    }
+    return `本会话加入规则: ${suggestion.rule.ruleContent}`
+  })
+  return `\n选择“本会话允许”后将应用: ${rendered.join("; ")}`
+}
+
+function pathConfirmationReason(pathResult: CommandPathValidationResult): string {
+  if (pathResult.allowed) return ""
+  return `${pathResult.reason}${permissionSuggestionText(pathResult)}`
+}
+
+function applyPathPermissionSuggestions(pathResult: CommandPathValidationResult, ctx?: ToolContext): void {
+  if (pathResult.allowed || !pathResult.suggestions?.length) return
+  ctx?.applyPermissionSuggestions?.(pathResult.suggestions)
+}
+
+function commandConfirmationRequest(pathResult: CommandPathValidationResult): CommandConfirmationRequest | undefined {
+  if (pathResult.allowed || !pathResult.suggestions?.length) return undefined
+  return { permissionSuggestions: pathResult.suggestions }
+}
+
+function maybeApplyPathPermissionSuggestions(pathResult: CommandPathValidationResult, ctx: ToolContext | undefined, state: ConfirmationState): void {
+  if (!state.applyPermissionSuggestions) return
+  applyPathPermissionSuggestions(pathResult, ctx)
 }
 
 async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: ToolContext, shellDialect = shellDialectForCommand(cmd, ctx)): Promise<string> {
@@ -1015,6 +1115,7 @@ export const commandTool: AgentTool = {
     const executionCwd = String(args.cwd || ctx?.cwd || process.cwd())
     const workspaceRoot = String(ctx?.workspace || ctx?.cwd || process.cwd())
     const shellDialect = shellDialectForCommand(cmd, ctx)
+    const confirmationState: ConfirmationState = {}
     const parsed = await parseCommandForSecurityAsync(cmd, { shellDialect })
 
     const danger = isDangerousCommand(cmd, { parsed, shellDialect })
@@ -1033,6 +1134,10 @@ export const commandTool: AgentTool = {
       workspaceRoot,
       shellDialect,
       parsed,
+      additionalWorkingDirectories: ctx?.additionalWorkingDirectories,
+      alwaysAllowRules: ctx?.alwaysAllowRules,
+      alwaysDenyRules: ctx?.alwaysDenyRules,
+      alwaysAskRules: ctx?.alwaysAskRules,
     })
     await maybeLogSecurityVerdictShadowDiff(cmd, { cwd: executionCwd, workspaceRoot, shellDialect })
 
@@ -1042,38 +1147,52 @@ export const commandTool: AgentTool = {
 
     if (readOnlyRequested) {
       if (!cmdIsReadOnly) return `⛔ 当前处于只读模式，不允许执行非只读命令: ${cmd.slice(0, 100)}`
-      if (!pathResult.allowed) return `⛔ 当前处于只读模式，路径安全检查未通过: ${pathResult.reason}`
-      if (ctx?.permissionMode === "plan") {
-        if (!(await askUser(cmd, "当前为 plan 模式，所有命令需确认", ctx))) return "⛔ 用户已取消执行"
+      if (!pathResult.allowed || ctx?.permissionMode === "plan") {
+        const reason = pathResult.allowed
+          ? "当前为 plan 模式，所有命令需确认"
+          : `当前处于只读模式，路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`
+        if (!(await askUser(cmd, reason, ctx, confirmationState, commandConfirmationRequest(pathResult)))) {
+          return pathResult.allowed
+            ? cancelledWithConfirmationOutcome("⛔ 用户已取消执行", confirmationState)
+            : cancelledWithConfirmationOutcome(`⛔ 路径安全检查需要确认: ${pathResult.reason}`, confirmationState)
+        }
+        maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
       }
-      return executeCmd(cmd, args, ctx, shellDialect)
+      return withConfirmationOutcome(await executeCmd(cmd, args, ctx, shellDialect), confirmationState)
     }
 
     const mode = ctx?.permissionMode ?? "default"
     if (mode === "plan") {
       const reason = pathResult.allowed
         ? "当前为 plan 模式，所有命令需确认"
-        : `当前为 plan 模式，且路径安全检查需要确认: ${pathResult.reason}`
-      if (!(await askUser(cmd, reason, ctx))) return "⛔ 用户已取消执行"
+        : `当前为 plan 模式，且路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`
+      if (!(await askUser(cmd, reason, ctx, confirmationState, commandConfirmationRequest(pathResult)))) {
+        return cancelledWithConfirmationOutcome("⛔ 用户已取消执行", confirmationState)
+      }
+      maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
     } else if (mode === "dontAsk") {
       if (!pathResult.allowed) {
-        if (!(await askUser(cmd, `路径安全检查需要确认: ${pathResult.reason}`, ctx))) {
-          return `⛔ 路径安全检查需要确认: ${pathResult.reason}`
+        if (!(await askUser(cmd, `路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`, ctx, confirmationState, commandConfirmationRequest(pathResult)))) {
+          return cancelledWithConfirmationOutcome(`⛔ 路径安全检查需要确认: ${pathResult.reason}`, confirmationState)
         }
+        maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
       }
     } else {
       if (!cmdIsReadOnly || !pathResult.allowed) {
         const reason = mode === "acceptEdits"
           ? (pathResult.allowed
             ? "acceptEdits 仅自动接受文件编辑，shell 非只读命令仍需确认"
-            : `acceptEdits 仅自动接受文件编辑，且路径安全检查需要确认: ${pathResult.reason}`)
+            : `acceptEdits 仅自动接受文件编辑，且路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`)
           : (pathResult.allowed
             ? "该命令不是只读操作，是否允许执行？"
-            : `该命令不是只读操作，且路径安全检查需要确认: ${pathResult.reason}`)
-        if (!(await askUser(cmd, reason, ctx))) return "⛔ 用户已取消执行"
+            : `该命令不是只读操作，且路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`)
+        if (!(await askUser(cmd, reason, ctx, confirmationState, commandConfirmationRequest(pathResult)))) {
+          return cancelledWithConfirmationOutcome("⛔ 用户已取消执行", confirmationState)
+        }
+        maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
       }
     }
 
-    return executeCmd(cmd, args, ctx, shellDialect)
+    return withConfirmationOutcome(await executeCmd(cmd, args, ctx, shellDialect), confirmationState)
   },
 }

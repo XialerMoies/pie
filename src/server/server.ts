@@ -18,6 +18,7 @@ import type { ServerContext, ChatStreamState, TraceEvent, AssistantBlock } from 
 import { TsserverManager } from "./ts-server";
 import { mark, logTiming } from "./timing";
 import { shellDialectFromEnv } from "../agent/tools/command/shell-parser";
+import { createSessionPermissionState } from "../agent/permissions";
 // 不再移动活跃 session 文件——只在 header 标记 workspace
 export function tagSessionHeader(sessionFile: string | undefined, ws: string): void {
   if (!sessionFile) return
@@ -451,6 +452,7 @@ async function main() {
 
   // ─── 共享可变状态 ────────────────────────────────────────────
   const chatStream: ChatStreamState = { textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "", response: null, turnId: "", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0 };
+  const sessionPermissionState = createSessionPermissionState();
 
   const runtime = await initAgent({
     agentDir: PI_CONFIG_DIR,
@@ -461,6 +463,7 @@ async function main() {
     permissionMode: "default",
     shellDialect: shellDialectFromEnv(),
     confirmCommand: createCommandConfirmCallback(chatStream),
+    sessionPermissionState,
   });
 
   console.log("Pi session ready");

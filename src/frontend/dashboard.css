@@ -399,6 +399,23 @@ body{background:var(--bg);height:100vh}
 @keyframes mo-in{from{opacity:0}to{opacity:1}}
 .modal-box{background:var(--bs);border:1px solid var(--bd);border-radius:14px;width:640px;height:520px;display:flex;flex-direction:column;box-shadow:0 16px 64px var(--sd);animation:mb-in .15s ease-out}
 @keyframes mb-in{from{opacity:0;transform:scale(.96)translateY(8px)}to{opacity:1;transform:scale(1)translateY(0)}}
+.command-confirm-box{width:min(680px,calc(100vw - 32px));max-height:min(78vh,640px);background:var(--bs);border:1px solid var(--bd);border-radius:8px;box-shadow:0 16px 64px var(--sd);animation:mb-in .15s ease-out;display:flex;flex-direction:column;overflow:hidden}
+.command-confirm-head{padding:16px 18px 10px;border-bottom:1px solid var(--bd)}
+.command-confirm-title{font-family:var(--fd);font-size:.9rem;font-weight:700;color:var(--tx);line-height:1.3}
+.command-confirm-reason{margin-top:8px;color:var(--ts);font-size:.75rem;line-height:1.55;overflow-wrap:anywhere}
+.command-confirm-body{padding:14px 18px;display:flex;flex-direction:column;gap:12px;overflow:auto;min-height:0}
+.command-confirm-label{font-size:.62rem;font-weight:700;font-family:var(--fd);letter-spacing:.05em;text-transform:uppercase;color:var(--tm);margin-bottom:5px}
+.command-confirm-code{margin:0;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.16);border:1px solid var(--bd);border-radius:7px;padding:10px;font-family:var(--fm);font-size:.73rem;line-height:1.55;color:var(--tx)}
+.command-confirm-scope{border:1px solid var(--bd);border-radius:7px;background:rgba(255,255,255,.03);padding:9px 10px;color:var(--ts);font-size:.72rem;line-height:1.55}
+.command-confirm-scope ul{margin:5px 0 0 16px;padding:0}
+.command-confirm-scope li+li{margin-top:2px}
+.command-confirm-empty-scope{color:var(--tm)}
+.command-confirm-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid var(--bd);flex-wrap:wrap}
+.command-confirm-btn{height:30px;padding:0 13px;border-radius:6px;border:1px solid var(--bd);background:transparent;color:var(--ts);font:600 .72rem var(--fb);cursor:pointer;white-space:nowrap;transition:background .1s,color .1s,border-color .1s}
+.command-confirm-btn:hover{background:var(--bc);color:var(--tx)}
+.command-confirm-btn.primary{border-color:var(--am);background:rgba(245,158,11,.12);color:var(--am)}
+.command-confirm-btn.primary:hover{background:rgba(245,158,11,.2)}
+.command-confirm-btn.danger:hover{border-color:var(--rs);background:rgba(239,68,68,.12);color:var(--rs)}
 .modal-header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--bd);flex-shrink:0}
 .modal-title{font-family:var(--fd);font-size:.85rem;font-weight:700}
 .modal-close{width:28px;height:28px;border:none;border-radius:6px;background:0 0;color:var(--tm);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;transition:all .1s}

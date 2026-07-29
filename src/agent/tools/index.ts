@@ -59,6 +59,11 @@ type ExtraCtx = {
   permissionMode?: ToolContext["permissionMode"]
   confirmCommand?: ToolContext["confirmCommand"]
   shellDialect?: ToolContext["shellDialect"]
+  additionalWorkingDirectories?: ToolContext["additionalWorkingDirectories"]
+  alwaysAllowRules?: ToolContext["alwaysAllowRules"]
+  alwaysDenyRules?: ToolContext["alwaysDenyRules"]
+  alwaysAskRules?: ToolContext["alwaysAskRules"]
+  applyPermissionSuggestions?: ToolContext["applyPermissionSuggestions"]
 }
 
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */

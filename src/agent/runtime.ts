@@ -10,7 +10,8 @@ import type { AgentSession } from "@xiamol/pi-coding-agent"
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from "@xiamol/pi-coding-agent"
 import { resolveSystemPrompt } from "./prompts"
 import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools"
-import type { ToolContext } from "./types"
+import type { SessionPermissionState, ToolContext } from "./types"
+import { applySessionPermissionSuggestions, resetSessionPermissionState } from "./permissions"
 import { wsDir } from "../server/routes/session-dir"
 
 const _pendingOpens = new Map<string, Promise<void>>()
@@ -32,16 +33,35 @@ export interface RuntimeConfig {
   shellDialect?: ToolContext["shellDialect"]
   /** 用户确认回调：返回 true=允许，false/undefined=拒绝 */
   confirmCommand?: ToolContext["confirmCommand"]
+  sessionPermissionState?: SessionPermissionState
 }
 
-type RuntimeToolExtraContext = Pick<ToolContext, "permissionMode" | "confirmCommand" | "shellDialect">
+type RuntimeToolExtraContext = Pick<
+  ToolContext,
+  | "permissionMode"
+  | "confirmCommand"
+  | "shellDialect"
+  | "additionalWorkingDirectories"
+  | "alwaysAllowRules"
+  | "alwaysDenyRules"
+  | "alwaysAskRules"
+  | "applyPermissionSuggestions"
+>
 
 export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraContext | undefined {
-  if (!config.permissionMode && !config.confirmCommand && !config.shellDialect) return undefined
+  const permissionState = config.sessionPermissionState
+  if (!config.permissionMode && !config.confirmCommand && !config.shellDialect && !permissionState) return undefined
   return {
     permissionMode: config.permissionMode,
     confirmCommand: config.confirmCommand,
     shellDialect: config.shellDialect,
+    additionalWorkingDirectories: permissionState?.additionalWorkingDirectories,
+    alwaysAllowRules: permissionState?.alwaysAllowRules,
+    alwaysDenyRules: permissionState?.alwaysDenyRules,
+    alwaysAskRules: permissionState?.alwaysAskRules,
+    applyPermissionSuggestions: permissionState
+      ? (suggestions) => applySessionPermissionSuggestions(permissionState, suggestions)
+      : undefined,
   }
 }
 
@@ -58,6 +78,11 @@ export class AgentRuntime {
 
   private constructor() {}
 
+  private resetSessionPermissions(): void {
+    const state = this.config?.sessionPermissionState
+    if (state) resetSessionPermissionState(state)
+  }
+
   /** 创建新的运行时 */
   static async create(config: RuntimeConfig): Promise<AgentRuntime> {
     const runtime = new AgentRuntime()
@@ -71,6 +96,7 @@ export class AgentRuntime {
   /** 切换 workspace（重建整个 session）—— 不续写旧文件，新 workspace 独立 session */
   async switchWorkspace(workspace: string): Promise<void> {
     if (workspace === this.currentWorkspace) return
+    this.resetSessionPermissions()
 
     console.log(`[runtime] Switching workspace: "${this.currentWorkspace}" → "${workspace}"`)
 
@@ -120,6 +146,7 @@ export class AgentRuntime {
 
   private async _doOpenSession(sessionFile: string, workspace: string): Promise<void> {
     console.log(`[runtime] Opening session: "${sessionFile}"`)
+    this.resetSessionPermissions()
     // 记录是否同 workspace（在更新 currentWorkspace 之前判断）
     const sameWs = workspace === this.currentWorkspace
     const prevWs = this.currentWorkspace
@@ -143,6 +170,7 @@ export class AgentRuntime {
    */
   async createNewSession(): Promise<string> {
     console.log(`[runtime] Creating new session`)
+    this.resetSessionPermissions()
 
     const callbacks = await this._saveAndDispose(true)
     await this._initSession(this.currentWorkspace, undefined, true /* forceNew */)

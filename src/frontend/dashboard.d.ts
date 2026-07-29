@@ -301,6 +301,11 @@ declare function $(id: string): HTMLElement | null;
 declare function S(name: string, size?: number): string;
 declare function E(s: unknown): string;
 declare function confirmAsync(msg: string): Promise<boolean>;
+declare function confirmCommandAsync(input: {
+  command: string;
+  reason: string;
+  permissionSuggestions?: any[];
+}): Promise<'once' | 'session' | 'deny'>;
 declare function F(s: number): string;
 declare function sb(id: string): void;
 declare function toast(msg: string, type?: 'info' | 'error' | 'success'): void;

@@ -89,6 +89,26 @@ describe("custom tool trace emitter", () => {
     assert.ok(chunks.some((c) => c.includes("hello-stream")), "chunks 应包含实际输出");
   });
 
+  it("commandTool emits confirmation status through onUpdate", async () => {
+    const { commandTool } = await import("../src/agent/tools/command.ts");
+    const chunks = [];
+    const result = await commandTool.execute(
+      { command: "node --version" },
+      {
+        cwd: process.cwd(),
+        sessionId: "",
+        permissionMode: "default",
+        confirmCommand: async () => true,
+        onUpdate: (chunk) => chunks.push(chunk),
+      },
+    );
+    const joined = chunks.join("");
+    assert.ok(result.length > 0, "confirmed command should execute");
+    assert.ok(result.includes("用户已允许命令执行"), "final result should show approval");
+    assert.ok(joined.includes("等待用户确认命令执行"), "trace should show waiting for confirmation");
+    assert.ok(joined.includes("用户已允许命令执行"), "trace should show approval");
+  });
+
   it("commandTool preserves quoted node -e commands", async () => {
     const { commandTool } = await import("../src/agent/tools/command.ts");
     const chunks = [];

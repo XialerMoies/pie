@@ -203,6 +203,58 @@ function confirmAsync(msg: string): Promise<boolean> {
   });
 }
 
+type CommandConfirmChoice = 'once' | 'session' | 'deny';
+
+function commandSuggestionLabel(suggestion: any): string {
+  if (!suggestion || typeof suggestion !== 'object') return '';
+  if (suggestion.type === 'addWorkingDirectory' && suggestion.directory) return String(suggestion.directory);
+  if (suggestion.type === 'addReadRule') {
+    if (suggestion.rule?.ruleContent) return String(suggestion.rule.ruleContent);
+    if (suggestion.directory) return String(suggestion.directory);
+  }
+  return '';
+}
+
+function confirmCommandAsync(input: { command: string; reason: string; permissionSuggestions?: any[] }): Promise<CommandConfirmChoice> {
+  return new Promise((resolve) => {
+    const suggestions = Array.isArray(input.permissionSuggestions) ? input.permissionSuggestions : [];
+    const suggestionLabels = suggestions.map(commandSuggestionLabel).filter(Boolean);
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay command-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="command-confirm-box" role="dialog" aria-modal="true" aria-labelledby="command-confirm-title">
+        <div class="command-confirm-head">
+          <div id="command-confirm-title" class="command-confirm-title">确认执行命令</div>
+          <div class="command-confirm-reason">${E(input.reason || '该命令需要确认')}</div>
+        </div>
+        <div class="command-confirm-body">
+          <div>
+            <div class="command-confirm-label">命令</div>
+            <pre class="command-confirm-code">${E(input.command || '')}</pre>
+          </div>
+          <div class="command-confirm-scope">
+            <div class="command-confirm-label">本会话授权</div>
+            ${suggestionLabels.length
+              ? `<ul>${suggestionLabels.map((label) => `<li>${E(label)}</li>`).join('')}</ul>`
+              : `<div class="command-confirm-empty-scope">本次命令没有可持久化的目录或规则授权。</div>`}
+          </div>
+        </div>
+        <div class="command-confirm-actions">
+          <button type="button" class="command-confirm-btn danger" data-choice="deny">拒绝</button>
+          <button type="button" class="command-confirm-btn" data-choice="once">仅本次允许</button>
+          <button type="button" class="command-confirm-btn primary" data-choice="session">本会话允许</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = (choice: CommandConfirmChoice) => { overlay.remove(); resolve(choice); };
+    overlay.querySelectorAll<HTMLButtonElement>('[data-choice]').forEach((button) => {
+      const choice = button.dataset.choice as CommandConfirmChoice;
+      button.addEventListener('click', () => close(choice));
+    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close('deny'); });
+  });
+}
+
 /** 在 viewport 内安全定位右键菜单，自动翻转防止溢出 */
 function placeContextMenu(menu: HTMLElement, x: number, y: number, opts?: { margin?: number; maxHeight?: number }): void {
   document.body.appendChild(menu);
