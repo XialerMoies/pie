@@ -11,7 +11,7 @@
  *
  * 适用场景：单用户桌面开发环境，非企业级多用户权限治理。
  */
-import type { AgentTool, CommandConfirmationRequest, CommandConfirmationResponse, ToolContext } from "../types.js"
+import type { AgentTool, CommandConfirmationRequest, CommandConfirmationResponse, PermissionSuggestion, ToolContext } from "../types.js"
 import { spawn } from "child_process"
 import { existsSync } from "fs"
 import { dirname } from "path"
@@ -942,12 +942,20 @@ interface ConfirmationState {
   outcome?: ConfirmationOutcome
   scope?: "once" | "session"
   applyPermissionSuggestions?: boolean
+  appliedPermissionRules?: string[]
 }
 
 function confirmationOutcomeText(state: ConfirmationState): string {
   if (state.outcome === "allowed") {
     if (state.scope === "once") return "✅ 用户已允许命令执行（仅本次）。"
-    if (state.scope === "session") return "✅ 用户已允许命令执行（本会话）。"
+    if (state.scope === "session") {
+      const rules = state.appliedPermissionRules?.length
+        ? `已应用本会话授权规则: ${state.appliedPermissionRules.join("; ")}`
+        : ""
+      return rules
+        ? `✅ 用户已允许命令执行（本会话）。${rules}`
+        : "✅ 用户已允许命令执行（本会话）。"
+    }
     return "✅ 用户已允许命令执行。"
   }
   if (state.outcome === "rejected") return "⛔ 用户已拒绝命令执行。"
@@ -1029,9 +1037,15 @@ function pathConfirmationReason(pathResult: CommandPathValidationResult): string
   return `${pathResult.reason}${permissionSuggestionText(pathResult)}`
 }
 
-function applyPathPermissionSuggestions(pathResult: CommandPathValidationResult, ctx?: ToolContext): void {
-  if (pathResult.allowed || !pathResult.suggestions?.length) return
-  ctx?.applyPermissionSuggestions?.(pathResult.suggestions)
+function appliedPermissionRuleLabel(suggestion: PermissionSuggestion): string {
+  if (suggestion.type === "addWorkingDirectory") return `WorkingDirectory(${suggestion.directory})`
+  return suggestion.rule.ruleContent
+}
+
+function applyPathPermissionSuggestions(pathResult: CommandPathValidationResult, ctx?: ToolContext): string[] {
+  if (pathResult.allowed || !pathResult.suggestions?.length || !ctx?.applyPermissionSuggestions) return []
+  ctx.applyPermissionSuggestions(pathResult.suggestions)
+  return pathResult.suggestions.map(appliedPermissionRuleLabel)
 }
 
 function commandConfirmationRequest(pathResult: CommandPathValidationResult): CommandConfirmationRequest | undefined {
@@ -1041,7 +1055,7 @@ function commandConfirmationRequest(pathResult: CommandPathValidationResult): Co
 
 function maybeApplyPathPermissionSuggestions(pathResult: CommandPathValidationResult, ctx: ToolContext | undefined, state: ConfirmationState): void {
   if (!state.applyPermissionSuggestions) return
-  applyPathPermissionSuggestions(pathResult, ctx)
+  state.appliedPermissionRules = applyPathPermissionSuggestions(pathResult, ctx)
 }
 
 async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: ToolContext, shellDialect = shellDialectForCommand(cmd, ctx)): Promise<string> {

@@ -73,6 +73,26 @@ function expectPathAsk(result, operation, suggestionType) {
   }
 }
 
+function permissionToolForOperation(operation) {
+  if (operation === "write") return "Write"
+  if (operation === "create") return "Create"
+  if (operation === "remove") return "Remove"
+  return "Read"
+}
+
+function expectPathRuleSuggestion(result, operation) {
+  const toolName = permissionToolForOperation(operation)
+  expectPathAsk(result, operation, "addPathRule")
+  const suggestion = !result.allowed
+    ? result.suggestions?.find((item) => item.type === "addPathRule")
+    : undefined
+  ok(suggestion, "expected addPathRule suggestion")
+  equal(suggestion.operation, operation)
+  equal(suggestion.rule?.toolName, toolName)
+  equal(suggestion.rule?.match, "wildcard")
+  ok(String(suggestion.rule?.ruleContent || "").startsWith(`${toolName}(`))
+}
+
 async function withEnvVar(name, value, fn) {
   const previous = process.env[name]
   if (value === undefined) delete process.env[name]
@@ -294,7 +314,7 @@ describe("security parser facade", () => {
       shellDialect: "posix-bash",
       parsed: parsedWithRedirect,
     })
-    expectPathAsk(redirectResult, "write", "addWorkingDirectory")
+    expectPathRuleSuggestion(redirectResult, "write")
 
     const parsedWithArg = {
       kind: "simple",
@@ -316,7 +336,7 @@ describe("security parser facade", () => {
       shellDialect: "posix-bash",
       parsed: parsedWithArg,
     })
-    expectPathAsk(argResult, "read", "addReadRule")
+    expectPathRuleSuggestion(argResult, "read")
   })
 })
 
@@ -331,12 +351,12 @@ describe("validateCommandPaths", () => {
     equal(result.allowed, true)
   })
 
-  it("workspace 外写入路径应硬拒绝", () => {
+  it("workspace 外写入路径应建议按写入规则确认", () => {
     const result = validateCommandPaths("echo hi > ../outside.txt", {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
     })
-    expectPathAsk(result, "write", "addWorkingDirectory")
+    expectPathRuleSuggestion(result, "write")
     ok(!result.allowed && result.reason.includes("workspace"))
   })
 
@@ -358,7 +378,7 @@ describe("validateCommandPaths", () => {
         cwd: workspace,
         workspaceRoot: workspace,
       })
-      expectPathAsk(writeAsk, "write", "addWorkingDirectory")
+      expectPathRuleSuggestion(writeAsk, "write")
 
       const additionalWorkingDirectories = new Map([
         ["external", { path: external, source: "session" }],
@@ -369,11 +389,23 @@ describe("validateCommandPaths", () => {
         additionalWorkingDirectories,
       }).allowed, true)
 
+      equal(validateCommandPaths(`echo hi > ${writeTarget}`, {
+        cwd: workspace,
+        workspaceRoot: workspace,
+        alwaysAllowRules: {
+          session: [{
+            toolName: "Write",
+            ruleContent: `Write(${join(external, "**")})`,
+            match: "wildcard",
+          }],
+        },
+      }).allowed, true)
+
       const readAsk = validateCommandPaths(readTarget, {
         cwd: workspace,
         workspaceRoot: workspace,
       })
-      expectPathAsk(readAsk, "read", "addReadRule")
+      expectPathRuleSuggestion(readAsk, "read")
 
       equal(validateCommandPaths(readTarget, {
         cwd: workspace,
@@ -455,7 +487,7 @@ describe("validateCommandPaths", () => {
         cwd: process.cwd(),
         workspaceRoot: process.cwd(),
       })
-      expectPathAsk(result, "read", "addReadRule")
+      expectPathRuleSuggestion(result, "read")
       ok(!result.allowed && result.reason.includes("读取路径"))
     }
   })
@@ -499,7 +531,7 @@ describe("validateCommandPaths", () => {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
     })
-    expectPathAsk(input, "read", "addReadRule")
+    expectPathRuleSuggestion(input, "read")
     ok(!input.allowed && input.reason.includes("读取路径"))
 
     const outputVar = validateCommandPaths("echo hi > $OUT_FILE", {
@@ -525,7 +557,7 @@ describe("validateCommandPaths", () => {
       workspaceRoot: process.cwd(),
       shellDialect: "cmd",
     })
-    expectPathAsk(result, "write", "addWorkingDirectory")
+    expectPathRuleSuggestion(result, "write")
     ok(!result.allowed && result.reason.includes("写入路径"))
   })
 
@@ -684,6 +716,15 @@ describe("validateCommandPaths", () => {
     const uncType = validateCommandPaths(String.raw`type \\server\share\secret.txt`, opts)
     equal(uncType.allowed, false)
     ok(!uncType.allowed && uncType.reason.includes("UNC"))
+
+    if (process.platform === "win32") {
+      const windowsRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows"
+      const hostsPath = join(windowsRoot, "System32", "drivers", "etc", "hosts")
+      const systemHosts = validateCommandPaths(`type "${hostsPath}"`, { ...opts, shellDialect: "cmd" })
+      equal(systemHosts.allowed, false)
+      equal(!systemHosts.allowed && systemHosts.hardDeny, true)
+      ok(!systemHosts.allowed && String(systemHosts.blockedPath || "").toLowerCase().endsWith("\\system32\\drivers\\etc\\hosts"))
+    }
   })
 
   it("cmd bare cd should be treated as cwd display, not home-directory access", () => {
@@ -1752,9 +1793,16 @@ describe("commandTool 权限模式", () => {
         },
       }
 
-      await commandTool.execute({ command: writeCommand }, writeCtx)
+      const firstWrite = await commandTool.execute({ command: writeCommand }, writeCtx)
+      ok(firstWrite.includes("Write("), firstWrite)
       equal(existsSync(join(external, "command-out.txt")), true)
       equal(writeConfirmCalls, 1)
+      equal(writeState.additionalWorkingDirectories.size, 0)
+      ok(writeState.alwaysAllowRules.session.some((rule) => (
+        rule.toolName === "Write"
+        && rule.match === "wildcard"
+        && rule.ruleContent.startsWith("Write(")
+      )))
 
       await commandTool.execute({ command: writeCommand }, writeCtx)
       equal(writeConfirmCalls, 1)
@@ -1780,11 +1828,61 @@ describe("commandTool 权限模式", () => {
 
       const firstRead = await commandTool.execute({ command: readCommand, readOnly: true }, readCtx)
       ok(firstRead.includes("external-read"), firstRead)
+      ok(firstRead.includes("Read("), firstRead)
       equal(readConfirmCalls, 1)
+      ok(readState.alwaysAllowRules.session.some((rule) => (
+        rule.toolName === "Read"
+        && rule.match === "wildcard"
+        && rule.ruleContent.startsWith("Read(")
+      )))
 
       const secondRead = await commandTool.execute({ command: readCommand, readOnly: true }, readCtx)
       ok(secondRead.includes("external-read"), secondRead)
       equal(readConfirmCalls, 1)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("default mode should still confirm non-read-only commands after a Write path rule matches", async () => {
+    const { root, workspace } = tempWorkspace()
+    const external = join(root, "external")
+    mkdirSync(external, { recursive: true })
+    const writeTarget = process.platform === "win32"
+      ? "..\\external\\default-out.txt"
+      : "../external/default-out.txt"
+    const writeCommand = `echo default-write > ${writeTarget}`
+
+    try {
+      const state = createSessionPermissionState()
+      state.alwaysAllowRules.session.push({
+        toolName: "Write",
+        ruleContent: `Write(${join(external, "**")})`,
+        match: "wildcard",
+      })
+      let confirmCalls = 0
+      let suggestionCount = -1
+      const ctx = {
+        cwd: workspace,
+        workspace,
+        sessionId: "",
+        permissionMode: "default",
+        additionalWorkingDirectories: state.additionalWorkingDirectories,
+        alwaysAllowRules: state.alwaysAllowRules,
+        alwaysDenyRules: state.alwaysDenyRules,
+        alwaysAskRules: state.alwaysAskRules,
+        applyPermissionSuggestions: (suggestions) => applySessionPermissionSuggestions(state, suggestions),
+        confirmCommand: async (_command, _reason, request) => {
+          confirmCalls++
+          suggestionCount = request?.permissionSuggestions?.length ?? 0
+          return { allow: true, scope: "once" }
+        },
+      }
+
+      await commandTool.execute({ command: writeCommand }, ctx)
+      equal(confirmCalls, 1)
+      equal(suggestionCount, 0)
+      equal(existsSync(join(external, "default-out.txt")), true)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1824,10 +1922,108 @@ describe("commandTool 权限模式", () => {
       equal(existsSync(join(external, "once-out.txt")), true)
       equal(confirmCalls, 1)
       equal(state.additionalWorkingDirectories.size, 0)
+      equal(state.alwaysAllowRules.session.length, 0)
 
       await commandTool.execute({ command: writeCommand }, ctx)
       equal(confirmCalls, 2, "仅本次允许后再次访问同目录仍应确认")
       equal(state.additionalWorkingDirectories.size, 0)
+      equal(state.alwaysAllowRules.session.length, 0)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("session deny and ask path rules should apply during command execution", async () => {
+    const { root, workspace } = tempWorkspace()
+    const external = join(root, "external")
+    mkdirSync(external, { recursive: true })
+
+    const deniedTarget = process.platform === "win32"
+      ? "..\\external\\deny-out.txt"
+      : "../external/deny-out.txt"
+
+    try {
+      let denyConfirmCalls = 0
+      const denied = await commandTool.execute(
+        { command: `echo denied > ${deniedTarget}` },
+        {
+          cwd: workspace,
+          workspace,
+          sessionId: "",
+          permissionMode: "dontAsk",
+          additionalWorkingDirectories: new Map([
+            ["external", { path: external, source: "session" }],
+          ]),
+          alwaysDenyRules: {
+            session: [{
+              toolName: "Write",
+              ruleContent: `Write(${join(external, "**")})`,
+              match: "wildcard",
+            }],
+          },
+          confirmCommand: async () => {
+            denyConfirmCalls++
+            return true
+          },
+        },
+      )
+      ok(denied.length > 0, denied)
+      equal(denyConfirmCalls, 0)
+      equal(existsSync(join(external, "deny-out.txt")), false)
+
+      let askConfirmCalls = 0
+      const asked = await commandTool.execute(
+        { command: "echo asked > inside-ask.txt" },
+        {
+          cwd: workspace,
+          workspace,
+          sessionId: "",
+          permissionMode: "dontAsk",
+          alwaysAskRules: {
+            session: [{
+              toolName: "Write",
+              ruleContent: `Write(${join(workspace, "**")})`,
+              match: "wildcard",
+            }],
+          },
+          confirmCommand: async (_command, _reason, request) => {
+            askConfirmCalls++
+            equal(request?.permissionSuggestions?.[0]?.type, "addPathRule")
+            return { allow: true, scope: "once" }
+          },
+        },
+      )
+      ok(asked.includes("已完成"), asked)
+      equal(askConfirmCalls, 1)
+      equal(existsSync(join(workspace, "inside-ask.txt")), true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("Windows system config reads should hard deny before confirmation", async () => {
+    if (process.platform !== "win32") return
+    const { root, workspace } = tempWorkspace()
+    const windowsRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows"
+    const hostsPath = join(windowsRoot, "System32", "drivers", "etc", "hosts")
+
+    try {
+      let confirmCalls = 0
+      const result = await commandTool.execute(
+        { command: `type "${hostsPath}"`, readOnly: true },
+        {
+          cwd: workspace,
+          workspace,
+          sessionId: "",
+          permissionMode: "dontAsk",
+          confirmCommand: async () => {
+            confirmCalls++
+            return false
+          },
+        },
+      )
+      equal(confirmCalls, 0)
+      ok(result.length > 0, result)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

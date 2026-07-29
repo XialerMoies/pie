@@ -33,11 +33,14 @@ export interface CommandConfirmationRequest {
 export type CommandConfirmationResponse = boolean | CommandConfirmationResult | undefined
 
 export type PermissionDestination = "session"
-export type PermissionToolName = "Read" | "Command"
+export type PermissionRuleMatch = "exact" | "prefix" | "wildcard"
+export type PathPermissionToolName = "Read" | "Write" | "Create" | "Remove"
+export type PermissionToolName = PathPermissionToolName | "Command"
 
 export interface PermissionRule {
   toolName: PermissionToolName
   ruleContent: string
+  match?: PermissionRuleMatch
 }
 
 export interface AdditionalWorkingDirectory {
@@ -48,6 +51,13 @@ export interface AdditionalWorkingDirectory {
 export type PermissionSuggestion =
   | {
       type: "addReadRule"
+      directory: string
+      rule: PermissionRule
+      destination: PermissionDestination
+    }
+  | {
+      type: "addPathRule"
+      operation: "read" | "write" | "create" | "remove"
       directory: string
       rule: PermissionRule
       destination: PermissionDestination

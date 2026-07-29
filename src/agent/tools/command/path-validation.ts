@@ -4,7 +4,7 @@ import { existsSync, statSync } from "fs"
 import { parseShellCommand, tokensWithoutRedirects, type ShellSegment } from "./shell-parser.js"
 import { parseCommandForSecurity } from "./security-parser.js"
 import type { SecurityParseResult, SecurityRedirect, ShellDialect, SimpleCommand } from "./security-ast.js"
-import type { AdditionalWorkingDirectory, PermissionRule, PermissionSuggestion } from "../../types.js"
+import type { AdditionalWorkingDirectory, PathPermissionToolName, PermissionRule, PermissionSuggestion } from "../../types.js"
 
 type PathOperation = "read" | "write" | "create" | "remove"
 
@@ -350,31 +350,90 @@ function shouldHardDeny(operation: PathOperation): boolean {
   return operation === "write" || operation === "create" || operation === "remove"
 }
 
-function readRuleContentForDirectory(directory: string): string {
-  return `Read(${path.join(path.resolve(directory), "**")})`
+const PATH_PERMISSION_TOOLS = new Set<PathPermissionToolName>(["Read", "Write", "Create", "Remove"])
+
+function permissionToolForOperation(operation: PathOperation): PathPermissionToolName {
+  if (operation === "write") return "Write"
+  if (operation === "create") return "Create"
+  if (operation === "remove") return "Remove"
+  return "Read"
 }
 
-function stripReadRuleWrapper(ruleContent: string): string {
+function pathRuleContentForDirectory(directory: string, operation: PathOperation): string {
+  const toolName = permissionToolForOperation(operation)
+  return `${toolName}(${path.join(path.resolve(directory), "**")})`
+}
+
+function stripPathRuleWrapper(ruleContent: string, toolName: PathPermissionToolName): string {
   const trimmed = ruleContent.trim()
-  if (trimmed.startsWith("Read(") && trimmed.endsWith(")")) {
-    return trimmed.slice("Read(".length, -1)
+  const prefix = `${toolName}(`
+  if (trimmed.startsWith(prefix) && trimmed.endsWith(")")) {
+    return trimmed.slice(prefix.length, -1)
   }
   return trimmed
 }
 
-function readRuleDirectory(rule: PermissionRule): string | undefined {
-  if (rule.toolName !== "Read") return undefined
-  let content = stripSurroundingQuotes(stripReadRuleWrapper(rule.ruleContent))
-  content = content.replace(/[\\/]\*\*$/, "")
-  if (!content) return undefined
-  return path.resolve(content)
+function pathRulePattern(rule: PermissionRule, operation: PathOperation): string | undefined {
+  const toolName = rule.toolName as PathPermissionToolName
+  if (!PATH_PERMISSION_TOOLS.has(toolName)) return undefined
+  if (toolName !== permissionToolForOperation(operation)) return undefined
+
+  const content = stripSurroundingQuotes(stripPathRuleWrapper(rule.ruleContent, toolName))
+  return content ? content : undefined
 }
 
-function matchingReadRule(resolvedPath: string, rules: readonly PermissionRule[] = []): PermissionRule | undefined {
-  return rules.find((rule) => {
-    const directory = readRuleDirectory(rule)
-    return directory ? isInsidePath(resolvedPath, directory) : false
-  })
+function normalizeRulePath(value: string): string {
+  const normalized = path.normalize(path.resolve(value)).replace(/[\\/]+/g, "/").replace(/\/$/, "")
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&")
+}
+
+function wildcardPathMatches(resolvedPath: string, pattern: string): boolean {
+  const normalizedPattern = normalizeRulePath(pattern)
+  const normalizedPath = normalizeRulePath(resolvedPath)
+  const recursiveRoot = normalizedPattern.replace(/\/\*\*$/, "")
+  if (recursiveRoot !== normalizedPattern) {
+    return normalizedPath === recursiveRoot || normalizedPath.startsWith(`${recursiveRoot}/`)
+  }
+
+  let regex = ""
+  for (let i = 0; i < normalizedPattern.length; i++) {
+    const ch = normalizedPattern[i]
+    if (ch === "*") {
+      if (normalizedPattern[i + 1] === "*") {
+        regex += ".*"
+        i++
+      } else {
+        regex += "[^/]*"
+      }
+    } else if (ch === "?") {
+      regex += "[^/]"
+    } else {
+      regex += escapeRegExp(ch)
+    }
+  }
+  return new RegExp(`^${regex}$`).test(normalizedPath)
+}
+
+function stripRecursiveGlob(pattern: string): string {
+  return pattern.replace(/[\\/]\*\*$/, "")
+}
+
+function pathRuleMatches(resolvedPath: string, rule: PermissionRule, operation: PathOperation): boolean {
+  const pattern = pathRulePattern(rule, operation)
+  if (!pattern) return false
+
+  const match = rule.match ?? (containsGlob(pattern) ? "wildcard" : "prefix")
+  if (match === "exact") return normalizeRulePath(resolvedPath) === normalizeRulePath(stripRecursiveGlob(pattern))
+  if (match === "wildcard") return wildcardPathMatches(resolvedPath, pattern)
+  return isInsidePath(resolvedPath, path.resolve(stripRecursiveGlob(pattern)))
+}
+
+function matchingPathRule(resolvedPath: string, operation: PathOperation, rules: readonly PermissionRule[] = []): PermissionRule | undefined {
+  return rules.find((rule) => pathRuleMatches(resolvedPath, rule, operation))
 }
 
 function permissionDirectoryForPath(resolvedPath: string, operation: PathOperation, assumeDirectory = false): string {
@@ -388,20 +447,15 @@ function permissionDirectoryForPath(resolvedPath: string, operation: PathOperati
 
 function externalPathSuggestions(directory: string, operation: PathOperation): PermissionSuggestion[] {
   const resolvedDirectory = path.resolve(directory)
-  if (operation === "read") {
-    return [{
-      type: "addReadRule",
-      directory: resolvedDirectory,
-      rule: {
-        toolName: "Read",
-        ruleContent: readRuleContentForDirectory(resolvedDirectory),
-      },
-      destination: "session",
-    }]
-  }
   return [{
-    type: "addWorkingDirectory",
+    type: "addPathRule",
+    operation,
     directory: resolvedDirectory,
+    rule: {
+      toolName: permissionToolForOperation(operation),
+      ruleContent: pathRuleContentForDirectory(resolvedDirectory, operation),
+      match: "wildcard",
+    },
     destination: "session",
   }]
 }
@@ -466,6 +520,13 @@ function isDangerousRemovalPath(resolvedPath: string, workspaceRoot: string): bo
   return false
 }
 
+function windowsSystemRoot(): string | undefined {
+  if (process.platform !== "win32") return undefined
+  return process.env.SystemRoot
+    || process.env.WINDIR
+    || path.join(path.parse(os.homedir()).root || "C:\\", "Windows")
+}
+
 function isSensitiveExternalPath(resolvedPath: string, workspaceRoot: string): boolean {
   if (isInsidePath(resolvedPath, workspaceRoot)) return false
 
@@ -480,6 +541,15 @@ function isSensitiveExternalPath(resolvedPath: string, workspaceRoot: string): b
   ].map((entry) => path.join(home, entry))
 
   if (sensitiveHomeDirs.some((directory) => isInsidePath(resolvedPath, directory))) return true
+
+  const windowsRoot = windowsSystemRoot()
+  if (windowsRoot) {
+    const sensitiveWindowsDirs = [
+      path.join(windowsRoot, "System32", "drivers", "etc"),
+      path.join(windowsRoot, "System32", "config"),
+    ]
+    if (sensitiveWindowsDirs.some((directory) => isInsidePath(resolvedPath, directory))) return true
+  }
 
   const base = path.basename(resolvedPath).toLowerCase()
   return [
@@ -520,10 +590,18 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
       if (isSensitiveExternalPath(resolvedBase, workspaceRoot)) {
         return fail(`${label}路径指向敏感路径: ${token}`, true, { operation, blockedPath: resolvedBase })
       }
-      if (matchingReadRule(resolvedBase, scope.alwaysDenyRules?.session)) {
+      if (matchingPathRule(resolvedBase, operation, scope.alwaysDenyRules?.session)) {
         return fail(`${label}路径被本会话规则拒绝: ${token}`, true, { operation, blockedPath: resolvedBase })
       }
-      if (isInsideAnyPath(resolvedBase, scope.allowedWorkingRoots) || matchingReadRule(resolvedBase, scope.alwaysAllowRules?.session)) {
+      if (matchingPathRule(resolvedBase, operation, scope.alwaysAskRules?.session)) {
+        const directory = permissionDirectoryForPath(resolvedBase, operation, true)
+        return fail(`${label}路径需要本会话规则确认: ${token}`, false, {
+          operation,
+          blockedPath: resolvedBase,
+          suggestions: externalPathSuggestions(directory, operation),
+        })
+      }
+      if (isInsideAnyPath(resolvedBase, scope.allowedWorkingRoots) || matchingPathRule(resolvedBase, operation, scope.alwaysAllowRules?.session)) {
         return { allowed: true }
       }
       const directory = permissionDirectoryForPath(resolvedBase, operation, true)
@@ -538,6 +616,22 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
   }
 
   const resolved = resolvePathToken(clean, cwd)
+  if (isInsidePath(resolved, workspaceRoot)) {
+    if (operation === "remove" && isDangerousRemovalPath(resolved, workspaceRoot)) {
+      return fail(`删除路径指向高风险目录: ${token}`, true)
+    }
+    if (matchingPathRule(resolved, operation, scope.alwaysDenyRules?.session)) {
+      return fail(`${label}路径被本会话规则拒绝: ${token}`, true, { operation, blockedPath: resolved })
+    }
+    if (matchingPathRule(resolved, operation, scope.alwaysAskRules?.session)) {
+      const directory = permissionDirectoryForPath(resolved, operation)
+      return fail(`${label}路径需要本会话规则确认: ${token}`, false, {
+        operation,
+        blockedPath: resolved,
+        suggestions: externalPathSuggestions(directory, operation),
+      })
+    }
+  }
   if (!isInsidePath(resolved, workspaceRoot)) {
     if (operation === "remove" && isDangerousRemovalPath(resolved, workspaceRoot)) {
       return fail(`删除路径指向高风险目录: ${token}`, true)
@@ -545,10 +639,10 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
     if (isSensitiveExternalPath(resolved, workspaceRoot)) {
       return fail(`${label}路径指向敏感路径: ${token}`, true, { operation, blockedPath: resolved })
     }
-    if (operation === "read" && matchingReadRule(resolved, scope.alwaysDenyRules?.session)) {
+    if (matchingPathRule(resolved, operation, scope.alwaysDenyRules?.session)) {
       return fail(`${label}路径被本会话规则拒绝: ${token}`, true, { operation, blockedPath: resolved })
     }
-    if (operation === "read" && matchingReadRule(resolved, scope.alwaysAskRules?.session)) {
+    if (matchingPathRule(resolved, operation, scope.alwaysAskRules?.session)) {
       const directory = permissionDirectoryForPath(resolved, operation)
       return fail(`${label}路径需要本会话规则确认: ${token}`, false, {
         operation,
@@ -557,7 +651,7 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
       })
     }
     if (isInsideAnyPath(resolved, scope.allowedWorkingRoots)) return { allowed: true }
-    if (operation === "read" && matchingReadRule(resolved, scope.alwaysAllowRules?.session)) return { allowed: true }
+    if (matchingPathRule(resolved, operation, scope.alwaysAllowRules?.session)) return { allowed: true }
 
     const directory = permissionDirectoryForPath(resolved, operation)
     return fail(`${label}路径不在 workspace/授权目录内: ${token}`, false, {

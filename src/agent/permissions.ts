@@ -1,15 +1,21 @@
 import path from "path"
-import type { PermissionSuggestion, SessionPermissionState } from "./types"
+import type { PermissionRule, PermissionSuggestion, PermissionToolName, SessionPermissionState } from "./types"
 
 function permissionPathKey(value: string): string {
   const resolved = path.resolve(value)
   return process.platform === "win32" ? resolved.toLowerCase() : resolved
 }
 
-function hasRule(state: SessionPermissionState, ruleContent: string, toolName: "Read" | "Command"): boolean {
+function hasRule(state: SessionPermissionState, ruleContent: string, toolName: PermissionToolName): boolean {
   return state.alwaysAllowRules.session.some((rule) => (
     rule.toolName === toolName && rule.ruleContent === ruleContent
   ))
+}
+
+function addAllowRule(state: SessionPermissionState, rule: PermissionRule): void {
+  if (!hasRule(state, rule.ruleContent, rule.toolName)) {
+    state.alwaysAllowRules.session.push(rule)
+  }
 }
 
 export function createSessionPermissionState(): SessionPermissionState {
@@ -44,11 +50,8 @@ export function applySessionPermissionSuggestions(
       continue
     }
 
-    if (suggestion.type === "addReadRule") {
-      const { rule } = suggestion
-      if (!hasRule(state, rule.ruleContent, rule.toolName)) {
-        state.alwaysAllowRules.session.push(rule)
-      }
+    if (suggestion.type === "addReadRule" || suggestion.type === "addPathRule") {
+      addAllowRule(state, suggestion.rule)
     }
   }
 }

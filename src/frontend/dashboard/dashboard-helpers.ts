@@ -210,6 +210,10 @@ let _activeCommandConfirmHost: HTMLElement | null = null;
 function commandSuggestionLabel(suggestion: any): string {
   if (!suggestion || typeof suggestion !== 'object') return '';
   if (suggestion.type === 'addWorkingDirectory' && suggestion.directory) return String(suggestion.directory);
+  if (suggestion.type === 'addPathRule') {
+    if (suggestion.rule?.ruleContent) return String(suggestion.rule.ruleContent);
+    if (suggestion.directory) return String(suggestion.directory);
+  }
   if (suggestion.type === 'addReadRule') {
     if (suggestion.rule?.ruleContent) return String(suggestion.rule.ruleContent);
     if (suggestion.directory) return String(suggestion.directory);
