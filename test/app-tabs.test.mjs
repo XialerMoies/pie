@@ -134,6 +134,27 @@ describe("App.Tabs dispatch", () => {
     assert.doesNotMatch(css, /\.tb-scroll::-webkit-scrollbar\s*\{[^}]*height\s*:\s*0(?:;|\})/);
   });
 
+  it("token usage rail keeps percent text compact and clipped", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    const tokenCode = readFileSync(new URL("../src/frontend/chat/chat-token.ts", import.meta.url), "utf8");
+
+    assert.match(tokenCode, /function\s+formatPercent\(/);
+    assert.match(tokenCode, /pctEl\.textContent\s*=\s*formatPercent\(pct\)/);
+    assert.match(tokenCode, /crEl\.textContent\s*=\s*formatPercent\(data\.cacheHitRate\)/);
+    assert.match(tokenCode, /const\s+pctDisplay\s*=\s*formatPercent\(pct\)/);
+    assert.match(tokenCode, /formatPercent\(d\.cacheHitRate\)/);
+    assert.doesNotMatch(tokenCode, /pct\s*\+\s*['"]%['"]/);
+    assert.doesNotMatch(tokenCode, /cacheHitRate\s*\+\s*['"]%['"]/);
+
+    const railValueCss = cssBlocks(css, ".tr-pct,.tr-cr");
+    assertCssDecl(railValueCss, "width", "100%");
+    assertCssDecl(railValueCss, "min-width", "0");
+    assertCssDecl(railValueCss, "max-width", "100%");
+    assertCssDecl(railValueCss, "overflow", "hidden");
+    assertCssDecl(railValueCss, "text-overflow", "ellipsis");
+    assertCssDecl(railValueCss, "white-space", "nowrap");
+  });
+
   it("更多菜单中的会话标签使用实时标题", () => {
     const ts = win.__tabs;
     ts.openTab({ kind: "session", id: "sess-real-title", title: "新会话", sessionId: "sess-real-title" });
