@@ -4,11 +4,12 @@
  * AI 用此工具记录项目配置、构建方式、测试框架、代码风格偏好、架构决策等。
  * 每次对话开始时自动读入 prompt。
  */
-import { writeFileSync } from "fs";
+import { existsSync, writeFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import type { AgentTool } from "../types.js";
 import { getCurrentRuntime } from "../globals.js";
+import { authorizeToolPath } from "./path-authorization.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(__dirname, "..", "..", "..");
@@ -35,7 +36,14 @@ export const writeAgentMdTool: AgentTool = {
   execute: async ({ content }, ctx) => {
     const root = ctx.workspace || APP_ROOT;
     const agentMdPath = resolve(root, "AGENT.md");
-    writeFileSync(agentMdPath, String(content), "utf-8");
+    const operation = existsSync(agentMdPath) ? "write" : "create";
+    let authorizedFile: string;
+    try {
+      authorizedFile = await authorizeToolPath(ctx, root, agentMdPath, operation, `agent.agent_md.${operation}`);
+      writeFileSync(authorizedFile, String(content), "utf-8");
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
     // 刷新系统 prompt 使当前对话立即生效
     const runtime = getCurrentRuntime();
     if (runtime) await runtime.refreshSystemPrompt();

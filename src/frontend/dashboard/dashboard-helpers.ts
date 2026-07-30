@@ -167,9 +167,24 @@ function toast(msg: string, type?: 'info' | 'error' | 'success'): void {
 //  Dashboard Data Fetch
 // ═══════════════════════════════════════════════════════════════════
 
+let _bootstrapPromise: Promise<void> | null = null;
+
+function bootstrapApi(): Promise<void> {
+  if (!_bootstrapPromise) {
+    _bootstrapPromise = fetch('/api/bootstrap', {
+      credentials: 'include',
+      cache: 'no-store',
+    }).then(() => undefined).catch(() => {
+      _bootstrapPromise = null;
+    });
+  }
+  return _bootstrapPromise;
+}
+
 async function getD(): Promise<void> {
   try {
-    const r = await fetch('/api/dashboard');
+    await bootstrapApi();
+    const r = await fetch('/api/dashboard', { credentials: 'include' });
     window.__state.D = await r.json();
     // Sync model name to input bar
     const fn = (window as any).App?.Chat?.updateModelName;
@@ -217,6 +232,10 @@ function commandSuggestionLabel(suggestion: any): string {
   if (suggestion.type === 'addReadRule') {
     if (suggestion.rule?.ruleContent) return String(suggestion.rule.ruleContent);
     if (suggestion.directory) return String(suggestion.directory);
+  }
+  if (suggestion.type === 'addToolRule') {
+    if (suggestion.rule?.ruleContent) return String(suggestion.rule.ruleContent);
+    if (suggestion.toolName) return `Tool(${String(suggestion.toolName)})`;
   }
   return '';
 }
@@ -308,6 +327,97 @@ function confirmCommandAsync(input: { command: string; reason: string; permissio
 }
 
 /** 在 viewport 内安全定位右键菜单，自动翻转防止溢出 */
+type PermissionConfirmInput = {
+  source?: string;
+  operation?: string;
+  toolName?: string;
+  riskLevel?: string;
+  root?: string;
+  path?: string;
+  relativePath?: string;
+  reason?: string;
+  permissionSuggestions?: any[];
+};
+
+function permissionOperationLabel(operation?: string): string {
+  if (operation === 'tool') return 'Tool';
+  if (operation === 'read') return '读取';
+  if (operation === 'write') return '写入';
+  if (operation === 'create') return '创建';
+  if (operation === 'remove') return '删除';
+  return operation || '访问';
+}
+
+function permissionConfirmBoxHTML(input: PermissionConfirmInput, suggestionLabels: string[], inline = false): string {
+  const details = [
+    input.toolName ? `Tool: ${input.toolName}` : '',
+    input.riskLevel ? `Risk: ${input.riskLevel}` : '',
+    input.source ? `来源: ${input.source}` : '',
+    input.operation ? `操作: ${permissionOperationLabel(input.operation)}` : '',
+    input.root ? `Root: ${input.root}` : '',
+    input.relativePath ? `相对路径: ${input.relativePath}` : '',
+  ].filter(Boolean).join('\n');
+
+  return `
+      <div class="command-confirm-box${inline ? ' command-confirm-inline' : ''}" role="dialog" ${inline ? '' : 'aria-modal="true" '}aria-labelledby="permission-confirm-title">
+        <div class="command-confirm-head">
+          <div id="permission-confirm-title" class="command-confirm-title">确认路径访问</div>
+          <div class="command-confirm-reason">${E(input.reason || '该路径访问需要确认')}</div>
+        </div>
+        <div class="command-confirm-body">
+          <div>
+            <div class="command-confirm-label">路径</div>
+            <pre class="command-confirm-code">${E(input.path || input.toolName || '')}</pre>
+          </div>
+          ${details ? `<div><div class="command-confirm-label">详情</div><pre class="command-confirm-code">${E(details)}</pre></div>` : ''}
+          <div class="command-confirm-scope">
+            <div class="command-confirm-label">本会话授权</div>
+            ${suggestionLabels.length
+              ? `<ul>${suggestionLabels.map((label) => `<li>${E(label)}</li>`).join('')}</ul>`
+              : `<div class="command-confirm-empty-scope">本次路径访问没有可持久化的目录或规则授权。</div>`}
+          </div>
+        </div>
+        <div class="command-confirm-actions">
+          <button type="button" class="command-confirm-btn danger" data-choice="deny">拒绝</button>
+          <button type="button" class="command-confirm-btn" data-choice="once">仅本次允许</button>
+          <button type="button" class="command-confirm-btn primary" data-choice="session">本会话允许</button>
+        </div>
+      </div>`;
+}
+
+function confirmPermissionAsync(input: PermissionConfirmInput): Promise<CommandConfirmChoice> {
+  return new Promise((resolve) => {
+    const suggestions = Array.isArray(input.permissionSuggestions) ? input.permissionSuggestions : [];
+    const suggestionLabels = suggestions.map(commandSuggestionLabel).filter(Boolean);
+    clearActiveCommandConfirm('deny');
+    const inlineHost = commandConfirmInlineHost();
+    if (inlineHost) {
+      _activeCommandConfirmResolve = resolve;
+      _activeCommandConfirmHost = inlineHost;
+      inlineHost.innerHTML = permissionConfirmBoxHTML(input, suggestionLabels, true);
+      inlineHost.classList.add('on');
+      inlineHost.querySelectorAll<HTMLButtonElement>('[data-choice]').forEach((button) => {
+        const choice = button.dataset.choice as CommandConfirmChoice;
+        button.addEventListener('click', () => clearActiveCommandConfirm(choice));
+      });
+      const defaultButton = inlineHost.querySelector<HTMLButtonElement>('[data-choice="once"]');
+      setTimeout(() => defaultButton?.focus(), 0);
+      return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay command-confirm-overlay';
+    overlay.innerHTML = permissionConfirmBoxHTML(input, suggestionLabels);
+    document.body.appendChild(overlay);
+    const close = (choice: CommandConfirmChoice) => { overlay.remove(); resolve(choice); };
+    overlay.querySelectorAll<HTMLButtonElement>('[data-choice]').forEach((button) => {
+      const choice = button.dataset.choice as CommandConfirmChoice;
+      button.addEventListener('click', () => close(choice));
+    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close('deny'); });
+  });
+}
+
 function placeContextMenu(menu: HTMLElement, x: number, y: number, opts?: { margin?: number; maxHeight?: number }): void {
   document.body.appendChild(menu);
   const r = menu.getBoundingClientRect();
@@ -365,6 +475,7 @@ App.UI.E = E;
 App.UI.F = F;
 App.UI.sb = sb;
 App.UI.toast = toast;
+App.UI.bootstrapApi = bootstrapApi;
 App.UI.getD = getD;
 App.UI.refresh = refresh;
 App.UI.winCtrl = winCtrl;
@@ -376,6 +487,7 @@ App.Tabs = App.Tabs || {};
 // 公开 API — 供 onclick 和 init 使用（向后兼容，后续移除）
 window.$ = $; window.S = S; window.E = E; window.F = F;
 window.sb = sb; window.toast = toast as any;
+window.bootstrapApi = bootstrapApi;
 window.getD = getD; window.refresh = refresh;
 window.winCtrl = winCtrl;
 window.placeContextMenu = placeContextMenu;

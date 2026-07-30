@@ -10,6 +10,8 @@
 import type { RouteHandler } from "./types";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
+import { writePathGuardError } from "./path-guard";
+import { authorizeRoutePath, writeServerPermissionError } from "../permission-service";
 
 const FILE_NAME = "ui-state.json";
 
@@ -47,9 +49,9 @@ function readStore(piConfigDir: string): UiStateStore {
   }
 }
 
-function writeStore(piConfigDir: string, store: UiStateStore): void {
+function writeStoreFile(filePath: string, store: UiStateStore): void {
   try {
-    writeFileSync(stateFile(piConfigDir), JSON.stringify(store, null, 2));
+    writeFileSync(filePath, JSON.stringify(store, null, 2));
   } catch { /* ignore */ }
 }
 
@@ -76,10 +78,13 @@ export const handleUiState: RouteHandler = async (req, res, ctx) => {
       const workspace = parsed.workspacePath || "_default";
       const store = readStore(piConfigDir);
       store.workspaces[workspace] = parsed;
-      writeStore(piConfigDir, store);
+      const filePath = (await authorizeRoutePath(ctx, piConfigDir, FILE_NAME, "write", "ui-state.save")).path;
+      writeStoreFile(filePath, store);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
     } catch (err) {
+      if (writeServerPermissionError(res, {}, err)) return true;
+      if (writePathGuardError(res, {}, err)) return true;
       res.writeHead(400);
       res.end(JSON.stringify({ error: "invalid JSON" }));
     }

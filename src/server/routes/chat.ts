@@ -152,7 +152,7 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         if (attachments && Array.isArray(attachments) && attachments.length > 0) {
           const ws = workspace || p.APP_ROOT;
           console.log(`📎 Processing ${attachments.length} attachment(s)`);
-          const { blocks } = processAttachments(attachments, ws);
+          const { blocks } = await processAttachments(attachments, ws, ctx.permissionService);
           const contextBlock = buildContextBlock(blocks);
           if (contextBlock) {
             finalMessage = message + contextBlock;

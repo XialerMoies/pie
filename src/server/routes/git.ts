@@ -4,13 +4,24 @@
  * 核心解析逻辑在 git-core.ts，此处仅 HTTP 路由分发。
  */
 import type { RouteHandler } from "./types";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { parseBody } from "./parse-body";
 import { findGitRoot, parsePorcelain, parseLog } from "./git-core";
+import { writePathGuardError } from "./path-guard";
+import { authorizeRoutePath, writeServerPermissionError } from "../permission-service";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
 export { findGitRoot } from "./git-core";
+
+function git(args: string[], cwd: string, timeout = 10000): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf-8",
+    timeout,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
 
 export const handleGit: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
@@ -24,32 +35,27 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
   try {
     // GET /api/git/status
     if (url.startsWith("/api/git/status")) {
-      const root = queryRoot || p.APP_ROOT;
+      const root = (await authorizeRoutePath(ctx, queryRoot || p.APP_ROOT, "", "read", "git.status")).path;
       const gitRoot = findGitRoot(root);
       if (!gitRoot) {
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ error: "not_a_repo", message: "当前工作区不是 Git 仓库" }));
         return true;
       }
-      const output = execSync("git status --porcelain", {
-        cwd: gitRoot,
-        encoding: "utf-8",
-        timeout: 10000,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      const output = git(["status", "--porcelain"], gitRoot);
       const entries = parsePorcelain(output);
       // 附加信息：分支 / 远程差异 / 最新 commit
       let branch = "HEAD";
-      try { branch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: gitRoot, encoding: "utf-8", timeout: 5000, stdio: "pipe" }).trim(); } catch {}
+      try { branch = git(["rev-parse", "--abbrev-ref", "HEAD"], gitRoot, 5000).trim(); } catch {}
       let ahead = 0, behind = 0;
       try {
-        const revs = execSync("git rev-list --count --left-right HEAD...@{upstream}", { cwd: gitRoot, encoding: "utf-8", timeout: 5000, stdio: "pipe" }).trim();
+        const revs = git(["rev-list", "--count", "--left-right", "HEAD...@{upstream}"], gitRoot, 5000).trim();
         const parts = revs.split("\t");
         ahead = parseInt(parts[0] || "0", 10);
         behind = parseInt(parts[1] || "0", 10);
       } catch {}
       let lastCommit = "";
-      try { lastCommit = execSync("git log -1 --format=%h %s", { cwd: gitRoot, encoding: "utf-8", timeout: 5000, stdio: "pipe" }).trim(); } catch {}
+      try { lastCommit = git(["log", "-1", "--format=%h %s"], gitRoot, 5000).trim(); } catch {}
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({
         gitRoot,
@@ -68,20 +74,16 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
 
     // GET /api/git/log
     if (url.startsWith("/api/git/log")) {
-      const root = queryRoot || p.APP_ROOT;
+      const root = (await authorizeRoutePath(ctx, queryRoot || p.APP_ROOT, "", "read", "git.log")).path;
       const gitRoot = findGitRoot(root);
       if (!gitRoot) {
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ error: "not_a_repo", message: "当前工作区不是 Git 仓库" }));
         return true;
       }
-      const count = parseInt(u.searchParams.get("count") || "10", 10);
-      const output = execSync(`git log --oneline -${count}`, {
-        cwd: gitRoot,
-        encoding: "utf-8",
-        timeout: 10000,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      const rawCount = parseInt(u.searchParams.get("count") || "10", 10);
+      const count = Number.isFinite(rawCount) ? Math.max(1, Math.min(rawCount, 100)) : 10;
+      const output = git(["log", "--oneline", `-${count}`], gitRoot);
       const entries = parseLog(output);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ gitRoot, entries }));
@@ -92,7 +94,7 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
     if (url.startsWith("/api/git/commit") && method === "POST") {
       const body = await parseBody(req).catch(() => ({}));
       const msg = (body.message || "").trim();
-      const bodyRoot = body.root || p.APP_ROOT;
+      const bodyRoot = (await authorizeRoutePath(ctx, body.root || p.APP_ROOT, "", "write", "git.commit")).path;
       const gitRoot2 = findGitRoot(bodyRoot);
       if (!gitRoot2) {
         res.writeHead(200, { ...cors });
@@ -100,8 +102,8 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
         return true;
       }
       if (!msg) { res.writeHead(200, { ...cors }); res.end(JSON.stringify({ error: "empty_message", message: "提交信息不能为空" })); return true; }
-      execSync(`git add -A`, { cwd: gitRoot2, encoding: "utf-8", timeout: 15000, stdio: "pipe" });
-      execSync(`git commit -m "${msg.replace(/"/g, '\\"')}"`, { cwd: gitRoot2, encoding: "utf-8", timeout: 15000, stdio: "pipe" });
+      git(["add", "-A"], gitRoot2, 15000);
+      git(["commit", "-m", msg], gitRoot2, 15000);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true, message: "提交成功" }));
       return true;
@@ -110,7 +112,7 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
     // POST /api/git/push
     if (url.startsWith("/api/git/push") && method === "POST") {
       const body = await parseBody(req).catch(() => ({}));
-      const bodyRoot = body.root || p.APP_ROOT;
+      const bodyRoot = (await authorizeRoutePath(ctx, body.root || p.APP_ROOT, "", "write", "git.push")).path;
       const gitRoot2 = findGitRoot(bodyRoot);
       if (!gitRoot2) {
         res.writeHead(200, { ...cors });
@@ -118,7 +120,7 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
         return true;
       }
       try {
-        execSync(`git push`, { cwd: gitRoot2, encoding: "utf-8", timeout: 60000, stdio: "pipe" });
+        git(["push"], gitRoot2, 60000);
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, message: "推送成功" }));
       } catch (pushErr: unknown) {
@@ -133,7 +135,7 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
     // POST /api/git/pull
     if (url.startsWith("/api/git/pull") && method === "POST") {
       const body = await parseBody(req).catch(() => ({}));
-      const bodyRoot = body.root || p.APP_ROOT;
+      const bodyRoot = (await authorizeRoutePath(ctx, body.root || p.APP_ROOT, "", "write", "git.pull")).path;
       const gitRoot2 = findGitRoot(bodyRoot);
       if (!gitRoot2) {
         res.writeHead(200, { ...cors });
@@ -141,7 +143,7 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
         return true;
       }
       try {
-        execSync(`git pull`, { cwd: gitRoot2, encoding: "utf-8", timeout: 60000, stdio: "pipe" });
+        git(["pull"], gitRoot2, 60000);
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, message: "拉取成功" }));
       } catch (pullErr: unknown) {
@@ -153,6 +155,8 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
       return true;
     }
   } catch (e: unknown) {
+    if (writeServerPermissionError(res, cors, e)) return true;
+    if (writePathGuardError(res, cors, e)) return true;
     res.writeHead(200, { ...cors });
     res.end(JSON.stringify({ error: (e as Error).message?.includes("not a git repository") ? "not_a_repo" : "git_error", message: (e as Error).message }));
     return true;

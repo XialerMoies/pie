@@ -1,9 +1,5 @@
 import type { AgentTool } from "../types.js"
-
-function getBaseUrl(): string {
-  const port = process.env.SERVER_PORT || process.env.PI_DEV_PORT || "3099"
-  return `http://127.0.0.1:${port}`
-}
+import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
 export const searchTool: AgentTool = {
   name: "search",
@@ -49,8 +45,8 @@ export const searchTool: AgentTool = {
     })
     if (ctx.workspace) params.set("root", ctx.workspace)
 
-    const url = `${getBaseUrl()}/api/search?${params.toString()}`
-    const res = await fetch(url)
+    const url = `${getLocalApiBaseUrl()}/api/search?${params.toString()}`
+    const res = await localApiFetch(url, ctx)
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
     if (!res.ok || data.error) return `搜索失败：${data.error || data.message || res.status}`
 

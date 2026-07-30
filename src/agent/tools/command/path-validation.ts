@@ -4,6 +4,12 @@ import { existsSync, statSync } from "fs"
 import { parseShellCommand, tokensWithoutRedirects, type ShellSegment } from "./shell-parser.js"
 import { parseCommandForSecurity } from "./security-parser.js"
 import type { SecurityParseResult, SecurityRedirect, ShellDialect, SimpleCommand } from "./security-ast.js"
+import {
+  createPathPermissionSuggestions,
+  findMatchingPathPermissionRule,
+  pathPermissionToolForOperation,
+  pathRuleContentForDirectory as sharedPathRuleContentForDirectory,
+} from "../../permissions.js"
 import type { AdditionalWorkingDirectory, PathPermissionToolName, PermissionRule, PermissionSuggestion } from "../../types.js"
 
 type PathOperation = "read" | "write" | "create" | "remove"
@@ -353,15 +359,11 @@ function shouldHardDeny(operation: PathOperation): boolean {
 const PATH_PERMISSION_TOOLS = new Set<PathPermissionToolName>(["Read", "Write", "Create", "Remove"])
 
 function permissionToolForOperation(operation: PathOperation): PathPermissionToolName {
-  if (operation === "write") return "Write"
-  if (operation === "create") return "Create"
-  if (operation === "remove") return "Remove"
-  return "Read"
+  return pathPermissionToolForOperation(operation)
 }
 
 function pathRuleContentForDirectory(directory: string, operation: PathOperation): string {
-  const toolName = permissionToolForOperation(operation)
-  return `${toolName}(${path.join(path.resolve(directory), "**")})`
+  return sharedPathRuleContentForDirectory(directory, operation)
 }
 
 function stripPathRuleWrapper(ruleContent: string, toolName: PathPermissionToolName): string {
@@ -433,7 +435,7 @@ function pathRuleMatches(resolvedPath: string, rule: PermissionRule, operation: 
 }
 
 function matchingPathRule(resolvedPath: string, operation: PathOperation, rules: readonly PermissionRule[] = []): PermissionRule | undefined {
-  return rules.find((rule) => pathRuleMatches(resolvedPath, rule, operation))
+  return findMatchingPathPermissionRule(resolvedPath, operation, rules)
 }
 
 function permissionDirectoryForPath(resolvedPath: string, operation: PathOperation, assumeDirectory = false): string {
@@ -446,18 +448,7 @@ function permissionDirectoryForPath(resolvedPath: string, operation: PathOperati
 }
 
 function externalPathSuggestions(directory: string, operation: PathOperation): PermissionSuggestion[] {
-  const resolvedDirectory = path.resolve(directory)
-  return [{
-    type: "addPathRule",
-    operation,
-    directory: resolvedDirectory,
-    rule: {
-      toolName: permissionToolForOperation(operation),
-      ruleContent: pathRuleContentForDirectory(resolvedDirectory, operation),
-      match: "wildcard",
-    },
-    destination: "session",
-  }]
+  return createPathPermissionSuggestions(directory, operation)
 }
 
 function stripSurroundingQuotes(value: string): string {

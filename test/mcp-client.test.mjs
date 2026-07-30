@@ -210,6 +210,19 @@ describe("createMcpToolAdapter", () => {
     });
     assert.strictEqual(tool.isConcurrencySafe, true);
   });
+
+  it("declares high-risk external execution permission", () => {
+    const tool = adapter.createMcpToolAdapter({
+      serverName: "external-server",
+      tool: { name: "run_task" },
+      client: mockClient(),
+    });
+    assert.strictEqual(tool.needsPermission, true);
+    assert.strictEqual(tool.riskLevel, "high");
+    assert.strictEqual(tool.workspaceBounded, false);
+    assert.deepStrictEqual(tool.operations, ["execute"]);
+    assert.strictEqual(tool.permissionSource, "mcp.external-server.run_task");
+  });
 });
 
 // ─── agentToolToPiTool ─────────────────────────
@@ -283,6 +296,68 @@ describe("agentToolToPiTool", () => {
   });
 
 // ─── MCP 工具生命周期测试 ─────────────────────────
+
+  it("agentToolToPiTool authorizes tools that require permission", async () => {
+    let executed = false;
+    let seenRequest;
+    const agentTool = {
+      name: "mcp__s__t",
+      description: "",
+      parameters: { type: "object", properties: {} },
+      isReadOnly: false,
+      needsPermission: true,
+      operations: ["execute"],
+      riskLevel: "high",
+      workspaceBounded: false,
+      permissionSource: "mcp.s.t",
+      execute: async () => {
+        executed = true;
+        return "ok";
+      },
+    };
+
+    const piTool = piHelper.agentToolToPiTool(agentTool, "/repo", undefined, {
+      authorizeTool: async (request) => {
+        seenRequest = request;
+        return { allow: true };
+      },
+    });
+    const result = await piTool.execute("call-auth", { input: true });
+
+    assert.strictEqual(executed, true);
+    assert.strictEqual(result.content[0].text, "ok");
+    assert.strictEqual(seenRequest.toolName, "mcp__s__t");
+    assert.strictEqual(seenRequest.source, "mcp.s.t");
+    assert.deepStrictEqual(seenRequest.operations, ["execute"]);
+    assert.strictEqual(seenRequest.riskLevel, "high");
+    assert.strictEqual(seenRequest.workspaceBounded, false);
+  });
+
+  it("agentToolToPiTool denies permission-gated tools before execute", async () => {
+    let executed = false;
+    const agentTool = {
+      name: "mcp__s__blocked",
+      description: "",
+      parameters: { type: "object", properties: {} },
+      isReadOnly: false,
+      needsPermission: true,
+      operations: ["execute"],
+      execute: async () => {
+        executed = true;
+        return "should not run";
+      },
+    };
+
+    const piTool = piHelper.agentToolToPiTool(agentTool, "/repo", undefined, {
+      authorizeTool: async () => ({ allow: false, reason: "permission denied for test" }),
+    });
+
+    await assert.rejects(
+      () => piTool.execute("call-deny", {}),
+      /permission denied for test/,
+    );
+    assert.strictEqual(executed, false);
+  });
 
 it("bumpGeneration / currentGeneration 基本行为", async () => {
   const svc = await import("../src/agent/mcp/MCPClientService.ts");

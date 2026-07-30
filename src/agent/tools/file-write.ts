@@ -4,9 +4,10 @@
  * 与 str_replace_editor 配合使用：str_replace_editor 改已有文件，
  * file_write 创建新文件。两者互补，覆盖所有写场景。
  */
-import { writeFileSync, existsSync, statSync, mkdirSync, realpathSync } from "fs";
+import { writeFileSync, existsSync, mkdirSync, realpathSync } from "fs";
 import { resolve, relative, isAbsolute, dirname, sep } from "path";
 import type { AgentTool } from "../types.js";
+import { authorizeToolPath, guardToolPath } from "./path-authorization.js";
 
 /**
  * 确保路径在当前 workspace 内，拒绝路径穿越和 symlink 逃逸。
@@ -75,7 +76,9 @@ export const fileWriteTool: AgentTool = {
 
     let absPath: string;
     try {
-      absPath = guardPath(root, fp);
+      const candidatePath = guardToolPath(root, fp);
+      const operation = existsSync(candidatePath) ? "write" : "create";
+      absPath = await authorizeToolPath(ctx, root, candidatePath, operation, `agent.file_write.${operation}`);
     } catch (e: any) {
       return e.message;
     }

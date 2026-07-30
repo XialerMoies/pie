@@ -12,6 +12,7 @@
 import { readFileSync, writeFileSync, existsSync, statSync, realpathSync, mkdirSync } from "fs";
 import { resolve, relative, isAbsolute, sep, dirname } from "path";
 import type { AgentTool } from "../types.js";
+import { authorizeToolPath, guardToolPath } from "./path-authorization.js";
 
 const MAX_FILE_SIZE = 1024 * 1024; // 1 MB
 const MAX_RESULT_LINES = 50;
@@ -241,11 +242,12 @@ export const strReplaceEditorTool: AgentTool = {
     if (!root) return "当前没有活跃 workspace。";
 
     let absPath: string;
-    try { absPath = guardPath(root, fp); } catch (e: any) { return e.message; }
+    try { absPath = guardToolPath(root, fp); } catch (e: any) { return e.message; }
 
     // ── 模式 A：创建新文件（old_string === ""）────────────
     if (old_string === "" && new_string !== undefined && new_string !== null) {
       if (existsSync(absPath)) return `文件已存在：${fp}。编辑已有文件请提供 old_string。`;
+      try { absPath = await authorizeToolPath(ctx, root, absPath, "create", "agent.str_replace.create"); } catch (e: any) { return e.message; }
       mkdirSync(dirname(absPath), { recursive: true });
       writeFileSync(absPath, String(new_string), "utf-8");
       const lines = String(new_string).split("\n").length;
@@ -264,6 +266,7 @@ export const strReplaceEditorTool: AgentTool = {
 
     // 文件存在性
     if (!existsSync(absPath)) return `文件不存在: ${fp}`;
+    try { absPath = await authorizeToolPath(ctx, root, absPath, "read", "agent.str_replace.read"); } catch (e: any) { return e.message; }
     const st = statSync(absPath);
     if (!st.isFile()) return `不是文件: ${fp}`;
     if (st.size > MAX_FILE_SIZE) return `文件过大（>1MB），无法编辑。`;
@@ -318,6 +321,7 @@ export const strReplaceEditorTool: AgentTool = {
 
     // 保持 CRLF 并写盘
     const output = hadCRLF ? updated.replaceAll("\n", "\r\n") : updated;
+    try { absPath = await authorizeToolPath(ctx, root, absPath, "write", "agent.str_replace.write"); } catch (e: any) { return e.message; }
     writeFileSync(absPath, output, "utf-8");
 
     const totalLines = updated.split("\n").length;

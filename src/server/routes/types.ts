@@ -4,6 +4,8 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import type { TsserverManager } from "../ts-server";
 import type { AgentRuntime } from "../../agent/index";
+import type { DesktopSecurityConfig } from "../security";
+import type { ServerPermissionService } from "../permission-service";
 
 // ─── Trace Event 类型 ────────────────────────────────────
 
@@ -48,6 +50,8 @@ export interface ServerContext {
   chatStream: ChatStreamState;
   sseClients: ServerResponse[];
   tsServer?: TsserverManager;
+  security?: DesktopSecurityConfig;
+  permissionService?: ServerPermissionService;
   paths: {
     APP_ROOT: string;
     DATA_DIR: string;

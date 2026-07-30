@@ -1,12 +1,14 @@
 /**
  * Session routes — CRUD for conversation sessions
  */
-import type { RouteHandler } from "./types";
+import type { RouteHandler, ServerContext } from "./types";
 import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync, statSync, mkdirSync, renameSync } from "fs";
 import { resolve, basename, dirname } from "path";
 import { randomUUID } from "crypto";
 import { parseBody } from "./parse-body";
 import { wsKey, wsDir } from "./session-dir";
+import { isPathGuardError, writePathGuardError } from "./path-guard";
+import { authorizeRoutePath, isServerPermissionError, writeServerPermissionError } from "../permission-service";
 
 // Re-export for backward compat (tests use mod.wsKey / mod.wsDir)
 export { wsKey, wsDir } from "./session-dir";
@@ -14,7 +16,9 @@ export { wsKey, wsDir } from "./session-dir";
 const cors = { "Access-Control-Allow-Origin": "*" };
 
 /** 迁移会话: 从 sessions/ 根目录按 workspace 分类移入 by-project/ */
-function migrateOldSessions(baseDir: string): void {
+async function migrateOldSessions(ctx: ServerContext): Promise<void> {
+  const baseDir = ctx.paths.SESSIONS_DIR;
+  if (!existsSync(baseDir)) return;
   const entries = readdirSync(baseDir, { withFileTypes: true });
   let moved = 0;
   for (const e of entries) {
@@ -22,14 +26,19 @@ function migrateOldSessions(baseDir: string): void {
     if (!e.name.endsWith(".jsonl")) continue;
     const fp = resolve(baseDir, e.name);
     try {
-      const content = readFileSync(fp, "utf-8");
+      const sourceFile = await authorizeSessionPath(ctx, fp, "read", "sessions.auto-migrate.source");
+      const content = readFileSync(sourceFile, "utf-8");
       const header = JSON.parse(content.trim().split("\n")[0] || "{}");
       const ws = header.workspace || "";
       const targetDir = ws ? wsDir(baseDir, ws) : resolve(baseDir, "by-project", "_legacy");
-      if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
-      renameSync(fp, resolve(targetDir, e.name));
+      const targetFile = await authorizeSessionPath(ctx, resolve(targetDir, e.name), "create", "sessions.auto-migrate.destination");
+      const removableSource = await authorizeSessionPath(ctx, sourceFile, "remove", "sessions.auto-migrate.source");
+      if (!existsSync(dirname(targetFile))) mkdirSync(dirname(targetFile), { recursive: true });
+      renameSync(removableSource, targetFile);
       moved++;
-    } catch {}
+    } catch (error) {
+      if (isPathGuardError(error) || isServerPermissionError(error)) throw error;
+    }
   }
   if (moved > 0) console.log(`📦 Migrated ${moved} session(s) to by-project/`);
 }
@@ -78,6 +87,22 @@ export function findAllJsonl(dir: string): string[] {
   return files;
 }
 
+async function findAuthorizedJsonl(ctx: ServerContext, dir: string, source: string): Promise<string[]> {
+  if (!existsSync(dir)) return [];
+  const authorizedDir = await authorizeSessionPath(ctx, dir, "read", `${source}.dir`);
+  const entries = readdirSync(authorizedDir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const e of entries) {
+    const candidate = resolve(authorizedDir, e.name);
+    if (e.isDirectory()) {
+      files.push(...await findAuthorizedJsonl(ctx, candidate, source));
+    } else if (e.name.endsWith(".jsonl")) {
+      files.push(await authorizeSessionPath(ctx, candidate, "read", source));
+    }
+  }
+  return files;
+}
+
 export function findSessionFileById(baseDir: string, id: string): string | null {
   // Search all session files by reading header ID
   const searchDirs = [baseDir, resolve(baseDir, "by-project")];
@@ -98,6 +123,34 @@ export function findSessionFileById(baseDir: string, id: string): string | null 
         } catch {}
       }
     }
+  }
+  return null;
+}
+
+async function findAuthorizedSessionFileById(ctx: ServerContext, id: string, source: string): Promise<string | null> {
+  if (typeof id !== "string" || !id.trim()) return null;
+  return findAuthorizedSessionFileInDir(ctx, ctx.paths.SESSIONS_DIR, id, source);
+}
+
+async function findAuthorizedSessionFileInDir(ctx: ServerContext, dir: string, id: string, source: string): Promise<string | null> {
+  if (!existsSync(dir)) return null;
+  const authorizedDir = await authorizeSessionPath(ctx, dir, "read", `${source}.dir`);
+  const entries = readdirSync(authorizedDir, { withFileTypes: true });
+  for (const e of entries) {
+    const candidate = resolve(authorizedDir, e.name);
+    if (e.isDirectory()) {
+      const found = await findAuthorizedSessionFileInDir(ctx, candidate, id, source);
+      if (found) return found;
+      continue;
+    }
+    if (!e.name.endsWith(".jsonl")) continue;
+
+    const authorizedFile = await authorizeSessionPath(ctx, candidate, "read", source);
+    try {
+      const headerLine = readFileSync(authorizedFile, "utf-8").trim().split("\n")[0];
+      const header = JSON.parse(headerLine);
+      if (header.id === id || e.name.includes(id)) return authorizedFile;
+    } catch {}
   }
   return null;
 }
@@ -146,6 +199,15 @@ function appendSessionInfo(sessionFile: string, info: Record<string, unknown>): 
   const lines = content.trim().split("\n").filter(Boolean);
   lines.splice(1, 0, JSON.stringify({ type: "session_info", ...info, timestamp: new Date().toISOString() }));
   writeFileSync(sessionFile, lines.join("\n") + "\n");
+}
+
+async function authorizeSessionPath(
+  ctx: ServerContext,
+  targetPath: string,
+  operation: "read" | "write" | "create" | "remove",
+  source: string,
+): Promise<string> {
+  return (await authorizeRoutePath(ctx, ctx.paths.SESSIONS_DIR, targetPath, operation, source)).path;
 }
 
 function textFromBlocks(blocks: Array<{type: string; text?: string; thinking?: string}>): string {
@@ -435,7 +497,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
   if ((url === "/api/sessions" || url?.startsWith("/api/sessions?")) && method === "GET") {
     try {
       // Migrate old flat sessions -> by-project/
-      migrateOldSessions(p.SESSIONS_DIR);
+      await migrateOldSessions(ctx);
 
       const u = new URL(url, `http://${req.headers.host || "localhost"}`);
       const currentWs = u.searchParams.get("workspace") || "";
@@ -444,17 +506,15 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
 
       // Current workspace sessions dir
       const curSessionsDir = wsDir(p.SESSIONS_DIR, currentWs);
-      if (!existsSync(p.SESSIONS_DIR)) mkdirSync(p.SESSIONS_DIR, { recursive: true });
-      if (!existsSync(curSessionsDir)) mkdirSync(curSessionsDir, { recursive: true });
-
       // Active session ID from runtime
       const activeSession = runtime.getActiveSession ? runtime.getActiveSession() : null;
       const runningSessionId = (session as any).isStreaming ? activeSession?.id || curId : "";
 
       // Helper to parse session from a dir
-      function readSessionsFromDir(dir: string): Array<Record<string, unknown>> {
+      async function readSessionsFromDir(dir: string): Promise<Array<Record<string, unknown>>> {
         if (!existsSync(dir)) return [];
-        return findAllJsonl(dir).map((fullPath: string) => {
+        const records: Array<Record<string, unknown>> = [];
+        for (const fullPath of await findAuthorizedJsonl(ctx, dir, "sessions.list")) {
           const stat = existsSync(fullPath) ? statSync(fullPath) : null;
           const content = readFileSync(fullPath, "utf-8");
           const lines = content.trim().split("\n");
@@ -463,7 +523,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
           const meta = readSessionMeta(lines);
           const replySummary = meta.name ? "" : deriveReplySummary(lines);
           const hasError = lines.some((line: string) => line.includes('"isError":true') || line.includes('"status":"error"') || line.includes('"error"'));
-          return {
+          records.push({
             id, name: meta.name || replySummary || "新会话", active: id === curId,
             messageCount: lines.filter((l: string) => l.includes('"type":"message"')).length,
             createdAt: stat?.birthtime?.toISOString() || header.timestamp || "",
@@ -476,11 +536,12 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
             hasError,
             isRunning: id === runningSessionId,
             branchFrom: meta.branchFrom,
-          };
-        }).sort((a: Record<string, unknown>, b: Record<string, unknown>) => String(b["updatedAt"] || b["createdAt"] || "").localeCompare(String(a["updatedAt"] || a["createdAt"] || "")));
+          });
+        }
+        return records.sort((a: Record<string, unknown>, b: Record<string, unknown>) => String(b["updatedAt"] || b["createdAt"] || "").localeCompare(String(a["updatedAt"] || a["createdAt"] || "")));
       }
 
-      const sessions = readSessionsFromDir(curSessionsDir);
+      const sessions = await readSessionsFromDir(curSessionsDir);
 
       // Other projects
       let other: { project: string; path: string; sessions: Record<string, unknown>[] }[] = [];
@@ -490,7 +551,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
         for (const dir of allDirs) {
           const projName = basename(dir);
           if (projName === curKey) continue;
-          const projSessions = readSessionsFromDir(dir);
+          const projSessions = await readSessionsFromDir(dir);
           if (projSessions.length > 0) {
             // Get workspace path from the first session's header
             const wsPath = (projSessions[0] as any)?.workspace || "";
@@ -502,6 +563,8 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ sessions, other, activeSessionId: activeSession?.id || null }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ sessions: [], other: [], error: (err as Error).message }));
     }
@@ -513,6 +576,13 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
     try {
       const body = await parseBody(req).catch(() => ({}));
       const workspace = body.workspace || "";
+      if (workspace) {
+        await authorizeRoutePath(ctx, workspace, "", "read", "sessions.new.workspace");
+      }
+      const targetWorkspace = workspace || runtime.currentWorkspace || "";
+      if (existsSync(p.SESSIONS_DIR)) {
+        await authorizeSessionPath(ctx, wsDir(p.SESSIONS_DIR, targetWorkspace), "create", "sessions.new.destination");
+      }
       // 如果 workspace 与当前不同，先切 workspace 再创建
       if (workspace && runtime.currentWorkspace !== workspace) {
         await runtime.switchWorkspace(workspace);
@@ -521,6 +591,8 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true, id }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -532,23 +604,29 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
     try {
       const body = await parseBody(req);
       const { id, workspace } = body;
-      const sFile = findSessionFileById(p.SESSIONS_DIR, id);
+      const sFile = await findAuthorizedSessionFileById(ctx, id, "sessions.migrate.lookup");
       if (!sFile) { res.writeHead(404, { ...cors }); res.end(JSON.stringify({ error: "not found" })); return true; }
+      const sourceFile = await authorizeSessionPath(ctx, sFile, "read", "sessions.migrate.source");
       const targetDir = wsDir(p.SESSIONS_DIR, workspace || "");
-      if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
-      const targetFile = resolve(targetDir, basename(sFile));
+      const targetFile = await authorizeSessionPath(ctx, resolve(targetDir, basename(sourceFile)), "create", "sessions.migrate.destination");
+      if (!existsSync(dirname(targetFile))) mkdirSync(dirname(targetFile), { recursive: true });
       // Read, tag, and move
-      const content = readFileSync(sFile, "utf-8");
+      const content = readFileSync(sourceFile, "utf-8");
       const lines = content.trim().split("\n");
       const header = JSON.parse(lines[0]);
       header.workspace = workspace || "";
       lines[0] = JSON.stringify(header);
       writeFileSync(targetFile, lines.join("\n") + "\n");
-      if (sFile !== targetFile) unlinkSync(sFile);
+      if (sourceFile !== targetFile) {
+        const removeSource = await authorizeSessionPath(ctx, sourceFile, "remove", "sessions.migrate.source");
+        unlinkSync(removeSource);
+      }
       console.log(`📦 Migrated session ${id} → by-project/${wsKey(workspace)}/`);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -566,16 +644,19 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/sessions/pin" && method === "POST") {
     try {
       const { id, pinned } = await parseBody(req);
-      const sessionFile = findSessionFileById(p.SESSIONS_DIR, id);
+      const sessionFile = await findAuthorizedSessionFileById(ctx, id, "sessions.pin.lookup");
       if (!sessionFile) {
         res.writeHead(404, { ...cors });
         res.end(JSON.stringify({ error: "session not found" }));
         return true;
       }
-      appendSessionInfo(sessionFile, { pinned: Boolean(pinned) });
+      const authorizedFile = await authorizeSessionPath(ctx, sessionFile, "write", "sessions.pin");
+      appendSessionInfo(authorizedFile, { pinned: Boolean(pinned) });
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true, id, pinned: Boolean(pinned) }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -586,19 +667,20 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/sessions/branch" && method === "POST") {
     try {
       const { id, workspace, name } = await parseBody(req);
-      const sourceFile = findSessionFileById(p.SESSIONS_DIR, id);
+      const sourceFile = await findAuthorizedSessionFileById(ctx, id, "sessions.branch.lookup");
       if (!sourceFile) {
         res.writeHead(404, { ...cors });
         res.end(JSON.stringify({ error: "session not found" }));
         return true;
       }
-      const sourceContent = readFileSync(sourceFile, "utf-8");
+      const authorizedSource = await authorizeSessionPath(ctx, sourceFile, "read", "sessions.branch.source");
+      const sourceContent = readFileSync(authorizedSource, "utf-8");
       const sourceLines = sourceContent.trim().split("\n").filter(Boolean);
       const sourceHeader = sourceLines[0] ? JSON.parse(sourceLines[0]) : {};
       const sourceMeta = readSessionMeta(sourceLines);
       const newId = `branch-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-      const targetDir = dirname(sourceFile);
-      const targetFile = resolve(targetDir, `${newId}.jsonl`);
+      const targetDir = dirname(authorizedSource);
+      const targetFile = await authorizeSessionPath(ctx, resolve(targetDir, `${newId}.jsonl`), "create", "sessions.branch.destination");
       const branchName = typeof name === "string" && name.trim()
         ? name.trim()
         : `${sourceMeta.name || "未命名会话"} · 分支`;
@@ -617,11 +699,14 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       });
       writeFileSync(targetFile, [JSON.stringify(branchHeader), branchInfo, ...sourceLines.slice(1)].join("\n") + "\n");
       await runtime.openSession(targetFile, workspace || runtime.currentWorkspace);
-      const messages = parseSessionMessages(readFileSync(targetFile, "utf-8"));
+      const readableTarget = await authorizeSessionPath(ctx, targetFile, "read", "sessions.branch.result");
+      const messages = parseSessionMessages(readFileSync(readableTarget, "utf-8"));
       const activeSessionId = runtime.getActiveSession?.()?.id || newId;
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true, id: newId, activeSessionId, messages }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -633,7 +718,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
     try {
       const body = await parseBody(req);
       const { id, workspace } = body;
-      const sessionFile = findSessionFileById(p.SESSIONS_DIR, id);
+      const sessionFile = await findAuthorizedSessionFileById(ctx, id, "sessions.activate.lookup");
       if (!sessionFile) {
         const activeSession = runtime.getActiveSession?.();
         if (activeSession?.id === id) {
@@ -646,13 +731,16 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
         return true;
       }
       // openSession 会重建 session，同 workspace 下切换不同 session 文件
-      await runtime.openSession(sessionFile, workspace || runtime.currentWorkspace);
-      const content = readFileSync(sessionFile, "utf-8");
+      const authorizedFile = await authorizeSessionPath(ctx, sessionFile, "read", "sessions.activate");
+      await runtime.openSession(authorizedFile, workspace || runtime.currentWorkspace);
+      const content = readFileSync(authorizedFile, "utf-8");
       const messages = parseSessionMessages(content);
       const activeSessionId = runtime.getActiveSession?.()?.id || "";
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true, activeSessionId, messages }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -664,17 +752,20 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
     try {
       const idMatch = url.match(/\/api\/sessions\/(.+?)\/messages/);
       const sessionId = idMatch ? idMatch[1] : "";
-      const sessionFile = findSessionFileById(p.SESSIONS_DIR, sessionId);
+      const sessionFile = await findAuthorizedSessionFileById(ctx, sessionId, "sessions.messages.lookup");
       if (!sessionFile) {
         res.writeHead(404, { ...cors });
         res.end(JSON.stringify({ error: "not found" }));
         return true;
       }
-      const content = readFileSync(sessionFile, "utf-8");
+      const authorizedFile = await authorizeSessionPath(ctx, sessionFile, "read", "sessions.messages");
+      const content = readFileSync(authorizedFile, "utf-8");
       const messages = parseSessionMessages(content);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ messages }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -687,13 +778,16 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       const parsed = await parseBody(req);
       const { id, name } = parsed;
       const titleSource = parsed.titleSource === "auto" || parsed.titleSource === "manual" ? parsed.titleSource : undefined;
-      const sessionFile = findSessionFileById(p.SESSIONS_DIR, id);
+      const sessionFile = await findAuthorizedSessionFileById(ctx, id, "sessions.rename.lookup");
       if (sessionFile) {
-        appendSessionInfo(sessionFile, titleSource ? { name, titleSource } : { name });
+        const authorizedFile = await authorizeSessionPath(ctx, sessionFile, "write", "sessions.rename");
+        appendSessionInfo(authorizedFile, titleSource ? { name, titleSource } : { name });
       }
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -704,11 +798,16 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/sessions/delete" && method === "POST") {
     try {
       const { id } = await parseBody(req);
-      const sessionFile = findSessionFileById(p.SESSIONS_DIR, id);
-      if (sessionFile) unlinkSync(sessionFile);
+      const sessionFile = await findAuthorizedSessionFileById(ctx, id, "sessions.delete.lookup");
+      if (sessionFile) {
+        const authorizedFile = await authorizeSessionPath(ctx, sessionFile, "remove", "sessions.delete");
+        unlinkSync(authorizedFile);
+      }
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }

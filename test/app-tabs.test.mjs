@@ -84,6 +84,57 @@ describe("App.Tabs dispatch", () => {
     delete win.sessionTabLabel;
   });
 
+  it("getD bootstraps before dashboard fetch and retries a failed bootstrap", async () => {
+    const calls = [];
+    const previousFetch = globalThis.fetch;
+    const previousWindowFetch = win.fetch;
+    const previousUpdateModelName = win.App.Chat.updateModelName;
+    try {
+      let bootstrapCalls = 0;
+      const mockFetch = async (url, init) => {
+        const textUrl = String(url);
+        calls.push([textUrl, init || {}]);
+        if (textUrl === "/api/bootstrap") {
+          bootstrapCalls += 1;
+          if (bootstrapCalls === 1) throw new Error("server not ready");
+          return { ok: true, json: async () => ({ ok: true }) };
+        }
+        if (textUrl === "/api/dashboard" && bootstrapCalls === 1) {
+          throw new Error("dashboard unavailable before cookie");
+        }
+        return {
+          ok: true,
+          json: async () => textUrl.includes("/api/dashboard")
+            ? { modelId: "bootstrapped-model" }
+            : { ok: true },
+        };
+      };
+      globalThis.fetch = mockFetch;
+      global.fetch = mockFetch;
+      win.fetch = mockFetch;
+      win.App.Chat.updateModelName = () => {};
+
+      await win.getD();
+      assert.strictEqual(win.__state.D, null);
+
+      await win.getD();
+
+      assert.strictEqual(calls[0][0], "/api/bootstrap");
+      assert.strictEqual(calls[0][1].credentials, "include");
+      assert.strictEqual(calls[1][0], "/api/dashboard");
+      assert.strictEqual(calls[2][0], "/api/bootstrap");
+      assert.strictEqual(calls[2][1].credentials, "include");
+      assert.strictEqual(calls[3][0], "/api/dashboard");
+      assert.strictEqual(calls[3][1].credentials, "include");
+      assert.strictEqual(win.__state.D.modelId, "bootstrapped-model");
+    } finally {
+      globalThis.fetch = previousFetch;
+      global.fetch = previousFetch;
+      win.fetch = previousWindowFetch;
+      win.App.Chat.updateModelName = previousUpdateModelName;
+    }
+  });
+
   it("toast 不拦截标签栏点击且淡出后移除 DOM", () => {
     const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
     const toastCss = cssBlocks(css, ".toast-el");

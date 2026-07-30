@@ -19,6 +19,10 @@ import { TsserverManager } from "./ts-server";
 import { mark, logTiming } from "./timing";
 import { shellDialectFromEnv } from "../agent/tools/command/shell-parser";
 import { createSessionPermissionState } from "../agent/permissions";
+import { authorizeLocalApiRequest, clearDesktopSessionTokenEnv, createDesktopSecurityConfig, installSecurityHeaders, isApiPreflight, writeSecurityError } from "./security";
+import { ServerPermissionService } from "./permission-service";
+import { cancelPermissionConfirmationsForResponse, createPermissionConfirmCallback } from "./permission-confirmation";
+import { FilePermissionAuditStore } from "./permission-audit-store";
 // 不再移动活跃 session 文件——只在 header 标记 workspace
 export function tagSessionHeader(sessionFile: string | undefined, ws: string): void {
   if (!sessionFile) return
@@ -452,9 +456,20 @@ async function main() {
 
   // ─── 共享可变状态 ────────────────────────────────────────────
   const chatStream: ChatStreamState = { textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "", response: null, turnId: "", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0 };
+  const sseClients: import("http").ServerResponse[] = [];
   const sessionPermissionState = createSessionPermissionState();
+  let runtime: AgentRuntime;
+  const security = createDesktopSecurityConfig();
+  clearDesktopSessionTokenEnv();
+  const permissionService = new ServerPermissionService({
+    sessionPermissionState,
+    workspaceRootProvider: () => runtime?.currentWorkspace || APP_ROOT,
+    trustedRootsProvider: () => [APP_ROOT, DATA_DIR, PI_CONFIG_DIR, SESSIONS_DIR],
+    confirmPermission: createPermissionConfirmCallback(sseClients),
+    auditStore: new FilePermissionAuditStore(resolve(PI_CONFIG_DIR, "permission-audit.json"), { maxEntries: 2000 }),
+  });
 
-  const runtime = await initAgent({
+  runtime = await initAgent({
     agentDir: PI_CONFIG_DIR,
     cwd: APP_ROOT,
     sessionsDir: SESSIONS_DIR,
@@ -463,7 +478,10 @@ async function main() {
     permissionMode: "default",
     shellDialect: shellDialectFromEnv(),
     confirmCommand: createCommandConfirmCallback(chatStream),
+    desktopApiToken: security.token,
     sessionPermissionState,
+    authorizePath: (root, target, operation, source) => permissionService.authorizePath(root, target, operation, source),
+    authorizeTool: (request) => permissionService.authorizeTool(request),
   });
 
   console.log("Pi session ready");
@@ -497,9 +515,6 @@ async function main() {
 
   attachSessionEvents(runtime, chatStream);
 
-  // ─── SSE 客户端集合（用于文件变更推送）──────────────────────────
-  const sseClients: import("http").ServerResponse[] = [];
-
   // ─── tsserver（TypeScript 语言服务，延迟启动）────────────────────
   const tsServer = new TsserverManager();
 
@@ -509,6 +524,8 @@ async function main() {
     chatStream,
     sseClients,
     tsServer,
+    security,
+    permissionService,
     paths: {
       APP_ROOT,
       DATA_DIR,
@@ -525,6 +542,18 @@ async function main() {
   const server = createServer(async (req, res) => {
     const url = req.url ?? "/";
     const cors = { "Access-Control-Allow-Origin": "*" };
+    installSecurityHeaders(req, res, ctx.security);
+
+    const securityDecision = authorizeLocalApiRequest(req, ctx.security);
+    if (!securityDecision.ok) {
+      writeSecurityError(res, securityDecision);
+      return;
+    }
+    if (isApiPreflight(req)) {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
 
     // favicon — 返回空内容避免控制台 404 报错
     if (url === "/favicon.ico") {
@@ -604,6 +633,7 @@ async function main() {
       req.on("close", () => {
         const idx = sseClients.indexOf(res);
         if (idx !== -1) sseClients.splice(idx, 1);
+        cancelPermissionConfirmationsForResponse(res);
       });
       return;
     }

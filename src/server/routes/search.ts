@@ -3,10 +3,11 @@
  *
  * 核心逻辑在 search-core.ts，此处仅 HTTP 路由分发。
  */
-import { resolve, relative, isAbsolute } from "path";
 import type { RouteHandler } from "./types";
 import { parseBody } from "./parse-body";
 import { doSearch, doReplace, searchConversations } from "./search-core";
+import { writePathGuardError } from "./path-guard";
+import { authorizeRoutePath, writeServerPermissionError } from "../permission-service";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
@@ -24,9 +25,16 @@ export const handleSearch: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ error: "Missing 'q'" }));
         return true;
       }
+      const requestedRoot = u.searchParams.get("root") || p.APP_ROOT;
+      if (!requestedRoot) {
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ error: "Missing root", results: [], total: 0, truncated: false }));
+        return true;
+      }
+      const rootDir = (await authorizeRoutePath(ctx, requestedRoot, "", "read", "search.get")).path;
       const data = doSearch(
         q,
-        u.searchParams.get("root") || p.APP_ROOT,
+        rootDir,
         (u.searchParams.get("type") as any) || "filename",
         u.searchParams.get("caseSensitive") === "true",
         parseInt(u.searchParams.get("maxResults") || "200", 10) || 200,
@@ -34,6 +42,8 @@ export const handleSearch: RouteHandler = async (req, res, ctx) => {
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify(data));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -61,17 +71,11 @@ export const handleSearch: RouteHandler = async (req, res, ctx) => {
         return true;
       }
       const rootDir = root || p.APP_ROOT;
-      const resolved = resolve(rootDir);
-      const rel = relative(resolve(p.APP_ROOT), resolved);
-      if (rel.startsWith("..") || isAbsolute(rel)) {
-        res.writeHead(403, { ...cors });
-        res.end(JSON.stringify({ error: "Access denied" }));
-        return true;
-      }
+      const guardedRoot = (await authorizeRoutePath(ctx, p.APP_ROOT, rootDir, previewOnly === false ? "write" : "read", "search.replace")).path;
       const data = doReplace({
         query,
         replacement,
-        rootDir,
+        rootDir: guardedRoot,
         caseSensitive: caseSensitive ?? false,
         regex: regex ?? false,
         previewOnly: previewOnly !== false,
@@ -79,6 +83,8 @@ export const handleSearch: RouteHandler = async (req, res, ctx) => {
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify(data));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -113,9 +119,16 @@ export const handleSearch: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ error: "Missing 'query'" }));
         return true;
       }
+      const requestedRoot = root || p.APP_ROOT;
+      if (!requestedRoot) {
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ error: "Missing root", results: [], total: 0, truncated: false }));
+        return true;
+      }
+      const rootDir = (await authorizeRoutePath(ctx, requestedRoot, "", "read", "search.post")).path;
       const data = doSearch(
         query,
-        root || p.APP_ROOT,
+        rootDir,
         type || "filename",
         caseSensitive || false,
         maxResults || 200,
@@ -123,6 +136,8 @@ export const handleSearch: RouteHandler = async (req, res, ctx) => {
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify(data));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }

@@ -261,6 +261,40 @@ ExplorerService.refreshTree = async function (): Promise<void> {
     es.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
+        if (d.type === 'permission_confirm') {
+          if (!d.id) return;
+          const input = {
+            source: d.source || '',
+            operation: d.operation || '',
+            toolName: d.toolName || '',
+            riskLevel: d.riskLevel || '',
+            root: d.root || '',
+            path: d.path || '',
+            relativePath: d.relativePath || '',
+            reason: d.reason || '路径访问需要确认',
+            permissionSuggestions: d.permissionSuggestions || [],
+          };
+          void (async () => {
+            const choice = typeof confirmPermissionAsync === 'function'
+              ? await confirmPermissionAsync(input)
+              : (await confirmAsync(`
+                <div style="font-weight:700;margin-bottom:8px">确认路径访问</div>
+                <div style="font-size:.76rem;color:var(--ts);margin-bottom:10px">${E(input.reason || '路径访问需要确认')}</div>
+                <pre style="margin:0;max-width:560px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.18);border:1px solid var(--bd);border-radius:7px;padding:10px;font-family:var(--fm);font-size:.74rem;color:var(--tx)">${E(input.path || '')}</pre>
+              `) ? 'session' : 'deny');
+            await fetch('/api/permissions/confirm', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                id: d.id,
+                allow: choice !== 'deny',
+                scope: choice === 'session' ? 'session' : 'once',
+              }),
+            }).catch(() => undefined);
+            void (window as any).refreshPermissionsPanel?.();
+          })();
+          return;
+        }
         if (d.type === 'refresh') {
           ExplorerService.refreshTree();
         }

@@ -8,7 +8,7 @@
  * PI SDK 需要的 ToolDefinition[] 格式，传给 createAgentSession()。
  */
 
-import { ToolRegistry, type AgentTool, type ToolContext, type ToolTraceEmitter } from "../types"
+import { ToolRegistry, authorizeToolExecution, type AgentTool, type ToolContext, type ToolTraceEmitter } from "../types"
 import { gitStatusTool } from "./git-status.js"
 import { searchTool } from "./search.js"
 import { fileReadTool } from "./file-read.js"
@@ -64,6 +64,9 @@ type ExtraCtx = {
   alwaysDenyRules?: ToolContext["alwaysDenyRules"]
   alwaysAskRules?: ToolContext["alwaysAskRules"]
   applyPermissionSuggestions?: ToolContext["applyPermissionSuggestions"]
+  authorizePath?: ToolContext["authorizePath"]
+  authorizeTool?: ToolContext["authorizeTool"]
+  desktopApiToken?: ToolContext["desktopApiToken"]
 }
 
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */
@@ -103,14 +106,16 @@ export function agentToolToPiTool(
             partialResult: chunk,
           })
         }
-        const text = await tool.execute(args, {
+        const toolContext: ToolContext = {
           cwd: workspace || "",
           sessionId: "",
           workspace,
           toolCallId: _toolCallId,
           onUpdate,
           ...extraCtx,
-        })
+        }
+        await authorizeToolExecution(tool, args, toolContext)
+        const text = await tool.execute(args, toolContext)
         emitTrace?.({
           type: "tool_execution_end",
           toolCallId: _toolCallId,

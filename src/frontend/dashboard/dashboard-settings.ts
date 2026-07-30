@@ -54,12 +54,12 @@ function switchSettingsModal(tab: string): void {
         </div>
       </div>
     `;
-    fetch('/api/auth').then(r => r.json()).then((ad: { providers: Array<{ provider: string; hasKey: boolean; keyPreview: string; keyFull: string }> }) => {
+    fetch('/api/auth').then(r => r.json()).then((ad: { providers: Array<{ provider: string; hasKey: boolean; keyPreview: string }> }) => {
       const list = $('msl-list')!;
-      const cfg: Record<string, { hasKey: boolean; keyPreview: string; keyFull: string }> = {};
+      const cfg: Record<string, ProviderKeyInfo> = {};
       ad.providers && ad.providers.forEach(p => {
-        cfg[p.provider] = p;
-        _provKeys[p.provider] = { hasKey: p.hasKey, keyPreview: p.keyPreview || '', keyFull: p.keyFull || '' };
+        cfg[p.provider] = { hasKey: p.hasKey, keyPreview: p.keyPreview || '' };
+        _provKeys[p.provider] = cfg[p.provider];
       });
       const allProvs = ['anthropic', 'deepseek', 'openai', 'openrouter', 'google'];
       const configured = allProvs.filter(p => cfg[p] && cfg[p].hasKey);
@@ -158,7 +158,10 @@ function selectProvider(prov: string): void {
   document.querySelectorAll('.msl-item').forEach(el => (el as HTMLElement).classList.toggle('on', (el as HTMLElement).dataset.prov === prov));
   const rc = $('ms-right-content');
   if (!rc) return;
-  const info = _provKeys[prov] || { hasKey: false, keyPreview: '', keyFull: '' };
+  const info = _provKeys[prov] || { hasKey: false, keyPreview: '' };
+  const placeholder = info.hasKey
+    ? `已保存: ${info.keyPreview || '********'}，输入新 Key 覆盖`
+    : '输入 API Key...';
   let html = `
     <div class="rp-header">
       <div class="rp-prov-name">${prov}</div>
@@ -172,7 +175,7 @@ function selectProvider(prov: string): void {
     <div class="rp-key-section">
       <div class="rp-key-label">API Key</div>
       <div class="rp-key-row">
-        <input class="rp-key-input" type="password" id="key-input-${prov}" placeholder="输入 API Key..." value="${E(info.keyFull||'')}"/>
+        <input class="rp-key-input" type="password" id="key-input-${prov}" placeholder="${E(placeholder)}" value=""/>
         <button class="rp-key-toggle" onclick="toggleKeyVis('${prov}')">👁</button>
         <button class="rp-save-btn" onclick="saveApiKey('${prov}')">保存</button>
       </div>
@@ -195,7 +198,7 @@ function saveApiKey(provider: string): void {
     .then(r => r.json()).then((r: { ok: boolean }) => {
       if (r.ok) {
         toast('已保存');
-        _provKeys[provider] = { hasKey: true, keyPreview: input.value.trim().slice(0, 8) + '...', keyFull: input.value.trim() };
+        _provKeys[provider] = { hasKey: true, keyPreview: input.value.trim().slice(0, 8) + '...' };
         selectProvider(provider);
       } else toast('保存失败');
     }).catch(() => toast('保存失败'));

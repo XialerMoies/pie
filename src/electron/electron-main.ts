@@ -7,10 +7,12 @@
  */
 import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
 import { spawn, execSync, type ChildProcess } from "child_process";
+import { randomBytes } from "crypto";
 import * as http from "http";
 import * as path from "path";
 import * as fs from "fs";
 import { fileURLToPath } from "url";
+import { registerDesktopIpcHandlers, TrustedDesktopRoots } from "./desktop-ipc.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,10 +24,47 @@ const DATA_DIR = path.join(RUNTIME_ROOT, "data");
 const PI_CONFIG_DIR = path.join(DATA_DIR, "pi");
 const SESSIONS_DIR = path.join(PI_CONFIG_DIR, "sessions");
 const AUTH_FILE = path.join(PI_CONFIG_DIR, "auth.json");
+const DESKTOP_SECURITY_TOKEN = randomBytes(32).toString("base64url");
+const trustedDesktopRoots = new TrustedDesktopRoots();
 
 function ensureDir(dir: string) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
+
+function addPersistedWorkspaceRoots(): void {
+  trustedDesktopRoots.addPersistedWorkspaceRoots(path.join(PI_CONFIG_DIR, "ui-state.json"));
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "::1" || host === "127.0.0.1" || host.startsWith("127.");
+}
+
+function isAllowedAppUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "http:") return false;
+    if (!isLoopbackHost(parsed.hostname)) return false;
+    const vitePort = process.env.VITE_DEV_PORT;
+    return parsed.port === String(serverPort) || (!!vitePort && parsed.port === String(vitePort));
+  } catch {
+    return false;
+  }
+}
+
+function hardenWindow(win: BrowserWindow): void {
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event, url) => {
+    if (!isAllowedAppUrl(url)) event.preventDefault();
+  });
+  win.webContents.on("will-attach-webview", (event) => {
+    event.preventDefault();
+  });
+}
+
+trustedDesktopRoots.addRoot(APP_ROOT);
+trustedDesktopRoots.addRoot(RUNTIME_ROOT);
+trustedDesktopRoots.addRoot(DATA_DIR);
 
 // ─── Pi 服务器进程 ────────────────────────────────────────────────
 let serverProcess: ChildProcess | null = null;
@@ -71,6 +110,7 @@ function startPiServer(): Promise<number> {
       PI_DESKTOP_DATA: DATA_DIR,
       PI_DESKTOP_CONFIG: PI_CONFIG_DIR,
       PI_DESKTOP_SESSIONS: SESSIONS_DIR,
+      MY_CODE_AGENT_DESKTOP_TOKEN: DESKTOP_SECURITY_TOKEN,
     };
 
     const isWin = process.platform === "win32";
@@ -164,7 +204,9 @@ function startHealthCheck(): void {
   stopHealthCheck();
   healthCheckTimer = setInterval(() => {
     if (!serverPort) return;
-    const req = http.get(`http://127.0.0.1:${serverPort}/api/dashboard`, (res) => {
+    const req = http.get(`http://127.0.0.1:${serverPort}/api/dashboard`, {
+      headers: { "X-My-Code-Agent-Token": DESKTOP_SECURITY_TOKEN },
+    }, (res) => {
       if (res.statusCode !== 200) {
         console.warn(`⚠️  Health check returned status ${res.statusCode}`);
       }
@@ -227,10 +269,13 @@ function createWindow() {
       preload: path.join(APP_ROOT, "dist-electron", "electron", "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
     },
     show: false,
     autoHideMenuBar: true,
   });
+  hardenWindow(mainWindow);
 
   const vitePort = process.env.VITE_DEV_PORT;
   if (vitePort) {
@@ -280,52 +325,9 @@ function createWindow() {
 }
 
 // ─── IPC 窗口控制 ────────────────────────────────────────────────
-ipcMain.on("window-minimize", () => mainWindow?.minimize());
-ipcMain.on("window-maximize", () => {
-  if (mainWindow?.isMaximized()) mainWindow.unmaximize();
-  else mainWindow?.maximize();
-});
-ipcMain.on("window-close", () => mainWindow?.close());
 
 // ─── IPC 文件菜单 ──────────────────────────────────────────────────
-ipcMain.handle("dialog-open-file", async () => {
-  const result = await dialog.showOpenDialog({ properties: ["openFile"] });
-  return result.filePaths[0] || null;
-});
-ipcMain.handle("dialog-open-folder", async () => {
-  const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
-  return result.filePaths[0] || null;
-});
-ipcMain.on("window-new", () => {
-  const windowIcon = getAppIconPath();
-  const win = new BrowserWindow({
-    width: 1100, height: 760, minWidth: 600, minHeight: 400,
-    title: "My Code Agent", backgroundColor: "#06080F",
-    ...(windowIcon ? { icon: windowIcon } : {}),
-    titleBarStyle: "hidden", autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(APP_ROOT, "dist-electron", "electron", "preload.js"),
-      contextIsolation: true, nodeIntegration: false,
-    },
-    show: false,
-  });
-  const vitePort = process.env.VITE_DEV_PORT;
-  if (vitePort) win.loadURL(`http://127.0.0.1:${vitePort}`);
-  else win.loadURL(`http://127.0.0.1:${serverPort}`);
-  win.once("ready-to-show", () => win.show());
-});
-
-ipcMain.handle("show-item-in-folder", async (_, filePath: string) => {
-  shell.showItemInFolder(filePath);
-});
-ipcMain.handle("trash-item", async (_, filePath: string) => {
-  shell.trashItem(filePath);
-});
-ipcMain.handle("open-folder-dialog", async () => {
-  const r = await dialog.showOpenDialog({ properties: ["openDirectory"] });
-  return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
-});
-ipcMain.handle("spawn-terminal", async () => {
+function spawnCliTerminal(): boolean {
   if (process.platform === "win32") {
     execSync(`start cmd /k "npx tsx src/server/main.ts --cli"`, { cwd: APP_ROOT, stdio: "ignore" });
   } else if (process.platform === "darwin") {
@@ -335,9 +337,25 @@ ipcMain.handle("spawn-terminal", async () => {
     execSync(`x-terminal-emulator -e "npx tsx src/server/main.ts --cli"`, { cwd: APP_ROOT, stdio: "ignore" });
   }
   return true;
+}
+
+registerDesktopIpcHandlers({
+  ipcMain,
+  getMainWindow: () => mainWindow,
+  createWindow,
+  showOpenDialog: (options) => dialog.showOpenDialog({ properties: options.properties }),
+  showItemInFolder: (filePath) => shell.showItemInFolder(filePath),
+  trashItem: (filePath) => shell.trashItem(filePath),
+  spawnTerminal: spawnCliTerminal,
+  trustedRoots: trustedDesktopRoots,
 });
 
 app.whenReady().then(async () => {
+  ensureDir(DATA_DIR);
+  ensureDir(PI_CONFIG_DIR);
+  ensureDir(SESSIONS_DIR);
+  addPersistedWorkspaceRoots();
+
   const isDev = process.env.VITE_DEV_PORT;
   if (isDev) {
     console.log(`📡 Dev mode: loading from Vite at http://127.0.0.1:${isDev}`);

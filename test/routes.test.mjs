@@ -164,6 +164,18 @@ before(async () => {
 // ════════════════════════════════════════════════════════════
 
 describe("dashboard routes", () => {
+  it("GET /api/bootstrap returns ok", async () => {
+    const { status, body } = await callHandler(handleDashboard, "GET", "/api/bootstrap");
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(parseJSON(body), { ok: true });
+  });
+
+  it("HEAD /api/bootstrap returns headers without a body", async () => {
+    const { status, body } = await callHandler(handleDashboard, "HEAD", "/api/bootstrap");
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body, "");
+  });
+
   it("GET /api/dashboard 返回 200 JSON", async () => {
     const { status, body } = await callHandler(handleDashboard, "GET", "/api/dashboard");
     assert.strictEqual(status, 200);
@@ -600,6 +612,32 @@ describe("chat routes", () => {
   });
 });
 
+describe("settings routes", () => {
+  it("GET /api/auth redacts stored provider keys", async () => {
+    const ctx = mockContext();
+    try {
+      mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+      writeFileSync(resolve(ctx.paths.PI_CONFIG_DIR, "auth.json"), JSON.stringify({
+        openai: { apiKey: "sk-test-secret-value" },
+      }));
+
+      const { status, body } = await callHandler(handleSettings, "GET", "/api/auth", undefined, ctx);
+
+      assert.strictEqual(status, 200);
+      const data = parseJSON(body);
+      assert.ok(Array.isArray(data.providers));
+      const openai = data.providers.find((item) => item.provider === "openai");
+      assert.ok(openai);
+      assert.strictEqual(openai.hasKey, true);
+      assert.strictEqual(openai.keyPreview, "sk-test-...");
+      assert.strictEqual(Object.hasOwn(openai, "keyFull"), false);
+      assert.strictEqual(JSON.stringify(data).includes("secret-value"), false);
+    } finally {
+      if (ctx.paths._tmpDir) rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("sessions routes", () => {
   it("GET /api/sessions 返回列表", async () => {
     const ctx = mockContext();
@@ -1018,6 +1056,57 @@ describe("search conversations route", () => {
       const data = parseJSON(body);
       assert.strictEqual(status, 403);
       assert.ok(data?.error, "应返回 error");
+    } finally { rmSync(parent, { recursive: true, force: true }); }
+  });
+
+  it("POST /api/file/write 拒绝兄弟目录前缀逃逸", async () => {
+    const parent = mkdtempSync(resolve(tmpdir(), "explorer-write-guard-"));
+    try {
+      const root = resolve(parent, "root");
+      const sibling = resolve(parent, "root-evil");
+      mkdirSync(root);
+      mkdirSync(sibling);
+      const target = resolve(sibling, "pwn.txt");
+      const ctx = mockContext({ paths: { ...mockPaths(), APP_ROOT: root } });
+
+      const { status, body } = await callHandler(
+        handleExplorer,
+        "POST",
+        "/api/file/write",
+        { root, path: "../root-evil/pwn.txt", content: "owned" },
+        ctx,
+      );
+
+      const data = parseJSON(body);
+      assert.strictEqual(status, 403);
+      assert.ok(data?.error, "应返回安全拒绝错误");
+      assert.strictEqual(existsSync(target), false, "不应写入兄弟目录");
+    } finally { rmSync(parent, { recursive: true, force: true }); }
+  });
+
+  it("POST /api/file/delete 拒绝兄弟目录前缀逃逸", async () => {
+    const parent = mkdtempSync(resolve(tmpdir(), "explorer-delete-guard-"));
+    try {
+      const root = resolve(parent, "root");
+      const sibling = resolve(parent, "root-evil");
+      mkdirSync(root);
+      mkdirSync(sibling);
+      const target = resolve(sibling, "keep.txt");
+      writeFileSync(target, "keep");
+      const ctx = mockContext({ paths: { ...mockPaths(), APP_ROOT: root } });
+
+      const { status, body } = await callHandler(
+        handleExplorer,
+        "POST",
+        "/api/file/delete",
+        { root, path: "../root-evil/keep.txt" },
+        ctx,
+      );
+
+      const data = parseJSON(body);
+      assert.strictEqual(status, 403);
+      assert.ok(data?.error, "应返回安全拒绝错误");
+      assert.strictEqual(readFileSync(target, "utf-8"), "keep", "不应删除兄弟目录文件");
     } finally { rmSync(parent, { recursive: true, force: true }); }
   });
 });

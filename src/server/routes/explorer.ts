@@ -3,8 +3,10 @@
  */
 import type { RouteHandler } from "./types";
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, renameSync, rmSync, mkdirSync, createReadStream } from "fs";
-import { resolve, dirname, relative, isAbsolute } from "path";
+import { resolve, dirname } from "path";
 import { parseBody } from "./parse-body";
+import { writePathGuardError } from "./path-guard";
+import { authorizeRoutePath, writeServerPermissionError } from "../permission-service";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
@@ -51,14 +53,7 @@ export const handleExplorer: RouteHandler = async (req, res, ctx) => {
       const parsedUrl = new URL(url, `http://${req.headers.host || "localhost"}`);
       const rootDir = parsedUrl.searchParams.get("root") || p.APP_ROOT;
       const rawPath = parsedUrl.searchParams.get("path") || "";
-      const targetDir = rawPath ? resolve(rootDir, rawPath) : rootDir;
-
-      const tdRel = relative(rootDir, targetDir);
-      if (tdRel.startsWith("..") || isAbsolute(tdRel)) {
-        res.writeHead(403, { ...cors });
-        res.end(JSON.stringify({ error: "Access denied" }));
-        return true;
-      }
+      const targetDir = (await authorizeRoutePath(ctx, rootDir, rawPath, "read", "explorer.list")).path;
       if (!existsSync(targetDir)) {
         res.writeHead(404, { ...cors });
         res.end(JSON.stringify({ error: "目录不存在: " + targetDir }));
@@ -97,6 +92,8 @@ export const handleExplorer: RouteHandler = async (req, res, ctx) => {
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ rootDir, relativePath: rawPath || "", items }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -109,12 +106,7 @@ export const handleExplorer: RouteHandler = async (req, res, ctx) => {
       const parsedUrl = new URL(url, `http://${req.headers.host || "localhost"}`);
       const filePath = parsedUrl.searchParams.get("path") || "";
       const rootDir = parsedUrl.searchParams.get("root") || p.APP_ROOT;
-      const resolvedPath = resolve(rootDir, filePath);
-
-      const rel = relative(rootDir, resolvedPath);
-      if (rel.startsWith("..") || isAbsolute(rel)) {
-        res.writeHead(403, { ...cors }); res.end(JSON.stringify({ error: "Access denied" })); return true;
-      }
+      const resolvedPath = (await authorizeRoutePath(ctx, rootDir, filePath, "read", "file.raw")).path;
       if (!existsSync(resolvedPath)) {
         res.writeHead(404, { ...cors }); res.end(JSON.stringify({ error: "File not found" })); return true;
       }
@@ -160,6 +152,8 @@ export const handleExplorer: RouteHandler = async (req, res, ctx) => {
       res.end(readFileSync(resolvedPath));
       return true;
     } catch (e: any) {
+      if (writeServerPermissionError(res, cors, e)) return true;
+      if (writePathGuardError(res, cors, e)) return true;
       res.writeHead(500, { ...cors }); res.end(JSON.stringify({ error: e.message })); return true;
     }
   }
@@ -171,14 +165,7 @@ export const handleExplorer: RouteHandler = async (req, res, ctx) => {
       const filePath = parsedUrl.searchParams.get("path") || "";
       const rootDir = parsedUrl.searchParams.get("root") || p.APP_ROOT;
       const mode = parsedUrl.searchParams.get("mode") || "content";
-      const resolvedPath = resolve(rootDir, filePath);
-
-      const rel = relative(rootDir, resolvedPath);
-if (rel.startsWith("..") || isAbsolute(rel)) {
-        res.writeHead(403, { ...cors });
-        res.end(JSON.stringify({ error: "Access denied" }));
-        return true;
-      }
+      const resolvedPath = (await authorizeRoutePath(ctx, rootDir, filePath, "read", "file.read")).path;
       if (!existsSync(resolvedPath)) {
         res.writeHead(404, { ...cors });
         res.end(JSON.stringify({ error: "File not found" }));
@@ -257,6 +244,8 @@ if (rel.startsWith("..") || isAbsolute(rel)) {
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ content, encoding, path: resolvedPath, size: st.size, mtime: st.mtime.toISOString() }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(500, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -267,12 +256,16 @@ if (rel.startsWith("..") || isAbsolute(rel)) {
   if (url?.startsWith("/api/file/new") && method === "POST") {
     try {
       const { root, path } = await parseBody(req);
-      const fullPath = resolve(root, path);
-      if (!fullPath.startsWith(resolve(root))) { res.writeHead(403, { ...cors }); res.end(JSON.stringify({ error: "Access denied" })); return true; }
-      if (path.endsWith("/")) mkdirSync(fullPath, { recursive: true });
+      const targetPath = String(path ?? "");
+      const fullPath = (await authorizeRoutePath(ctx, String(root ?? ""), targetPath, "create", "file.new")).path;
+      if (targetPath.endsWith("/")) mkdirSync(fullPath, { recursive: true });
       else { mkdirSync(dirname(fullPath), { recursive: true }); writeFileSync(fullPath, "", "utf-8"); }
       res.writeHead(200, { ...cors }); res.end(JSON.stringify({ ok: true }));
-    } catch (e: unknown) { const msg = e instanceof Error ? (e as Error).message : String(e); res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: msg })); }
+    } catch (e: unknown) {
+      if (writeServerPermissionError(res, cors, e)) return true;
+      if (writePathGuardError(res, cors, e)) return true;
+      const msg = e instanceof Error ? (e as Error).message : String(e); res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: msg }));
+    }
     return true;
   }
 
@@ -280,12 +273,16 @@ if (rel.startsWith("..") || isAbsolute(rel)) {
   if (url?.startsWith("/api/file/rename") && method === "POST") {
     try {
       const { root, path, newPath } = await parseBody(req);
-      const oldFull = resolve(root, path);
-      const newFull = resolve(root, newPath || "");
-      if (!oldFull.startsWith(resolve(root)) || !newFull.startsWith(resolve(root))) { res.writeHead(403, { ...cors }); res.end(JSON.stringify({ error: "Access denied" })); return true; }
+      const rootText = String(root ?? "");
+      const oldFull = (await authorizeRoutePath(ctx, rootText, String(path ?? ""), "remove", "file.rename.source")).path;
+      const newFull = (await authorizeRoutePath(ctx, rootText, String(newPath ?? ""), "create", "file.rename.destination")).path;
       renameSync(oldFull, newFull);
       res.writeHead(200, { ...cors }); res.end(JSON.stringify({ ok: true }));
-    } catch (e: unknown) { const msg = e instanceof Error ? (e as Error).message : String(e); res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: msg })); }
+    } catch (e: unknown) {
+      if (writeServerPermissionError(res, cors, e)) return true;
+      if (writePathGuardError(res, cors, e)) return true;
+      const msg = e instanceof Error ? (e as Error).message : String(e); res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: msg }));
+    }
     return true;
   }
 
@@ -293,11 +290,14 @@ if (rel.startsWith("..") || isAbsolute(rel)) {
   if (url?.startsWith("/api/file/delete") && method === "POST") {
     try {
       const { root, path } = await parseBody(req);
-      const fullPath = resolve(root, path);
-      if (!fullPath.startsWith(resolve(root))) { res.writeHead(403, { ...cors }); res.end(JSON.stringify({ error: "Access denied" })); return true; }
+      const fullPath = (await authorizeRoutePath(ctx, String(root ?? ""), String(path ?? ""), "remove", "file.delete")).path;
       rmSync(fullPath, { recursive: true, force: true });
       res.writeHead(200, { ...cors }); res.end(JSON.stringify({ ok: true }));
-    } catch (e: unknown) { const msg = e instanceof Error ? (e as Error).message : String(e); res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: msg })); }
+    } catch (e: unknown) {
+      if (writeServerPermissionError(res, cors, e)) return true;
+      if (writePathGuardError(res, cors, e)) return true;
+      const msg = e instanceof Error ? (e as Error).message : String(e); res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: msg }));
+    }
     return true;
   }
 
@@ -305,12 +305,16 @@ if (rel.startsWith("..") || isAbsolute(rel)) {
   if (url?.startsWith("/api/file/move") && method === "POST") {
     try {
       const { root, path, newPath } = await parseBody(req);
-      const srcFull = resolve(root, path);
-      const dstFull = resolve(root, newPath || "");
-      if (!srcFull.startsWith(resolve(root)) || !dstFull.startsWith(resolve(root))) { res.writeHead(403, { ...cors }); res.end(JSON.stringify({ error: "Access denied" })); return true; }
+      const rootText = String(root ?? "");
+      const srcFull = (await authorizeRoutePath(ctx, rootText, String(path ?? ""), "remove", "file.move.source")).path;
+      const dstFull = (await authorizeRoutePath(ctx, rootText, String(newPath ?? ""), "create", "file.move.destination")).path;
       renameSync(srcFull, dstFull);
       res.writeHead(200, { ...cors }); res.end(JSON.stringify({ ok: true }));
-    } catch (e: unknown) { const msg = e instanceof Error ? (e as Error).message : String(e); res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: msg })); }
+    } catch (e: unknown) {
+      if (writeServerPermissionError(res, cors, e)) return true;
+      if (writePathGuardError(res, cors, e)) return true;
+      const msg = e instanceof Error ? (e as Error).message : String(e); res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: msg }));
+    }
     return true;
   }
 
@@ -318,11 +322,14 @@ if (rel.startsWith("..") || isAbsolute(rel)) {
   if (url?.startsWith("/api/file/write") && method === "POST") {
     try {
       const { root, path, content } = await parseBody(req);
-      const fullPath = resolve(root, path);
-      if (!fullPath.startsWith(resolve(root))) { res.writeHead(403, { ...cors }); res.end(JSON.stringify({ error: "Access denied" })); return true; }
+      const fullPath = (await authorizeRoutePath(ctx, String(root ?? ""), String(path ?? ""), "write", "file.write")).path;
       writeFileSync(fullPath, content, "utf-8");
       res.writeHead(200, { ...cors }); res.end(JSON.stringify({ ok: true }));
-    } catch (e: unknown) { const msg = e instanceof Error ? (e as Error).message : String(e); res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: msg })); }
+    } catch (e: unknown) {
+      if (writeServerPermissionError(res, cors, e)) return true;
+      if (writePathGuardError(res, cors, e)) return true;
+      const msg = e instanceof Error ? (e as Error).message : String(e); res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: msg }));
+    }
     return true;
   }
 

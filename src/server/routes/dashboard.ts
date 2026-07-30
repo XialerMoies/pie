@@ -2,20 +2,29 @@
  * Dashboard route — /api/dashboard, /api/paths, /layout-config, /api/usage/*
  */
 import type { RouteHandler, ServerContext } from "./types";
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { parseBody } from "./parse-body";
 import { fullScan, incrementalScan, updateSessionInIndex, loadIndex, saveIndex, type UsageIndex } from "../usage-index";
 import { getServersStatus } from "../../agent/mcp/MCPClientService";
 import { loadMcpConfig, defaultGlobalConfigPath } from "../../agent/mcp/config";
 import { MCP_CATALOG, type CatalogEntry } from "../../agent/mcp/builtin-list";
-import { TrustStore, hashServerCommand } from "../../agent/mcp/trust-store";
+import { isPathInside, normalizePermissionPath } from "../../agent/permissions";
+import { TrustStore, hashServerCommand, defaultTrustStorePath } from "../../agent/mcp/trust-store";
+import { authorizeRoutePath, ServerPermissionError, writeServerPermissionError } from "../permission-service";
 
 export const handleDashboard: RouteHandler = (req, res, ctx) => {
   const { url, method } = req;
   const cors = { "Access-Control-Allow-Origin": "*" };
   const { runtime, paths: p } = ctx;
   const session = runtime.session;
+
+  if (url === "/api/bootstrap" && (method === "GET" || method === "HEAD")) {
+    res.writeHead(200, { "Content-Type": "application/json", ...cors });
+    if (method === "HEAD") res.end();
+    else res.end(JSON.stringify({ ok: true }));
+    return true;
+  }
 
   // Dashboard data
   if (url === "/api/dashboard") {
@@ -286,7 +295,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         if (!source) { res.writeHead(404, {"Content-Type":"application/json",...cors}); res.end(JSON.stringify({ok:false,error:"未找到 server"})); return true; }
 
         // 修改 .mcp.json 中的 enabled 字段
-        const filePath = source.sourcePath;
+        const filePath = await authorizeMcpConfigFileWrite(ctx, workspace, source.sourcePath, "mcp.toggle");
         const content = JSON.parse(readFileSync(filePath, "utf-8"));
         const current = content.servers?.[name]?.enabled;
         const newEnabled = current === false ? true : false;
@@ -296,6 +305,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, name, enabled: newEnabled, restartNeeded: true, message: "请重启会话以应用更改" }));
       } catch (e: any) {
+        if (writeServerPermissionError(res, cors, e)) return true;
         res.writeHead(500, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: false, error: e.message }));
       }
@@ -316,13 +326,14 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         const source = result.servers.find((s) => s.name === name);
         if (!source) { res.writeHead(404, {"Content-Type":"application/json",...cors}); res.end(JSON.stringify({ok:false,error:"未找到 server"})); return true; }
 
-        const trustStore = new TrustStore();
+        const trustStore = await createAuthorizedTrustStore(ctx, "mcp.trust");
         const hash = hashServerCommand(source.config);
         trustStore.addTrust(workspace, hash, source.name);
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, name, restartNeeded: true, message: `已信任 ${name}，请重启会话以加载工具` }));
       } catch (e: any) {
+        if (writeServerPermissionError(res, cors, e)) return true;
         res.writeHead(500, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: false, error: e.message }));
       }
@@ -349,7 +360,8 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
           return true;
         }
 
-        const globalPath = defaultGlobalConfigPath();
+        const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
+        const globalPath = await authorizeMcpConfigFileWrite(ctx, workspace, defaultGlobalConfigPath(), "mcp.install.custom");
         let config: any = {};
         try { config = JSON.parse(readFileSync(globalPath, "utf-8")); } catch {}
         if (!config.servers) config.servers = {};
@@ -361,14 +373,14 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         // 自动预信任（用户主动安装视为同意）
         try {
           const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
-          const { TrustStore: TS, hashServerCommand: HSC } = await import("../../agent/mcp/trust-store");
-          const store = new TS();
-          store.addTrust(workspace, HSC({ command, args: args || [], transport: "stdio" }), name);
+          const store = await createAuthorizedTrustStore(ctx, "mcp.install.custom.trust");
+          store.addTrust(workspace, hashServerCommand({ command, args: args || [], transport: "stdio" }), name);
         } catch {}
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, name, isGlobal: true, restartNeeded: true, message: `已全局安装 ${name}，在项目 MCP 面板中启用即可使用` }));
       } catch (e: any) {
+        if (writeServerPermissionError(res, cors, e)) return true;
         res.writeHead(500, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: false, error: e.message }));
       }
@@ -396,7 +408,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         }
 
         const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
-        const globalPath = defaultGlobalConfigPath();
+        const globalPath = await authorizeMcpConfigFileWrite(ctx, workspace, defaultGlobalConfigPath(), "mcp.install");
         let config: any = {};
         try { config = JSON.parse(readFileSync(globalPath, "utf-8")); } catch {}
         if (!config.servers) config.servers = {};
@@ -407,7 +419,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
 
         // 自动预信任（用户主动安装视为同意）
         try {
-          const trustStore = new TrustStore();
+          const trustStore = await createAuthorizedTrustStore(ctx, "mcp.install.trust");
           const srvConfig: import("../../agent/mcp/types").McpServerConfig = {
             command: entry.command, args: entry.args, transport: "stdio",
           };
@@ -419,6 +431,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, name: entry.name, isGlobal: true, message: `已全局安装 ${entry.name}，在项目 MCP 面板中启用即可使用。${hint}` }));
       } catch (e: any) {
+        if (writeServerPermissionError(res, cors, e)) return true;
         res.writeHead(500, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: false, error: e.message }));
       }
@@ -451,15 +464,17 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         }
 
         // 从配置来源的 .mcp.json 中删除
-        const config = JSON.parse(readFileSync(source.sourcePath, "utf-8"));
+        const configPath = await authorizeMcpConfigFileWrite(ctx, workspace, source.sourcePath, "mcp.uninstall");
+        const config = JSON.parse(readFileSync(configPath, "utf-8"));
         if (config.servers?.[name]) {
           delete config.servers[name];
-          writeFileSync(source.sourcePath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+          writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
         }
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, name, restartNeeded: true, message: `已移除 ${name}，请重启会话以应用更改` }));
       } catch (e: any) {
+        if (writeServerPermissionError(res, cors, e)) return true;
         res.writeHead(500, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: false, error: e.message }));
       }
@@ -478,4 +493,34 @@ interface SessionStatsLike {
 
 function roundCost(n: number): number {
   return Math.round(n * 1_000_000) / 1_000_000;
+}
+
+async function authorizeMcpConfigFileWrite(ctx: ServerContext, workspace: string, filePath: string, source: string): Promise<string> {
+  const resolvedFile = resolve(filePath);
+  if (isPathInside(resolvedFile, workspace)) {
+    return (await authorizeRoutePath(ctx, workspace, resolvedFile, "write", source)).path;
+  }
+
+  const globalPath = resolve(defaultGlobalConfigPath());
+  if (normalizePermissionPath(resolvedFile) === normalizePermissionPath(globalPath)) {
+    return (await authorizeRoutePath(ctx, existingAncestorForPath(globalPath), resolvedFile, "write", source)).path;
+  }
+
+  throw new ServerPermissionError("MCP config path is outside workspace/global config roots", 403, "permission_denied");
+}
+
+async function createAuthorizedTrustStore(ctx: ServerContext, source: string): Promise<TrustStore> {
+  const trustPath = defaultTrustStorePath();
+  const authorizedPath = (await authorizeRoutePath(ctx, existingAncestorForPath(trustPath), trustPath, "write", source)).path;
+  return new TrustStore({ filePath: authorizedPath });
+}
+
+function existingAncestorForPath(filePath: string): string {
+  let current = dirname(resolve(filePath));
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
+  return current;
 }

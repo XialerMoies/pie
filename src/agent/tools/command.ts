@@ -25,6 +25,7 @@ import { parseShellCommand, shellDialectFromEnv, tokensWithoutRedirects } from "
 
 const MAX_OUTPUT = 100 * 1024 // 100KB 总输出上限
 const COMMAND_TIMEOUT = 300_000 // 5 分钟
+const DESKTOP_TOKEN_ENV = "MY_CODE_AGENT_DESKTOP_TOKEN"
 
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
 
@@ -748,12 +749,14 @@ export function resolveBashExecutable(): string | undefined {
 }
 
 function commandExecutionEnv(): NodeJS.ProcessEnv {
-  if (!isWindows()) return process.env
+  const env: NodeJS.ProcessEnv = { ...process.env }
+  delete env[DESKTOP_TOKEN_ENV]
+
+  if (!isWindows()) return env
 
   const bashExecutable = resolveBashExecutable()
-  if (!bashExecutable) return process.env
+  if (!bashExecutable) return env
 
-  const env: NodeJS.ProcessEnv = { ...process.env }
   const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "Path"
   const currentPath = env[pathKey] ?? ""
   const bashDir = dirname(bashExecutable)

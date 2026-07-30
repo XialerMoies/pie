@@ -5,6 +5,8 @@ import type { RouteHandler } from "./types";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { resolve } from "path";
 import { parseBody } from "./parse-body";
+import { writePathGuardError } from "./path-guard";
+import { authorizeRoutePath, writeServerPermissionError } from "../permission-service";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
@@ -36,16 +38,19 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/settings" && method === "POST") {
     try {
       const data = await parseBody(req);
+      const settingsFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "settings.json", "write", "settings.save")).path;
       let settings: Record<string, unknown> = {};
-      if (existsSync(p.SETTINGS_FILE)) {
-        settings = JSON.parse(readFileSync(p.SETTINGS_FILE, "utf-8"));
+      if (existsSync(settingsFile)) {
+        settings = JSON.parse(readFileSync(settingsFile, "utf-8"));
       }
       if (data.defaultProvider) settings.defaultProvider = data.defaultProvider;
       if (data.defaultModel) settings.defaultModel = data.defaultModel;
-      writeFileSync(p.SETTINGS_FILE, JSON.stringify(settings, null, 2));
+      writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -61,7 +66,6 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
         provider,
         hasKey: !!authData[provider]?.apiKey,
         keyPreview: authData[provider]?.apiKey ? authData[provider].apiKey.slice(0, 8) + "..." : "",
-        keyFull: authData[provider]?.apiKey || "",
       }));
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ providers: providerKeys }));
@@ -77,7 +81,7 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
     try {
       const { provider, apiKey } = await parseBody(req);
       if (!provider || !apiKey) { res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: "provider and apiKey required" })); return true; }
-      const authFile = resolve(p.PI_CONFIG_DIR, "auth.json");
+      const authFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "auth.json", "write", "settings.auth")).path;
       let authData: Record<string, unknown> = {};
       if (existsSync(authFile)) authData = JSON.parse(readFileSync(authFile, "utf-8"));
       authData[provider] = { apiKey };
@@ -85,6 +89,8 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -139,18 +145,21 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
         return true;
       }
       // Persist to settings
+      const settingsFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "settings.json", "write", "settings.model-switch")).path;
       let settings: Record<string, unknown> = {};
-      if (existsSync(p.SETTINGS_FILE)) {
-        settings = JSON.parse(readFileSync(p.SETTINGS_FILE, "utf-8"));
+      if (existsSync(settingsFile)) {
+        settings = JSON.parse(readFileSync(settingsFile, "utf-8"));
       }
       settings.defaultProvider = provider;
       settings.defaultModel = modelId;
-      writeFileSync(p.SETTINGS_FILE, JSON.stringify(settings, null, 2));
+      writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
       // Hot switch
       await session.setModel(model);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
@@ -161,11 +170,13 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/layout-config" && method === "POST") {
     try {
       const data = await parseBody(req);
-      const layoutPath = resolve(p.APP_ROOT, "src", "layout-config.json");
+      const layoutPath = (await authorizeRoutePath(ctx, p.APP_ROOT, "src/layout-config.json", "write", "settings.layout-config")).path;
       writeFileSync(layoutPath, JSON.stringify(data, null, 2));
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }

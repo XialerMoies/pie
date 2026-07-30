@@ -68,6 +68,46 @@ describe("write_agent_md", () => {
 // ===================================================================
 // 2. read_memory / write_memory 名称白名单
 // ===================================================================
+describe("agent-md authorization", () => {
+  it("create and overwrite both use shared path authorization", async () => {
+    const testDir = mkdtempSync(resolve(tmpdir(), "agent-md-auth-"));
+    const calls = [];
+    const authorizePath = async (root, target, operation, source) => {
+      calls.push({ root, target, operation, source });
+      return { operation, root, path: target, relativePath: target };
+    };
+    try {
+      const context = toolCtx({ workspace: testDir, authorizePath });
+      await writeAgentMdTool.execute({ content: "created" }, context);
+      await writeAgentMdTool.execute({ content: "overwritten" }, context);
+
+      assert.deepStrictEqual(calls.map((call) => [call.operation, call.source]), [
+        ["create", "agent.agent_md.create"],
+        ["write", "agent.agent_md.write"],
+      ]);
+    } finally {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("authorization denial does not write AGENT.md", async () => {
+    const testDir = mkdtempSync(resolve(tmpdir(), "agent-md-denied-"));
+    try {
+      const result = await writeAgentMdTool.execute(
+        { content: "blocked" },
+        toolCtx({
+          workspace: testDir,
+          authorizePath: async () => { throw new Error("permission denied for test"); },
+        }),
+      );
+      assert.ok(result.includes("permission denied for test"));
+      assert.strictEqual(existsSync(resolve(testDir, "AGENT.md")), false);
+    } finally {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("memory name validation", () => {
   describe("validMemoryName", () => {
     it("允许字母数字短横线", () => {
@@ -154,10 +194,65 @@ describe("memory name validation", () => {
 // ===================================================================
 // 3. switchWorkspace / _doOpenSession 失败回滚
 // ===================================================================
+describe("agent memory authorization", () => {
+  it("write_memory and read_memory use shared path authorization", async () => {
+    const calls = [];
+    const snapshots = new Map();
+    const authorizePath = async (root, target, operation, source) => {
+      if (!snapshots.has(target)) {
+        snapshots.set(target, {
+          exists: existsSync(target),
+          content: existsSync(target) ? readFileSync(target) : null,
+        });
+      }
+      calls.push({ root, target, operation, source });
+      return { operation, root, path: target, relativePath: target };
+    };
+    const name = `permission-test-${Date.now()}`;
+
+    try {
+      await writeMemoryTool.execute(
+        { name, content: "# permission test" },
+        toolCtx({ authorizePath }),
+      );
+      const result = await readMemoryTool.execute(
+        { name },
+        toolCtx({ authorizePath }),
+      );
+
+      assert.strictEqual(result, "# permission test");
+      assert.ok(calls.some((call) => call.source === "agent.memory.create"));
+      assert.ok(calls.some((call) => call.source === "agent.memory.index.write"));
+      assert.ok(calls.some((call) => call.source === "agent.memory.read"));
+    } finally {
+      for (const [target, snapshot] of snapshots) {
+        if (snapshot.exists) writeFileSync(target, snapshot.content);
+        else rmSync(target, { force: true });
+      }
+    }
+  });
+
+  it("write_memory returns denial and does not create a file", async () => {
+    let target;
+    const result = await writeMemoryTool.execute(
+      { name: `permission-denied-${Date.now()}`, content: "blocked" },
+      toolCtx({
+        authorizePath: async (_root, path) => {
+          target = path;
+          throw new Error("permission denied for test");
+        },
+      }),
+    );
+
+    assert.ok(result.includes("permission denied for test"));
+    assert.ok(target);
+    assert.strictEqual(existsSync(target), false);
+  });
+});
+
 describe("switchWorkspace rollback behavior", () => {
   it("_initSession 抛出后 currentWorkspace 恢复原值", async () => {
-    const ts = Date.now();
-    const { AgentRuntime, setCurrentRuntime } = await import(`../src/agent/runtime.ts?t=${ts}`);
+    const { AgentRuntime, setCurrentRuntime } = await import("../src/agent/runtime.ts");
 
     // 用 Object.create 绕过私有构造函数，mock 内部方法
     const runtime = Object.create(AgentRuntime.prototype);
@@ -185,8 +280,7 @@ describe("switchWorkspace rollback behavior", () => {
   });
 
   it("_doOpenSession 初始化失败回滚 workspace", async () => {
-    const ts = Date.now();
-    const { AgentRuntime, setCurrentRuntime } = await import(`../src/agent/runtime.ts?t=${ts}`);
+    const { AgentRuntime, setCurrentRuntime } = await import("../src/agent/runtime.ts");
 
     const runtime = Object.create(AgentRuntime.prototype);
     runtime.currentWorkspace = "/original";

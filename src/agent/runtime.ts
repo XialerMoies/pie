@@ -34,6 +34,9 @@ export interface RuntimeConfig {
   /** 用户确认回调：返回 true=允许，false/undefined=拒绝 */
   confirmCommand?: ToolContext["confirmCommand"]
   sessionPermissionState?: SessionPermissionState
+  authorizePath?: ToolContext["authorizePath"]
+  authorizeTool?: ToolContext["authorizeTool"]
+  desktopApiToken?: string
 }
 
 type RuntimeToolExtraContext = Pick<
@@ -46,11 +49,14 @@ type RuntimeToolExtraContext = Pick<
   | "alwaysDenyRules"
   | "alwaysAskRules"
   | "applyPermissionSuggestions"
+  | "authorizePath"
+  | "authorizeTool"
+  | "desktopApiToken"
 >
 
 export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraContext | undefined {
   const permissionState = config.sessionPermissionState
-  if (!config.permissionMode && !config.confirmCommand && !config.shellDialect && !permissionState) return undefined
+  if (!config.permissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.desktopApiToken) return undefined
   return {
     permissionMode: config.permissionMode,
     confirmCommand: config.confirmCommand,
@@ -62,6 +68,9 @@ export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraCo
     applyPermissionSuggestions: permissionState
       ? (suggestions) => applySessionPermissionSuggestions(permissionState, suggestions)
       : undefined,
+    authorizePath: config.authorizePath,
+    authorizeTool: config.authorizeTool,
+    desktopApiToken: config.desktopApiToken,
   }
 }
 

@@ -52,7 +52,6 @@ interface ChatErrorState {
 interface ProviderKeyInfo {
   hasKey: boolean;
   keyPreview: string;
-  keyFull: string;
 }
 
 interface ElectronAPI {
@@ -62,9 +61,9 @@ interface ElectronAPI {
   newWindow(): void;
   openFile(): Promise<string | null>;
   openFolder(): Promise<string | null>;
-  showItemInFolder(path: string): void;
-  trashItem(path: string): Promise<void>;
-  spawnTerminal(): void;
+  showItemInFolder(path: string): Promise<void>;
+  trashItem(path: string): Promise<boolean>;
+  spawnTerminal(): Promise<boolean>;
 }
 
 // ─── Unified Tab System types ─────────────────────────
@@ -125,6 +124,7 @@ interface AppUI {
   sb(id: string): void;
   winCtrl(action: string): void;
   toast(msg: string, type?: 'info' | 'error' | 'success'): void;
+  bootstrapApi(): Promise<void>;
   getD(): Promise<void>;
   refresh(): Promise<void>;
   layout(): void;
@@ -294,6 +294,7 @@ interface Window {
   isConversationSearchActive?: () => boolean;
   onceSessionActivated?: OnceSessionActivated;
   emitSessionActivated?: SessionActivatedCallback;
+  refreshPermissionsPanel?: (forceToast?: boolean) => Promise<void>;
 }
 
 // 公共函数声明（在 HTML onclick 中用）
@@ -306,9 +307,21 @@ declare function confirmCommandAsync(input: {
   reason: string;
   permissionSuggestions?: any[];
 }): Promise<'once' | 'session' | 'deny'>;
+declare function confirmPermissionAsync(input: {
+  source?: string;
+  operation?: string;
+  toolName?: string;
+  riskLevel?: string;
+  root?: string;
+  path?: string;
+  relativePath?: string;
+  reason?: string;
+  permissionSuggestions?: any[];
+}): Promise<'once' | 'session' | 'deny'>;
 declare function F(s: number): string;
 declare function sb(id: string): void;
 declare function toast(msg: string, type?: 'info' | 'error' | 'success'): void;
+declare function bootstrapApi(): Promise<void>;
 declare function getD(): Promise<void>;
 declare function refresh(): Promise<void>;
 declare function winCtrl(action: string): void;

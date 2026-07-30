@@ -107,8 +107,14 @@ export function createMcpToolAdapter(opts: McpToolAdapterOptions): AgentTool {
     description: tool.description ?? "",
     parameters: convertInputSchema(tool.inputSchema),
     isReadOnly: false,
+    isDestructive: true,
     isConcurrencySafe: true,
     isEnabled: () => true,
+    operations: ["execute"],
+    riskLevel: "high",
+    needsPermission: true,
+    workspaceBounded: false,
+    permissionSource: `mcp.${serverName}.${tool.name}`,
     execute: async (args, ctx) => {
       const requestOptions: RequestOptions = {}
       const signal = (ctx as any).signal as AbortSignal | undefined

@@ -1622,6 +1622,23 @@ describe("commandTool.execute 安全拦截", () => {
     }
   })
 
+  it("does not expose the desktop API token to spawned commands", async () => {
+    const { commandTool } = await import("../src/agent/tools/command.ts")
+    const { root, workspace } = tempWorkspace()
+    try {
+      await withEnvVar("MY_CODE_AGENT_DESKTOP_TOKEN", "secret-desktop-token", async () => {
+        const result = await commandTool.execute(
+          { command: "node -e \"process.stdout.write(process.env.MY_CODE_AGENT_DESKTOP_TOKEN || 'missing')\"" },
+          { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
+        )
+        ok(!result.includes("secret-desktop-token"), result)
+        ok(result.includes("missing"), result)
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it("Windows cmd mode should warn that set MY_CODE_AGENT only affects child cmd", async () => {
     if (process.platform !== "win32") return
     const { root, workspace } = tempWorkspace()

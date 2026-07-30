@@ -132,6 +132,7 @@ const bundleOrder = [
   "gen/pane/search/index.js",
   "gen/pane/git/index.js",
   "gen/pane/mcp/index.js",
+  "gen/pane/permissions/index.js",
   "gen/dashboard/dashboard-menus.js",
   "gen/dashboard/dashboard-settings.js",
 ].filter(f => existsSync(resolve(SRC, f)));

@@ -5,6 +5,8 @@
  */
 import { readFileSync, readdirSync, type Dirent } from "fs";
 import { resolve, relative } from "path";
+import { guardPathWithinRoot, isPathGuardError } from "./path-guard";
+import { authorizeRoutePath, type ServerPermissionService } from "../permission-service";
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -75,7 +77,7 @@ export interface ProcessedAttach {
 
 // ─── Public API ─────────────────────────────────────────────────
 
-export function processAttachments(atts: Array<Record<string, unknown>>, workspace: string): { blocks: ProcessedAttach[]; totalBytes: number } {
+export async function processAttachments(atts: Array<Record<string, unknown>>, workspace: string, permissionService?: ServerPermissionService): Promise<{ blocks: ProcessedAttach[]; totalBytes: number }> {
   const blocks: ProcessedAttach[] = [];
   let totalBytes = 0;
   const ws = resolve(workspace || '');
@@ -85,16 +87,21 @@ export function processAttachments(atts: Array<Record<string, unknown>>, workspa
     const attPath: string = (att as Record<string, unknown>).path as string || '';
     if (!attPath) continue;
 
-    const fullPath = resolve(ws, attPath);
-    if (!fullPath.startsWith(ws)) continue;
+    let fullPath: string;
+    try {
+      fullPath = (await authorizeRoutePath({ permissionService }, ws, attPath, "read", "chat.attachment")).path;
+    } catch (err) {
+      if (isPathGuardError(err)) continue;
+      continue;
+    }
 
     if (kind === 'folder') {
       const files = walkFolder(fullPath, ws, ATTACH_FOLDER_MAX_FILES);
       let folderBytes = 0;
       for (const relPath of files) {
         if (totalBytes >= ATTACH_TOTAL_MAX_BYTES) break;
-        const fp = resolve(ws, relPath);
         try {
+          const fp = (await authorizeRoutePath({ permissionService }, ws, relPath, "read", "chat.attachment.folder")).path;
           let content = readFileSync(fp, 'utf-8');
           let truncated = false;
           if (content.length > ATTACH_FILE_MAX_BYTES) {

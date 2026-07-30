@@ -11,15 +11,14 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
-import { tmpdir } from "node:os";
 
 // ── 模拟 fetch ────────────────────────────────────────────
 let mockStatus = 200;
 let mockBody = {};
 let lastRequest = null;
 
-async function mockFetch(url, _init) {
-  lastRequest = { url };
+async function mockFetch(url, init) {
+  lastRequest = { url, init };
   const body = mockStatus >= 400 ? { error: mockBody.error || "mock error" } : mockBody;
   return {
     ok: mockStatus < 400,
@@ -78,6 +77,14 @@ describe("file_read tool", () => {
     const r = await fileReadTool.execute({ path: "f.ts", startLine: -5 }, ctx());
     assert.ok(lastRequest?.url.includes("path=f.ts"));
     assert.ok(r.includes("line1"));
+  });
+});
+
+describe("file_read tool local API security", () => {
+  it("desktop API token is forwarded as a local API header", async () => {
+    mockBody = { content: "ok", size: 10, mtime: "2026-01-01T00:00:00.000Z" };
+    await fileReadTool.execute({ path: "secure.txt" }, ctx({ desktopApiToken: "tool-token" }));
+    assert.strictEqual(lastRequest?.init?.headers?.["X-My-Code-Agent-Token"], "tool-token");
   });
 });
 
@@ -171,7 +178,7 @@ describe("str_replace_editor tool", () => {
   let dir;
 
   beforeEach(() => {
-    dir = mkdtempSync(resolve(tmpdir(), "sre-test-"));
+    dir = mkdtempSync(resolve(process.cwd(), ".tmp-sre-test-"));
   });
 
   afterEach(() => {
@@ -180,6 +187,17 @@ describe("str_replace_editor tool", () => {
 
   function workspaceCtx() {
     return { workspace: dir, toolCallId: "call-1" };
+  }
+
+  function authorizedWorkspaceCtx(calls, authorizePath) {
+    return {
+      workspace: dir,
+      toolCallId: "call-1",
+      authorizePath: authorizePath || (async (root, target, operation, source) => {
+        calls.push({ root, target, operation, source });
+        return { operation, root, path: target, relativePath: target };
+      }),
+    };
   }
 
   it("找不到 old_string 返回友好提示", async () => {
@@ -209,6 +227,23 @@ describe("str_replace_editor tool", () => {
     assert.ok(r.includes("已替换"));
     const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
     assert.strictEqual(content, "hello there");
+  });
+
+  it("existing edits go through read/write path authorization", async () => {
+    const calls = [];
+    writeFileSync(resolve(dir, "guarded.txt"), "hello world", "utf-8");
+
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "guarded.txt", old_string: "world", new_string: "there" },
+      authorizedWorkspaceCtx(calls),
+    );
+
+    assert.ok(r.length > 0);
+    assert.deepStrictEqual(calls.map((call) => [call.operation, call.source]), [
+      ["read", "agent.str_replace.read"],
+      ["write", "agent.str_replace.write"],
+    ]);
+    assert.strictEqual(readFileSync(resolve(dir, "guarded.txt"), "utf-8"), "hello there");
   });
 
   it("replace_all 替换所有匹配", async () => {
@@ -294,6 +329,20 @@ describe("str_replace_editor tool", () => {
     assert.strictEqual(content, "hello");
   });
 
+  it("new-file edits go through create path authorization", async () => {
+    const calls = [];
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "guarded-new.txt", old_string: "", new_string: "hello" },
+      authorizedWorkspaceCtx(calls),
+    );
+
+    assert.ok(r.length > 0);
+    assert.deepStrictEqual(calls.map((call) => [call.operation, call.source]), [
+      ["create", "agent.str_replace.create"],
+    ]);
+    assert.strictEqual(readFileSync(resolve(dir, "guarded-new.txt"), "utf-8"), "hello");
+  });
+
   it("反转义 <fnr> → <function_results>", async () => {
     // 反转义在 findActualString 之前执行，所以文件内容用直引号
     writeFileSync(resolve(dir, "test.txt"), "some <function_results> here", "utf-8");
@@ -311,7 +360,7 @@ describe("file_write tool", () => {
   let dir;
 
   beforeEach(() => {
-    dir = mkdtempSync(resolve(tmpdir(), "fw-test-"));
+    dir = mkdtempSync(resolve(process.cwd(), ".tmp-fw-test-"));
   });
 
   afterEach(() => {
@@ -332,6 +381,25 @@ describe("file_write tool", () => {
     assert.strictEqual(content, "hello");
   });
 
+  it("new files go through create path authorization", async () => {
+    const calls = [];
+    const ctx = {
+      workspace: dir,
+      toolCallId: "call-1",
+      authorizePath: async (root, target, operation, source) => {
+        calls.push({ root, target, operation, source });
+        return { operation, root, path: target, relativePath: target };
+      },
+    };
+
+    await fileWriteTool.execute({ file_path: "authorized-new.txt", content: "hello" }, ctx);
+
+    assert.deepStrictEqual(calls.map((call) => [call.operation, call.source]), [
+      ["create", "agent.file_write.create"],
+    ]);
+    assert.strictEqual(readFileSync(resolve(dir, "authorized-new.txt"), "utf-8"), "hello");
+  });
+
   it("覆盖已有文件返回'已覆盖'", async () => {
     writeFileSync(resolve(dir, "exist.txt"), "old", "utf-8");
     const r = await fileWriteTool.execute(
@@ -341,6 +409,39 @@ describe("file_write tool", () => {
     assert.ok(r.includes("已覆盖"));
     const content = readFileSync(resolve(dir, "exist.txt"), "utf-8");
     assert.strictEqual(content, "new");
+  });
+
+  it("existing files go through write path authorization", async () => {
+    const calls = [];
+    writeFileSync(resolve(dir, "authorized-existing.txt"), "old", "utf-8");
+    const ctx = {
+      workspace: dir,
+      toolCallId: "call-1",
+      authorizePath: async (root, target, operation, source) => {
+        calls.push({ root, target, operation, source });
+        return { operation, root, path: target, relativePath: target };
+      },
+    };
+
+    await fileWriteTool.execute({ file_path: "authorized-existing.txt", content: "new" }, ctx);
+
+    assert.deepStrictEqual(calls.map((call) => [call.operation, call.source]), [
+      ["write", "agent.file_write.write"],
+    ]);
+    assert.strictEqual(readFileSync(resolve(dir, "authorized-existing.txt"), "utf-8"), "new");
+  });
+
+  it("does not write when path authorization rejects", async () => {
+    const ctx = {
+      workspace: dir,
+      toolCallId: "call-1",
+      authorizePath: async () => { throw new Error("permission denied for test"); },
+    };
+
+    const r = await fileWriteTool.execute({ file_path: "denied.txt", content: "blocked" }, ctx);
+
+    assert.ok(r.includes("permission denied for test"));
+    assert.throws(() => readFileSync(resolve(dir, "denied.txt"), "utf-8"));
   });
 
   it("拒绝路径穿越", async () => {
@@ -353,7 +454,7 @@ describe("file_write tool", () => {
 
   it("拒绝 symlink 目录逃逸", async () => {
     const { symlinkSync } = await import("fs");
-    const outsideDir = mkdtempSync(resolve(tmpdir(), "outside-"));
+    const outsideDir = mkdtempSync(resolve(process.cwd(), ".tmp-outside-test-"));
     const linkPath = resolve(dir, "escape-link");
     try {
       symlinkSync(outsideDir, linkPath, "junction");

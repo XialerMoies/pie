@@ -1,11 +1,5 @@
 import type { AgentTool } from "../types.js"
-
-/** 获取后端 API 的 base URL */
-function getBaseUrl(): string {
-  // 优先用 SERVER_PORT（server.ts 启动时设置），fallback dev port，最后 3099
-  const port = process.env.SERVER_PORT || process.env.PI_DEV_PORT || "3099"
-  return `http://127.0.0.1:${port}`
-}
+import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
 export const gitStatusTool: AgentTool = {
   name: "git-status",
@@ -18,9 +12,9 @@ export const gitStatusTool: AgentTool = {
   execute: async (args, ctx) => {
     const ws = ctx.workspace || ""
     const url = ws
-      ? `${getBaseUrl()}/api/git/status?root=${encodeURIComponent(ws)}`
-      : `${getBaseUrl()}/api/git/status`
-    const res = await fetch(url)
+      ? `${getLocalApiBaseUrl()}/api/git/status?root=${encodeURIComponent(ws)}`
+      : `${getLocalApiBaseUrl()}/api/git/status`
+    const res = await localApiFetch(url, ctx)
     const data = await res.json().catch(() => ({ error: "parse_error", message: `HTTP ${res.status}` }))
     if (!res.ok || data.error) {
       const hint = data.error === "not_a_repo"

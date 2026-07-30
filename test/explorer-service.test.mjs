@@ -165,6 +165,78 @@ describe("ExplorerService", () => {
     });
   });
 
+  describe("events permission confirmation", () => {
+    it("POSTs permission confirmation decisions back to the server", async () => {
+      let eventSource;
+      const calls = [];
+      const oldEventSource = global.EventSource;
+      const oldConfirmPermissionAsync = global.confirmPermissionAsync;
+      const oldConfirmAsync = global.confirmAsync;
+      const oldFetch = global.fetch;
+      const oldRefreshPermissionsPanel = global.refreshPermissionsPanel;
+      try {
+        global.EventSource = class {
+          constructor(url) {
+            this.url = url;
+            eventSource = this;
+          }
+        };
+        global.confirmPermissionAsync = async (input) => {
+          calls.push({ type: "confirm", input });
+          return "session";
+        };
+        global.confirmAsync = async () => false;
+        global.refreshPermissionsPanel = async () => {
+          calls.push({ type: "refreshPermissionsPanel" });
+        };
+        global.fetch = async (url, options = {}) => {
+          calls.push({ type: "fetch", url: String(url), options });
+          return { ok: true, json: async () => ({ ok: true }) };
+        };
+
+        await import(`../src/frontend/service/explorer-service.ts?permission-event=${Date.now()}`);
+        assert.ok(eventSource, "EventSource should be created");
+        assert.strictEqual(eventSource.url, "/api/events");
+
+        eventSource.onmessage({
+          data: JSON.stringify({
+            type: "permission_confirm",
+            id: "perm-test",
+            source: "file.write",
+            operation: "write",
+            root: "E:\\\\workspace",
+            path: "E:\\\\outside\\\\file.txt",
+            reason: "Write path is outside workspace/authorized roots",
+            permissionSuggestions: [{ type: "addPathRule", rule: { ruleContent: "Write(E:\\\\outside\\\\**)" } }],
+          }),
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        const confirm = calls.find((call) => call.type === "confirm");
+        assert.strictEqual(confirm.input.source, "file.write");
+        assert.strictEqual(confirm.input.operation, "write");
+        assert.strictEqual(confirm.input.path, "E:\\\\outside\\\\file.txt");
+
+        const post = calls.find((call) => call.type === "fetch" && call.url === "/api/permissions/confirm");
+        assert.ok(post, "confirmation POST should be sent");
+        assert.strictEqual(post.options.method, "POST");
+        assert.deepStrictEqual(JSON.parse(post.options.body), {
+          id: "perm-test",
+          allow: true,
+          scope: "session",
+        });
+        assert.ok(calls.some((call) => call.type === "refreshPermissionsPanel"));
+      } finally {
+        global.EventSource = oldEventSource;
+        global.confirmPermissionAsync = oldConfirmPermissionAsync;
+        global.confirmAsync = oldConfirmAsync;
+        global.fetch = oldFetch;
+        global.refreshPermissionsPanel = oldRefreshPermissionsPanel;
+      }
+    });
+  });
+
   describe("refreshTree", () => {
     it("快照未变化时跳过整棵树重绘", async () => {
       const calls = [];

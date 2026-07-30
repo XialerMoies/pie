@@ -12,6 +12,7 @@ import { handleSearch } from "./search";
 import { handleGit } from "./git";
 import { handleTypeScript } from "./typescript";
 import { handleUiState } from "./ui-state";
+import { handlePermissions } from "./permissions";
 
 const handlers: RouteHandler[] = [
   handleChat,
@@ -23,6 +24,7 @@ const handlers: RouteHandler[] = [
   handleGit,
   handleTypeScript,
   handleUiState,
+  handlePermissions,
 ];
 
 /**

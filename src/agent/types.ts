@@ -35,7 +35,7 @@ export type CommandConfirmationResponse = boolean | CommandConfirmationResult | 
 export type PermissionDestination = "session"
 export type PermissionRuleMatch = "exact" | "prefix" | "wildcard"
 export type PathPermissionToolName = "Read" | "Write" | "Create" | "Remove"
-export type PermissionToolName = PathPermissionToolName | "Command"
+export type PermissionToolName = PathPermissionToolName | "Command" | "Tool"
 
 export interface PermissionRule {
   toolName: PermissionToolName
@@ -63,6 +63,12 @@ export type PermissionSuggestion =
       destination: PermissionDestination
     }
   | {
+      type: "addToolRule"
+      toolName: string
+      rule: PermissionRule
+      destination: PermissionDestination
+    }
+  | {
       type: "addWorkingDirectory"
       directory: string
       destination: PermissionDestination
@@ -74,6 +80,43 @@ export interface SessionPermissionState {
   alwaysDenyRules: Record<PermissionDestination, PermissionRule[]>
   alwaysAskRules: Record<PermissionDestination, PermissionRule[]>
 }
+
+export type ToolPathOperation = "read" | "write" | "create" | "remove"
+
+export type ToolOperation = ToolPathOperation | "execute"
+export type ToolRiskLevel = "low" | "medium" | "high"
+
+export interface ToolAuthorizationRequest {
+  toolName: string
+  source: string
+  operations: readonly ToolOperation[]
+  riskLevel: ToolRiskLevel
+  workspaceBounded: boolean
+  args: Record<string, unknown>
+}
+
+export interface ToolAuthorizationResult {
+  allow: boolean
+  reason?: string
+}
+
+export type ToolAuthorizer = (
+  request: ToolAuthorizationRequest,
+) => Promise<ToolAuthorizationResult>
+
+export interface ToolPathAuthorizationResult {
+  operation: ToolPathOperation
+  root: string
+  path: string
+  relativePath: string
+}
+
+export type ToolPathAuthorizer = (
+  root: string,
+  target: string,
+  operation: ToolPathOperation,
+  source: string,
+) => Promise<ToolPathAuthorizationResult>
 
 /** Tool 执行上下文 */
 export interface ToolContext {
@@ -98,6 +141,9 @@ export interface ToolContext {
   alwaysDenyRules?: SessionPermissionState["alwaysDenyRules"]
   alwaysAskRules?: SessionPermissionState["alwaysAskRules"]
   applyPermissionSuggestions?: (suggestions: PermissionSuggestion[]) => void
+  authorizePath?: ToolPathAuthorizer
+  authorizeTool?: ToolAuthorizer
+  desktopApiToken?: string
 }
 
 export type ToolTraceEmitter = (event: {
@@ -134,6 +180,12 @@ export interface AgentTool {
   isConcurrencySafe?: boolean
   /** 条件启用：某些 tool 只在特定环境可用 */
   isEnabled?: () => boolean
+  /** 通用工具能力声明，由 Registry 在执行前统一接入权限层 */
+  operations?: readonly ToolOperation[]
+  riskLevel?: ToolRiskLevel
+  needsPermission?: boolean
+  workspaceBounded?: boolean
+  permissionSource?: string
 
   // ── 待后续开发 ──
   // aliases?: string[]
@@ -142,6 +194,28 @@ export interface AgentTool {
 }
 
 /** Tool 注册表 */
+export async function authorizeToolExecution(
+  tool: AgentTool,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<void> {
+  if (!tool.needsPermission) return
+  if (!ctx.authorizeTool) {
+    throw new Error(`Tool authorization unavailable: ${tool.name}`)
+  }
+  const decision = await ctx.authorizeTool({
+    toolName: tool.name,
+    source: tool.permissionSource || `agent.${tool.name}`,
+    operations: tool.operations || [],
+    riskLevel: tool.riskLevel || "medium",
+    workspaceBounded: tool.workspaceBounded !== false,
+    args,
+  })
+  if (!decision.allow) {
+    throw new Error(decision.reason || `Tool execution denied: ${tool.name}`)
+  }
+}
+
 export class ToolRegistry {
   private tools = new Map<string, AgentTool>()
 
@@ -174,6 +248,9 @@ export class ToolRegistry {
       alwaysDenyRules?: ToolContext["alwaysDenyRules"]
       alwaysAskRules?: ToolContext["alwaysAskRules"]
       applyPermissionSuggestions?: ToolContext["applyPermissionSuggestions"]
+      authorizePath?: ToolContext["authorizePath"]
+      authorizeTool?: ToolContext["authorizeTool"]
+      desktopApiToken?: ToolContext["desktopApiToken"]
     },
   ) {
     return this.getAll().map((tool) => ({
@@ -198,14 +275,16 @@ export class ToolRegistry {
               partialResult: chunk,
             })
           }
-          const text = await tool.execute(args, {
+          const toolContext: ToolContext = {
             cwd: workspace || "",
             sessionId: "",
             workspace,
             toolCallId: _toolCallId,
             onUpdate,
             ...extraCtx,
-          })
+          }
+          await authorizeToolExecution(tool, args, toolContext)
+          const text = await tool.execute(args, toolContext)
           emitTrace?.({
             type: "tool_execution_end",
             toolCallId: _toolCallId,

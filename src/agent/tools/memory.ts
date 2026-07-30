@@ -9,8 +9,9 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import type { AgentTool } from "../types.js";
+import type { AgentTool, ToolContext } from "../types.js";
 import { getCurrentRuntime } from "../globals.js";
+import { authorizeToolPath } from "./path-authorization.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(__dirname, "..", "..", "..");
@@ -22,8 +23,12 @@ export function validMemoryName(name: string): boolean {
   return /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name) && name.length <= 64;
 }
 
+async function authorizeMemoryPath(ctx: ToolContext | undefined, target: string, operation: "read" | "write" | "create", source: string): Promise<string> {
+  return authorizeToolPath(ctx, APP_ROOT, target, operation, source);
+}
+
 /** 扫描 memory/ 目录，重建 MEMORY.md 索引 */
-function updateMemoryIndex(): void {
+async function updateMemoryIndex(ctx?: ToolContext): Promise<void> {
   try {
     const files = readdirSync(MEMORY_DIR);
     const lines: string[] = [];
@@ -32,14 +37,17 @@ function updateMemoryIndex(): void {
       const name = f.replace(/\.md$/, "");
       // 读取第一行作为描述
       try {
-        const firstLine = readFileSync(resolve(MEMORY_DIR, f), "utf-8").split("\n")[0] || "";
+        const memoryFile = await authorizeMemoryPath(ctx, resolve(MEMORY_DIR, f), "read", "agent.memory.index.read");
+        const firstLine = readFileSync(memoryFile, "utf-8").split("\n")[0] || "";
         const desc = firstLine.replace(/^#\s*/, "").trim();
         lines.push(`- [${name}](${f}) — ${desc}`);
       } catch {
         lines.push(`- [${name}](${f})`);
       }
     }
-    writeFileSync(MEMORY_INDEX, lines.join("\n") + "\n", "utf-8");
+    const indexOperation = existsSync(MEMORY_INDEX) ? "write" : "create";
+    const indexFile = await authorizeMemoryPath(ctx, MEMORY_INDEX, indexOperation, "agent.memory.index.write");
+    writeFileSync(indexFile, lines.join("\n") + "\n", "utf-8");
   } catch {
     // memory/ 还不存在时静默
   }
@@ -60,12 +68,17 @@ export const readMemoryTool: AgentTool = {
   },
   isReadOnly: true,
   isConcurrencySafe: true,
-  execute: async ({ name }) => {
+  execute: async ({ name }, ctx) => {
     const n = String(name ?? "");
     if (!validMemoryName(n)) return `无效的记忆名称"${n}"。名称只允许字母、数字、点、下划线、短横线，最长 64 字符。`;
     const filePath = resolve(MEMORY_DIR, `${n}.md`);
     if (!existsSync(filePath)) return `未找到记忆"${n}"。用 write_memory 创建一条新的。`;
-    return readFileSync(filePath, "utf-8");
+    try {
+      const authorizedFile = await authorizeMemoryPath(ctx, filePath, "read", "agent.memory.read");
+      return readFileSync(authorizedFile, "utf-8");
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
   },
 };
 
@@ -88,17 +101,24 @@ export const writeMemoryTool: AgentTool = {
   },
   isReadOnly: false,
   isDestructive: false,
-  execute: async ({ name, content }) => {
+  execute: async ({ name, content }, ctx) => {
     const n = String(name ?? "");
     if (!validMemoryName(n)) return `无效的记忆名称"${n}"。名称只允许字母、数字、点、下划线、短横线，最长 64 字符。`;
     // 确保 memory/ 目录存在
+    const filePath = resolve(MEMORY_DIR, `${n}.md`);
+    const operation = existsSync(filePath) ? "write" : "create";
+    let authorizedFile: string;
+    try {
+      authorizedFile = await authorizeMemoryPath(ctx, filePath, operation, `agent.memory.${operation}`);
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
     if (!existsSync(MEMORY_DIR)) {
       const { mkdirSync } = await import("fs");
       mkdirSync(MEMORY_DIR, { recursive: true });
     }
-    const filePath = resolve(MEMORY_DIR, `${n}.md`);
-    writeFileSync(filePath, String(content), "utf-8");
-    updateMemoryIndex();
+    writeFileSync(authorizedFile, String(content), "utf-8");
+    await updateMemoryIndex(ctx);
     // 刷新系统 prompt 使当前对话立即看到更新
     const runtime = getCurrentRuntime();
     if (runtime) await runtime.refreshSystemPrompt();

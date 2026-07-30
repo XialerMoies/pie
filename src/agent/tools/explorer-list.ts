@@ -1,9 +1,5 @@
 import type { AgentTool } from "../types.js"
-
-function getBaseUrl(): string {
-  const port = process.env.SERVER_PORT || process.env.PI_DEV_PORT || "3099"
-  return `http://127.0.0.1:${port}`
-}
+import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
 export const explorerListTool: AgentTool = {
   name: "explorer_list",
@@ -32,8 +28,8 @@ export const explorerListTool: AgentTool = {
     if (filter) params.set("filter", "1")
     if (ctx.workspace) params.set("root", ctx.workspace)
 
-    const url = `${getBaseUrl()}/api/explorer?${params.toString()}`
-    const res = await fetch(url)
+    const url = `${getLocalApiBaseUrl()}/api/explorer?${params.toString()}`
+    const res = await localApiFetch(url, ctx)
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
     if (!res.ok || data.error) return `列出目录失败：${data.error || data.message || res.status}`
 

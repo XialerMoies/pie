@@ -1,9 +1,5 @@
 import type { AgentTool } from "../types.js"
-
-function getBaseUrl(): string {
-  const port = process.env.SERVER_PORT || process.env.PI_DEV_PORT || "3099"
-  return `http://127.0.0.1:${port}`
-}
+import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
 export const fileOutlineTool: AgentTool = {
   name: "file_outline",
@@ -27,8 +23,8 @@ export const fileOutlineTool: AgentTool = {
     const params = new URLSearchParams({ path, mode: "toc" })
     if (ctx.workspace) params.set("root", ctx.workspace)
 
-    const url = `${getBaseUrl()}/api/file/read?${params.toString()}`
-    const res = await fetch(url)
+    const url = `${getLocalApiBaseUrl()}/api/file/read?${params.toString()}`
+    const res = await localApiFetch(url, ctx)
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
     if (!res.ok || data.error) {
       return data.error === "Access denied"

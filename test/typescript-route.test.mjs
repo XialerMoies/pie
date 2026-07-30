@@ -1,22 +1,20 @@
-/**
- * monaco-setup 通信测试
- *
- * 验证 tsserver IPC 请求/响应格式，mock 后端 handler 和 tsServer。
- *
- * 运行：npx tsx --test test/monaco-setup.test.mjs
- */
-import { describe, it, before } from "node:test";
+import { describe, it, beforeEach, after } from "node:test";
 import assert from "node:assert";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { handleTypeScript } from "../src/server/routes/typescript.ts";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const ROOT = resolve(__dirname, "..");
+const TEST_WORKSPACE = mkdtempSync(resolve(ROOT, ".tmp-ts-route-"));
+const TEST_FILE = resolve(TEST_WORKSPACE, "test.ts");
+const OUTSIDE_FILE = resolve(TEST_WORKSPACE, "..", "outside.ts");
 
-// 简化版 callHandler（避免 HTTP server）
 async function callHandler(handler, method, url, body, ctx) {
   const req = {
-    url, method,
+    url,
+    method,
     headers: { host: "localhost", "content-type": "application/json" },
     on(event, cb) {
       if (event === "data" && body) cb(Buffer.from(JSON.stringify(body)));
@@ -25,19 +23,35 @@ async function callHandler(handler, method, url, body, ctx) {
     },
   };
   const res = {
-    _body: "", _status: 0,
-    writeHead(s, h) { this._status = s; if (h) Object.assign(this, h); return this; },
-    end(d) { if (d) this._body += d; return this; },
-    write() { return true; }, on() { return this; },
+    _body: "",
+    _status: 0,
+    writeHead(status, headers) {
+      this._status = status;
+      if (headers) Object.assign(this, headers);
+      return this;
+    },
+    end(data) {
+      if (data) this._body += data;
+      return this;
+    },
+    write() { return true; },
+    on() { return this; },
   };
   const handled = await handler(req, res, ctx);
   return { handled, status: res._status, body: res._body };
 }
 
-describe("tsserver 通信", () => {
-  let handleTypeScript;
+function parseJSON(body) {
+  return JSON.parse(body);
+}
+
+describe("typescript routes", () => {
+  let lastTsRequest = null;
+  let isRunningCalls = 0;
+  let organizeImportsResult = null;
 
   const sendRequest = async (cmd, args) => {
+    lastTsRequest = { cmd, args };
     switch (cmd) {
       case "semanticDiagnosticsSync":
       case "syntacticDiagnosticsSync":
@@ -51,11 +65,44 @@ describe("tsserver 通信", () => {
       case "references":
         return { refs: [] };
       case "getCodeFixes":
-        return [{ description: "fix it", changes: [{ fileName: "/test.ts", textChanges: [{ span: { start: { line: 1, offset: 1 }, end: { line: 1, offset: 1 } }, newText: "const fixed = true;\n" }] }], commands: [], fixId: "fix", fixName: "fix-it", fixAllDescription: "Fix it" }];
+        return [{
+          description: "fix it",
+          changes: [{
+            fileName: TEST_FILE,
+            textChanges: [{
+              span: { start: { line: 1, offset: 1 }, end: { line: 1, offset: 1 } },
+              newText: "const fixed = true;\n",
+            }],
+          }],
+          commands: [],
+          fixId: "fix",
+          fixName: "fix-it",
+          fixAllDescription: "Fix it",
+        }];
       case "getApplicableRefactors":
-        return [{ name: "Extract type", description: "Extract type", actions: [{ name: "Extract to type alias", description: "Extract to type alias", kind: "refactor.extract.type" }] }];
+        return [{
+          name: "Extract type",
+          description: "Extract type",
+          actions: [{
+            name: "Extract to type alias",
+            description: "Extract to type alias",
+            kind: "refactor.extract.type",
+          }],
+        }];
       case "getEditsForRefactor":
-        return { edits: [{ fileName: "/test.ts", textChanges: [{ span: { start: { line: 1, offset: 1 }, end: { line: 1, offset: 1 } }, newText: "type Extracted = string;\n" }] }], renameFilename: undefined, renameLocation: undefined };
+        return {
+          edits: [{
+            fileName: TEST_FILE,
+            textChanges: [{
+              span: { start: { line: 1, offset: 1 }, end: { line: 1, offset: 1 } },
+              newText: "type Extracted = string;\n",
+            }],
+          }],
+          renameFilename: undefined,
+          renameLocation: undefined,
+        };
+      case "organizeImports":
+        return organizeImportsResult ?? [];
       default:
         return { success: true, command: cmd, arguments: args };
     }
@@ -66,7 +113,10 @@ describe("tsserver 通信", () => {
     send: sendRequest,
     start: async () => {},
     init: async () => {},
-    isRunning: () => true,
+    isRunning: () => {
+      isRunningCalls++;
+      return true;
+    },
   };
 
   const ctx = {
@@ -75,11 +125,11 @@ describe("tsserver 通信", () => {
     chatStream: {},
     sseClients: [],
     paths: {
-      APP_ROOT: ROOT,
-      DATA_DIR: resolve(ROOT, "data"),
-      PI_CONFIG_DIR: resolve(ROOT, "data", "pi"),
-      SESSIONS_DIR: resolve(ROOT, "data", "pi", "sessions"),
-      SETTINGS_FILE: resolve(ROOT, "data", "pi", "settings.json"),
+      APP_ROOT: TEST_WORKSPACE,
+      DATA_DIR: resolve(TEST_WORKSPACE, "data"),
+      PI_CONFIG_DIR: resolve(TEST_WORKSPACE, "data", "pi"),
+      SESSIONS_DIR: resolve(TEST_WORKSPACE, "data", "pi", "sessions"),
+      SETTINGS_FILE: resolve(TEST_WORKSPACE, "data", "pi", "settings.json"),
       FRONTEND_DIR: resolve(ROOT, "dist", "frontend"),
       FRONTEND_SRC_DIR: resolve(ROOT, "src", "frontend"),
       HAS_BUILT_FRONTEND: false,
@@ -87,87 +137,174 @@ describe("tsserver 通信", () => {
     tsServer: mockTsServer,
   };
 
-  before(async () => {
-    const ts = Date.now();
-    const mod = await import(`../src/server/routes/typescript.ts?t=${ts}`);
-    handleTypeScript = mod.handleTypeScript;
+  beforeEach(() => {
+    lastTsRequest = null;
+    isRunningCalls = 0;
+    organizeImportsResult = null;
+    writeFileSync(TEST_FILE, "const test = 1;\n", "utf-8");
   });
 
-  it("非 /api/ts/ 路径返回 false", async () => {
+  after(() => {
+    rmSync(TEST_WORKSPACE, { recursive: true, force: true });
+  });
+
+  it("returns false for non-TypeScript routes", async () => {
     const { handled } = await callHandler(handleTypeScript, "GET", "/api/other", null, ctx);
     assert.strictEqual(handled, false);
   });
 
-  it("POST /api/ts/open 返回 200 JSON", async () => {
-    const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/open", { file: "/test.ts", content: "const x = 1;", scriptKindName: "TS" }, ctx);
+  it("opens a workspace file and passes the guarded path to tsserver", async () => {
+    const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/open", {
+      file: TEST_FILE,
+      content: "const x = 1;",
+      scriptKindName: "TS",
+    }, ctx);
     assert.strictEqual(status, 200);
-    const data = JSON.parse(body);
-    assert.ok(data);
+    assert.ok(parseJSON(body).ok);
+    assert.strictEqual(lastTsRequest?.cmd, "open");
+    assert.strictEqual(lastTsRequest?.args?.file, TEST_FILE);
   });
 
-  it("POST /api/ts/open 缺少 file 返回错误", async () => {
+  it("rejects missing file before tsserver", async () => {
     const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/open", { content: "x" }, ctx);
-    const data = JSON.parse(body);
-    // 可能返回 400 或 200 + error
-    assert.ok(data.error || status === 400);
+    const data = parseJSON(body);
+    assert.strictEqual(status, 400);
+    assert.strictEqual(data.code, "missing_file");
+    assert.strictEqual(lastTsRequest, null);
+    assert.strictEqual(isRunningCalls, 0);
   });
 
-  it("POST /api/ts/change 返回 200", async () => {
-    const { status } = await callHandler(handleTypeScript, "POST", "/api/ts/change", { file: "/test.ts", content: "const y = 2;" }, ctx);
-    assert.strictEqual(status, 200);
+  it("rejects files outside APP_ROOT before tsserver", async () => {
+    const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/open", {
+      file: OUTSIDE_FILE,
+      content: "x",
+    }, ctx);
+    const data = parseJSON(body);
+    assert.strictEqual(status, 403);
+    assert.strictEqual(data.code, "access_denied");
+    assert.strictEqual(lastTsRequest, null);
+    assert.strictEqual(isRunningCalls, 0);
   });
 
-  it("POST /api/ts/close 返回 200", async () => {
-    const { status } = await callHandler(handleTypeScript, "POST", "/api/ts/close", { file: "/test.ts" }, ctx);
-    assert.strictEqual(status, 200);
+  it("handles change, close, completions, quickinfo, definition, and references", async () => {
+    assert.strictEqual((await callHandler(handleTypeScript, "POST", "/api/ts/change", {
+      file: TEST_FILE,
+      content: "const y = 2;",
+    }, ctx)).status, 200);
+    assert.strictEqual((await callHandler(handleTypeScript, "POST", "/api/ts/close", {
+      file: TEST_FILE,
+    }, ctx)).status, 200);
+
+    const completions = await callHandler(handleTypeScript, "POST", "/api/ts/completions", {
+      file: TEST_FILE,
+      line: 1,
+      offset: 1,
+    }, ctx);
+    assert.strictEqual(completions.status, 200);
+    assert.ok(Array.isArray(parseJSON(completions.body)?.entries ?? []));
+
+    for (const route of ["/api/ts/quickinfo", "/api/ts/definition", "/api/ts/references"]) {
+      const result = await callHandler(handleTypeScript, "POST", route, {
+        file: TEST_FILE,
+        line: 1,
+        offset: 1,
+      }, ctx);
+      assert.strictEqual(result.status, 200);
+    }
   });
 
-  it("POST /api/ts/completions 返回 JSON", async () => {
-    const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/completions", { file: "/test.ts", line: 1, offset: 1 }, ctx);
-    assert.strictEqual(status, 200);
-    const data = JSON.parse(body);
-    assert.ok(Array.isArray(data?.entries ?? []));
+  it("returns quickfix and refactor code actions", async () => {
+    const quickfix = await callHandler(handleTypeScript, "POST", "/api/ts/code-actions", {
+      file: TEST_FILE,
+      line: 1,
+      offset: 1,
+      endLine: 1,
+      endOffset: 1,
+      errorCodes: [1001],
+    }, ctx);
+    assert.strictEqual(quickfix.status, 200);
+    const quickfixData = parseJSON(quickfix.body);
+    assert.strictEqual(quickfixData.actions[0].kind, "quickfix");
+    assert.strictEqual(quickfixData.actions[0].description, "fix it");
+
+    const refactor = await callHandler(handleTypeScript, "POST", "/api/ts/code-actions", {
+      file: TEST_FILE,
+      line: 1,
+      offset: 1,
+      endLine: 1,
+      endOffset: 1,
+      errorCodes: [],
+    }, ctx);
+    assert.strictEqual(refactor.status, 200);
+    const refactorData = parseJSON(refactor.body);
+    assert.strictEqual(refactorData.actions[0].kind, "refactor.extract.type");
+    assert.strictEqual(refactorData.actions[0].description, "Extract to type alias");
   });
 
-  it("POST /api/ts/quickinfo 返回 JSON", async () => {
-    const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/quickinfo", { file: "/test.ts", line: 1, offset: 1 }, ctx);
-    assert.strictEqual(status, 200);
+  it("returns diagnostics for a guarded workspace file", async () => {
+    const result = await callHandler(
+      handleTypeScript,
+      "GET",
+      `/api/ts/diagnostics?file=${encodeURIComponent(TEST_FILE)}`,
+      null,
+      ctx,
+    );
+    assert.strictEqual(result.handled, true);
+    assert.strictEqual(result.status, 200);
+    assert.ok(Array.isArray(parseJSON(result.body)));
   });
 
-  it("POST /api/ts/definition 返回 JSON", async () => {
-    const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/definition", { file: "/test.ts", line: 1, offset: 1 }, ctx);
-    assert.strictEqual(status, 200);
+  it("applies code actions only after all target files pass authorization", async () => {
+    const before = readFileSync(TEST_FILE, "utf-8");
+    const result = await callHandler(handleTypeScript, "POST", "/api/ts/apply-code-action", {
+      changes: [
+        {
+          fileName: TEST_FILE,
+          textChanges: [{
+            span: { start: { line: 1, offset: 1 }, end: { line: 1, offset: 1 } },
+            newText: "const changed = true;\n",
+          }],
+        },
+        {
+          fileName: OUTSIDE_FILE,
+          textChanges: [{
+            span: { start: { line: 1, offset: 1 }, end: { line: 1, offset: 1 } },
+            newText: "outside",
+          }],
+        },
+      ],
+    }, ctx);
+    const data = parseJSON(result.body);
+    assert.strictEqual(result.status, 403);
+    assert.strictEqual(data.code, "access_denied");
+    assert.strictEqual(readFileSync(TEST_FILE, "utf-8"), before);
   });
 
-  it("POST /api/ts/references 返回 JSON", async () => {
-    const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/references", { file: "/test.ts", line: 1, offset: 1 }, ctx);
-    assert.strictEqual(status, 200);
-  });
+  it("organize imports preflights all returned files before writing", async () => {
+    const before = readFileSync(TEST_FILE, "utf-8");
+    organizeImportsResult = [
+      {
+        fileName: TEST_FILE,
+        textChanges: [{
+          span: { start: { line: 1, offset: 1 }, end: { line: 1, offset: 1 } },
+          newText: "import './safe';\n",
+        }],
+      },
+      {
+        fileName: OUTSIDE_FILE,
+        textChanges: [{
+          span: { start: { line: 1, offset: 1 }, end: { line: 1, offset: 1 } },
+          newText: "outside",
+        }],
+      },
+    ];
 
-  it("POST /api/ts/code-actions 支持 quickfix", async () => {
-    const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/code-actions", { file: "/test.ts", line: 1, offset: 1, endLine: 1, endOffset: 1, errorCodes: [1001] }, ctx);
-    assert.strictEqual(status, 200);
-    const data = JSON.parse(body);
-    assert.ok(Array.isArray(data.actions));
-    assert.strictEqual(data.actions[0].kind, "quickfix");
-    assert.strictEqual(data.actions[0].description, "fix it");
-  });
-
-  it("POST /api/ts/code-actions 支持 refactor", async () => {
-    const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/code-actions", { file: "/test.ts", line: 1, offset: 1, endLine: 1, endOffset: 1, errorCodes: [] }, ctx);
-    assert.strictEqual(status, 200);
-    const data = JSON.parse(body);
-    assert.ok(Array.isArray(data.actions));
-    assert.strictEqual(data.actions[0].kind, "refactor.extract.type");
-    assert.strictEqual(data.actions[0].description, "Extract to type alias");
-  });
-
-  it("GET /api/ts/diagnostics 返回 JSON", async () => {
-    const req = { url: "/api/ts/diagnostics?file=/test.ts", method: "GET", headers: { host: "localhost" }, on: () => req };
-    const res = { _body: "", _status: 0, writeHead(s, h) { this._status = s; return this; }, end(d) { if (d) this._body += d; return this; }, write() { return true; }, on: () => res };
-    const handled = await handleTypeScript(req, res, ctx);
-    assert.strictEqual(handled, true);
-    const data = JSON.parse(res._body);
-    assert.ok(data);
+    const result = await callHandler(handleTypeScript, "POST", "/api/ts/organize-imports", {
+      file: TEST_FILE,
+    }, ctx);
+    const data = parseJSON(result.body);
+    assert.strictEqual(result.status, 403);
+    assert.strictEqual(data.code, "access_denied");
+    assert.strictEqual(readFileSync(TEST_FILE, "utf-8"), before);
   });
 });

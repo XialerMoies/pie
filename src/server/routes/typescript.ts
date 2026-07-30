@@ -17,7 +17,8 @@
 import type { RouteHandler } from "./types";
 import { parseBody } from "./parse-body";
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import { resolve } from "path";
+import { authorizeRoutePath, writeServerPermissionError } from "../permission-service";
+import { PathGuardError, writePathGuardError } from "./path-guard";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
@@ -38,6 +39,18 @@ async function getTsServer(ctx: import("./types").ServerContext): Promise<import
   return tsServer;
 }
 
+async function authorizeTsFile(
+  ctx: import("./types").ServerContext,
+  file: unknown,
+  operation: "read" | "write",
+  source: string,
+): Promise<string> {
+  if (typeof file !== "string" || !file.trim()) {
+    throw new PathGuardError("Missing 'file'", 400, "missing_file");
+  }
+  return (await authorizeRoutePath(ctx, ctx.paths.APP_ROOT, file, operation, source)).path;
+}
+
 export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
 
@@ -46,19 +59,21 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
   // GET /api/ts/diagnostics?file=... — 同步诊断
   if (url.startsWith("/api/ts/diagnostics") && method === "GET") {
     try {
-      const ts = await getTsServer(ctx);
       const u = new URL(url, `http://${req.headers.host || "localhost"}`);
       const file = u.searchParams.get("file") || "";
-      if (!file) { res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: "Missing 'file'" })); return true; }
+      const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.diagnostics");
+      const ts = await getTsServer(ctx);
 
       const [semantic, syntactic] = await Promise.all([
-        ts.sendRequest("semanticDiagnosticsSync", { file }).catch(() => []),
-        ts.sendRequest("syntacticDiagnosticsSync", { file }).catch(() => []),
+        ts.sendRequest("semanticDiagnosticsSync", { file: authorizedFile }).catch(() => []),
+        ts.sendRequest("syntacticDiagnosticsSync", { file: authorizedFile }).catch(() => []),
       ]);
       const all = [...(semantic || []), ...(syntactic || [])];
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify(all));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ success: false, error: (err as Error).message }));
     }
@@ -68,19 +83,15 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
   if (method !== "POST") return false;
 
   try {
-    const ts = await getTsServer(ctx);
     const body = await parseBody(req);
     const file = body.file;
 
     switch (true) {
       case url === "/api/ts/open": {
-        if (!file) {
-          res.writeHead(400, { ...cors });
-          res.end(JSON.stringify({ error: "Missing 'file'" }));
-          return true;
-        }
+        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.open");
+        const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("open", {
-          file,
+          file: authorizedFile,
           fileContent: body.content || "",
           scriptKindName: body.scriptKindName || "TS",
           projectRootPath: ctx.paths.APP_ROOT,
@@ -91,11 +102,13 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/change": {
+        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.change");
+        const ts = await getTsServer(ctx);
         const lines = (body.content || "").split("\n");
         const endLine = lines.length;
         const endOffset = (lines[lines.length - 1] || "").length + 1;
         await ts.sendRequest("change", {
-          file,
+          file: authorizedFile,
           line: 1,
           offset: 1,
           endLine,
@@ -108,15 +121,19 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/close": {
-        await ts.sendRequest("close", { file });
+        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.close");
+        const ts = await getTsServer(ctx);
+        await ts.sendRequest("close", { file: authorizedFile });
         res.writeHead(200, { ...cors });
         res.end(JSON.stringify({ ok: true }));
         return true;
       }
 
       case url === "/api/ts/completions": {
+        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.completions");
+        const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("completionInfo", {
-          file,
+          file: authorizedFile,
           line: body.line,
           offset: body.offset,
           triggerKind: body.triggerKind || 0,
@@ -127,8 +144,10 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/completionDetails": {
+        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.completion-details");
+        const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("completionEntryDetails", {
-          file,
+          file: authorizedFile,
           line: body.line,
           offset: body.offset,
           entryNames: body.names || [],
@@ -139,8 +158,10 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/quickinfo": {
+        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.quickinfo");
+        const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("quickinfo", {
-          file,
+          file: authorizedFile,
           line: body.line,
           offset: body.offset,
         });
@@ -150,8 +171,10 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/definition": {
+        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.definition");
+        const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("definitionAndBoundSpan", {
-          file,
+          file: authorizedFile,
           line: body.line,
           offset: body.offset,
         });
@@ -161,8 +184,10 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/references": {
+        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.references");
+        const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("references", {
-          file,
+          file: authorizedFile,
           line: body.line,
           offset: body.offset,
         });
@@ -174,6 +199,8 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       // ─── Code Actions ──────────────────────────────────
 
       case url === "/api/ts/code-actions": {
+        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.code-actions");
+        const ts = await getTsServer(ctx);
         const errorCodes: number[] = body.errorCodes || [];
         const startLine = body.line;
         const startOffset = body.offset;
@@ -182,7 +209,7 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
 
         if (errorCodes.length === 0) {
           const refactors = await ts.sendRequest("getApplicableRefactors", {
-            file,
+            file: authorizedFile,
             startLine,
             startOffset,
             endLine,
@@ -198,7 +225,7 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
               if (action?.notApplicableReason || action?.isInteractive) continue;
               try {
                 const edits = await ts.sendRequest("getEditsForRefactor", {
-                  file,
+                  file: authorizedFile,
                   startLine,
                   startOffset,
                   endLine,
@@ -231,7 +258,7 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
         }
 
         const fixes = await ts.sendRequest("getCodeFixes", {
-          file,
+          file: authorizedFile,
           startLine,
           startOffset,
           endLine,
@@ -255,18 +282,28 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
 
       case url === "/api/ts/apply-code-action": {
         const changes: { fileName: string; textChanges: { span: { start: { line: number; offset: number }; end: { line: number; offset: number } }; newText: string }[] }[] = body.changes || [];
+        const authorizedChanges: Array<{ edit: typeof changes[number]; absPath: string }> = [];
         const appliedFiles: string[] = [];
         const errors: string[] = [];
 
         for (const edit of changes) {
-          try {
-            const absPath = resolve(ctx.paths.APP_ROOT, edit.fileName);
-            // 检查文件是否存在
-            if (!existsSync(absPath)) {
-              errors.push(`File not found: ${edit.fileName}`);
-              continue;
-            }
+          const absPath = await authorizeTsFile(ctx, edit.fileName, "write", "ts.apply-code-action");
+          if (!existsSync(absPath)) {
+            errors.push(`File not found: ${edit.fileName}`);
+            continue;
+          }
+          authorizedChanges.push({ edit, absPath });
+        }
 
+        if (errors.length > 0) {
+          res.writeHead(200, { ...cors });
+          res.end(JSON.stringify({ ok: false, partial: false, files: [], errors }));
+          return true;
+        }
+
+        for (const { edit, absPath } of authorizedChanges) {
+          try {
+            // 检查文件是否存在
             let content = readFileSync(absPath, "utf-8");
             const lines = content.split("\n");
 
@@ -313,9 +350,10 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
 
       case url === "/api/ts/format": {
         const { file, tabSize, useTabs } = body;
-        if (!file) { res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: "Missing 'file'" })); return true; }
+        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.format");
+        const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("getFormattingEditsForDocument", {
-          file,
+          file: authorizedFile,
           options: {
             tabSize: tabSize ?? 2,
             indentSize: tabSize ?? 2,
@@ -330,19 +368,33 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/organize-imports": {
+        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.organize-imports.source");
+        const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("organizeImports", {
-          file,
+          file: authorizedFile,
           scope: "",
           host: ctx.paths.APP_ROOT,
         });
         if (result && Array.isArray(result)) {
           // apply changes to disk
+          const authorizedEdits: Array<{ edit: any; absPath: string }> = [];
           const appliedFiles: string[] = [];
           const errors: string[] = [];
           for (const edit of result as any[]) {
+            const absPath = await authorizeTsFile(ctx, edit.fileName, "write", "ts.organize-imports");
+            if (!existsSync(absPath)) {
+              errors.push(`File not found: ${edit.fileName}`);
+              continue;
+            }
+            authorizedEdits.push({ edit, absPath });
+          }
+          if (errors.length > 0) {
+            res.writeHead(200, { ...cors });
+            res.end(JSON.stringify({ ok: false, partial: false, files: [], errors }));
+            return true;
+          }
+          for (const { edit, absPath } of authorizedEdits) {
             try {
-              const absPath = resolve(ctx.paths.APP_ROOT, edit.fileName);
-              if (!existsSync(absPath)) { errors.push(`File not found: ${edit.fileName}`); continue; }
               let content = readFileSync(absPath, "utf-8");
               const lines = content.split("\n");
               const sorted = [...(edit.textChanges || [])].sort((a: any, b: any) => {
@@ -378,6 +430,8 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
         return false;
     }
   } catch (err: unknown) {
+    if (writeServerPermissionError(res, cors, err)) return true;
+    if (writePathGuardError(res, cors, err)) return true;
     res.writeHead(200, { ...cors });
     res.end(JSON.stringify({ success: false, error: (err as Error).message }));
     return true;
