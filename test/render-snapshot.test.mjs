@@ -72,6 +72,9 @@ global.ExplorerService = {
 before(async () => {
   const ts = Date.now();
   await import(`../src/frontend/dashboard/dashboard-helpers.ts?t=${ts}`);
+  await import(`../src/frontend/services/chat-runtime-store.ts?t=${ts}`);
+  await import(`../src/frontend/services/preferences.ts?t=${ts}`);
+  global.App = win.App;
   await import(`../src/frontend/service/explorer-service.ts?t=${ts}`);
   await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-layout.ts?t=${ts}`);
@@ -459,6 +462,26 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes('trace-text'), "最后一个节点是 text block");
     const lastNodeMatch = html.match(/<div class="trace-node trace-text">/g);
     assert.ok(lastNodeMatch, "text 节点存在");
+  });
+});
+
+describe("markdown security", () => {
+  it("不允许原始 HTML 和危险 URL 协议", () => {
+    const originalE = globalThis.E;
+    const escape = (value) => String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+    globalThis.E = escape;
+    win.__state.M = [{ role: "assistant", content: '<script>alert(1)</script> [run](javascript:alert(1)) ![x](data:text/html,alert(1))' }];
+    const html = win.msgs();
+    assert.ok(!html.includes("<script>"), "raw script tags must not enter the DOM");
+    assert.ok(html.includes("&lt;script&gt;"), "raw HTML should render as text");
+    assert.ok(!html.includes('href="javascript:'), "javascript links must be removed");
+    assert.ok(!html.includes('src="data:'), "data image URLs must be removed");
+    globalThis.E = originalE;
   });
 });
 

@@ -100,15 +100,16 @@ async function deleteEphemeralSession(sessionId: string): Promise<void> {
 }
 
 function extractLastUserMessage(): string {
-  for (let i = window.__state.M.length - 1; i >= 0; i--) {
-    const msg = window.__state.M[i];
+  const messages = App.ChatState.getMessages();
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
     if (msg.role === 'user' && msg.content.trim()) return msg.content.trim();
   }
   return '';
 }
 
 function retryLastTurn(): void {
-  if (window.__state.IL) return;
+  if (App.ChatState.isBusy()) return;
   const text = extractLastUserMessage();
   if (!text) { toast('没有可重发的消息', 'error'); return; }
   const input = $('ci') as HTMLTextAreaElement | null;
@@ -117,7 +118,7 @@ function retryLastTurn(): void {
 }
 
 async function copyLastError(): Promise<void> {
-  const last = [...window.__state.M].reverse().find(m => m.error?.message || m.error?.reason || m.error?.raw);
+  const last = [...App.ChatState.getMessages()].reverse().find(m => m.error?.message || m.error?.reason || m.error?.raw);
   const error = last?.error;
   if (!error) { toast('没有可复制的错误', 'error'); return; }
   const text = [
@@ -155,7 +156,7 @@ function _messageKey(m: any): string {
 
 /** 节点级消息 diff：逐条检查 key，变才渲染 + replaceWith；无中间字符串层 */
 function _applyMsgsDiff(msgsEl: HTMLElement, scroll: boolean): void {
-  const M = window.__state.M;
+  const M = App.ChatState.getMessages();
   const rm = (window as any).App?.Chat?.renderMessage;
   if (!rm) {
     const fallback = (window as any).msgs ? (window as any).msgs() || "" : "";
@@ -211,7 +212,7 @@ function _applyMsgsDiff(msgsEl: HTMLElement, scroll: boolean): void {
 }
 
 function markLastMessageRendered(): void {
-  const M = window.__state.M;
+  const M = App.ChatState.getMessages();
   while (_msgKeys.length < M.length) _msgKeys.push("");
   while (_msgKeys.length > M.length) _msgKeys.pop();
   if (M.length > 0) _msgKeys[M.length - 1] = _messageKey(M[M.length - 1]);
@@ -234,7 +235,6 @@ function bind(): void {
     if (fn) fn(ci);
   });
 
-  let _streamGen = 0;
   let renderFrame: number | null = null;
 
   function makeErrorState(title: string, message: string, reason?: string, nextSteps?: string[], raw?: string): ChatErrorState {
@@ -242,7 +242,8 @@ function bind(): void {
   }
 
   function setAssistantError(title: string, message: string, reason?: string, nextSteps?: string[], raw?: string): void {
-    const last = window.__state.M[window.__state.M.length - 1];
+    const messages = App.ChatState.getMessages();
+    const last = messages[messages.length - 1];
     if (!last) return;
     last.error = makeErrorState(title, message, reason, nextSteps, raw);
     last.streaming = false;
@@ -253,14 +254,13 @@ function bind(): void {
 
   function submitMessage(rawText: string): void {
     const ci2 = ci!;
-    const st = window.__state;
     const ciVal = rawText.trim();
     if (!ciVal) return;
     ci2.value = '';
     ci2.style.height = 'auto';
 
     if (ciVal === '/clear') {
-      st.IL = false;
+      App.ChatState.setBusy(false);
       fetch('/api/clear', { method: 'POST' })
         .then(r => r.json())
         .then((d: { ok: boolean }) => toast(d.ok ? '缓存已清除' : '清除失败', d.ok ? 'success' : 'error'))
@@ -269,20 +269,19 @@ function bind(): void {
       return;
     }
 
-    st.M.push({ role: 'user', content: ciVal }); st.IL = true;
-    st.M.push({ role: 'assistant', content: '', thinking: '', streaming: true });
+    App.ChatState.appendMessage({ role: 'user', content: ciVal });
+    App.ChatState.setBusy(true);
+    App.ChatState.appendMessage({ role: 'assistant', content: '', thinking: '', streaming: true });
     updateUI(); sb('ms');
     const _ws = App.State.getWorkspacePath();
-    const gen = ++_streamGen;
+    App.ChatStream.close();
+    const gen = App.ChatStream.open();
     const activeTabId = chatGetActiveSessionTabId();
     activeSendContext = activeTabId && !chatIsDraftSessionId(activeTabId)
       ? { sessionId: activeTabId, persistent: true }
       : activeTabId && chatIsDraftSessionId(activeTabId)
         ? { sessionId: '', persistent: true, draftId: activeTabId }
         : { sessionId: '', persistent: false };
-
-    if (st.CS) { st.CS.onmessage = null; st.CS.onerror = null; st.CS.close(); st.CS = null; }
-    st.CS = new EventSource('/api/chat/stream');
 
     const finalizeSendContext = (context: ChatSendContext | null): void => {
       if (context && !context.persistent && context.sessionId) {
@@ -294,7 +293,7 @@ function bind(): void {
 
     void (async () => {
       const prepared = await ensureSessionForSend();
-      if (_streamGen !== gen || !st.IL) return;
+      if (!App.ChatStream.isCurrent(gen) || !App.ChatState.isBusy()) return;
       activeSendContext = prepared;
 
       const atts = App.Chat?.getPendingAttachments?.();
@@ -304,7 +303,7 @@ function bind(): void {
       fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
         .then(() => { if (pending) App.Chat?.clearAttachments?.(); })
         .catch((err: unknown) => {
-          if (_streamGen !== gen) return;
+          if (!App.ChatStream.isCurrent(gen)) return;
           setAssistantError(
             '发送失败',
             '消息没有成功送达后端，请检查当前连接。',
@@ -312,7 +311,7 @@ function bind(): void {
             ['确认后端服务是否仍在运行', '检查当前工作区是否有效', '重新发送当前消息'],
             err instanceof Error ? err.stack || err.message : String(err),
           );
-          window.__state.IL = false;
+          App.ChatState.setBusy(false);
           updateUI();
           const failedContext = activeSendContext;
           activeSendContext = null;
@@ -320,11 +319,13 @@ function bind(): void {
         });
     })();
 
-    st.CS.onmessage = (e: MessageEvent) => {
-      if (_streamGen !== gen) return;
+    App.ChatStream.setHandlers(gen, {
+      onMessage: (e: MessageEvent) => {
+      if (!App.ChatStream.isCurrent(gen)) return;
       try {
         if (!window.___sseFirst) { window.___sseFirst = true; mark('sse_first_event'); } const d = JSON.parse(e.data) as { type: string; id?: string; command?: string; reason?: string; permissionSuggestions?: any[]; text?: string; thinking?: boolean; turnId?: string; sessionId?: string; message?: string; block?: any; blocks?: any[] };
-        const last = st.M[st.M.length - 1];
+        const messages = App.ChatState.getMessages();
+        const last = messages[messages.length - 1];
         if (d.type === 'command_confirm') {
           const id = d.id || '';
           if (!id) return;
@@ -368,7 +369,7 @@ function bind(): void {
           if (last?.streaming) {
             if (!last?.blocks?.length) App.Chat?.appendDelta?.(d.text || '');
           } else {
-            st.M.push({ role: 'assistant', content: d.text || '', thinking: '', streaming: true });
+            App.ChatState.appendMessage({ role: 'assistant', content: d.text || '', thinking: '', streaming: true });
             updateUI();
           }
           sb('ms');
@@ -383,7 +384,7 @@ function bind(): void {
           last.error = undefined;
           if (Array.isArray(d.blocks)) last.blocks = d.blocks;
           last._rv = (last._rv || 0) + 1;
-          st.IL = false; st.CS?.close(); st.CS = null;
+            App.ChatState.setBusy(false); App.ChatStream.close();
           const finalized = App.Chat?.finalizeLastMessage?.() || false;
           if (finalized) markLastMessageRendered();
           else renderMessages();
@@ -414,7 +415,7 @@ function bind(): void {
             ['检查网络和模型配置', '确认工作区路径仍然有效', '重试发送当前消息'],
             reason,
           );
-          st.IL = false; st.CS?.close(); st.CS = null;
+          App.ChatState.setBusy(false); App.ChatStream.close();
           renderMessages();
           const _cs2 = $('cs') as HTMLButtonElement | null;
           const _ci2 = $('ci') as HTMLTextAreaElement | null;
@@ -427,25 +428,19 @@ function bind(): void {
           console.error('[chat] SSE error:', d.text || d.message);
         }
       } catch { /* ignore */ }
-    };
-    st.CS.onerror = () => {
-      if (_streamGen !== gen) return;
-      const last = st.M[st.M.length - 1];
-      if (last?.streaming) {
-        setAssistantError(
-          '连接中断',
-          '与后端的流式连接已断开。回复可能没有完整保存。',
-          'EventSource 连接被关闭或服务器暂时不可用',
-          ['检查后端是否仍在运行', '稍后重试当前消息', '如果反复出现，刷新工作区'],
-          'EventSource closed',
-        );
-        st.IL = false;
-      }
-      if (st.CS) { toast('连接中断，请重试', 'error'); st.CS?.close(); st.CS = null; updateUI(); }
-      const failedContext = activeSendContext;
-      activeSendContext = null;
-      finalizeSendContext(failedContext);
-    };
+      },
+      onError: () => {
+      if (!App.ChatStream.isCurrent(gen)) return;
+      // EventSource owns transport reconnects and will resume with
+      // Last-Event-ID. Keep this turn alive until a business event finishes it.
+      toast('连接中断，正在重连…', 'info');
+      updateUI();
+      },
+      onOpen: () => {
+        if (!App.ChatStream.isCurrent(gen)) return;
+        updateUI();
+      },
+    });
   }
   submitMessageHandler = submitMessage;
 
@@ -472,12 +467,12 @@ function bind(): void {
   App.Chat.scheduleMessagesRender = scheduleMessagesRender;
 
   function sendOrStop(): void {
-    const st = window.__state;
-    if (st.IL) {
-      if (st.CS) { st.CS.onmessage = null; st.CS.onerror = null; st.CS.close(); st.CS = null; }
-      const last = st.M[st.M.length - 1];
+    if (App.ChatState.isBusy()) {
+      App.ChatStream.close();
+      const messages = App.ChatState.getMessages();
+      const last = messages[messages.length - 1];
       if (last?.streaming) last.streaming = false;
-      st.IL = false; updateUI(); sb('ms');
+      App.ChatState.setBusy(false); updateUI(); sb('ms');
       return;
     }
     submitMessage(ci.value);
@@ -501,7 +496,7 @@ function bind(): void {
   const modelBtn = $('fi-model-btn');
   if (modelBtn) {
     modelBtn.onclick = (e) => {
-      const st = window.__state.D;
+      const st = App.ChatState.getDashboard();
       if (!st || st.modelId === 'N/A' || st.modelId === 'unknown') {
         (window as any).openSettingsModal?.();
       } else {
@@ -595,7 +590,7 @@ function bind(): void {
 function updateModelName(): void {
   const mn = $('fi-model-name');
   if (!mn) return;
-  const st = window.__state.D;
+  const st = App.ChatState.getDashboard();
   if (!st || st.modelId === 'N/A' || !st.modelId) {
     mn.textContent = '未配置';
     mn.style.color = 'var(--tm)';
@@ -611,7 +606,7 @@ function updateModelName(): void {
 
 function updateUI(): void {
   const ci = $("ci") as HTMLTextAreaElement | null, cs = $("cs") as HTMLButtonElement | null;
-  const stIL = window.__state.IL;
+  const stIL = App.ChatState.isBusy();
   if (ci) ci.disabled = stIL;
   if (cs) {
     cs.disabled = stIL ? false : !ci?.value.trim();
@@ -622,6 +617,10 @@ function updateUI(): void {
   if (msgsEl && (window as any).msgs) {
     _applyMsgsDiff(msgsEl, false);
   }
+}
+
+function isBusy(): boolean {
+  return App.ChatState.isBusy();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -650,7 +649,7 @@ function showModelPicker(e: MouseEvent): void {
       picker.appendChild(header);
       for (const m of models) {
         const item = document.createElement('div');
-        const stD = window.__state.D;
+        const stD = App.ChatState.getDashboard();
         const active = (m.provider === stD?.modelProvider && m.id === stD?.modelId);
         item.style.cssText = `padding:6px 10px;border-radius:4px;cursor:pointer;font-size:.78rem;font-family:var(--fm);color:${active?'var(--am)':'var(--ts)'};background:${active?'rgba(245,158,11,.1)':'transparent'}`;
         item.textContent = m.id;
@@ -681,6 +680,7 @@ window.showModelPicker = showModelPicker;
   AppChat.bind = bind;
   AppChat.updateUI = updateUI;
   AppChat.showModelPicker = showModelPicker;
+  AppChat.isBusy = isBusy;
   AppChat.updateModelName = updateModelName;
   App.Chat.retryLastTurn = retryLastTurn;
   App.Chat.copyLastError = copyLastError;

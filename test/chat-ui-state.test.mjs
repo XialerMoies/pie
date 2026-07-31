@@ -117,6 +117,8 @@ describe("chat ui state", () => {
   beforeEach(async () => {
     env = setupDom();
     const ts = Date.now() + Math.random();
+    await import(`../src/frontend/services/chat-runtime-store.ts?t=${ts}`);
+    await import(`../src/frontend/services/chat-stream.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/dashboard-chat.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${ts}`);
@@ -464,8 +466,8 @@ describe("chat ui state", () => {
     assert.strictEqual(body.id, "auto-session");
     assert.strictEqual(body.titleSource, "auto");
     assert.ok(body.name.includes("标签栏关闭按钮无法点击"));
-    assert.strictEqual(env.win.__state._sessionTabLabels?.["auto-session"], body.name);
-    assert.strictEqual(env.win.__state._sessionTitleSources?.["auto-session"], "auto");
+    assert.strictEqual(env.win.App.State.getSnapshot().tabs.labels?.["auto-session"], body.name);
+    assert.strictEqual(env.win.App.State.getSnapshot().tabs.titleSources?.["auto-session"], "auto");
   });
 
   it("legacy localStorage keys no longer written by session functions", () => {
@@ -494,7 +496,7 @@ describe("chat ui state", () => {
       assert.strictEqual(localStorage.getItem(key), null, `commitSessionTab: ${key}`);
     }
     assert.deepStrictEqual(env.win.__state._sessionTabs, ["sess-real"]);
-    assert.strictEqual(env.win.__state._sessionTabLabels?.["sess-real"], "手动标题");
+    assert.strictEqual(env.win.App.State.getSnapshot().tabs.labels?.["sess-real"], "手动标题");
   });
 
   it("_rv 是唯一检测手段时仍触发重绘（同前缀后缀中间变化）", () => {

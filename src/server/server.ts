@@ -26,6 +26,7 @@ import { cancelPermissionConfirmationsForResponse, createPermissionConfirmCallba
 import { FilePermissionAuditStore } from "./permission-audit-store.js";
 import { contentTypeForStaticAsset, resolveStaticAssetPath } from "./static-assets.js";
 import { RootRegistry } from "./root-registry.js";
+import { writeChatEvent } from "./chat-stream.js";
 
 export type SessionWriteAuthorizer = (sessionFile: string, source: string) => void;
 
@@ -221,9 +222,7 @@ export function emitBlock(
   if (options?.persist !== false) {
     persistBlockEvent(runtime, block, options);
   }
-  try {
-    chatStream.response?.write(`data: ${JSON.stringify({ type: "block", block })}\n\n`);
-  } catch { /* ignore */ }
+  writeChatEvent(chatStream, { type: "block", block });
 }
 export function persistTraceEvent(
   runtime: AgentRuntime,
@@ -273,9 +272,7 @@ export function emitTrace(
   if (!turnId) return;
   const normalized = assignTraceSeq(chatStream, { ...trace, turnId } as TraceEvent);
   persistTraceEvent(runtime, normalized, options);
-  try {
-    chatStream.response?.write(`data: ${JSON.stringify({ type: "trace", trace: normalized })}\n\n`);
-  } catch { /* ignore */ }
+  writeChatEvent(chatStream, { type: "trace", trace: normalized });
 }
 
 export function attachSessionEvents(
@@ -290,7 +287,7 @@ export function attachSessionEvents(
     : undefined;
 
   runtime.onEvent((event: any) => {
-    if (!chatStream.response && event.type !== "agent_end") return;
+    if (event.type === "agent_end" && !chatStream.turnId) return;
 
     const turnId = chatStream.turnId || (event.turnIndex !== undefined ? `turn-${event.turnIndex}` : "");
     const tid = (event.toolCallId || event.id || event.type) + "@" + turnId;
@@ -395,7 +392,6 @@ export function attachSessionEvents(
 
     // ─── Thinking trace ──────────────────────────────────────
     if (event.type === "message_update" && turnId) {
-      if (!chatStream.response) return;
       const msg = event.message;
       if (msg?.role === "assistant" && msg?.content) {
         const fullText = msg.content.filter((c: any) => c.type === "text").map((c: any) => c.text || "").join("");
@@ -409,9 +405,7 @@ export function attachSessionEvents(
 
         if (textState.delta) {
           chatStream.textBuffer = textState.aggregate;
-          try {
-            chatStream.response.write(`data: ${JSON.stringify({ type: "delta", text: textState.delta })}\n\n`);
-          } catch { /* ignore */ }
+          writeChatEvent(chatStream, { type: "delta", text: textState.delta });
           // 同步更新 text block（流式不持久化）
           if (chatStream.textBuffer) {
             const block: AssistantBlock = {
@@ -481,17 +475,15 @@ export function attachSessionEvents(
         tagSessionHeader(runtime.session.sessionFile, ws, authorizeSessionWrite);
       }
 
-      try {
-        chatStream.response?.write(`data: ${JSON.stringify({
+      writeChatEvent(chatStream, {
           type: "done",
           text: chatStream.textBuffer,
           thinking: chatStream.thinkingBuffer || undefined,
           turnId,
           sessionId,
           blocks: chatStream.blocks,
-        })}\n\n`);
-        chatStream.response?.end();
-      } catch { /* ignore */ }
+      });
+      try { chatStream.response?.end(); } catch { /* ignore */ }
       chatStream.response = null;
       chatStream.textBuffer = "";
       chatStream.thinkingBuffer = "";
@@ -512,7 +504,7 @@ async function main() {
   console.log("Starting Pi server...");
 
   // ─── 共享可变状态 ────────────────────────────────────────────
-  const chatStream: ChatStreamState = { textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "", response: null, turnId: "", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0 };
+  const chatStream: ChatStreamState = { textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "", response: null, turnId: "", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0, eventSeq: 0, eventHistory: [] };
   const sseClients: import("http").ServerResponse[] = [];
   const sessionPermissionState = createSessionPermissionState();
   let runtime: AgentRuntime;

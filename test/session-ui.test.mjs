@@ -91,6 +91,35 @@ win.App = {
   Settings: {},
   Git: {},
   Tabs: {
+    getState() {
+      const items = [];
+      for (const file of win.__state._fileTabs || []) {
+        items.push({ id: file.id, kind: 'file', title: file.label, order: items.length, path: file.id });
+      }
+      for (const id of win.__state._sessionTabs || []) {
+        const isDraft = id.startsWith('draft:');
+        items.push({
+          id,
+          kind: isDraft ? 'chat' : 'session',
+          title: id,
+          order: items.length,
+          ...(isDraft ? { draftId: id } : { sessionId: id }),
+        });
+      }
+      return { items, activeId: win.__state._activeFileTab ?? win.__state._activeSessionTabId ?? null };
+    },
+    getTabs() { return this.getState().items; },
+    getActiveTab() {
+      const state = this.getState();
+      return state.items.find(tab => tab.id === state.activeId) || null;
+    },
+    getTab(id) { return this.getState().items.find(tab => tab.id === id); },
+    getFileTabIds() { return this.getState().items.filter(tab => tab.kind === 'file').map(tab => tab.id); },
+    getActiveFileTabId() {
+      const tab = this.getActiveTab();
+      return tab?.kind === 'file' ? tab.id : null;
+    },
+    clearActiveTab() { win.__state._activeFileTab = null; win.__state._activeSessionTabId = null; },
     activate(id) {
       // 添加到 _sessionTabs + 激活（简化：不检查旧字段，handler 负责校验）
       if (!win.__state._sessionTabs.includes(id)) win.__state._sessionTabs.push(id);
@@ -134,7 +163,11 @@ win.__tabs = {
       .map((tab) => tab.id);
     win.__state._activeSessionTabId = activeId;
   },
-  activateTab: (id) => { win.__state._activeSessionTabId = id; },
+  activateTab: (id) => {
+    // 镜像真实投影语义：激活会话/聊天 tab 会清空 file active（_syncMainArea 由 activeId 驱动）
+    win.__state._activeSessionTabId = id;
+    win.__state._activeFileTab = null;
+  },
 };
 
 const fetchCalls = [];
@@ -237,6 +270,8 @@ win.fetch = global.fetch;
 
 before(async () => {
   const ts = Date.now();
+  await import(`../src/frontend/services/chat-runtime-store.ts?t=${ts}`);
+  await import(`../src/frontend/services/chat-stream.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-layout.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${ts}`);
   await import(`../src/frontend/pane/chat/index.ts?t=${ts}`);
@@ -415,8 +450,8 @@ describe("session ui state", () => {
     const title = await win.maybeAutoTitleSession("sess-new-empty", "已完成");
 
     assert.strictEqual(title, null);
-    assert.strictEqual(win.__state._sessionTabLabels?.["sess-new-empty"], "手动标题");
-    assert.strictEqual(win.__state._sessionTitleSources?.["sess-new-empty"], "manual");
+    assert.strictEqual(win.App.State.getSnapshot().tabs.labels?.["sess-new-empty"], "手动标题");
+    assert.strictEqual(win.App.State.getSnapshot().tabs.titleSources?.["sess-new-empty"], "manual");
     assert.ok(!fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/rename") && method === "POST"));
   });
 
@@ -991,6 +1026,7 @@ describe("session ui state", () => {
     store["active-session-tab"] = "sess-b";
     store["session-tab-labels"] = JSON.stringify({});
     win.__state._sessionTabs = ["sess-a", "sess-b"];
+    win.__state._activeSessionTabId = "sess-b";
     win.renderSessionTabs("sess-b");
 
     let tabs = Array.from(doc.querySelectorAll("#main-tabs .session-tab"));

@@ -38,6 +38,7 @@ describe("Chat SSE", () => {
     assert.strictEqual(res._status, 200);
     assert.strictEqual(res._headers["Content-Type"], "text/event-stream");
     assert.strictEqual(chatStream.response, res, "response 应被保存");
+    assert.match(res._body, /^id: 0\ndata: \{"type":"stream_ready"\}\n\n$/);
   });
 
   it("SSE close 后 chatStream.response 被清空", async () => {
@@ -158,7 +159,7 @@ describe("Chat SSE", () => {
     const confirmed = createCommandConfirmCallback(chatStream)("node --version", "该命令不是只读操作，是否允许执行？", {
       permissionSuggestions: [{ type: "addWorkingDirectory", directory: ROOT, destination: "session" }],
     });
-    const line = sseRes._body.split("\n").find((part) => part.startsWith("data: "));
+    const line = sseRes._body.split("\n").find((part) => part.includes('"command_confirm"'));
     assert.ok(line, "应向 SSE 写入 command_confirm 事件");
     const event = JSON.parse(line.slice("data: ".length));
     assert.strictEqual(event.type, "command_confirm");

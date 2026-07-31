@@ -8,6 +8,7 @@ import type { CommandConfirmationRequest, CommandConfirmationResult } from "../.
 import { writeServerPermissionError } from "../permission-service.js";
 import { writePathGuardError } from "./path-guard.js";
 import { authorizeWorkspacePath, switchAuthorizedWorkspace } from "./workspace-authorization.js";
+import { replayChatEvents, resetChatEventHistory, writeChatEvent, writeChatStreamBaseline } from "../chat-stream.js";
 
 const COMMAND_CONFIRM_TIMEOUT_MS = 120_000;
 
@@ -42,13 +43,13 @@ export function createCommandConfirmCallback(chatStream: ChatStreamState) {
       pendingCommandConfirmations.set(id, { response, resolve: finish, timeout });
 
       try {
-        response.write(`data: ${JSON.stringify({
+        writeChatEvent(chatStream, {
           type: "command_confirm",
           id,
           command: cmd,
           reason,
           permissionSuggestions: request?.permissionSuggestions ?? [],
-        })}\n\n`);
+        });
       } catch {
         finish({ allow: false });
       }
@@ -133,6 +134,7 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         const parsed = JSON.parse(body);
         const { message, workspace: requestedWorkspace, attachments } = parsed;
         const workspace = await authorizeWorkspacePath(ctx, requestedWorkspace, "chat.workspace");
+        resetChatEventHistory(chatStream);
         console.log(`[chat] POST message="${message?.slice(0, 60)}${(message?.length || 0) > 60 ? "…" : ""}" ws="${workspace || "?"}" atts=${attachments?.length || 0}`);
         chatStream.textBuffer = "";
         chatStream.thinkingBuffer = "";
@@ -170,10 +172,8 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
           console.log(`[chat] ❌ session.prompt error after ${Date.now() - promptStart}ms: ${msg}`);
           if (stack) { console.log(`[chat]   stack:`, stack.split("\n").slice(0, 6).join("\n[chat]       ")); }
           // 通过 SSE 把错误推给前端，避免只显示空 "Pi"
-          try {
-            chatStream.response?.write(`data: ${JSON.stringify({ type: "error", message: msg })}\n\n`);
-            chatStream.response?.end();
-          } catch { /* ignore */ }
+          writeChatEvent(chatStream, { type: "error", message: msg });
+          try { chatStream.response?.end(); } catch { /* ignore */ }
           chatStream.response = null;
         });
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
@@ -214,14 +214,17 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
       "Connection": "keep-alive",
       ...cors,
     });
-    if (chatStream.response && chatStream.response !== res) {
+    const lastEventId = req.headers["last-event-id"];
+    const reconnecting = typeof lastEventId === "string" && lastEventId.length > 0;
+    if (chatStream.response && chatStream.response !== res && !reconnecting) {
       cancelCommandConfirmationsForResponse(chatStream.response);
     }
     chatStream.response = res;
     console.log(`[chat] SSE connected`);
+    if (reconnecting) replayChatEvents(chatStream, res, lastEventId as string);
+    else writeChatStreamBaseline(chatStream, res);
     req.on("close", () => {
       console.log(`[chat] SSE disconnected`);
-      cancelCommandConfirmationsForResponse(res);
       if (chatStream.response === res) chatStream.response = null;
     });
     return true;

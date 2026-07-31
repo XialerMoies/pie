@@ -176,7 +176,9 @@ describe("SSE agent_end ordering", () => {
 
     const doneWrite = writes.find((text) => text.includes('"type":"done"'));
     assert.ok(doneWrite, "done event should be written");
-    const donePayload = JSON.parse(doneWrite.replace(/^data: /, "").trim());
+    const doneData = doneWrite.split("\n").find((line) => line.startsWith("data: "));
+    assert.ok(doneData, "done SSE frame should contain a data line");
+    const donePayload = JSON.parse(doneData.slice("data: ".length).trim());
     assert.strictEqual(donePayload.type, "done");
     assert.strictEqual(donePayload.text, "final answer");
     assert.strictEqual(donePayload.thinking, "1. inspect\n2. fix");

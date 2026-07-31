@@ -15,6 +15,11 @@ export type TraceEvent =
   | { type: "tool"; status: "running" | "success" | "error"; name: string; input?: unknown; output?: string; error?: string; turnId: string; id: string; seq?: number }
   | { type: "step"; status: "info" | "success" | "error"; text: string; turnId: string; id: string; seq?: number };
 
+export interface ChatStreamEventFrame {
+  id: number;
+  data: string;
+}
+
 // ─── Assistant Block 协议 ─────────────────────────────────
 
 /** 在 assistant 气泡内线性排列的内容块，按 seq 排序 */
@@ -44,6 +49,9 @@ export interface ChatStreamState {
   blocks: AssistantBlock[];
   /** block 顺序号生成器（单调递增） */
   blockSeq: number;
+  /** SSE event sequence and bounded replay window for reconnecting clients. */
+  eventSeq: number;
+  eventHistory: ChatStreamEventFrame[];
 }
 
 export interface ServerContext {

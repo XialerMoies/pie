@@ -18,7 +18,7 @@ function toggleFileMenu(ev: MouseEvent, trigger?: HTMLElement): void {
     <div class="fm-sep"></div>
     <div class="fm-item" data-file-action="save">保存 <span style="color:var(--tm);font-size:10px;float:right">Ctrl+S</span></div>
     <div class="fm-item" data-file-action="saveAll">全部保存</div>
-    <div class="fm-item" data-file-action="toggleAutoSave">${localStorage.getItem('auto-save') === '1' ? '✓ ' : ''}自动保存</div>
+    <div class="fm-item" data-file-action="toggleAutoSave">${App.Preferences.getBoolean('auto-save') ? '✓ ' : ''}自动保存</div>
     <div class="fm-sep"></div>
     <div class="fm-item" data-file-action="closeWindow">关闭窗口</div>
   `;
@@ -49,11 +49,10 @@ function closeFMOutside(ev: MouseEvent): void {
 
 function resetWorkspaceState(workspace: string): void {
   const st = window.__state;
-  const oldCS = st.CS;
-  if (oldCS) { oldCS.onmessage = null; oldCS.onerror = null; oldCS.close(); st.CS = null; }
-  st.IL = false;
+  App.ChatStream.close();
+  App.ChatState.setBusy(false);
   App.Chat?.resetMsgKeys?.();
-  st.M = [];
+  App.ChatState.clearMessages();
   delete (st as any)._sessionTabLabels;
   const tabs = (window as any).__tabs;
   if (tabs) {
@@ -126,10 +125,9 @@ function fileAction(action: string): void {
   else if (action === 'save' && api) { /* handled by Monaco Ctrl+S */ }
   else if (action === 'saveAll' && api) { /* handled by Monaco */ }
   else if (action === 'toggleAutoSave') {
-    const v = localStorage.getItem('auto-save');
-    if (v === '1') localStorage.removeItem('auto-save');
-    else localStorage.setItem('auto-save', '1');
-    toast('自动保存: ' + (v === '1' ? '关' : '开'));
+    const v = App.Preferences.getBoolean('auto-save');
+    App.Preferences.setBoolean('auto-save', !v);
+    toast('自动保存: ' + (v ? '关' : '开'));
   }
   else if (action === 'closeWindow' && api) api.close();
 }
