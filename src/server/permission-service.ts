@@ -29,6 +29,7 @@ import {
   type GuardedPath,
 } from "./routes/path-guard.js";
 import type { PermissionAuditStore } from "./permission-audit-store.js";
+import type { RootRegistry } from "./root-registry.js";
 
 export interface PermissionAuditEntry {
   id: number;
@@ -73,6 +74,7 @@ export interface ServerPermissionServiceOptions {
   sessionPermissionState?: SessionPermissionState;
   workspaceRootProvider?: () => string | undefined;
   trustedRootsProvider?: () => readonly string[];
+  rootRegistry?: RootRegistry;
   confirmPermission?: ServerPermissionConfirmCallback;
   auditStore?: PermissionAuditStore;
   maxAuditEntries?: number;
@@ -107,6 +109,7 @@ export class ServerPermissionService {
   private readonly sessionPermissionState?: SessionPermissionState;
   private readonly workspaceRootProvider?: () => string | undefined;
   private readonly trustedRootsProvider?: () => readonly string[];
+  private readonly rootRegistry?: RootRegistry;
   private readonly confirmPermission?: ServerPermissionConfirmCallback;
   private readonly auditStore?: PermissionAuditStore;
   private readonly maxAuditEntries: number;
@@ -117,6 +120,7 @@ export class ServerPermissionService {
     this.sessionPermissionState = options.sessionPermissionState;
     this.workspaceRootProvider = options.workspaceRootProvider;
     this.trustedRootsProvider = options.trustedRootsProvider;
+    this.rootRegistry = options.rootRegistry;
     this.confirmPermission = options.confirmPermission;
     this.auditStore = options.auditStore;
     this.maxAuditEntries = options.maxAuditEntries ?? 500;
@@ -131,11 +135,12 @@ export class ServerPermissionService {
     options: ServerPathAuthorizationOptions = {},
   ): Promise<GuardedPath> {
     try {
-      const guarded = guardPathWithinRoot(root, target, operation);
+      const authorizedRoot = this.authorizedRoot(root);
+      const guarded = guardPathWithinRoot(authorizedRoot, target, operation);
       const permissionRoot = this.workspaceRootProvider?.() || guarded.root;
       const evaluatedDecision = evaluatePathPermission(guarded.path, operation, {
         workspaceRoot: permissionRoot,
-        allowedWorkingRoots: this.allowedRoots(permissionRoot, guarded.root),
+        allowedWorkingRoots: this.allowedRoots(permissionRoot, guarded.root, operation),
         alwaysAllowRules: this.sessionPermissionState?.alwaysAllowRules,
         alwaysDenyRules: this.sessionPermissionState?.alwaysDenyRules,
         alwaysAskRules: this.sessionPermissionState?.alwaysAskRules,
@@ -227,6 +232,7 @@ export class ServerPermissionService {
     }
 
     const real = realpathSync(resolved);
+    this.rootRegistry?.setWorkspaceRoot(real);
     this.record({
       source,
       operation: "read",
@@ -240,11 +246,12 @@ export class ServerPermissionService {
 
   authorizePathSync(root: string, target: string, operation: PathPermissionOperation, source: string): GuardedPath {
     try {
-      const guarded = guardPathWithinRoot(root, target, operation);
+      const authorizedRoot = this.authorizedRoot(root);
+      const guarded = guardPathWithinRoot(authorizedRoot, target, operation);
       const permissionRoot = this.workspaceRootProvider?.() || guarded.root;
       const decision = evaluatePathPermission(guarded.path, operation, {
         workspaceRoot: permissionRoot,
-        allowedWorkingRoots: this.allowedRoots(permissionRoot, guarded.root),
+        allowedWorkingRoots: this.allowedRoots(permissionRoot, guarded.root, operation),
         alwaysAllowRules: this.sessionPermissionState?.alwaysAllowRules,
         alwaysDenyRules: this.sessionPermissionState?.alwaysDenyRules,
         alwaysAskRules: this.sessionPermissionState?.alwaysAskRules,
@@ -506,7 +513,7 @@ export class ServerPermissionService {
     return this.sessionPermissionState;
   }
 
-  private allowedRoots(permissionRoot: string, guardedRoot: string): string[] {
+  private allowedRoots(permissionRoot: string, guardedRoot: string, operation: PathPermissionOperation): string[] {
     const roots: string[] = [];
     const seen = new Set<string>();
     const add = (value: string | undefined) => {
@@ -518,11 +525,20 @@ export class ServerPermissionService {
     };
 
     add(permissionRoot);
+    for (const root of this.rootRegistry?.getRoots() || []) {
+      if (root.operations.includes(operation)) add(root.path);
+    }
     for (const root of this.trustedRootsProvider?.() || []) add(root);
     for (const directory of this.sessionPermissionState?.additionalWorkingDirectories.values() || []) add(directory.path);
 
     if (!this.workspaceRootProvider && !this.trustedRootsProvider) add(guardedRoot);
     return roots;
+  }
+
+  private authorizedRoot(root: string): string {
+    // 已登记 root → 用规范化路径；未登记 → 原样透传给 evaluatePathPermission 决策
+    // （普通外部读放行、敏感读走确认，写入仍确认/fail-closed——低摩擦读取策略）
+    return this.rootRegistry?.resolveRegisteredRoot(root)?.path || root;
   }
 
   private async confirmAskDecision(
@@ -612,15 +628,16 @@ export function writeServerPermissionError(
 }
 
 export async function authorizeRoutePath(
-  ctx: { permissionService?: ServerPermissionService },
+  ctx: { permissionService?: ServerPermissionService; rootRegistry?: RootRegistry },
   root: string,
   target: string,
   operation: PathPermissionOperation,
   source: string,
 ): Promise<GuardedPath> {
+  const effectiveRoot = ctx.rootRegistry?.resolveRegisteredRoot(root)?.path || root;
   return ctx.permissionService
-    ? ctx.permissionService.authorizePath(root, target, operation, source)
-    : guardPathWithinRoot(root, target, operation);
+    ? ctx.permissionService.authorizePath(effectiveRoot, target, operation, source)
+    : guardPathWithinRoot(effectiveRoot, target, operation);
 }
 
 const PERMISSION_TOOL_NAMES = new Set<PermissionToolName>(["Read", "Write", "Create", "Remove", "Command", "Tool"]);

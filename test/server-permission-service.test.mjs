@@ -17,6 +17,7 @@ import { handleSearch } from "../src/server/routes/search.ts";
 import { handleSessions } from "../src/server/routes/sessions.ts";
 import { handleSettings } from "../src/server/routes/settings.ts";
 import { handleUiState } from "../src/server/routes/ui-state.ts";
+import { RootRegistry } from "../src/server/root-registry.ts";
 import { makeReq, makeRes, makeResWithEvents } from "./helpers/http.mjs";
 
 function routeCtx(root, permissionService) {
@@ -595,6 +596,38 @@ describe("server permission service", () => {
       assert.ok(audit.some((entry) => entry.source === "file.write" && entry.decision === "allow"));
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("allows ordinary file reads from an unregistered root", async () => {
+    const parent = makeTempRoot("server-perm-route-unregistered-read-");
+    try {
+      const workspace = resolve(parent, "workspace");
+      const external = resolve(parent, "external");
+      mkdirSync(workspace);
+      mkdirSync(external);
+      writeFileSync(resolve(external, "README.md"), "outside");
+
+      const rootRegistry = new RootRegistry();
+      rootRegistry.setWorkspaceRoot(workspace);
+      const service = new ServerPermissionService({
+        sessionPermissionState: createSessionPermissionState(),
+        workspaceRootProvider: () => workspace,
+        rootRegistry,
+      });
+      const ctx = { ...routeCtx(workspace, service), rootRegistry };
+      const req = makeReq(
+        "GET",
+        `/api/file/read?root=${encodeURIComponent(external)}&path=README.md`,
+      );
+      const res = makeRes();
+
+      await handleExplorer(req, res, ctx);
+
+      assert.strictEqual(res._status, 200);
+      assert.strictEqual(JSON.parse(res._body).content, "outside");
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
     }
   });
 

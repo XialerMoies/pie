@@ -21,9 +21,11 @@ import { shellDialectFromEnv } from "../agent/tools/command/shell-parser.js";
 import { createSessionPermissionState } from "../agent/permissions.js";
 import { authorizeLocalApiRequest, clearDesktopSessionTokenEnv, createDesktopSecurityConfig, installSecurityHeaders, isApiPreflight, writeSecurityError } from "./security.js";
 import { authorizeRoutePath, ServerPermissionService } from "./permission-service.js";
+import { authorizeWorkspacePath } from "./routes/workspace-authorization.js";
 import { cancelPermissionConfirmationsForResponse, createPermissionConfirmCallback } from "./permission-confirmation.js";
 import { FilePermissionAuditStore } from "./permission-audit-store.js";
 import { contentTypeForStaticAsset, resolveStaticAssetPath } from "./static-assets.js";
+import { RootRegistry } from "./root-registry.js";
 
 export type SessionWriteAuthorizer = (sessionFile: string, source: string) => void;
 
@@ -516,10 +518,11 @@ async function main() {
   let runtime: AgentRuntime;
   const security = createDesktopSecurityConfig();
   clearDesktopSessionTokenEnv();
+  const rootRegistry = new RootRegistry();
   const permissionService = new ServerPermissionService({
     sessionPermissionState,
     workspaceRootProvider: () => runtime?.currentWorkspace || APP_ROOT,
-    trustedRootsProvider: () => [APP_ROOT, DATA_DIR, PI_CONFIG_DIR, SESSIONS_DIR],
+    rootRegistry,
     confirmPermission: createPermissionConfirmCallback(sseClients),
     auditStore: new FilePermissionAuditStore(resolve(PI_CONFIG_DIR, "permission-audit.json"), { maxEntries: 2000 }),
   });
@@ -539,6 +542,27 @@ async function main() {
     authorizeTool: (request) => permissionService.authorizeTool(request),
   });
 
+  for (const [root, source] of [
+    [APP_ROOT, "app-data"],
+    [DATA_DIR, "app-data"],
+    [PI_CONFIG_DIR, "app-data"],
+    [SESSIONS_DIR, "session"],
+  ] as const) {
+    try {
+      rootRegistry.register(root, {
+        source,
+        operations: ["read", "write", "create", "remove"],
+      });
+    } catch {
+      // Optional data roots may not exist until the agent initializes them.
+    }
+  }
+  try {
+    rootRegistry.setWorkspaceRoot(runtime.currentWorkspace || APP_ROOT);
+  } catch {
+    // Permission checks remain fail-closed if the initial workspace is unavailable.
+  }
+
   console.log("Pi session ready");
   mark("agent_ready");
 
@@ -548,6 +572,7 @@ async function main() {
     sseClients,
     security,
     permissionService,
+    rootRegistry,
     paths: {
       APP_ROOT,
       DATA_DIR,
@@ -582,17 +607,18 @@ async function main() {
       for (const [ws, state] of candidates as any) {
         if (ws !== "_default") {
           console.log(`[startup] 恢复 workspace: "${ws}", session: ${state.activeView?.id || "none"}`);
+          const authorizedWorkspace = await authorizeWorkspacePath(baseCtx, ws, "workspace.startup.restore", { required: true });
           if (state.activeView?.type === "session" && state.activeView?.id) {
             const { findAuthorizedSessionFileById } = await import("./routes/sessions.js");
             const sessionFile = await findAuthorizedSessionFileById(baseCtx, state.activeView.id, "sessions.startup.restore");
             if (sessionFile) {
               // openSession 内部处理跨 workspace 切换，无需额外 switchWorkspace
-              await runtime.openSession(sessionFile, ws);
+              await runtime.openSession(sessionFile, authorizedWorkspace);
             } else {
-              await runtime.switchWorkspace(ws);
+              await runtime.switchWorkspace(authorizedWorkspace);
             }
           } else {
-            await runtime.switchWorkspace(ws);
+            await runtime.switchWorkspace(authorizedWorkspace);
           }
           break;
         }

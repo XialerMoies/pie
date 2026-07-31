@@ -130,7 +130,7 @@ npm run dist:portable
 ### 测试
 
 ```bash
-npm test            # 全量 973 项测试（unit + routes + frontend）
+npm test            # 全量 981 项测试（unit + routes + frontend）
 npm run test:build  # 构建验证 + smoke test
 npm run typecheck   # TypeScript 类型检查
 ```
@@ -138,7 +138,7 @@ npm run typecheck   # TypeScript 类型检查
 | 套件 | 数量 | 覆盖 |
 |------|------|------|
 | unit | 638 | Shell/权限安全、工具、状态存储、MCP、搜索替换、Agent memory |
-| routes | 220 | API、PathGuard、桌面认证、权限确认、session、SSE、TS、附件与 trace |
+| routes | 228 | API、PathGuard、root provenance、桌面认证、权限确认、session、SSE、TS、附件与 trace |
 | frontend | 115 | 消息、会话、workspace、tabs、权限中心、Explorer/Search/Git、桌面认证启动与 Monaco 生命周期 |
 | CSS | 20+20 | 变量定义完整性扫描（dark + light 各 20 项） |
 
@@ -245,7 +245,7 @@ src/
 │   ├── services/        # TabStore / ProblemsStore / UiStateStore
 │   ├── pane/            # 5 面板（explorer / chat / search / git / mcp）
 │   └── ui/              # Tree 组件 + ContextMenu
-test/                    # 49 个测试文件，973 项（另有 build smoke / packaged E2E）
+test/                    # 50 个测试文件，981 项（另有 build smoke / packaged E2E）
 scripts/                 # 编译/构建/清理脚本
 ```
 

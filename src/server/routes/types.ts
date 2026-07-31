@@ -6,6 +6,7 @@ import type { TsserverManager } from "../ts-server.js";
 import type { AgentRuntime } from "../../agent/index.js";
 import type { DesktopSecurityConfig } from "../security.js";
 import type { ServerPermissionService } from "../permission-service.js";
+import type { RootRegistry } from "../root-registry.js";
 
 // ─── Trace Event 类型 ────────────────────────────────────
 
@@ -52,6 +53,7 @@ export interface ServerContext {
   tsServer?: TsserverManager;
   security?: DesktopSecurityConfig;
   permissionService?: ServerPermissionService;
+  rootRegistry?: RootRegistry;
   paths: {
     APP_ROOT: string;
     DATA_DIR: string;
