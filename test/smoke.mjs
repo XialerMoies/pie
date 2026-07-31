@@ -103,6 +103,7 @@ const requiredSrc = [
   "dashboard.html", "dashboard.css",
   "dashboard/dashboard-helpers.ts", "dashboard/dashboard-layout.ts", "dashboard/layout-tabs.ts", "dashboard/layout-panel.ts", "dashboard/layout-shortcuts.ts", "dashboard/dashboard-chat.ts",
   "dashboard/dashboard-sessions.ts", "dashboard/dashboard-settings.ts", "dashboard/dashboard-menus.ts",
+  "services/chat-runtime-store.ts", "services/chat-stream.ts",
   "chat/chat-render.ts", "chat/chat-mode.ts", "chat/chat-token.ts", "chat/chat-attachments.ts",
   "ui/tree.ts", "ui/tree-render.ts", "ui/tree-events.ts", "service/explorer-service.ts",
   "editor/monaco-setup.ts", "editor/monaco-tsserver.ts", "editor/monaco-theme.ts", "marked.umd.js",

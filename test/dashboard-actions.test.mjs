@@ -72,7 +72,27 @@ win.App = {
   File: {},
   Session: { restoreSessionTabs: () => {} },
   Settings: { openSettingsModal: () => calls.push(["settings"]) },
-  Tabs: {},
+  Tabs: {
+    getState: () => {
+      const st = win.__state || {};
+      const items = [];
+      for (const file of st._fileTabs || []) items.push({ id: file.id, kind: 'file', title: file.label, order: items.length, path: file.id });
+      for (const id of st._sessionTabs || []) {
+        const isDraft = id.startsWith('draft:');
+        items.push({ id, kind: isDraft ? 'chat' : 'session', title: id, order: items.length, ...(isDraft ? { draftId: id } : { sessionId: id }) });
+      }
+      return { items, activeId: st._activeFileTab ?? st._activeSessionTabId ?? null };
+    },
+    getTabs: () => [],
+    getActiveTab: () => null,
+    getTab: () => undefined,
+    getFileTabIds: () => [],
+    getActiveFileTabId: () => null,
+    clearActiveTab: () => {},
+    activate: () => {},
+    close: () => {},
+    contextMenu: () => {},
+  },
   Git: {},
 };
 global.App = win.App;
@@ -80,6 +100,8 @@ global.App = win.App;
 before(async () => {
   doc.body.innerHTML = '<div id="app"></div>';
   const stamp = Date.now();
+  await import(`../src/frontend/services/chat-stream.ts?t=${stamp}`);
+  await import(`../src/frontend/services/preferences.ts?t=${stamp}`);
   await import(`../src/frontend/dashboard/dashboard-menus.ts?t=${stamp}`);
   await import(`../src/frontend/dashboard/dashboard-layout.ts?t=${stamp}`);
 });

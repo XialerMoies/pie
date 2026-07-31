@@ -74,6 +74,8 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     global.ExplorerService = { iconFor: () => '<svg></svg>' };
     win.ExplorerService = global.ExplorerService;
     await import("../src/frontend/dashboard/dashboard-helpers.ts");
+    await import(`../src/frontend/services/chat-runtime-store.ts?app-tabs=${Date.now()}`);
+    await import(`../src/frontend/services/chat-stream.ts?app-tabs=${Date.now()}`);
     await import("../src/frontend/services/ui-state-store.ts");
     await import("../src/frontend/services/tab-store.ts");
     global.placeContextMenu = win.placeContextMenu;

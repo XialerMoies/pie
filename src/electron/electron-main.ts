@@ -97,6 +97,36 @@ function requestStatus(url: string): Promise<number> {
   });
 }
 
+function requestJson(
+  pathname: string,
+  method = "GET",
+  payload?: unknown,
+): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolveRequest, reject) => {
+    const body = payload === undefined ? "" : JSON.stringify(payload);
+    const request = http.request(`http://127.0.0.1:${serverPort}${pathname}`, {
+      method,
+      headers: {
+        "X-My-Code-Agent-Token": DESKTOP_SECURITY_TOKEN,
+        ...(body ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } : {}),
+      },
+    }, (response) => {
+      let text = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { text += chunk; });
+      response.on("end", () => {
+        let parsed: unknown = null;
+        try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+        resolveRequest({ status: response.statusCode || 0, body: parsed });
+      });
+    });
+    request.once("error", reject);
+    request.setTimeout(10_000, () => request.destroy(new Error(`E2E HTTP request timed out: ${pathname}`)));
+    if (body) request.write(body);
+    request.end();
+  });
+}
+
 async function waitForRendererReady(win: BrowserWindow): Promise<void> {
   const deadline = Date.now() + 30_000;
   let snapshot: unknown = null;
@@ -157,6 +187,33 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
     await waitForRendererReady(win);
     const renderer = await collectRendererE2EResult(win);
     const unauthorizedApiStatus = await requestStatus(`http://127.0.0.1:${serverPort}/api/dashboard`);
+    const e2eRoot = E2E_DATA_DIR || DATA_DIR;
+    const workspace = path.join(e2eRoot, "workspace");
+    const externalRoot = path.join(path.dirname(e2eRoot), "external");
+    ensureDir(workspace);
+    ensureDir(externalRoot);
+    fs.writeFileSync(path.join(e2eRoot, "read.txt"), "packaged-read", "utf-8");
+    fs.writeFileSync(path.join(workspace, "read.txt"), "workspace-read", "utf-8");
+    fs.writeFileSync(path.join(externalRoot, "read.txt"), "external-read", "utf-8");
+
+    const fileRead = await requestJson(
+      `/api/file/read?root=${encodeURIComponent(e2eRoot)}&path=read.txt`,
+    );
+    const fileWrite = await requestJson("/api/file/write", "POST", {
+      root: e2eRoot,
+      path: "write.txt",
+      content: "packaged-write",
+    });
+    const externalRead = await requestJson(
+      `/api/file/read?root=${encodeURIComponent(externalRoot)}&path=read.txt`,
+    );
+    const workspaceSwitch = await requestJson("/api/workspace/switch", "POST", { workspace });
+    const workspaceRead = await requestJson(
+      `/api/file/read?root=${encodeURIComponent(workspace)}&path=read.txt`,
+    );
+    const pathTraversal = await requestJson(
+      `/api/file/read?root=${encodeURIComponent(workspace)}&path=${encodeURIComponent("../read.txt")}`,
+    );
     writeE2EResult({
       ok: true,
       packaged: app.isPackaged,
@@ -164,6 +221,12 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
       pageTitle: win.webContents.getTitle(),
       renderer,
       unauthorizedApiStatus,
+      fileReadStatus: fileRead.status,
+      fileWriteStatus: fileWrite.status,
+      externalReadStatus: externalRead.status,
+      workspaceSwitchStatus: workspaceSwitch.status,
+      workspaceReadStatus: workspaceRead.status,
+      pathTraversalStatus: pathTraversal.status,
       windowCount: BrowserWindow.getAllWindows().length,
     });
   } catch (error) {

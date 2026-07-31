@@ -88,6 +88,8 @@ describe("workspace ui isolation", () => {
 
   beforeEach(async () => {
     env = setupDom();
+    await import(`../src/frontend/services/chat-runtime-store.ts?workspace-ui=${Date.now()}-${Math.random()}`);
+    await import(`../src/frontend/services/chat-stream.ts?workspace-ui=${Date.now()}-${Math.random()}`);
     await import(`../src/frontend/dashboard/dashboard-menus.ts?workspace-ui=${Date.now()}-${Math.random()}`);
   });
 

@@ -86,6 +86,22 @@ describe("UiStateStore", () => {
     }
   });
 
+  it("keeps dashboard layout runtime and tab reads behind public facades", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-layout.ts"), "utf8");
+    assert.doesNotMatch(source, /window\.__state|window\.__tabs/, "dashboard layout must not read legacy state projections directly");
+    assert.doesNotMatch(source, /localStorage/, "dashboard layout must use the public state facade for workspace data");
+    assert.match(source, /App\.Tabs\.getState\(\)/);
+    assert.match(source, /App\.Chat\?\.isBusy\?\.\(\)/);
+  });
+
+  it("keeps session tab metadata out of legacy window state projections", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-sessions.ts"), "utf8");
+    assert.doesNotMatch(source, /window\.__state[^\n]*_(?:sessionTabs|activeSessionTabId|sessionTabLabels|sessionTitleSources)/);
+    assert.doesNotMatch(source, /\(window\.__state as any\)\._(?:sessionTabLabels|sessionTitleSources)/);
+    assert.match(source, /App\.State\.updateSessionMetadata/);
+    assert.match(source, /App\.State\.getSnapshot\(\)\.tabs/);
+  });
+
   it("syncs tabs and session UI data through detached App.State snapshots", async () => {
     global.fetch = async (url, init) => {
       if (init?.method === "PUT") return { ok: true, json: async () => ({ ok: true }) };

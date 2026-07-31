@@ -81,6 +81,12 @@ try {
   assert.equal(result.renderer?.inlineHandlerCount, 0);
   assert.equal(result.renderer?.popupOpened, false);
   assert.equal(result.unauthorizedApiStatus, 403);
+  assert.equal(result.fileReadStatus, 200);
+  assert.equal(result.fileWriteStatus, 200);
+  assert.equal(result.externalReadStatus, 200);
+  assert.equal(result.workspaceSwitchStatus, 200);
+  assert.equal(result.workspaceReadStatus, 200);
+  assert.equal(result.pathTraversalStatus, 403);
   assert.equal(result.windowCount, 1);
   assert.deepEqual(result.renderer?.preloadMethods, [
     "close",
