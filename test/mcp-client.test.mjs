@@ -331,6 +331,7 @@ describe("agentToolToPiTool", () => {
     assert.deepStrictEqual(seenRequest.operations, ["execute"]);
     assert.strictEqual(seenRequest.riskLevel, "high");
     assert.strictEqual(seenRequest.workspaceBounded, false);
+    assert.strictEqual(seenRequest.permissionRequired, true);
   });
 
   it("agentToolToPiTool denies permission-gated tools before execute", async () => {
@@ -357,6 +358,39 @@ describe("agentToolToPiTool", () => {
       /permission denied for test/,
     );
     assert.strictEqual(executed, false);
+  });
+
+  it("agentToolToPiTool still routes audit-only tools through the shared authorizer", async () => {
+    let executed = false;
+    let seenRequest;
+    const agentTool = {
+      name: "file_read",
+      description: "",
+      parameters: { type: "object", properties: {} },
+      isReadOnly: true,
+      needsPermission: false,
+      operations: ["read"],
+      riskLevel: "low",
+      workspaceBounded: true,
+      execute: async () => {
+        executed = true;
+        return "ok";
+      },
+    };
+
+    const piTool = piHelper.agentToolToPiTool(agentTool, "/repo", undefined, {
+      authorizeTool: async (request) => {
+        seenRequest = request;
+        return { allow: true };
+      },
+    });
+    const result = await piTool.execute("call-audit", {});
+
+    assert.strictEqual(executed, true);
+    assert.strictEqual(result.content[0].text, "ok");
+    assert.strictEqual(seenRequest.toolName, "file_read");
+    assert.strictEqual(seenRequest.permissionRequired, false);
+    assert.deepStrictEqual(seenRequest.operations, ["read"]);
   });
 
 it("bumpGeneration / currentGeneration 基本行为", async () => {

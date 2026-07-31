@@ -42,8 +42,27 @@ global.logTiming = () => {};
     _sessionTabs: [],
     _activeSessionTabId: null,
   };
+  const uiState = {
+    workspacePath: "",
+    activeView: { type: "chat" },
+    tabs: { items: [], activeId: null, sessions: [], files: [], chatOpen: true, labels: {}, titleSources: {} },
+    panel: { active: "explorer", closed: false, width: 260 },
+    recent: { sessions: {} },
+  };
   win.App = {
     Constants: { WS_KEY: "workspace_path" },
+    State: {
+      getWorkspacePath: () => win.localStorage.getItem("workspace_path") || "",
+      setWorkspacePath: (path) => win.localStorage.setItem("workspace_path", path),
+      hydrate: async () => uiState,
+      saveNow: async () => true,
+      getSnapshot: () => JSON.parse(JSON.stringify(uiState)),
+      syncTabs: (items, activeId) => { uiState.tabs.items = items.map((item) => ({ ...item })); uiState.tabs.activeId = activeId; },
+      updateSessionMetadata: (labels, titleSources) => { uiState.tabs.labels = { ...labels }; uiState.tabs.titleSources = { ...titleSources }; },
+      updatePanel: (panel) => { uiState.panel = { ...uiState.panel, ...panel }; },
+      setChatOpen: (open) => { uiState.tabs.chatOpen = open; },
+      touchSession: () => {},
+    },
     UI: {},
     Chat: {
       handleSlash: () => {},
@@ -59,6 +78,22 @@ global.logTiming = () => {};
     Git: {},
   };
   global.App = win.App;
+  win.__tabs = {
+    getSessionTabIds: () => [...win.__state._sessionTabs],
+    getActiveSessionTabId: () => win.__state._activeSessionTabId || null,
+    getActiveTab: () => {
+      const id = win.__state._activeSessionTabId;
+      return id ? { id, kind: id.startsWith("draft:") ? "chat" : "session", title: id, order: 0 } : null;
+    },
+    getTab: (id) => win.__state._sessionTabs.includes(id) ? { id, kind: id.startsWith("draft:") ? "chat" : "session", title: id, order: 0 } : undefined,
+    openTab: (tab) => { if (!win.__state._sessionTabs.includes(tab.id)) win.__state._sessionTabs.push(tab.id); },
+    closeTab: (id) => { win.__state._sessionTabs = win.__state._sessionTabs.filter((tabId) => tabId !== id); },
+    replaceTab: (id, updates) => {
+      const index = win.__state._sessionTabs.indexOf(id);
+      if (index >= 0 && updates.id) win.__state._sessionTabs[index] = updates.id;
+    },
+    activateTab: (id) => { win.__state._activeSessionTabId = id; },
+  };
 
   global.$ = (id) => doc.getElementById(id);
   global.S = (name, size = 16) => `<svg width="${size}" height="${size}"><use href="#${name}"/></svg>`;
@@ -345,6 +380,7 @@ describe("chat ui state", () => {
   it("草稿标签首次发送会升级为真实会话", async () => {
     env.win.__state.M = [];
     env.win.__state._sessionTabs = ["draft:test"];
+    env.win.__state._activeSessionTabId = "draft:test";
     localStorage.setItem("session-tabs", JSON.stringify(["draft:test"]));
     localStorage.setItem("active-session-tab", "draft:test");
     const streams = [];
@@ -389,6 +425,7 @@ describe("chat ui state", () => {
   it("done 后为默认标题的持久会话自动生成标题", async () => {
     env.win.__state.M = [];
     env.win.__state._sessionTabs = ["draft:auto-title"];
+    env.win.__state._activeSessionTabId = "draft:auto-title";
     env.win.__state._sessionTabLabels = {};
     env.win.__state._sessionTitleSources = {};
     localStorage.setItem("session-tabs", JSON.stringify(["draft:auto-title"]));

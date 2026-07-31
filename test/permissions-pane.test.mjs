@@ -66,7 +66,10 @@ const state = {
       root: "E:\\\\workspace",
       decision: "ask",
       toolName: "mcp__external__run",
+      toolOperations: ["execute"],
       riskLevel: "high",
+      workspaceBounded: false,
+      permissionRequired: true,
       reason: "External tool requires confirmation",
     },
   ],
@@ -109,7 +112,10 @@ function resetState() {
       root: "E:\\\\workspace",
       decision: "ask",
       toolName: "mcp__external__run",
+      toolOperations: ["execute"],
       riskLevel: "high",
+      workspaceBounded: false,
+      permissionRequired: true,
       reason: "External tool requires confirmation",
     },
   ];
@@ -157,6 +163,9 @@ describe("permissions pane", () => {
     assert.match(container.textContent, /Tool/);
     assert.match(container.textContent, /mcp\.install/);
     assert.match(container.textContent, /mcp__external__run/);
+    assert.match(container.textContent, /Ops: execute/);
+    assert.match(container.textContent, /Prompt: required/);
+    assert.match(container.textContent, /Scope: external/);
 
     const rulesTab = container.querySelector('[data-perm-tab="rules"]');
     assert.ok(rulesTab);

@@ -56,10 +56,15 @@ if (existsSync(htmlDistPath)) {
 console.log("\n📜 JS 产物检查");
 const assetsDir = resolve(DIST, "assets");
 const appBundlePath = resolve(DIST, "js", "dashboard.js");
+const monacoEntryPath = resolve(DIST, "js", "monaco-entry.js");
 check(existsSync(appBundlePath), "js/dashboard.js app bundle exists");
+check(existsSync(monacoEntryPath), "js/monaco-entry.js is emitted as a browser ESM bundle");
 if (existsSync(appBundlePath)) {
   const sizeKB = (statSync(appBundlePath).size / 1024).toFixed(0);
+  const appBundle = readFileSync(appBundlePath, "utf-8");
   check(statSync(appBundlePath).size > 100 * 1024, `js/dashboard.js size looks reasonable (${sizeKB} KB)`);
+  check(!appBundle.includes("monaco-editor"), "dashboard bundle leaves Monaco in the dedicated browser ESM entry");
+  check(appBundle.includes("[dashboard-startup]"), "dashboard bundle contains the production startup entry");
   if (existsSync(htmlDistPath)) {
     const html = readFileSync(htmlDistPath, "utf-8");
     check(html.includes("./js/dashboard.js"), "HTML references js/dashboard.js");

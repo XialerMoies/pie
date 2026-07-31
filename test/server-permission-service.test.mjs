@@ -13,8 +13,10 @@ import { createPermissionConfirmCallback } from "../src/server/permission-confir
 import { handleDashboard } from "../src/server/routes/dashboard.ts";
 import { handleExplorer } from "../src/server/routes/explorer.ts";
 import { handlePermissions } from "../src/server/routes/permissions.ts";
+import { handleSearch } from "../src/server/routes/search.ts";
 import { handleSessions } from "../src/server/routes/sessions.ts";
 import { handleSettings } from "../src/server/routes/settings.ts";
+import { handleUiState } from "../src/server/routes/ui-state.ts";
 import { makeReq, makeRes, makeResWithEvents } from "./helpers/http.mjs";
 
 function routeCtx(root, permissionService) {
@@ -50,6 +52,7 @@ function writeSessionFixture(root, id, options = {}) {
   const workspace = options.workspace || resolve(root, "workspace");
   const sessionsDir = resolve(root, "data", "pi", "sessions");
   const projectDir = resolve(sessionsDir, "by-project", options.projectKey || "workspace");
+  mkdirSync(workspace, { recursive: true });
   mkdirSync(projectDir, { recursive: true });
   const file = resolve(projectDir, `${id}.jsonl`);
   writeFileSync(file, [
@@ -61,6 +64,18 @@ function writeSessionFixture(root, id, options = {}) {
 
 function makeTempRoot(prefix) {
   return mkdtempSync(resolve(process.cwd(), `.tmp-${prefix}`));
+}
+
+function makeAsyncJsonReq(method, url, body) {
+  const payload = body === undefined ? "" : JSON.stringify(body);
+  return {
+    url,
+    method,
+    headers: { host: "localhost", "content-type": "application/json" },
+    async *[Symbol.asyncIterator]() {
+      if (payload) yield Buffer.from(payload);
+    },
+  };
 }
 
 describe("server permission service", () => {
@@ -129,6 +144,37 @@ describe("server permission service", () => {
     }
   });
 
+  it("fails closed and audits synchronous internal session writes", () => {
+    const root = makeTempRoot("server-perm-sync-session-write-");
+    try {
+      mkdirSync(resolve(root, "sessions"), { recursive: true });
+      const sessionFile = resolve(root, "sessions", "session.jsonl");
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Write",
+        ruleContent: `Write(${sessionFile})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({
+        sessionPermissionState: state,
+        trustedRootsProvider: () => [resolve(root, "sessions")],
+      });
+
+      assert.throws(
+        () => service.authorizePathSync(resolve(root, "sessions"), sessionFile, "write", "sessions.trace"),
+        ServerPermissionError,
+      );
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "sessions.trace" &&
+        entry.operation === "write" &&
+        entry.path === sessionFile &&
+        entry.decision === "deny"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("asks through confirmation callback for paths outside the trusted workspace", async () => {
     const parent = makeTempRoot("server-perm-ask-");
     try {
@@ -160,6 +206,83 @@ describe("server permission service", () => {
       assert.deepStrictEqual(audit.map((entry) => entry.decision), ["ask", "allow"]);
     } finally {
       rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("allows ordinary external reads without prompting or audit noise", async () => {
+    const parent = makeTempRoot("server-perm-external-read-");
+    try {
+      const workspace = resolve(parent, "workspace");
+      const external = resolve(parent, "external");
+      mkdirSync(workspace);
+      mkdirSync(external);
+      writeFileSync(resolve(external, "README.md"), "ordinary");
+      let confirmCount = 0;
+      const service = new ServerPermissionService({
+        workspaceRootProvider: () => workspace,
+        trustedRootsProvider: () => [workspace],
+        confirmPermission: async () => {
+          confirmCount += 1;
+          return { allow: true, scope: "session" };
+        },
+      });
+
+      const guarded = await service.authorizePath(external, "README.md", "read", "test.external-read");
+
+      assert.strictEqual(guarded.path, resolve(external, "README.md"));
+      assert.strictEqual(confirmCount, 0);
+      assert.deepStrictEqual(service.getAuditTrail(), []);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("confirms a sensitive external read once per session", async () => {
+    const parent = makeTempRoot("server-perm-sensitive-read-");
+    try {
+      const workspace = resolve(parent, "workspace");
+      const external = resolve(parent, "external");
+      mkdirSync(workspace);
+      mkdirSync(external);
+      writeFileSync(resolve(external, ".npmrc"), "//registry.example/:_authToken=secret");
+      const state = createSessionPermissionState();
+      let confirmCount = 0;
+      let request;
+      const service = new ServerPermissionService({
+        sessionPermissionState: state,
+        workspaceRootProvider: () => workspace,
+        trustedRootsProvider: () => [workspace],
+        confirmPermission: async (nextRequest) => {
+          confirmCount += 1;
+          request = nextRequest;
+          return { allow: true, scope: "session" };
+        },
+      });
+
+      await service.authorizePath(external, ".npmrc", "read", "test.sensitive-read");
+      await service.authorizePath(external, ".npmrc", "read", "test.sensitive-read");
+
+      assert.strictEqual(confirmCount, 1);
+      assert.match(request.reason, /sensitive/i);
+      assert.strictEqual(request.permissionSuggestions[0].operation, "read");
+      assert.strictEqual(state.alwaysAllowRules.session.length, 1);
+      assert.deepStrictEqual(service.getAuditTrail().map((entry) => entry.decision), ["ask", "allow"]);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("does not audit routine workspace reads", async () => {
+    const root = makeTempRoot("server-perm-read-audit-noise-");
+    try {
+      writeFileSync(resolve(root, "source.ts"), "export const value = 1;");
+      const service = new ServerPermissionService();
+
+      await service.authorizePath(root, "source.ts", "read", "search.read");
+
+      assert.deepStrictEqual(service.getAuditTrail(), []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -309,10 +432,16 @@ describe("server permission service", () => {
       assert.strictEqual(state.alwaysAllowRules.session[0].ruleContent, "Tool(mcp__external__run)");
       assert.strictEqual(request.operation, "tool");
       assert.strictEqual(request.toolName, "mcp__external__run");
+      assert.deepStrictEqual(request.toolOperations, ["execute"]);
       assert.strictEqual(request.riskLevel, "high");
+      assert.strictEqual(request.workspaceBounded, false);
+      assert.strictEqual(request.permissionRequired, true);
       const audit = service.getAuditTrail();
       assert.deepStrictEqual(audit.map((entry) => entry.decision), ["ask", "allow", "allow"]);
       assert.strictEqual(audit[0].operation, "tool");
+      assert.deepStrictEqual(audit[0].toolOperations, ["execute"]);
+      assert.strictEqual(audit[0].workspaceBounded, false);
+      assert.strictEqual(audit[0].permissionRequired, true);
       assert.strictEqual(audit[1].operation, "tool");
       assert.strictEqual(audit[1].toolName, "mcp__external__run");
     } finally {
@@ -346,6 +475,110 @@ describe("server permission service", () => {
     }
   });
 
+  it("tracks audit-only tool execution without prompting", async () => {
+    const root = makeTempRoot("server-perm-tool-audit-");
+    try {
+      let confirmCount = 0;
+      const service = new ServerPermissionService({
+        workspaceRootProvider: () => root,
+        confirmPermission: async () => {
+          confirmCount += 1;
+          return { allow: true };
+        },
+      });
+
+      const result = await service.authorizeTool({
+        toolName: "file_write",
+        source: "agent.file_write.create",
+        operations: ["create", "write"],
+        riskLevel: "high",
+        workspaceBounded: true,
+        permissionRequired: false,
+        args: { path: "ok.txt" },
+      });
+
+      assert.deepStrictEqual(result, { allow: true });
+      assert.strictEqual(confirmCount, 0);
+      const audit = service.getAuditTrail();
+      assert.strictEqual(audit.length, 1);
+      assert.strictEqual(audit[0].decision, "allow");
+      assert.strictEqual(audit[0].toolName, "file_write");
+      assert.strictEqual(audit[0].operation, "tool");
+      assert.deepStrictEqual(audit[0].toolOperations, ["create", "write"]);
+      assert.strictEqual(audit[0].workspaceBounded, true);
+      assert.strictEqual(audit[0].permissionRequired, false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not audit low or medium risk permission-free tool allows", async () => {
+    const root = makeTempRoot("server-perm-tool-noise-");
+    try {
+      const service = new ServerPermissionService({ workspaceRootProvider: () => root });
+
+      await service.authorizeTool({
+        toolName: "search",
+        source: "agent.search",
+        operations: ["read"],
+        riskLevel: "low",
+        workspaceBounded: true,
+        permissionRequired: false,
+        args: { query: "needle" },
+      });
+      await service.authorizeTool({
+        toolName: "web-fetch",
+        source: "agent.web_fetch",
+        operations: ["execute"],
+        riskLevel: "medium",
+        workspaceBounded: false,
+        permissionRequired: false,
+        args: { url: "https://example.com" },
+      });
+
+      assert.deepStrictEqual(service.getAuditTrail(), []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("persists and reloads tool permission audit history", async () => {
+    const root = makeTempRoot("server-perm-tool-audit-store-");
+    try {
+      const auditFile = resolve(root, "data", "pi", "permission-audit.json");
+      const firstService = new ServerPermissionService({
+        auditStore: new FilePermissionAuditStore(auditFile, { maxEntries: 20 }),
+        workspaceRootProvider: () => root,
+      });
+      await firstService.authorizeTool({
+        toolName: "file_write",
+        source: "agent.file_write",
+        operations: ["create", "write"],
+        riskLevel: "high",
+        workspaceBounded: true,
+        permissionRequired: false,
+        args: { path: "output.txt" },
+      });
+
+      const saved = JSON.parse(readFileSync(auditFile, "utf-8"));
+      assert.strictEqual(saved.length, 1);
+      assert.strictEqual(saved[0].operation, "tool");
+      assert.strictEqual(saved[0].toolName, "file_write");
+      assert.deepStrictEqual(saved[0].toolOperations, ["create", "write"]);
+      assert.strictEqual(saved[0].permissionRequired, false);
+
+      const secondService = new ServerPermissionService({
+        auditStore: new FilePermissionAuditStore(auditFile, { maxEntries: 20 }),
+      });
+      const reloaded = secondService.getAuditTrail();
+      assert.strictEqual(reloaded.length, 1);
+      assert.strictEqual(reloaded[0].operation, "tool");
+      assert.strictEqual(reloaded[0].toolName, "file_write");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("routes file writes through the shared permission service audit", async () => {
     const root = makeTempRoot("server-perm-route-");
     try {
@@ -369,7 +602,7 @@ describe("server permission service", () => {
     const root = makeTempRoot("server-perm-audit-");
     try {
       const service = new ServerPermissionService();
-      await service.authorizePath(root, "view.txt", "read", "test.audit");
+      await service.authorizePath(root, "view.txt", "write", "test.audit");
       const ctx = routeCtx(root, service);
       const req = makeReq("GET", "/api/permissions/audit?limit=1");
       const res = makeRes();
@@ -405,7 +638,7 @@ describe("server permission service", () => {
       });
       assert.strictEqual(secondService.getAuditTrail()[0].source, "test.audit.persist");
 
-      await secondService.authorizePath(root, "second.txt", "read", "test.audit.reload");
+      await secondService.authorizePath(root, "second.txt", "write", "test.audit.reload");
       const reloaded = secondService.getAuditTrail();
       assert.deepStrictEqual(reloaded.map((entry) => entry.id), [1, 2]);
       assert.deepStrictEqual(reloaded.map((entry) => entry.source), ["test.audit.persist", "test.audit.reload"]);
@@ -484,6 +717,589 @@ describe("server permission service", () => {
       assert.strictEqual(res._status, 200);
       const audit = service.getAuditTrail();
       assert.ok(audit.some((entry) => entry.source === "settings.save" && entry.decision === "allow"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("serves layout config reads without routine allow audit noise", async () => {
+    const root = makeTempRoot("server-perm-layout-read-");
+    try {
+      const srcDir = resolve(root, "src");
+      mkdirSync(srcDir, { recursive: true });
+      const layoutPath = resolve(srcDir, "layout-config.json");
+      writeFileSync(layoutPath, JSON.stringify({ marker: "layout-read-ok" }));
+      const service = new ServerPermissionService();
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleDashboard(makeReq("GET", "/layout-config.json"), res, ctx);
+
+      assert.strictEqual(res._status, 200);
+      assert.match(res._body, /layout-read-ok/);
+      assert.ok(!service.getAuditTrail().some((entry) => (
+        entry.source === "dashboard.layout-config" &&
+        entry.operation === "read" &&
+        entry.path === layoutPath &&
+        entry.decision === "allow"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when layout config reads are denied", async () => {
+    const root = makeTempRoot("server-perm-layout-read-deny-");
+    try {
+      const srcDir = resolve(root, "src");
+      mkdirSync(srcDir, { recursive: true });
+      const layoutPath = resolve(srcDir, "layout-config.json");
+      writeFileSync(layoutPath, JSON.stringify({ marker: "layout-secret-denied" }));
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${layoutPath})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({ sessionPermissionState: state });
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleDashboard(makeReq("GET", "/layout-config.json"), res, ctx);
+
+      assert.strictEqual(res._status, 403);
+      assert.doesNotMatch(res._body, /layout-secret-denied/);
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "dashboard.layout-config" &&
+        entry.operation === "read" &&
+        entry.path === layoutPath &&
+        entry.decision === "deny"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("serves auth metadata reads without routine allow audit noise", async () => {
+    const root = makeTempRoot("server-perm-auth-read-");
+    try {
+      const service = new ServerPermissionService();
+      const ctx = routeCtx(root, service);
+      mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+      const authFile = resolve(ctx.paths.PI_CONFIG_DIR, "auth.json");
+      writeFileSync(authFile, JSON.stringify({
+        openai: { apiKey: "sk-test-auth-read" },
+      }));
+      const res = makeRes();
+
+      await handleSettings(makeReq("GET", "/api/auth"), res, ctx);
+
+      assert.strictEqual(res._status, 200);
+      const body = JSON.parse(res._body);
+      assert.strictEqual(body.providers[0].provider, "openai");
+      assert.strictEqual(body.providers[0].hasKey, true);
+      assert.ok(!service.getAuditTrail().some((entry) => (
+        entry.source === "settings.auth.read" &&
+        entry.operation === "read" &&
+        entry.path === authFile &&
+        entry.decision === "allow"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when auth metadata reads are denied", async () => {
+    const root = makeTempRoot("server-perm-auth-read-deny-");
+    try {
+      const ctxForPath = routeCtx(root, undefined);
+      mkdirSync(ctxForPath.paths.PI_CONFIG_DIR, { recursive: true });
+      const authFile = resolve(ctxForPath.paths.PI_CONFIG_DIR, "auth.json");
+      writeFileSync(authFile, JSON.stringify({
+        openai: { apiKey: "sk-denied-auth-read" },
+      }));
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${authFile})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({ sessionPermissionState: state });
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleSettings(makeReq("GET", "/api/auth"), res, ctx);
+
+      assert.strictEqual(res._status, 403);
+      assert.doesNotMatch(res._body, /sk-denied-auth-read/);
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "settings.auth.read" &&
+        entry.operation === "read" &&
+        entry.path === authFile &&
+        entry.decision === "deny"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("serves model availability without routine read allow audit noise", async () => {
+    const root = makeTempRoot("server-perm-models-auth-read-");
+    try {
+      const service = new ServerPermissionService();
+      const ctx = routeCtx(root, service);
+      ctx.runtime.modelRegistry = {
+        getAvailable: () => [
+          { provider: "openai", id: "gpt-test" },
+          { provider: "anthropic", id: "claude-test" },
+        ],
+      };
+      mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+      const authFile = resolve(ctx.paths.PI_CONFIG_DIR, "auth.json");
+      writeFileSync(authFile, JSON.stringify({
+        openai: { apiKey: "sk-test-models-auth-read" },
+      }));
+      const res = makeRes();
+
+      await handleSettings(makeReq("GET", "/api/models"), res, ctx);
+
+      assert.strictEqual(res._status, 200);
+      const body = JSON.parse(res._body);
+      assert.deepStrictEqual(body.models, [{ provider: "openai", id: "gpt-test" }]);
+      assert.ok(!service.getAuditTrail().some((entry) => (
+        entry.source === "settings.models.auth" &&
+        entry.operation === "read" &&
+        entry.path === authFile &&
+        entry.decision === "allow"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when model availability auth reads are denied", async () => {
+    const root = makeTempRoot("server-perm-models-auth-read-deny-");
+    try {
+      const ctxForPath = routeCtx(root, undefined);
+      mkdirSync(ctxForPath.paths.PI_CONFIG_DIR, { recursive: true });
+      const authFile = resolve(ctxForPath.paths.PI_CONFIG_DIR, "auth.json");
+      writeFileSync(authFile, JSON.stringify({
+        openai: { apiKey: "sk-denied-models-auth-read" },
+      }));
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${authFile})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({ sessionPermissionState: state });
+      const ctx = routeCtx(root, service);
+      ctx.runtime.modelRegistry = {
+        getAvailable: () => [
+          { provider: "openai", id: "gpt-secret" },
+          { provider: "anthropic", id: "claude-secret" },
+        ],
+      };
+      const res = makeRes();
+
+      await handleSettings(makeReq("GET", "/api/models"), res, ctx);
+
+      assert.strictEqual(res._status, 403);
+      assert.doesNotMatch(res._body, /gpt-secret/);
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "settings.models.auth" &&
+        entry.operation === "read" &&
+        entry.path === authFile &&
+        entry.decision === "deny"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lists all models when auth config has not been created yet", async () => {
+    const root = makeTempRoot("server-perm-models-first-run-");
+    try {
+      const service = new ServerPermissionService();
+      const ctx = routeCtx(root, service);
+      ctx.runtime.modelRegistry = {
+        getAvailable: () => [
+          { provider: "openai", id: "gpt-first-run" },
+          { provider: "anthropic", id: "claude-first-run" },
+        ],
+      };
+      const res = makeRes();
+
+      await handleSettings(makeReq("GET", "/api/models"), res, ctx);
+
+      assert.strictEqual(res._status, 200);
+      assert.deepStrictEqual(JSON.parse(res._body), {
+        models: [
+          { provider: "openai", id: "gpt-first-run" },
+          { provider: "anthropic", id: "claude-first-run" },
+        ],
+      });
+      assert.strictEqual(service.getAuditTrail().length, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("serves UI state reads without routine allow audit noise", async () => {
+    const root = makeTempRoot("server-perm-ui-state-read-");
+    try {
+      const service = new ServerPermissionService();
+      const ctx = routeCtx(root, service);
+      mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+      const uiStateFile = resolve(ctx.paths.PI_CONFIG_DIR, "ui-state.json");
+      writeFileSync(uiStateFile, JSON.stringify({
+        workspaces: {
+          [root]: {
+            schemaVersion: 2,
+            workspacePath: root,
+            activeView: { type: "session", id: "sess-ui-read" },
+            tabs: { sessions: ["sess-ui-read"], files: [], chatOpen: true, labels: {} },
+            panel: { active: "explorer", closed: false, width: 260 },
+            recent: { sessions: {} },
+          },
+        },
+      }));
+      const res = makeRes();
+
+      await handleUiState(makeReq("GET", `/api/ui-state?workspace=${encodeURIComponent(root)}`), res, ctx);
+
+      assert.strictEqual(res._status, 200);
+      const body = JSON.parse(res._body);
+      assert.strictEqual(body.activeView.id, "sess-ui-read");
+      assert.ok(!service.getAuditTrail().some((entry) => (
+        entry.source === "ui-state.read" &&
+        entry.operation === "read" &&
+        entry.path === uiStateFile &&
+        entry.decision === "allow"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when UI state reads are denied", async () => {
+    const root = makeTempRoot("server-perm-ui-state-read-deny-");
+    try {
+      const ctxForPath = routeCtx(root, undefined);
+      mkdirSync(ctxForPath.paths.PI_CONFIG_DIR, { recursive: true });
+      const uiStateFile = resolve(ctxForPath.paths.PI_CONFIG_DIR, "ui-state.json");
+      writeFileSync(uiStateFile, JSON.stringify({
+        workspaces: {
+          [root]: {
+            schemaVersion: 2,
+            workspacePath: root,
+            activeView: { type: "session", id: "sess-ui-denied" },
+            tabs: { sessions: ["sess-ui-denied"], files: [], chatOpen: true, labels: {} },
+            panel: { active: "explorer", closed: false, width: 260 },
+            recent: { sessions: {} },
+          },
+        },
+      }));
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${uiStateFile})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({ sessionPermissionState: state });
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleUiState(makeReq("GET", `/api/ui-state?workspace=${encodeURIComponent(root)}`), res, ctx);
+
+      assert.strictEqual(res._status, 403);
+      assert.doesNotMatch(res._body, /sess-ui-denied/);
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "ui-state.read" &&
+        entry.operation === "read" &&
+        entry.path === uiStateFile &&
+        entry.decision === "deny"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("audits UI state writes while suppressing routine read allows", async () => {
+    const root = makeTempRoot("server-perm-ui-state-save-");
+    try {
+      const service = new ServerPermissionService();
+      const ctx = routeCtx(root, service);
+      mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+      const uiStateFile = resolve(ctx.paths.PI_CONFIG_DIR, "ui-state.json");
+      writeFileSync(uiStateFile, JSON.stringify({ workspaces: {} }));
+      const nextState = {
+        schemaVersion: 2,
+        workspacePath: root,
+        activeView: { type: "chat" },
+        tabs: { sessions: [], files: [], chatOpen: true, labels: {} },
+        panel: { active: "explorer", closed: false, width: 260 },
+        recent: { sessions: {} },
+      };
+      const res = makeRes();
+
+      await handleUiState(makeAsyncJsonReq("PUT", "/api/ui-state", nextState), res, ctx);
+
+      assert.strictEqual(res._status, 200);
+      const persistedUiState = JSON.parse(readFileSync(uiStateFile, "utf8"));
+      assert.strictEqual(persistedUiState.activeWorkspace, root);
+      const audit = service.getAuditTrail();
+      assert.ok(!audit.some((entry) => (
+        entry.source === "ui-state.save.workspace" &&
+        entry.operation === "read" &&
+        entry.path === root &&
+        entry.decision === "allow"
+      )));
+      assert.ok(!audit.some((entry) => (
+        entry.source === "ui-state.read" &&
+        entry.operation === "read" &&
+        entry.path === uiStateFile &&
+        entry.decision === "allow"
+      )));
+      assert.ok(audit.some((entry) => (
+        entry.source === "ui-state.save" &&
+        entry.operation === "write" &&
+        entry.path === uiStateFile &&
+        entry.decision === "allow"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses usage summary read allows while auditing its index write", async () => {
+    const root = makeTempRoot("server-perm-usage-summary-");
+    try {
+      const service = new ServerPermissionService();
+      const { workspace } = writeSessionFixture(root, "sess-usage");
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleDashboard(makeReq("GET", "/api/usage/summary"), res, ctx);
+
+      assert.strictEqual(res._status, 200);
+      const body = JSON.parse(res._body);
+      assert.strictEqual(body.sessions, 1);
+      assert.ok(!service.getAuditTrail().some((entry) => (
+        entry.source === "usage.summary.file" &&
+        entry.operation === "read" &&
+        entry.decision === "allow"
+      )));
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "usage.summary.index" &&
+        entry.operation === "write" &&
+        entry.decision === "allow"
+      )));
+      assert.strictEqual(body.topSessions[0].workspace, workspace);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when usage summary enters a denied session directory", async () => {
+    const root = makeTempRoot("server-perm-usage-summary-deny-");
+    try {
+      const { projectDir } = writeSessionFixture(root, "sess-usage-deny");
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${projectDir})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({ sessionPermissionState: state });
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleDashboard(makeReq("GET", "/api/usage/summary"), res, ctx);
+
+      assert.strictEqual(res._status, 403);
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "usage.summary.project" &&
+        entry.operation === "read" &&
+        entry.decision === "deny"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses compact read allows while auditing its index write", async () => {
+    const root = makeTempRoot("server-perm-usage-compact-");
+    try {
+      const service = new ServerPermissionService();
+      writeSessionFixture(root, "sess-compact");
+      const ctx = routeCtx(root, service);
+      let compactCalls = 0;
+      ctx.runtime.session.compact = async () => {
+        compactCalls += 1;
+        return { summary: "done" };
+      };
+      const res = makeRes();
+
+      await handleDashboard(makeReq("POST", "/api/compact", { focus: "usage" }), res, ctx);
+
+      assert.strictEqual(res._status, 200);
+      assert.strictEqual(compactCalls, 1);
+      const audit = service.getAuditTrail();
+      assert.ok(!audit.some((entry) => (
+        entry.source === "usage.compact.file" &&
+        entry.operation === "read" &&
+        entry.decision === "allow"
+      )));
+      assert.ok(audit.some((entry) => (
+        entry.source === "usage.compact.index" &&
+        entry.operation === "write" &&
+        entry.decision === "allow"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed before compact when usage index refresh enters a denied session directory", async () => {
+    const root = makeTempRoot("server-perm-usage-compact-deny-");
+    try {
+      const { projectDir } = writeSessionFixture(root, "sess-compact-deny");
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${projectDir})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({ sessionPermissionState: state });
+      const ctx = routeCtx(root, service);
+      let compactCalls = 0;
+      ctx.runtime.session.compact = async () => {
+        compactCalls += 1;
+        return { summary: "should-not-run" };
+      };
+      const res = makeRes();
+
+      await handleDashboard(makeReq("POST", "/api/compact", { focus: "usage" }), res, ctx);
+
+      assert.strictEqual(res._status, 403);
+      assert.strictEqual(compactCalls, 0);
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "usage.compact.project" &&
+        entry.operation === "read" &&
+        entry.decision === "deny"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("searches conversations without routine read allow audit noise", async () => {
+    const root = makeTempRoot("server-perm-search-conv-");
+    try {
+      const service = new ServerPermissionService();
+      const { workspace } = writeSessionFixture(root, "sess-search");
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleSearch(makeReq("POST", "/api/search/conversations", { query: "hello" }), res, ctx);
+
+      assert.strictEqual(res._status, 200);
+      const body = JSON.parse(res._body);
+      assert.strictEqual(body.results.length, 1);
+      assert.strictEqual(body.results[0].workspace, workspace);
+      assert.ok(!service.getAuditTrail().some((entry) => (
+        entry.source === "search.conversations.file" &&
+        entry.operation === "read" &&
+        entry.decision === "allow"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed before conversation search enters a denied session directory", async () => {
+    const root = makeTempRoot("server-perm-search-conv-deny-");
+    try {
+      const { projectDir } = writeSessionFixture(root, "sess-search-deny");
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${projectDir})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({ sessionPermissionState: state });
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleSearch(makeReq("POST", "/api/search/conversations", { query: "hello" }), res, ctx);
+
+      assert.strictEqual(res._status, 403);
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "search.conversations.project" &&
+        entry.operation === "read" &&
+        entry.decision === "deny"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lists MCP config without routine read allow audit noise", async () => {
+    const root = makeTempRoot("server-perm-mcp-read-");
+    try {
+      const configPath = resolve(root, ".mcp.json");
+      writeFileSync(configPath, JSON.stringify({
+        servers: { readServer: { command: "node", enabled: true } },
+      }));
+      const service = new ServerPermissionService();
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleDashboard(makeReq("GET", "/api/mcp/servers"), res, ctx);
+
+      assert.strictEqual(res._status, 200);
+      const body = JSON.parse(res._body);
+      assert.ok(body.some((server) => server.name === "readServer"));
+      const audit = service.getAuditTrail();
+      assert.ok(!audit.some((entry) => (
+        entry.source === "mcp.servers.config" &&
+        entry.operation === "read" &&
+        entry.path === configPath &&
+        entry.decision === "allow"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when MCP server config reads are denied", async () => {
+    const root = makeTempRoot("server-perm-mcp-read-deny-");
+    try {
+      const configPath = resolve(root, ".mcp.json");
+      writeFileSync(configPath, JSON.stringify({
+        servers: { blockedServer: { command: "secret-node", enabled: true } },
+      }));
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${configPath})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({ sessionPermissionState: state });
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleDashboard(makeReq("GET", "/api/mcp/servers"), res, ctx);
+
+      assert.strictEqual(res._status, 403);
+      assert.doesNotMatch(res._body, /secret-node/);
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "mcp.servers.config" &&
+        entry.operation === "read" &&
+        entry.path === configPath &&
+        entry.decision === "deny"
+      )));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -576,7 +1392,7 @@ describe("server permission service", () => {
     }
   });
 
-  it("audits session listing reads through the shared permission service", async () => {
+  it("lists sessions without routine read allow audit noise", async () => {
     const root = makeTempRoot("server-perm-sessions-list-");
     try {
       const service = new ServerPermissionService();
@@ -591,10 +1407,86 @@ describe("server permission service", () => {
       const body = JSON.parse(res._body);
       assert.strictEqual(body.sessions.length, 1);
       assert.strictEqual(body.sessions[0].id, "sess-list");
-      assert.ok(service.getAuditTrail().some((entry) => (
+      assert.ok(!service.getAuditTrail().some((entry) => (
         entry.source === "sessions.list" &&
         entry.operation === "read" &&
         entry.decision === "allow"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed before automatic migration enumerates a denied sessions root", async () => {
+    const root = makeTempRoot("server-perm-sessions-root-deny-");
+    try {
+      const workspace = resolve(root, "workspace");
+      const sessionsDir = resolve(root, "data", "pi", "sessions");
+      mkdirSync(workspace, { recursive: true });
+      mkdirSync(resolve(sessionsDir, "by-project", "workspace"), { recursive: true });
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${sessionsDir})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({ sessionPermissionState: state });
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleSessions(makeReq("GET", `/api/sessions?workspace=${encodeURIComponent(workspace)}`), res, ctx);
+
+      assert.strictEqual(res._status, 403);
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "sessions.auto-migrate.root" &&
+        entry.operation === "read" &&
+        entry.path === sessionsDir &&
+        entry.decision === "deny"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when session listing targets an outside workspace", async () => {
+    const root = makeTempRoot("server-perm-sessions-list-workspace-");
+    try {
+      const workspace = resolve(root, "workspace");
+      const externalWorkspace = resolve(root, "external-workspace");
+      const sessionsDir = resolve(root, "data", "pi", "sessions", "by-project", "external-workspace");
+      mkdirSync(sessionsDir, { recursive: true });
+      mkdirSync(workspace, { recursive: true });
+      mkdirSync(externalWorkspace, { recursive: true });
+      writeFileSync(resolve(sessionsDir, "sess-outside.jsonl"), [
+        JSON.stringify({ type: "session", id: "sess-outside", timestamp: "2026-07-30T00:00:00.000Z", workspace: externalWorkspace }),
+      ].join("\n") + "\n");
+
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${externalWorkspace})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({
+        sessionPermissionState: state,
+        workspaceRootProvider: () => workspace,
+        trustedRootsProvider: () => [
+          workspace,
+          resolve(root, "data"),
+          resolve(root, "data", "pi"),
+          resolve(root, "data", "pi", "sessions"),
+        ],
+      });
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleSessions(makeReq("GET", `/api/sessions?workspace=${encodeURIComponent(externalWorkspace)}`), res, ctx);
+
+      assert.strictEqual(res._status, 403);
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "sessions.list.workspace" &&
+        entry.operation === "read" &&
+        entry.decision === "deny"
       )));
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -607,6 +1499,7 @@ describe("server permission service", () => {
       const workspace = resolve(root, "workspace");
       const sessionsDir = resolve(root, "data", "pi", "sessions");
       const nestedDir = resolve(sessionsDir, "by-project", "workspace", "nested");
+      mkdirSync(workspace, { recursive: true });
       mkdirSync(nestedDir, { recursive: true });
       writeFileSync(resolve(nestedDir, "sess-nested.jsonl"), [
         JSON.stringify({ type: "session", id: "sess-nested", timestamp: "2026-07-30T00:00:00.000Z", workspace }),
@@ -628,6 +1521,40 @@ describe("server permission service", () => {
       assert.ok(service.getAuditTrail().some((entry) => (
         entry.source === "sessions.list.dir" &&
         entry.operation === "read" &&
+        entry.decision === "deny"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed before listing other-project session directories when the project index is denied", async () => {
+    const root = makeTempRoot("server-perm-sessions-project-index-deny-");
+    try {
+      const { workspace, sessionsDir } = writeSessionFixture(root, "sess-current");
+      writeSessionFixture(root, "sess-other", {
+        workspace: resolve(root, "other-workspace"),
+        projectKey: "other-workspace",
+      });
+      const projectsDir = resolve(sessionsDir, "by-project");
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${projectsDir})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({ sessionPermissionState: state });
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleSessions(makeReq("GET", `/api/sessions?workspace=${encodeURIComponent(workspace)}&other=1`), res, ctx);
+
+      assert.strictEqual(res._status, 403);
+      assert.doesNotMatch(res._body, /sess-other/);
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "sessions.list.projects" &&
+        entry.operation === "read" &&
+        entry.path === projectsDir &&
         entry.decision === "deny"
       )));
     } finally {
@@ -671,6 +1598,74 @@ describe("server permission service", () => {
     }
   });
 
+  it("exports an authorized session lookup helper for startup restore", async () => {
+    const root = makeTempRoot("server-perm-sessions-startup-lookup-deny-");
+    try {
+      const workspace = resolve(root, "workspace");
+      const sessionsDir = resolve(root, "data", "pi", "sessions");
+      const nestedDir = resolve(sessionsDir, "by-project", "workspace", "nested");
+      mkdirSync(workspace, { recursive: true });
+      mkdirSync(nestedDir, { recursive: true });
+      writeFileSync(resolve(nestedDir, "sess-startup.jsonl"), [
+        JSON.stringify({ type: "session", id: "sess-startup", timestamp: "2026-07-30T00:00:00.000Z", workspace }),
+      ].join("\n") + "\n");
+
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${nestedDir})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({ sessionPermissionState: state });
+      const ctx = routeCtx(root, service);
+      const sessionsMod = await import("../src/server/routes/sessions.ts");
+
+      assert.strictEqual(typeof sessionsMod.findAuthorizedSessionFileById, "function");
+      await assert.rejects(
+        () => sessionsMod.findAuthorizedSessionFileById(ctx, "sess-startup", "sessions.startup.restore"),
+        ServerPermissionError,
+      );
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "sessions.startup.restore.dir" &&
+        entry.operation === "read" &&
+        entry.path === nestedDir &&
+        entry.decision === "deny"
+      )));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the authorized session lookup helper during startup restore", () => {
+    const serverSource = readFileSync(resolve(process.cwd(), "src", "server", "server.ts"), "utf-8");
+
+    assert.match(serverSource, /findAuthorizedSessionFileById/);
+    assert.doesNotMatch(serverSource, /findSessionFileById\(SESSIONS_DIR/);
+  });
+
+  it("authorizes UI state before startup restore reads it", () => {
+    const serverSource = readFileSync(resolve(process.cwd(), "src", "server", "server.ts"), "utf-8");
+
+    assert.match(
+      serverSource,
+      /authorizeRoutePath\(\s*baseCtx,\s*PI_CONFIG_DIR,\s*"ui-state\.json",\s*"read",\s*"ui-state\.startup\.restore",?\s*\)/,
+    );
+    assert.doesNotMatch(
+      serverSource,
+      /const uiStateFile = resolve\(PI_CONFIG_DIR, "ui-state\.json"\)/,
+    );
+  });
+
+  it("restores the explicitly active workspace before legacy session fallback", () => {
+    const serverSource = readFileSync(resolve(process.cwd(), "src", "server", "server.ts"), "utf-8");
+    const activeWorkspaceLookup = serverSource.indexOf("uiData.activeWorkspace");
+    const legacyWorkspaceScan = serverSource.indexOf("Object.entries(workspaces).filter", activeWorkspaceLookup);
+
+    assert.ok(activeWorkspaceLookup >= 0);
+    assert.ok(legacyWorkspaceScan > activeWorkspaceLookup);
+    assert.match(serverSource, /activeState\s*\?\s*\[\[activeWorkspace, activeState\]\]/);
+  });
+
   it("fails closed on session list symlink or junction escapes when the platform follows them", async () => {
     const root = makeTempRoot("server-perm-sessions-link-");
     try {
@@ -678,6 +1673,7 @@ describe("server permission service", () => {
       const sessionsDir = resolve(root, "data", "pi", "sessions");
       const projectDir = resolve(sessionsDir, "by-project", "workspace");
       const outsideDir = resolve(root, "outside-sessions");
+      mkdirSync(workspace, { recursive: true });
       mkdirSync(projectDir, { recursive: true });
       mkdirSync(outsideDir, { recursive: true });
       writeFileSync(resolve(outsideDir, "outside.jsonl"), [
@@ -713,13 +1709,14 @@ describe("server permission service", () => {
     }
   });
 
-  it("audits automatic legacy session migration as read/create/remove", async () => {
+  it("audits automatic legacy session migration mutations without routine reads", async () => {
     const root = makeTempRoot("server-perm-sessions-migrate-");
     try {
       const service = new ServerPermissionService();
       const ctx = routeCtx(root, service);
       const workspace = resolve(root, "workspace");
       const sessionsDir = ctx.paths.SESSIONS_DIR;
+      mkdirSync(workspace, { recursive: true });
       mkdirSync(sessionsDir, { recursive: true });
       const legacyFile = resolve(sessionsDir, "legacy.jsonl");
       writeFileSync(legacyFile, [
@@ -735,9 +1732,53 @@ describe("server permission service", () => {
       assert.strictEqual(existsSync(legacyFile), false);
       assert.strictEqual(existsSync(resolve(sessionsDir, "by-project", "workspace", "legacy.jsonl")), true);
       const audit = service.getAuditTrail();
-      assert.ok(audit.some((entry) => entry.source === "sessions.auto-migrate.source" && entry.operation === "read"));
+      assert.ok(!audit.some((entry) => entry.source === "sessions.auto-migrate.source" && entry.operation === "read"));
       assert.ok(audit.some((entry) => entry.source === "sessions.auto-migrate.destination" && entry.operation === "create"));
       assert.ok(audit.some((entry) => entry.source === "sessions.auto-migrate.source" && entry.operation === "remove"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when session migration targets an outside workspace", async () => {
+    const root = makeTempRoot("server-perm-sessions-migrate-workspace-");
+    try {
+      const workspace = resolve(root, "workspace");
+      const externalWorkspace = resolve(root, "external-workspace");
+      mkdirSync(workspace, { recursive: true });
+      mkdirSync(externalWorkspace, { recursive: true });
+      const { file, sessionsDir } = writeSessionFixture(root, "sess-migrate-deny", { workspace });
+      const deniedTarget = resolve(sessionsDir, "by-project", "external-workspace", "sess-migrate-deny.jsonl");
+
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${externalWorkspace})`,
+        match: "exact",
+      });
+      const service = new ServerPermissionService({
+        sessionPermissionState: state,
+        workspaceRootProvider: () => workspace,
+        trustedRootsProvider: () => [
+          workspace,
+          resolve(root, "data"),
+          resolve(root, "data", "pi"),
+          resolve(root, "data", "pi", "sessions"),
+        ],
+      });
+      const ctx = routeCtx(root, service);
+      const res = makeRes();
+
+      await handleSessions(makeReq("POST", "/api/sessions/migrate", { id: "sess-migrate-deny", workspace: externalWorkspace }), res, ctx);
+
+      assert.strictEqual(res._status, 403);
+      assert.strictEqual(existsSync(file), true);
+      assert.strictEqual(existsSync(deniedTarget), false);
+      assert.ok(service.getAuditTrail().some((entry) => (
+        entry.source === "sessions.migrate.workspace" &&
+        entry.operation === "read" &&
+        entry.decision === "deny"
+      )));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -761,9 +1802,9 @@ describe("server permission service", () => {
       assert.strictEqual(existsSync(file), false);
 
       const audit = service.getAuditTrail();
-      assert.ok(audit.some((entry) => entry.source === "sessions.rename.lookup" && entry.operation === "read"));
+      assert.ok(!audit.some((entry) => entry.source === "sessions.rename.lookup" && entry.operation === "read"));
       assert.ok(audit.some((entry) => entry.source === "sessions.rename" && entry.operation === "write"));
-      assert.ok(audit.some((entry) => entry.source === "sessions.delete.lookup" && entry.operation === "read"));
+      assert.ok(!audit.some((entry) => entry.source === "sessions.delete.lookup" && entry.operation === "read"));
       assert.ok(audit.some((entry) => entry.source === "sessions.delete" && entry.operation === "remove"));
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -798,7 +1839,7 @@ describe("server permission service", () => {
     }
   });
 
-  it("audits session branch source, destination, and result reads", async () => {
+  it("audits session branch creation without routine read allows", async () => {
     const root = makeTempRoot("server-perm-sessions-branch-");
     try {
       const service = new ServerPermissionService();
@@ -816,10 +1857,10 @@ describe("server permission service", () => {
       assert.ok(body.id.startsWith("branch-"));
       assert.strictEqual(existsSync(resolve(projectDir, `${body.id}.jsonl`)), true);
       const audit = service.getAuditTrail();
-      assert.ok(audit.some((entry) => entry.source === "sessions.branch.lookup" && entry.operation === "read"));
-      assert.ok(audit.some((entry) => entry.source === "sessions.branch.source" && entry.operation === "read"));
+      assert.ok(!audit.some((entry) => entry.source === "sessions.branch.lookup" && entry.operation === "read"));
+      assert.ok(!audit.some((entry) => entry.source === "sessions.branch.source" && entry.operation === "read"));
       assert.ok(audit.some((entry) => entry.source === "sessions.branch.destination" && entry.operation === "create"));
-      assert.ok(audit.some((entry) => entry.source === "sessions.branch.result" && entry.operation === "read"));
+      assert.ok(!audit.some((entry) => entry.source === "sessions.branch.result" && entry.operation === "read"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -15,7 +15,12 @@ global.setTimeout = setTimeout;
 global.clearTimeout = clearTimeout;
 
 global.$ = (id) => doc.getElementById(id);
-global.E = (value) => String(value ?? "");
+global.E = (value) => String(value ?? "")
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
 global.S = (name, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24"><use href="#${name}"/></svg>`;
 
 global.toast = () => {};
@@ -33,6 +38,10 @@ const searchCounts = { file: 0, text: 0, case: 0, fallback: 0 };
 
 win.App = {
   Constants: { WS_KEY: "workspace_path" },
+  State: {
+    getWorkspacePath: () => win.localStorage.getItem("workspace_path") || "",
+    setWorkspacePath: (path) => win.localStorage.setItem("workspace_path", path),
+  },
   UI: {},
   File: {},
   Settings: {
@@ -67,9 +76,13 @@ win.__monaco = {
   },
 };
 
+let searchResponse = { results: [], total: 0, truncated: false };
 global.fetch = async (url) => {
   if (String(url).startsWith("/api/file/read")) {
     return { ok: true, json: async () => ({ content: "one\ntwo\nthree", encoding: "utf-8" }) };
+  }
+  if (String(url).startsWith("/api/search?")) {
+    return { ok: true, json: async () => searchResponse };
   }
   throw new Error(`unexpected fetch: ${url}`);
 };
@@ -87,7 +100,7 @@ after(() => {
 });
 
 describe("search pane", () => {
-  it("does not double-call App.Settings fallbacks for search mode buttons", () => {
+  it("binds search controls without inline event attributes", () => {
     searchCounts.file = 0;
     searchCounts.text = 0;
     searchCounts.case = 0;
@@ -109,18 +122,42 @@ describe("search pane", () => {
     assert.ok(textBtn);
     assert.ok(caseBtn);
 
-    const runHandler = (button) => new Function(
-      "App",
-      "setSearchType",
-      "toggleCaseSensitive",
-      `return (${button.getAttribute("onclick")});`
-    );
-    runHandler(textBtn)(win.App, global.setSearchType, global.toggleCaseSensitive);
-    runHandler(caseBtn)(win.App, global.setSearchType, global.toggleCaseSensitive);
+    assert.strictEqual(container.querySelectorAll("[onclick], [onchange], [oninput]").length, 0);
+
+    textBtn.click();
+    caseBtn.click();
     assert.strictEqual(searchCounts.text, 1, "App.Settings.setSearchType should be called once");
     assert.strictEqual(searchCounts.case, 1, "App.Settings.toggleCaseSensitive should be called once");
-    // 注意：onclick 使用 App.Settings?.setSearchType?.() || setSearchType() 模式，
-    // 当 App.Settings 函数无返回值时 fallback 也会执行；这是已有模式，非本次引入
+    container.remove();
+  });
+
+  it("opens a quote-containing result path through delegated click handling", async () => {
+    const maliciousPath = `src/quote'\"<img src=x onerror=alert(1)>.ts`;
+    searchResponse = {
+      results: [{ file: maliciousPath, absolutePath: `E:/my-code-agent/${maliciousPath}`, matches: [] }],
+      total: 1,
+      truncated: false,
+    };
+    win.localStorage.setItem("workspace_path", "E:/my-code-agent");
+    openFileArg = null;
+
+    const container = doc.createElement("div");
+    doc.body.appendChild(container);
+    registerCalls[0][1](container);
+    const input = container.querySelector("#search-input");
+    input.value = "quote";
+    input.dispatchEvent(new win.Event("input", { bubbles: true }));
+    input.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 350));
+
+    const result = container.querySelector(".search-file-name");
+    assert.ok(result, container.innerHTML);
+    assert.strictEqual(result.getAttribute("onclick"), null);
+    result.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.strictEqual(openFileArg?.filePath, maliciousPath);
+    assert.strictEqual(container.querySelector("img"), null, "path must remain text, not executable markup");
     container.remove();
   });
 

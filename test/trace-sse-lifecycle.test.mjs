@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 
-import { attachSessionEvents, flushPendingTracePersist, persistTraceEvent, tagSessionHeader } from "../src/server/server.ts";
+import { attachSessionEvents, flushPendingTracePersist, persistBlockEvent, persistTraceEvent, tagSessionHeader } from "../src/server/server.ts";
 
 function jsonl(file) {
   return readFileSync(file, "utf-8")
@@ -74,6 +74,60 @@ describe("trace persistence lifecycle", () => {
 
     const [header] = jsonl(sessionFile);
     assert.strictEqual(header.workspace, "E:\\workspace\\pay");
+  });
+
+  it("does not append a trace when session write authorization rejects", () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "trace-write-denied-"));
+    const sessionFile = resolve(dir, "session.jsonl");
+    writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "session-1" }) + "\n");
+    const runtime = mockRuntime(sessionFile, { flushed: true });
+    const before = readFileSync(sessionFile, "utf-8");
+
+    const result = persistTraceEvent(runtime, {
+      type: "tool",
+      status: "running",
+      name: "search",
+      turnId: "turn-denied",
+      id: "trace-denied",
+    }, {
+      force: true,
+      authorizeSessionWrite: () => { throw new Error("permission denied"); },
+    });
+
+    assert.strictEqual(result, false);
+    assert.strictEqual(readFileSync(sessionFile, "utf-8"), before);
+  });
+
+  it("does not append an assistant block when session write authorization rejects", () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "block-write-denied-"));
+    const sessionFile = resolve(dir, "session.jsonl");
+    writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "session-1" }) + "\n");
+    const runtime = mockRuntime(sessionFile, { flushed: true });
+    const before = readFileSync(sessionFile, "utf-8");
+
+    const result = persistBlockEvent(runtime, {
+      type: "text",
+      text: "blocked",
+      turnId: "turn-denied",
+      blockId: "block-denied",
+      seq: 1,
+    }, {
+      authorizeSessionWrite: () => { throw new Error("permission denied"); },
+    });
+
+    assert.strictEqual(result, false);
+    assert.strictEqual(readFileSync(sessionFile, "utf-8"), before);
+  });
+
+  it("does not rewrite the workspace header when session write authorization rejects", () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "header-write-denied-"));
+    const sessionFile = resolve(dir, "session.jsonl");
+    writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "session-1" }) + "\n");
+    const before = readFileSync(sessionFile, "utf-8");
+
+    tagSessionHeader(sessionFile, "E:\\workspace\\pay", () => { throw new Error("permission denied"); });
+
+    assert.strictEqual(readFileSync(sessionFile, "utf-8"), before);
   });
 });
 

@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 import {
   applySessionPermissionSuggestions,
@@ -92,6 +92,101 @@ describe("shared permission primitives", () => {
         alwaysAllowRules: state.alwaysAllowRules,
       });
       assert.strictEqual(allowed.status, "allow");
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("allows ordinary reads outside the workspace without confirmation", () => {
+    const parent = mkdtempSync(resolve(tmpdir(), "perm-external-read-"));
+    try {
+      const workspace = resolve(parent, "workspace");
+      const external = resolve(parent, "external");
+      mkdirSync(workspace);
+      mkdirSync(external);
+
+      const decision = evaluatePathPermission(resolve(external, "README.md"), "read", {
+        workspaceRoot: workspace,
+      });
+
+      assert.strictEqual(decision.status, "allow");
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("asks before reading sensitive files outside the workspace", () => {
+    const parent = mkdtempSync(resolve(tmpdir(), "perm-sensitive-read-"));
+    try {
+      const workspace = resolve(parent, "workspace");
+      const external = resolve(parent, "external");
+      mkdirSync(workspace);
+      mkdirSync(external);
+
+      const target = resolve(external, ".npmrc");
+      const decision = evaluatePathPermission(target, "read", { workspaceRoot: workspace });
+
+      assert.strictEqual(decision.status, "ask");
+      assert.match(decision.reason, /sensitive/i);
+      assert.strictEqual(decision.suggestions[0].operation, "read");
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("trusts a sensitive path when the user explicitly selected its root", () => {
+    const parent = mkdtempSync(resolve(tmpdir(), "perm-sensitive-trusted-"));
+    try {
+      const workspace = resolve(parent, "workspace");
+      const selectedRoot = resolve(parent, "selected");
+      mkdirSync(workspace);
+      mkdirSync(selectedRoot);
+
+      const decision = evaluatePathPermission(resolve(selectedRoot, ".npmrc"), "read", {
+        workspaceRoot: workspace,
+        allowedWorkingRoots: [selectedRoot],
+      });
+
+      assert.strictEqual(decision.status, "allow");
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("recognizes browser profile data as a sensitive external read", () => {
+    const workspace = resolve(tmpdir(), "perm-browser-workspace");
+    const browserFile = process.platform === "win32"
+      ? resolve(homedir(), "AppData", "Local", "Google", "Chrome", "User Data", "Default", "Cookies")
+      : process.platform === "darwin"
+        ? resolve(homedir(), "Library", "Application Support", "Google", "Chrome", "Default", "Cookies")
+        : resolve(homedir(), ".config", "google-chrome", "Default", "Cookies");
+
+    const decision = evaluatePathPermission(browserFile, "read", { workspaceRoot: workspace });
+
+    assert.strictEqual(decision.status, "ask");
+    assert.match(decision.reason, /sensitive/i);
+  });
+
+  it("respects explicit ask rules inside the workspace", () => {
+    const parent = mkdtempSync(resolve(tmpdir(), "perm-internal-ask-"));
+    try {
+      const workspace = resolve(parent, "workspace");
+      mkdirSync(workspace);
+      const target = resolve(workspace, "review.txt");
+      const state = createSessionPermissionState();
+      state.alwaysAskRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${target})`,
+        match: "exact",
+      });
+
+      const decision = evaluatePathPermission(target, "read", {
+        workspaceRoot: workspace,
+        alwaysAskRules: state.alwaysAskRules,
+      });
+
+      assert.strictEqual(decision.status, "ask");
+      assert.match(decision.reason, /session rule/);
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }

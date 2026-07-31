@@ -9,13 +9,20 @@
  */
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 
 // ── 模拟 fetch ────────────────────────────────────────────
 let mockStatus = 200;
 let mockBody = {};
 let lastRequest = null;
+const originalPiConfigDir = process.env.PI_CONFIG_DIR;
+const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
+
+function restoreEnv(name, value) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
 
 async function mockFetch(url, init) {
   lastRequest = { url, init };
@@ -33,6 +40,12 @@ beforeEach(() => {
   lastRequest = null;
   global.fetch = mockFetch;
   process.env.SERVER_PORT = "3099";
+  setSearchBackend("auto");
+});
+
+afterEach(() => {
+  restoreEnv("PI_CONFIG_DIR", originalPiConfigDir);
+  restoreEnv("ANTHROPIC_API_KEY", originalAnthropicApiKey);
 });
 
 // ── 工具导入 ──────────────────────────────────────────────
@@ -40,10 +53,60 @@ import { fileReadTool } from "../src/agent/tools/file-read.ts";
 import { explorerListTool } from "../src/agent/tools/explorer-list.ts";
 import { fileOutlineTool } from "../src/agent/tools/file-outline.ts";
 import { searchTool } from "../src/agent/tools/search.ts";
+import { setSearchBackend, webSearchTool } from "../src/agent/tools/web-search.ts";
+import { toolRegistry } from "../src/agent/tools/index.ts";
 
 function ctx(overrides = {}) {
   return { toolCallId: "call-1", workspace: "/repo", ...overrides };
 }
+
+describe("builtin tool governance metadata", () => {
+  const expectedMetadata = new Map([
+    ["git-status", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: true }],
+    ["search", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: true }],
+    ["file_read", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: true }],
+    ["explorer_list", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: true }],
+    ["git_log", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: true }],
+    ["file_outline", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: true }],
+    ["web-search", { operations: ["execute"], riskLevel: "medium", needsPermission: false, workspaceBounded: false }],
+    ["web-fetch", { operations: ["execute"], riskLevel: "medium", needsPermission: false, workspaceBounded: false }],
+    ["command", { operations: ["execute"], riskLevel: "high", needsPermission: false, workspaceBounded: false }],
+    ["write_agent_md", { operations: ["create", "write"], riskLevel: "medium", needsPermission: false, workspaceBounded: true }],
+    ["read_memory", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: false }],
+    ["write_memory", { operations: ["read", "create", "write"], riskLevel: "medium", needsPermission: false, workspaceBounded: false }],
+    ["str_replace_editor", { operations: ["read", "create", "write"], riskLevel: "high", needsPermission: false, workspaceBounded: true }],
+    ["file_write", { operations: ["create", "write"], riskLevel: "high", needsPermission: false, workspaceBounded: true }],
+  ]);
+
+  it("every registered builtin tool declares the permission contract fields", () => {
+    const validOperations = new Set(["read", "write", "create", "remove", "execute"]);
+    const validRiskLevels = new Set(["low", "medium", "high"]);
+
+    for (const tool of toolRegistry.getAll()) {
+      assert.ok(Array.isArray(tool.operations), `${tool.name} should declare operations`);
+      assert.ok(tool.operations.length > 0, `${tool.name} should declare at least one operation`);
+      for (const operation of tool.operations) {
+        assert.ok(validOperations.has(operation), `${tool.name} declares unknown operation: ${operation}`);
+      }
+      assert.ok(validRiskLevels.has(tool.riskLevel), `${tool.name} should declare riskLevel`);
+      assert.strictEqual(typeof tool.needsPermission, "boolean", `${tool.name} should declare needsPermission`);
+      assert.strictEqual(typeof tool.workspaceBounded, "boolean", `${tool.name} should declare workspaceBounded`);
+    }
+  });
+
+  it("tracks the expected operations and risk for registered builtin tools", () => {
+    const toolsByName = new Map(toolRegistry.getAll().map((tool) => [tool.name, tool]));
+
+    for (const [name, expected] of expectedMetadata) {
+      const tool = toolsByName.get(name);
+      assert.ok(tool, `${name} should be registered`);
+      assert.deepStrictEqual(tool.operations, expected.operations, `${name} operations drifted`);
+      assert.strictEqual(tool.riskLevel, expected.riskLevel, `${name} riskLevel drifted`);
+      assert.strictEqual(tool.needsPermission, expected.needsPermission, `${name} needsPermission drifted`);
+      assert.strictEqual(tool.workspaceBounded, expected.workspaceBounded, `${name} workspaceBounded drifted`);
+    }
+  });
+});
 
 describe("file_read tool", () => {
   it("空路径返回友好提示", async () => {
@@ -153,6 +216,81 @@ describe("search tool", () => {
     assert.ok(r.includes("[代码"), "代码分组");
     assert.ok(r.includes("[文档/配置"), "文档分组");
     assert.ok(r.includes("[其他"), "其他分组");
+  });
+});
+
+describe("web-search tool", () => {
+  it("authorizes provider auth config reads through the shared path hook", async () => {
+    const tmp = mkdtempSync(resolve(process.cwd(), ".tmp-web-search-auth-"));
+    try {
+      const configDir = resolve(tmp, "pi");
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(resolve(configDir, "auth.json"), JSON.stringify({
+        deepseek: { apiKey: "sk-test-web-search" },
+      }));
+      process.env.PI_CONFIG_DIR = configDir;
+      mockBody = {
+        content: [
+          {
+            type: "text",
+            text: "provider result",
+          },
+        ],
+      };
+      setSearchBackend("provider");
+      const calls = [];
+      const ctxForAuth = {
+        toolCallId: "call-1",
+        workspace: tmp,
+        authorizePath: async (root, target, operation, source) => {
+          calls.push({ root, target, operation, source });
+          return { operation, root, path: target, relativePath: target };
+        },
+      };
+
+      const result = await webSearchTool.execute({ query: "codex" }, ctxForAuth);
+
+      assert.ok(result.includes("provider result"));
+      assert.deepStrictEqual(calls.map((call) => [call.operation, call.source]), [
+        ["read", "agent.web_search.auth"],
+      ]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not call the provider when auth config read is denied", async () => {
+    const tmp = mkdtempSync(resolve(process.cwd(), ".tmp-web-search-auth-deny-"));
+    try {
+      const configDir = resolve(tmp, "pi");
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(resolve(configDir, "auth.json"), JSON.stringify({
+        deepseek: { apiKey: "sk-denied-web-search" },
+      }));
+      process.env.PI_CONFIG_DIR = configDir;
+      mockBody = {
+        content: [
+          {
+            type: "text",
+            text: "provider result",
+          },
+        ],
+      };
+      setSearchBackend("provider");
+
+      const result = await webSearchTool.execute({ query: "codex" }, {
+        toolCallId: "call-1",
+        workspace: tmp,
+        authorizePath: async () => {
+          throw new Error("permission denied for web-search auth");
+        },
+      });
+
+      assert.ok(result.includes("permission denied for web-search auth"));
+      assert.strictEqual(lastRequest, null);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 

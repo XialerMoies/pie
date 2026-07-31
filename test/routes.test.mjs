@@ -669,6 +669,7 @@ describe("sessions routes", () => {
     const sessionsDir = resolve(tmpDir, "data", "pi", "sessions");
     const workspace = resolve(tmpDir, "project-title-source");
     const projectDir = resolve(sessionsDir, "by-project", "project-title-source");
+    mkdirSync(workspace, { recursive: true });
     mkdirSync(projectDir, { recursive: true });
     const sessionFile = resolve(projectDir, "sess-title-source.jsonl");
     writeFileSync(sessionFile, [
@@ -678,9 +679,10 @@ describe("sessions routes", () => {
 
     try {
       const ctx = mockContext({
+        runtime: mockRuntime({ currentWorkspace: workspace }),
         paths: {
           ...mockPaths(),
-          APP_ROOT: ROOT,
+          APP_ROOT: workspace,
           DATA_DIR: resolve(tmpDir, "data"),
           PI_CONFIG_DIR: resolve(tmpDir, "data", "pi"),
           SESSIONS_DIR: sessionsDir,

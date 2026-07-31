@@ -17,6 +17,12 @@ const win = new Window();
 global.window = win;
 global.document = win.document;
 global.self = win;
+win.App = {
+  State: {
+    syncTabs: () => {},
+  },
+};
+global.App = win.App;
 
 describe("TabStore", () => {
   before(async () => {
@@ -37,6 +43,27 @@ describe("TabStore", () => {
     const tabs = win.__tabs;
     assert.deepStrictEqual(tabs.getTabs(), []);
     assert.strictEqual(tabs.getActiveTab(), null);
+    assert.strictEqual(tabs.getState().activeId, null);
+  });
+
+  it("restoreTabs atomically replaces persisted tabs and activeId", () => {
+    const tabs = win.__tabs;
+    const persisted = [
+      { id: "sess-a", kind: "session", title: "A", order: 7, sessionId: "sess-a" },
+      { id: "/a.ts", kind: "file", title: "a.ts", order: 9, path: "/a.ts" },
+    ];
+
+    tabs.restoreTabs(persisted, "sess-a");
+    persisted[0].title = "mutated";
+
+    assert.deepStrictEqual(tabs.getTabs().map((tab) => [tab.id, tab.order, tab.title]), [
+      ["sess-a", 0, "A"],
+      ["/a.ts", 1, "a.ts"],
+    ]);
+    assert.strictEqual(tabs.getState().activeId, "sess-a");
+
+    tabs.restoreTabs([], "missing");
+    assert.deepStrictEqual(tabs.getTabs(), []);
     assert.strictEqual(tabs.getState().activeId, null);
   });
 

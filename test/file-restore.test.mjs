@@ -50,15 +50,15 @@ describe("File tab restore", () => {
       activateTab: () => {},
       getTabs: () => [],
     };
-    raw = {};
-    win.__state._uiStateStore = raw;
-    win.__uiStateStore = {
-      get _state() { return raw; },
-      get _hydrated() { return true; },
-      saveNow: async () => true,
-    };
+    raw = { activeView: { type: "chat" }, tabs: { items: [] }, panel: { active: "explorer", closed: false, width: 260 } };
     win.App = {
       Constants: { WS_KEY: "workspace_path" },
+      State: {
+        getSnapshot: () => raw,
+        getWorkspacePath: () => "/test",
+        setWorkspacePath: () => {},
+        resetWorkspace: () => {},
+      },
       UI: {}, Chat: {}, File: {}, Session: {}, Settings: {}, Git: {},
     };
     win.App.Tabs = {
@@ -79,7 +79,8 @@ describe("File tab restore", () => {
   beforeEach(() => {
     activateCalls = [];
     Object.keys(store).forEach(k => delete store[k]);
-    Object.keys(raw).forEach(k => delete raw[k]);
+    raw.activeView = { type: "chat" };
+    raw.tabs = { items: [] };
     win.__state._fileTabs = [];
   });
 

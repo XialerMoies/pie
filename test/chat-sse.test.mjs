@@ -98,18 +98,19 @@ describe("Chat SSE", () => {
   });
 
   it("POST /api/chat 设置 currentWorkspace", async () => {
+    const targetWorkspace = resolve(ROOT, "src");
     const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" };
     const ctx = {
-      runtime: { session: { model: {}, _cwd: "/other" }, currentWorkspace: "/other", switchWorkspace: async () => {}, onEvent: () => () => {} },
+      runtime: { session: { model: {}, _cwd: ROOT, prompt: async () => {} }, currentWorkspace: ROOT, switchWorkspace: async () => {}, onEvent: () => () => {} },
       paths: { APP_ROOT: ROOT },
       chatStream,
       sseClients: [],
     };
-    const req = makeReq("POST", "/api/chat", { message: "hi", workspace: "/my/ws" });
+    const req = makeReq("POST", "/api/chat", { message: "hi", workspace: targetWorkspace });
     const res = makeResWithEvents();
     await handleChat(req, res, ctx);
     await new Promise(r => setTimeout(r, 30));
-    assert.strictEqual(chatStream.currentWorkspace, "/my/ws");
+    assert.strictEqual(chatStream.currentWorkspace, targetWorkspace);
   });
 
   it("重复 SSE 连接覆盖旧 response", async () => {

@@ -44,6 +44,10 @@ global.logTiming = () => {};
   const calls = [];
   win.App = {
     Constants: { WS_KEY: "workspace_path" },
+    State: {
+      getWorkspacePath: () => "E:\\old-workspace",
+      resetWorkspace: (workspace) => calls.push(["resetWorkspace", workspace]),
+    },
     UI: {},
     Chat: { clearAttachments: () => calls.push(["clearAttachments"]) },
     File: {},
@@ -84,8 +88,7 @@ describe("workspace ui isolation", () => {
 
   beforeEach(async () => {
     env = setupDom();
-    const ts = Date.now() + Math.random();
-    await import(`../src/frontend/dashboard/dashboard-menus.ts?t=${ts}`);
+    await import(`../src/frontend/dashboard/dashboard-menus.ts?workspace-ui=${Date.now()}-${Math.random()}`);
   });
 
   it("openFolder waits for backend switch then clears cross-workspace state", async () => {
@@ -96,10 +99,6 @@ describe("workspace ui isolation", () => {
     assert.strictEqual(env.fetchCalls.length, 1);
     assert.strictEqual(env.fetchCalls[0][0], "/api/workspace/switch");
     assert.strictEqual(JSON.parse(env.fetchCalls[0][1].body).workspace, "E:\\new-workspace");
-
-    assert.strictEqual(localStorage.getItem("workspace_path"), "E:\\new-workspace");
-    assert.strictEqual(localStorage.getItem("file-tabs"), null);
-    assert.strictEqual(localStorage.getItem("last-session-id"), null);
 
     assert.strictEqual(env.oldStream.closed, true);
     assert.strictEqual(env.oldStream.onmessage, null);
@@ -116,10 +115,47 @@ describe("workspace ui isolation", () => {
     assert.strictEqual(env.doc.getElementById("cs").disabled, false);
 
     assert.ok(env.calls.some((call) => call[0] === "clearAttachments"));
+    assert.ok(env.calls.some((call) => call[0] === "resetWorkspace" && call[1] === "E:\\new-workspace"));
     assert.ok(env.calls.some((call) => call[0] === "monacoDispose"));
     assert.ok(env.calls.some((call) => call[0] === "activateTab" && call[1] === null));
     assert.ok(env.calls.some((call) => call[0] === "renderPanel" && call[1] === "explorer"));
     assert.ok(env.calls.some((call) => call[0] === "loadSessions"));
     assert.ok(env.calls.some((call) => call[0] === "refreshGit"));
+  });
+
+  it("openFolder ignores an equivalent Windows workspace path", async () => {
+    env.win.electronAPI.openFolder = async () => "e:/old-workspace/";
+
+    env.win.fileAction("openFolder");
+    await new Promise((resolve) => queueMicrotask(resolve));
+
+    assert.strictEqual(env.fetchCalls.length, 0);
+    assert.ok(!env.calls.some((call) => call[0] === "resetWorkspace"));
+  });
+
+  it("openFolder reports the server permission error without resetting workspace state", async () => {
+    global.fetch = async (url, init = {}) => {
+      env.fetchCalls.push([url, init]);
+      return {
+        ok: false,
+        status: 403,
+        text: async () => JSON.stringify({
+          error: "Permission confirmation denied or timed out",
+          code: "permission_denied",
+        }),
+      };
+    };
+    env.win.fetch = global.fetch;
+
+    env.win.fileAction("openFolder");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.ok(env.calls.some((call) => (
+      call[0] === "toast" &&
+      call[1].includes("E:\\new-workspace") &&
+      call[1].includes("permission_denied") &&
+      call[2] === "error"
+    )), JSON.stringify(env.calls));
+    assert.ok(!env.calls.some((call) => call[0] === "resetWorkspace"));
   });
 });

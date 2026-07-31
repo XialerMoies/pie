@@ -40,7 +40,7 @@ global.localStorage = {
   removeItem: (k) => { delete storage[k]; },
 };
 
-describe("App.Tabs dispatch", () => {
+describe("App.Tabs dispatch", { concurrency: false }, () => {
   before(async () => {
     win.__state = {
       D: null, M: [], IL: false, CS: null, CT: "chat",
@@ -50,6 +50,14 @@ describe("App.Tabs dispatch", () => {
     };
     win.App = {
       Constants: { WS_KEY: "workspace_path" },
+      State: {
+        getWorkspacePath: () => localStorage.getItem("workspace_path") || "",
+        setWorkspacePath: (path) => localStorage.setItem("workspace_path", path),
+        syncTabs: (items, activeId) => {
+          const state = win.__state._uiStateStore._state;
+          state.tabs = { ...state.tabs, items: items.map((item) => ({ ...item })), activeId };
+        },
+      },
       UI: {}, Chat: { clearAttachments: () => {} },
       File: {}, Session: {}, Settings: {}, Git: {},
     };
@@ -65,8 +73,9 @@ describe("App.Tabs dispatch", () => {
     global.loadSessions = () => {};
     global.ExplorerService = { iconFor: () => '<svg></svg>' };
     win.ExplorerService = global.ExplorerService;
-    await import("../src/frontend/services/tab-store.ts");
     await import("../src/frontend/dashboard/dashboard-helpers.ts");
+    await import("../src/frontend/services/ui-state-store.ts");
+    await import("../src/frontend/services/tab-store.ts");
     global.placeContextMenu = win.placeContextMenu;
     await import("../src/frontend/dashboard/layout-tabs.ts");
     global.App = win.App;
@@ -89,6 +98,7 @@ describe("App.Tabs dispatch", () => {
     const previousFetch = globalThis.fetch;
     const previousWindowFetch = win.fetch;
     const previousUpdateModelName = win.App.Chat.updateModelName;
+    const previousElectronApi = win.electronAPI;
     try {
       let bootstrapCalls = 0;
       const mockFetch = async (url, init) => {
@@ -112,6 +122,7 @@ describe("App.Tabs dispatch", () => {
       globalThis.fetch = mockFetch;
       global.fetch = mockFetch;
       win.fetch = mockFetch;
+      win.electronAPI = { getDesktopSessionToken: async () => "desktop-token" };
       win.App.Chat.updateModelName = () => {};
 
       await win.getD();
@@ -121,16 +132,18 @@ describe("App.Tabs dispatch", () => {
 
       assert.strictEqual(calls[0][0], "/api/bootstrap");
       assert.strictEqual(calls[0][1].credentials, "include");
-      assert.strictEqual(calls[1][0], "/api/dashboard");
-      assert.strictEqual(calls[2][0], "/api/bootstrap");
+      assert.strictEqual(calls[0][1].headers["X-My-Code-Agent-Token"], "desktop-token");
+      assert.strictEqual(calls[1][0], "/api/bootstrap");
+      assert.strictEqual(calls[1][1].credentials, "include");
+      assert.strictEqual(calls[1][1].headers["X-My-Code-Agent-Token"], "desktop-token");
+      assert.strictEqual(calls[2][0], "/api/dashboard");
       assert.strictEqual(calls[2][1].credentials, "include");
-      assert.strictEqual(calls[3][0], "/api/dashboard");
-      assert.strictEqual(calls[3][1].credentials, "include");
       assert.strictEqual(win.__state.D.modelId, "bootstrapped-model");
     } finally {
       globalThis.fetch = previousFetch;
       global.fetch = previousFetch;
       win.fetch = previousWindowFetch;
+      win.electronAPI = previousElectronApi;
       win.App.Chat.updateModelName = previousUpdateModelName;
     }
   });

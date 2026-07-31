@@ -62,6 +62,7 @@ describe("desktop IPC governance", () => {
       .join("\n");
 
     assert.match(uncommentedSource, /openFile:\s*\(\)\s*=>\s*ipcRenderer\.invoke\("dialog-open-file"\)/);
+    assert.match(uncommentedSource, /getDesktopSessionToken:\s*\(\)\s*=>\s*ipcRenderer\.invoke\("desktop-session-token"\)/);
     assert.strictEqual([...uncommentedSource.matchAll(/\bopenFile\s*:/g)].length, 1);
   });
 
@@ -102,6 +103,33 @@ describe("desktop IPC governance", () => {
     assert.deepStrictEqual(roots.listRoots(), [realpathSync.native(workspace)]);
   });
 
+  it("trusts dialog-open-file selections as exact files instead of parent directory roots", async () => {
+    const root = makeTempDir();
+    const selected = join(root, "selected.txt");
+    const sibling = join(root, "sibling.txt");
+    writeFileSync(selected, "selected");
+    writeFileSync(sibling, "sibling");
+
+    const ipcMain = new IpcMainMock();
+    const trustedRoots = new TrustedDesktopRoots();
+
+    registerDesktopIpcHandlers({
+      ipcMain,
+      getMainWindow: () => null,
+      createWindow: () => {},
+      showOpenDialog: async () => ({ canceled: false, filePaths: [selected] }),
+      showItemInFolder: () => {},
+      trashItem: async () => {},
+      spawnTerminal: () => true,
+      getDesktopSessionToken: () => "desktop-token",
+      trustedRoots,
+    });
+
+    assert.strictEqual(await ipcMain.invoke("dialog-open-file"), selected);
+    assert.strictEqual(trustedRoots.guardPath(selected, "reveal"), realpathSync.native(selected));
+    assert.throws(() => trustedRoots.guardPath(sibling, "trash"), /outside trusted desktop roots/);
+  });
+
   it("registers an allowlisted IPC surface with argument validation", async () => {
     const root = makeTempDir();
     const file = join(root, "file.txt");
@@ -133,6 +161,7 @@ describe("desktop IPC governance", () => {
       showItemInFolder: (filePath) => calls.push(`reveal:${filePath}`),
       trashItem: async (filePath) => { calls.push(`trash:${filePath}`); },
       spawnTerminal: () => { calls.push("terminal"); return true; },
+      getDesktopSessionToken: () => "desktop-token",
       trustedRoots,
     });
 
@@ -155,8 +184,10 @@ describe("desktop IPC governance", () => {
     assert.strictEqual(await ipcMain.invoke("trash-item", file), true);
     assert.ok(calls.includes(`trash:${realpathSync.native(file)}`));
     assert.strictEqual(await ipcMain.invoke("spawn-terminal"), true);
+    assert.strictEqual(await ipcMain.invoke("desktop-session-token"), "desktop-token");
 
     await assert.rejects(() => ipcMain.invoke("trash-item", "relative.txt"), /expects exactly one absolute path argument/);
     await assert.rejects(() => ipcMain.invoke("dialog-open-file", "unexpected"), /does not accept renderer arguments/);
+    await assert.rejects(() => ipcMain.invoke("desktop-session-token", "unexpected"), /does not accept renderer arguments/);
   });
 });

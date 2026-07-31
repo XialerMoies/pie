@@ -8,6 +8,8 @@
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { Window } from "happy-dom";
 
 const win = new Window();
@@ -31,6 +33,120 @@ before(async () => {
 function store() { return global.window.__uiStateStore; }
 
 describe("UiStateStore", () => {
+  it("keeps workspace compatibility storage behind App.State", () => {
+    const workspaceConsumers = [
+      "src/frontend/dashboard/dashboard-chat.ts",
+      "src/frontend/dashboard/dashboard-sessions.ts",
+      "src/frontend/chat/chat-token.ts",
+      "src/frontend/pane/git/index.ts",
+      "src/frontend/pane/search/index.ts",
+      "src/frontend/editor/monaco-tsserver.ts",
+      "src/frontend/editor/monaco-setup.ts",
+      "src/frontend/service/explorer-service.ts",
+    ];
+
+    for (const file of workspaceConsumers) {
+      const source = readFileSync(resolve(process.cwd(), file), "utf8");
+      assert.match(source, /App\.State\.getWorkspacePath\(\)/, `${file} must read workspace through App.State`);
+      assert.doesNotMatch(source, /localStorage[^\n]*(?:WS_KEY|workspace_path)|(?:WS_KEY|workspace_path)[^\n]*localStorage/, `${file} must not own workspace compatibility storage`);
+    }
+
+    const explorerSource = readFileSync(resolve(process.cwd(), "src/frontend/service/explorer-service.ts"), "utf8");
+    assert.match(explorerSource, /App\.State\.setWorkspacePath\(p\)/);
+
+    const menuSource = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-menus.ts"), "utf8");
+    assert.doesNotMatch(menuSource, /__uiStateStore/, "workspace reset must stay behind App.State");
+  });
+
+  it("keeps frontend state consumers behind the public App.State facade", () => {
+    const stateConsumers = [
+      "src/frontend/services/tab-store.ts",
+      "src/frontend/dashboard/dashboard-sessions.ts",
+      "src/frontend/dashboard/dashboard-layout.ts",
+      "src/frontend/dashboard/layout-tabs.ts",
+      "src/frontend/dashboard/layout-panel.ts",
+      "src/frontend/dashboard/dashboard-chat.ts",
+      "src/frontend/dashboard/dashboard-menus.ts",
+    ];
+
+    for (const file of stateConsumers) {
+      const source = readFileSync(resolve(process.cwd(), file), "utf8");
+      assert.doesNotMatch(source, /__uiStateStore|_uiStateStore/, `${file} must not access UiStateStore internals`);
+      assert.doesNotMatch(source, /localStorage[^\n]*(?:session-tabs|active-session-tab|session-tab-labels|last-session-id|last-active-tab|chat-tab-open|panel-width)/, `${file} must not own migrated UI-state storage`);
+    }
+  });
+
+  it("keeps persisted panel state behind App.State instead of window.__state projections", () => {
+    for (const file of [
+      "src/frontend/dashboard/dashboard-layout.ts",
+      "src/frontend/dashboard/layout-panel.ts",
+    ]) {
+      const source = readFileSync(resolve(process.cwd(), file), "utf8");
+      assert.doesNotMatch(source, /_activePanel/, `${file} must use App.State for panel state`);
+    }
+  });
+
+  it("syncs tabs and session UI data through detached App.State snapshots", async () => {
+    global.fetch = async (url, init) => {
+      if (init?.method === "PUT") return { ok: true, json: async () => ({ ok: true }) };
+      return {
+        ok: true,
+        json: async () => ({
+          schemaVersion: 2,
+          workspacePath: "/workspace",
+          activeView: { type: "chat" },
+          tabs: { items: [], activeId: null, labels: {}, titleSources: {}, chatOpen: true },
+          panel: { active: "explorer", closed: false, width: 260 },
+          recent: { sessions: {} },
+        }),
+      };
+    };
+    await window.App.State.hydrate();
+
+    const tabs = [{ id: "sess-a", kind: "session", title: "Session A", order: 0, sessionId: "sess-a" }];
+    window.App.State.syncTabs(tabs, "sess-a");
+    window.App.State.updateSessionMetadata({ "sess-a": "Renamed" }, { "sess-a": "manual" });
+    window.App.State.updatePanel({ active: "git", closed: true, width: 320 });
+    window.App.State.setChatOpen(false);
+    window.App.State.touchSession("sess-a", 1234);
+
+    tabs[0].title = "mutated input";
+    const snapshot = window.App.State.getSnapshot();
+    assert.strictEqual(snapshot.tabs.items[0].title, "Session A");
+    assert.deepStrictEqual(snapshot.activeView, { type: "session", id: "sess-a" });
+    assert.strictEqual(snapshot.tabs.labels["sess-a"], "Renamed");
+    assert.strictEqual(snapshot.tabs.titleSources["sess-a"], "manual");
+    assert.deepStrictEqual(snapshot.panel, { active: "git", closed: true, width: 320 });
+    assert.strictEqual(snapshot.tabs.chatOpen, false);
+    assert.strictEqual(snapshot.recent.lastSessionId, "sess-a");
+    assert.strictEqual(snapshot.recent.sessions["sess-a"], 1234);
+
+    snapshot.tabs.items[0].title = "mutated snapshot";
+    assert.strictEqual(window.App.State.getSnapshot().tabs.items[0].title, "Session A");
+  });
+
+  it("exposes the hydrated workspace through the App.State facade", async () => {
+    storage["workspace_path"] = "/legacy-workspace";
+    global.fetch = async (url, init) => {
+      if (init?.method === "PUT") return { ok: true, json: async () => ({ ok: true }) };
+      return {
+        ok: true,
+        json: async () => ({
+          schemaVersion: 2,
+          workspacePath: "/server-workspace",
+          tabs: { sessions: [] },
+          activeView: { type: "chat" },
+          panel: { active: "explorer", closed: false, width: 260 },
+          recent: { sessions: {} },
+        }),
+      };
+    };
+
+    await store().hydrate();
+
+    assert.strictEqual(typeof window.App?.State?.getWorkspacePath, "function");
+    assert.strictEqual(window.App.State.getWorkspacePath(), "/server-workspace");
+  });
   it("服务端空 tabs 有效，不 fallback 到旧 localStorage", async () => {
     storage["session-tabs"] = JSON.stringify(["old-sess"]);
     storage["workspace_path"] = "/ws";
@@ -65,6 +181,19 @@ describe("UiStateStore", () => {
   });
 
   it("resetWorkspaceState 清空 store 并更新 workspacePath", async () => {
+    const workspaceLegacyKeys = [
+      "file-tabs",
+      "last-active-tab",
+      "session-tabs",
+      "active-session-tab",
+      "session-tab-labels",
+      "last-session-id",
+      "chat-tab-open",
+      "active-panel",
+      "panel-width",
+    ];
+    for (const key of workspaceLegacyKeys) storage[key] = `stale:${key}`;
+
     // 先设置一些模拟状态
     global.fetch = async (url, init) => {
       if (String(url).includes("/api/ui-state") && init?.method === "PUT") return { ok: true, json: async () => ({ ok: true }) };
@@ -75,21 +204,17 @@ describe("UiStateStore", () => {
 
     // 模拟工作区切换
     const uis = store();
-    const newState = {
-      schemaVersion: 2,
-      workspacePath: "/new-ws",
-      activeView: { type: "chat" },
-      tabs: { sessions: [], files: [], chatOpen: true, labels: {} },
-      panel: { active: "explorer", closed: false, width: 260 },
-      recent: { sessions: {} },
-    };
-    Object.assign(uis._state, newState);
+    uis.resetWorkspace("/new-ws");
     await uis.saveNow();
 
     const s = uis.getState();
     assert.strictEqual(s.tabs.sessions.length, 0, "新工作区无标签");
     assert.strictEqual(s.workspacePath, "/new-ws", "workspacePath 已更新");
     assert.strictEqual(s.activeView.type, "chat");
+    assert.strictEqual(storage.workspace_path, "/new-ws");
+    for (const key of workspaceLegacyKeys) {
+      assert.strictEqual(storage[key], undefined, `${key} must not leak into the new workspace`);
+    }
   });
 
   it("saveNow 持久化新 tabs 格式和标题元数据", async () => {

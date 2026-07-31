@@ -20,3 +20,9 @@ scripts/patch-sdk.mjs
 .codex/
 AGENTS.md
 build/
+docs/
+# 测试残留目录（mkdtemp 建于项目根，失败/中断时遗留）
+.tmp-*
+pi-test-*/
+usage-test-*/
+ws-tag-*/

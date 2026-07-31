@@ -121,6 +121,7 @@ describe("typescript routes", () => {
 
   const ctx = {
     session: {},
+    runtime: { currentWorkspace: TEST_WORKSPACE },
     modelRegistry: {},
     chatStream: {},
     sseClients: [],
@@ -163,6 +164,29 @@ describe("typescript routes", () => {
     assert.ok(parseJSON(body).ok);
     assert.strictEqual(lastTsRequest?.cmd, "open");
     assert.strictEqual(lastTsRequest?.args?.file, TEST_FILE);
+    assert.strictEqual(lastTsRequest?.args?.projectRootPath, TEST_WORKSPACE);
+  });
+
+  it("uses runtime.currentWorkspace as the TS authorization root", async () => {
+    const workspaceOnlyCtx = {
+      ...ctx,
+      runtime: { currentWorkspace: TEST_WORKSPACE },
+      paths: {
+        ...ctx.paths,
+        APP_ROOT: resolve(TEST_WORKSPACE, "..", "ts-app-root-unused"),
+      },
+    };
+
+    const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/open", {
+      file: TEST_FILE,
+      content: "const x = 1;",
+      scriptKindName: "TS",
+    }, workspaceOnlyCtx);
+
+    assert.strictEqual(status, 200);
+    assert.ok(parseJSON(body).ok);
+    assert.strictEqual(lastTsRequest?.args?.file, TEST_FILE);
+    assert.strictEqual(lastTsRequest?.args?.projectRootPath, TEST_WORKSPACE);
   });
 
   it("rejects missing file before tsserver", async () => {
@@ -174,7 +198,7 @@ describe("typescript routes", () => {
     assert.strictEqual(isRunningCalls, 0);
   });
 
-  it("rejects files outside APP_ROOT before tsserver", async () => {
+  it("rejects files outside the current workspace before tsserver", async () => {
     const { status, body } = await callHandler(handleTypeScript, "POST", "/api/ts/open", {
       file: OUTSIDE_FILE,
       content: "x",

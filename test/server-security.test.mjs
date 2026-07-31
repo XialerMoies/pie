@@ -14,6 +14,7 @@ const security = {
   token: "test-token",
   cookieName: "mca_token",
   cookieMaxAgeSeconds: 60,
+  allowedOrigins: ["http://127.0.0.1:5173"],
 };
 
 function req(method, url, headers = {}) {
@@ -122,6 +123,30 @@ describe("server desktop security", () => {
     assert.strictEqual(headBootstrap.ok, true);
   });
 
+  it("does not issue a desktop cookie to an unauthenticated public bootstrap", () => {
+    const response = res();
+    installSecurityHeaders(req("GET", "/api/bootstrap"), response, security);
+    response.writeHead(200);
+
+    assert.strictEqual(response.headers["Set-Cookie"], undefined);
+
+    const authenticated = res();
+    installSecurityHeaders(
+      req("GET", "/api/bootstrap", { "x-my-code-agent-token": "test-token" }),
+      authenticated,
+      security,
+    );
+    authenticated.writeHead(200);
+    assert.match(authenticated.headers["Set-Cookie"], /^mca_token=test-token;/);
+
+    const invalid = authorizeLocalApiRequest(
+      req("GET", "/api/bootstrap", { "x-my-code-agent-token": "wrong-token" }),
+      security,
+    );
+    assert.strictEqual(invalid.ok, false);
+    assert.strictEqual(invalid.code, "bad_token");
+  });
+
   it("rejects cross-site and non-loopback API requests", () => {
     const badOrigin = authorizeLocalApiRequest(
       req("GET", "/api/dashboard", { origin: "https://evil.example" }),
@@ -136,11 +161,22 @@ describe("server desktop security", () => {
     );
     assert.strictEqual(crossSite.ok, false);
     assert.strictEqual(crossSite.code, "cross_site");
+
+    const unknownLoopback = authorizeLocalApiRequest(
+      req("GET", "/api/bootstrap", { origin: "http://127.0.0.1:7777", host: "127.0.0.1:3099" }),
+      security,
+    );
+    assert.strictEqual(unknownLoopback.ok, false);
+    assert.strictEqual(unknownLoopback.code, "bad_origin");
   });
 
   it("strips wildcard CORS and sets desktop cookie/security headers", () => {
     const response = res();
-    installSecurityHeaders(req("GET", "/api/dashboard"), response, security);
+    installSecurityHeaders(
+      req("GET", "/api/dashboard", { "x-my-code-agent-token": "test-token" }),
+      response,
+      security,
+    );
     response.writeHead(200, { "Access-Control-Allow-Origin": "*" });
 
     assert.strictEqual(response.headers["Access-Control-Allow-Origin"], undefined);

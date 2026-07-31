@@ -62,8 +62,28 @@ win.__state = {
   _activeSessionTabId: null,
 };
 
+const uiState = {
+  workspacePath: "",
+  activeView: { type: "chat" },
+  tabs: { items: [], activeId: null, sessions: [], files: [], chatOpen: true, labels: {}, titleSources: {} },
+  panel: { active: "explorer", closed: false, width: 260 },
+  recent: { sessions: {} },
+};
+
 win.App = {
   Constants: { WS_KEY: "workspace_path" },
+  State: {
+    getWorkspacePath: () => localStorage.getItem("workspace_path") || "",
+    setWorkspacePath: (path) => localStorage.setItem("workspace_path", path),
+    hydrate: async () => uiState,
+    saveNow: async () => true,
+    getSnapshot: () => JSON.parse(JSON.stringify(uiState)),
+    syncTabs: (items, activeId) => { uiState.tabs.items = items.map((item) => ({ ...item })); uiState.tabs.activeId = activeId; },
+    updateSessionMetadata: (labels, titleSources) => { uiState.tabs.labels = { ...labels }; uiState.tabs.titleSources = { ...titleSources }; },
+    updatePanel: (panel) => { uiState.panel = { ...uiState.panel, ...panel }; },
+    setChatOpen: (open) => { uiState.tabs.chatOpen = open; },
+    touchSession: () => {},
+  },
   UI: {},
   Chat: {},
   File: {},
@@ -94,6 +114,28 @@ win.App = {
   },
 };
 global.App = win.App;
+win.__tabs = {
+  getSessionTabIds: () => [...win.__state._sessionTabs],
+  getActiveSessionTabId: () => win.__state._activeSessionTabId || null,
+  getActiveTab: () => {
+    const id = win.__state._activeSessionTabId;
+    return id ? { id, kind: id.startsWith("draft:") ? "chat" : "session", title: id, order: 0 } : null;
+  },
+  getTab: (id) => win.__state._sessionTabs.includes(id) ? { id, kind: id.startsWith("draft:") ? "chat" : "session", title: id, order: 0 } : undefined,
+  openTab: (tab) => { if (!win.__state._sessionTabs.includes(tab.id)) win.__state._sessionTabs.push(tab.id); },
+  closeTab: (id) => { win.__state._sessionTabs = win.__state._sessionTabs.filter((tabId) => tabId !== id); },
+  replaceTab: (id, updates) => {
+    const index = win.__state._sessionTabs.indexOf(id);
+    if (index >= 0 && updates.id) win.__state._sessionTabs[index] = updates.id;
+  },
+  restoreTabs: (items, activeId) => {
+    win.__state._sessionTabs = items
+      .filter((tab) => tab.kind === "session" || tab.kind === "chat")
+      .map((tab) => tab.id);
+    win.__state._activeSessionTabId = activeId;
+  },
+  activateTab: (id) => { win.__state._activeSessionTabId = id; },
+};
 
 const fetchCalls = [];
 let sessionListState = 0;
@@ -906,10 +948,11 @@ describe("session ui state", () => {
   });
 
   it("重启后会话标题从缓存恢复", async () => {
-    store["session-tabs"] = JSON.stringify(["sess-a", "sess-b"]);
-    store["session-tab-labels"] = JSON.stringify({});
-    store["active-session-tab"] = "sess-b";
-    win.__state._sessionTabs = [];
+    win.__tabs.restoreTabs([
+      { id: "sess-a", kind: "session", title: "新会话", order: 0, sessionId: "sess-a" },
+      { id: "sess-b", kind: "session", title: "新会话", order: 1, sessionId: "sess-b" },
+    ], "sess-b");
+    win.App.State.updateSessionMetadata({}, {});
 
     win.renderSessionTabs();
 
@@ -917,8 +960,8 @@ describe("session ui state", () => {
     assert.strictEqual(tabs.length, 2);
     assert.ok(tabs.some(t => t.includes("session-tab") || t.length > 0), "should render 2 session tabs");
 
-    store["session-tab-labels"] = JSON.stringify({ "sess-a": "手动名称" });
-    store["active-session-tab"] = "sess-a";
+    win.App.State.updateSessionMetadata({ "sess-a": "手动名称" }, { "sess-a": "manual" });
+    win.__tabs.activateTab("sess-a");
     win.renderSessionTabs("sess-a");
 
     const tabs2 = Array.from(doc.querySelectorAll("#main-tabs .session-tab")).map(node => node.textContent || "");

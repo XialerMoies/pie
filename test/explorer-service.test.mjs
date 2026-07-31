@@ -15,6 +15,13 @@ global.localStorage = {
   setItem: (key, val) => { store[key] = val; },
   removeItem: (key) => { delete store[key]; },
 };
+let workspacePath = "";
+global.App = {
+  State: {
+    getWorkspacePath: () => workspacePath,
+    setWorkspacePath: (path) => { workspacePath = path; },
+  },
+};
 global.window = global;
 global.AbortController = class {
   constructor() { this.signal = {}; }
@@ -166,6 +173,31 @@ describe("ExplorerService", () => {
   });
 
   describe("events permission confirmation", () => {
+    it("does not connect until startEvents is called", async () => {
+      let eventSource;
+      const oldEventSource = global.EventSource;
+      try {
+        global.EventSource = class {
+          constructor(url) {
+            this.url = url;
+            eventSource = this;
+          }
+        };
+
+        await import(`../src/frontend/service/explorer-service.ts?event-gate=${Date.now()}`);
+        assert.equal(eventSource, undefined);
+        const ready = ExplorerService.startEvents();
+        assert.ok(eventSource, "EventSource should be created after authentication");
+        assert.strictEqual(eventSource.url, "/api/events");
+        assert.strictEqual(typeof eventSource.onopen, "function");
+        eventSource.onopen();
+        await ready;
+      } finally {
+        ExplorerService.stopEvents();
+        global.EventSource = oldEventSource;
+      }
+    });
+
     it("POSTs permission confirmation decisions back to the server", async () => {
       let eventSource;
       const calls = [];
@@ -194,9 +226,11 @@ describe("ExplorerService", () => {
           return { ok: true, json: async () => ({ ok: true }) };
         };
 
-        await import(`../src/frontend/service/explorer-service.ts?permission-event=${Date.now()}`);
+        const ready = ExplorerService.startEvents();
         assert.ok(eventSource, "EventSource should be created");
         assert.strictEqual(eventSource.url, "/api/events");
+        eventSource.onopen();
+        await ready;
 
         eventSource.onmessage({
           data: JSON.stringify({
@@ -228,6 +262,7 @@ describe("ExplorerService", () => {
         });
         assert.ok(calls.some((call) => call.type === "refreshPermissionsPanel"));
       } finally {
+        ExplorerService.stopEvents();
         global.EventSource = oldEventSource;
         global.confirmPermissionAsync = oldConfirmPermissionAsync;
         global.confirmAsync = oldConfirmAsync;

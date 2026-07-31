@@ -32,7 +32,7 @@ import { describe, it } from "node:test"
 import { ok, deepEqual, equal } from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import {
   commandSecurityVerdictShadowDiff,
   commandTool,
@@ -91,6 +91,21 @@ function expectPathRuleSuggestion(result, operation) {
   equal(suggestion.rule?.toolName, toolName)
   equal(suggestion.rule?.match, "wildcard")
   ok(String(suggestion.rule?.ruleContent || "").startsWith(`${toolName}(`))
+}
+
+function externalReadAskOptions(cwd = process.cwd(), workspaceRoot = cwd) {
+  const externalRoot = resolve(workspaceRoot, "..")
+  return {
+    cwd,
+    workspaceRoot,
+    alwaysAskRules: {
+      session: [{
+        toolName: "Read",
+        ruleContent: `Read(${join(externalRoot, "**")})`,
+        match: "wildcard",
+      }],
+    },
+  }
 }
 
 async function withEnvVar(name, value, fn) {
@@ -331,8 +346,7 @@ describe("security parser facade", () => {
       redirects: [],
     }
     const argResult = validateCommandPaths("cat package.json", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
+      ...externalReadAskOptions(),
       shellDialect: "posix-bash",
       parsed: parsedWithArg,
     })
@@ -401,10 +415,13 @@ describe("validateCommandPaths", () => {
         },
       }).allowed, true)
 
-      const readAsk = validateCommandPaths(readTarget, {
+      const ordinaryRead = validateCommandPaths(readTarget, {
         cwd: workspace,
         workspaceRoot: workspace,
       })
+      equal(ordinaryRead.allowed, true)
+
+      const readAsk = validateCommandPaths(readTarget, externalReadAskOptions(workspace, workspace))
       expectPathRuleSuggestion(readAsk, "read")
 
       equal(validateCommandPaths(readTarget, {
@@ -443,8 +460,10 @@ describe("validateCommandPaths", () => {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
     })
-    equal(readOutside.allowed, false)
-    ok(!readOutside.allowed && readOutside.reason.includes("读取路径"))
+    equal(readOutside.allowed, true)
+
+    const readAsk = validateCommandPaths("cp ../outside.txt inside.txt", externalReadAskOptions())
+    expectPathRuleSuggestion(readAsk, "read")
 
     const writeOutside = validateCommandPaths("cp inside.txt ../outside.txt", {
       cwd: process.cwd(),
@@ -476,7 +495,7 @@ describe("validateCommandPaths", () => {
     ok(!targetDirectoryOutside.allowed && targetDirectoryOutside.reason.includes("写入路径"))
   })
 
-  it("只读命令的 workspace 外路径应硬拒绝", () => {
+  it("workspace 外普通读取默认放行且显式 ask 规则仍生效", () => {
     for (const cmd of [
       "cat ../outside.txt",
       "head -n 10 ../outside.log",
@@ -487,8 +506,10 @@ describe("validateCommandPaths", () => {
         cwd: process.cwd(),
         workspaceRoot: process.cwd(),
       })
-      expectPathRuleSuggestion(result, "read")
-      ok(!result.allowed && result.reason.includes("读取路径"))
+      equal(result.allowed, true)
+
+      const asked = validateCommandPaths(cmd, externalReadAskOptions())
+      expectPathRuleSuggestion(asked, "read")
     }
   })
 
@@ -503,9 +524,10 @@ describe("validateCommandPaths", () => {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
     })
-    equal(readOutside.allowed, false)
-    equal(!readOutside.allowed && readOutside.requiresConfirmation, true)
-    ok(!readOutside.allowed && readOutside.reason.includes("读取路径"))
+    equal(readOutside.allowed, true)
+
+    const readOutsideAsk = validateCommandPaths("cat ../*.ts", externalReadAskOptions())
+    expectPathRuleSuggestion(readOutsideAsk, "read")
 
     const writeGlob = validateCommandPaths("touch src/*.ts", {
       cwd: process.cwd(),
@@ -531,8 +553,10 @@ describe("validateCommandPaths", () => {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
     })
-    expectPathRuleSuggestion(input, "read")
-    ok(!input.allowed && input.reason.includes("读取路径"))
+    equal(input.allowed, true)
+
+    const inputAsk = validateCommandPaths("node script.js < ../secret.txt", externalReadAskOptions())
+    expectPathRuleSuggestion(inputAsk, "read")
 
     const outputVar = validateCommandPaths("echo hi > $OUT_FILE", {
       cwd: process.cwd(),
@@ -562,36 +586,21 @@ describe("validateCommandPaths", () => {
   })
 
   it("find/rg 按命令语义提取路径参数", () => {
-    const findRoot = validateCommandPaths("find ../outside -name package.json", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
+    const findRoot = validateCommandPaths("find ../outside -name package.json", externalReadAskOptions())
     equal(findRoot.allowed, false)
     ok(!findRoot.allowed && findRoot.reason.includes("读取路径"))
 
-    const findFlagPath = validateCommandPaths("find . -newer ../marker", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
+    const findFlagPath = validateCommandPaths("find . -newer ../marker", externalReadAskOptions())
     equal(findFlagPath.allowed, false)
 
-    const rgOutside = validateCommandPaths("rg -e TODO ../outside", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
+    const rgOutside = validateCommandPaths("rg -e TODO ../outside", externalReadAskOptions())
     equal(rgOutside.allowed, false)
 
-    const grepPatternFile = validateCommandPaths("grep -f ../patterns.txt src/file.ts", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
+    const grepPatternFile = validateCommandPaths("grep -f ../patterns.txt src/file.ts", externalReadAskOptions())
     equal(grepPatternFile.allowed, false)
     ok(!grepPatternFile.allowed && grepPatternFile.reason.includes("读取路径"))
 
-    const rgPatternFile = validateCommandPaths("rg --file ../patterns.txt src", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
+    const rgPatternFile = validateCommandPaths("rg --file ../patterns.txt src", externalReadAskOptions())
     equal(rgPatternFile.allowed, false)
     ok(!rgPatternFile.allowed && rgPatternFile.reason.includes("读取路径"))
 
@@ -603,10 +612,7 @@ describe("validateCommandPaths", () => {
   })
 
   it("sed/jq/git diff --no-index 提取文件路径", () => {
-    const sedRead = validateCommandPaths("sed -n '1p' ../outside.txt", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
+    const sedRead = validateCommandPaths("sed -n '1p' ../outside.txt", externalReadAskOptions())
     equal(sedRead.allowed, false)
 
     const sedWriteInside = validateCommandPaths("sed -i 's/a/b/' src/a.txt", {
@@ -629,24 +635,15 @@ describe("validateCommandPaths", () => {
     equal(sortWriteOutside.allowed, false)
     ok(!sortWriteOutside.allowed && sortWriteOutside.reason.includes("写入路径"))
 
-    const jqFilter = validateCommandPaths("jq -f ../filter.jq data.json", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
+    const jqFilter = validateCommandPaths("jq -f ../filter.jq data.json", externalReadAskOptions())
     equal(jqFilter.allowed, false)
 
-    const gitNoIndex = validateCommandPaths("git diff --no-index src/a.ts ../outside.ts", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
+    const gitNoIndex = validateCommandPaths("git diff --no-index src/a.ts ../outside.ts", externalReadAskOptions())
     equal(gitNoIndex.allowed, false)
   })
 
   it("tar 归档和解包路径按读写语义验证", () => {
-    const readArchiveOutside = validateCommandPaths("tar -xf ../archive.tar -C out", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
+    const readArchiveOutside = validateCommandPaths("tar -xf ../archive.tar -C out", externalReadAskOptions())
     equal(readArchiveOutside.allowed, false)
     ok(!readArchiveOutside.allowed && readArchiveOutside.reason.includes("读取路径"))
 
@@ -677,11 +674,39 @@ describe("validateCommandPaths", () => {
     ok(!tildeUser.allowed && tildeUser.reason.includes("用户目录"))
   })
 
+  it("allows ordinary read paths outside the workspace", () => {
+    const workspace = resolve(process.cwd(), "test")
+    const external = resolve(process.cwd(), "README.md")
+
+    const result = validateCommandPaths(`cat "${external}"`, {
+      cwd: workspace,
+      workspaceRoot: workspace,
+    })
+
+    equal(result.allowed, true)
+  })
+
+  it("makes sensitive external read paths confirmable instead of hard-denied", () => {
+    const workspace = resolve(process.cwd(), "test")
+    const sensitive = resolve(process.cwd(), ".npmrc")
+
+    const result = validateCommandPaths(`cat "${sensitive}"`, {
+      cwd: workspace,
+      workspaceRoot: workspace,
+    })
+
+    equal(result.allowed, false)
+    equal(!result.allowed && result.requiresConfirmation, true)
+    ok(!result.allowed && !result.hardDeny)
+    ok(!result.allowed && result.reason.includes("敏感路径"))
+  })
+
   it("Windows 原生命令路径应参与 workspace 边界验证", () => {
     const opts = {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
     }
+    const readAskOpts = externalReadAskOptions(opts.cwd, opts.workspaceRoot)
 
     equal(validateCommandPaths(String.raw`type package.json`, opts).allowed, true)
     equal(validateCommandPaths(String.raw`dir src`, opts).allowed, true)
@@ -689,23 +714,23 @@ describe("validateCommandPaths", () => {
     equal(validateCommandPaths(String.raw`copy data\input.txt out\copy.txt`, opts).allowed, true)
     equal(validateCommandPaths(String.raw`move out\copy.txt out\moved.txt`, opts).allowed, true)
 
-    const typeOutside = validateCommandPaths(String.raw`type ..\outside.txt`, opts)
+    const typeOutside = validateCommandPaths(String.raw`type ..\outside.txt`, readAskOpts)
     equal(typeOutside.allowed, false)
     ok(!typeOutside.allowed && typeOutside.reason.includes("读取路径"))
 
-    const dirOutside = validateCommandPaths(String.raw`dir ..\outside`, opts)
+    const dirOutside = validateCommandPaths(String.raw`dir ..\outside`, readAskOpts)
     equal(dirOutside.allowed, false)
     ok(!dirOutside.allowed && dirOutside.reason.includes("读取路径"))
 
-    const findstrOutside = validateCommandPaths(String.raw`findstr /s /m hello ..\*`, opts)
+    const findstrOutside = validateCommandPaths(String.raw`findstr /s /m hello ..\*`, readAskOpts)
     equal(findstrOutside.allowed, false)
     ok(!findstrOutside.allowed && findstrOutside.reason.includes("读取路径"))
 
-    const findstrListFile = validateCommandPaths(String.raw`findstr /g:..\patterns.txt src\*`, opts)
+    const findstrListFile = validateCommandPaths(String.raw`findstr /g:..\patterns.txt src\*`, readAskOpts)
     equal(findstrListFile.allowed, false)
     ok(!findstrListFile.allowed && findstrListFile.reason.includes("读取路径"))
 
-    const fcOutside = validateCommandPaths(String.raw`fc src\a.txt ..\b.txt`, opts)
+    const fcOutside = validateCommandPaths(String.raw`fc src\a.txt ..\b.txt`, readAskOpts)
     equal(fcOutside.allowed, false)
     ok(!fcOutside.allowed && fcOutside.reason.includes("读取路径"))
 
@@ -722,7 +747,8 @@ describe("validateCommandPaths", () => {
       const hostsPath = join(windowsRoot, "System32", "drivers", "etc", "hosts")
       const systemHosts = validateCommandPaths(`type "${hostsPath}"`, { ...opts, shellDialect: "cmd" })
       equal(systemHosts.allowed, false)
-      equal(!systemHosts.allowed && systemHosts.hardDeny, true)
+      equal(!systemHosts.allowed && systemHosts.requiresConfirmation, true)
+      ok(!systemHosts.allowed && !systemHosts.hardDeny)
       ok(!systemHosts.allowed && String(systemHosts.blockedPath || "").toLowerCase().endsWith("\\system32\\drivers\\etc\\hosts"))
     }
   })
@@ -738,16 +764,16 @@ describe("validateCommandPaths", () => {
     equal(validateCommandPaths("cd && dir", opts).allowed, true)
 
     const outsideRead = validateCommandPaths(String.raw`cd && type ..\outside.txt`, opts)
-    equal(outsideRead.allowed, false)
+    equal(outsideRead.allowed, true)
   })
 
-  it("POSIX bare cd should still model home-directory access", () => {
+  it("POSIX bare cd models home-directory access without blocking an ordinary external read", () => {
     const result = validateCommandPaths("cd", {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
       shellDialect: "posix-bash",
     })
-    equal(result.allowed, false)
+    equal(result.allowed, true)
   })
 
   it("cd 后接只读命令不因 cd 本身误杀，接写入应硬拒绝", () => {
@@ -767,7 +793,7 @@ describe("validateCommandPaths", () => {
       cwd: process.cwd(),
       workspaceRoot: process.cwd(),
     })
-    equal(readAfterFailedCdBranch.allowed, false)
+    equal(readAfterFailedCdBranch.allowed, true)
 
     const writeAfterCd = validateCommandPaths("cd src && touch generated.txt", {
       cwd: process.cwd(),
@@ -785,7 +811,7 @@ describe("validateCommandPaths", () => {
     ok(!previousDirectory.allowed && previousDirectory.reason.includes("上一次目录"))
   })
 
-  it("Windows cd /d 开关不应被当成路径，但目标仍需在 workspace 内", () => {
+  it("Windows cd /d 开关不应被当成路径且外部只读目录遵循 ask 规则", () => {
     if (process.platform !== "win32") return
     const { root, workspace } = tempWorkspace()
     try {
@@ -799,8 +825,13 @@ describe("validateCommandPaths", () => {
         cwd: workspace,
         workspaceRoot: workspace,
       })
-      equal(outside.allowed, false)
-      ok(!outside.allowed && outside.reason.includes("读取路径"))
+      equal(outside.allowed, true)
+
+      const asked = validateCommandPaths(
+        `cd /d "${root}" && dir`,
+        externalReadAskOptions(workspace, workspace),
+      )
+      expectPathRuleSuggestion(asked, "read")
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1476,6 +1507,72 @@ describe("commandTool.execute 安全拦截", () => {
     }
   })
 
+  it("复杂但非灾难性的 shell 命令应确认后继续执行", async () => {
+    if (!resolveBashExecutable()) return
+    let confirmCalls = 0
+    let confirmationReason = ""
+    const result = await commandTool.execute(
+      { command: "(echo complex-confirm-ok)" },
+      {
+        cwd: process.cwd(),
+        workspace: process.cwd(),
+        sessionId: "",
+        permissionMode: "dontAsk",
+        shellDialect: "posix-bash",
+        confirmCommand: async (_command, reason) => {
+          confirmCalls++
+          confirmationReason = reason
+          return { allow: true, scope: "once" }
+        },
+      },
+    )
+    equal(confirmCalls, 1)
+    ok(confirmationReason.includes("complex bash expansion or control flow"), confirmationReason)
+    ok(result.includes("complex-confirm-ok"), result)
+    ok(result.includes("仅本次"), result)
+  })
+
+  it("明确灾难性命令应硬拒且不能通过确认绕过", async () => {
+    let confirmCalls = 0
+    const result = await commandTool.execute(
+      { command: "rm -rf /" },
+      {
+        cwd: process.cwd(),
+        workspace: process.cwd(),
+        sessionId: "",
+        permissionMode: "dontAsk",
+        shellDialect: "posix-bash",
+        confirmCommand: async () => {
+          confirmCalls++
+          return true
+        },
+      },
+    )
+    equal(confirmCalls, 0)
+    ok(result.includes("危险命令已拦截"), result)
+  })
+
+  it("只读硬约束应阻止复杂命令且不能通过确认绕过", async () => {
+    let confirmCalls = 0
+    const result = await commandTool.execute(
+      { command: "(echo complex-readonly-blocked)", readOnly: true },
+      {
+        cwd: process.cwd(),
+        workspace: process.cwd(),
+        sessionId: "",
+        permissionMode: "default",
+        shellDialect: "posix-bash",
+        confirmCommand: async () => {
+          confirmCalls++
+          return true
+        },
+      },
+    )
+    equal(confirmCalls, 0)
+    ok(result.includes("只读模式"), result)
+    ok(!result.includes("complex-readonly-blocked\n"), result)
+  })
+
   it("只读模式下非只读命令应被拦截", async () => {
     const { commandTool } = await import("../src/agent/tools/command.ts")
     const result = await commandTool.execute(
@@ -1776,7 +1873,7 @@ describe("commandTool 权限模式", () => {
     }
   })
 
-  it("确认普通外部路径后应应用本会话授权，后续不重复确认", async () => {
+  it("外部写入会话授权不重复确认且普通外部读取直接放行", async () => {
     const { root, workspace } = tempWorkspace()
     const external = join(root, "external")
     mkdirSync(external, { recursive: true })
@@ -1845,17 +1942,12 @@ describe("commandTool 权限模式", () => {
 
       const firstRead = await commandTool.execute({ command: readCommand, readOnly: true }, readCtx)
       ok(firstRead.includes("external-read"), firstRead)
-      ok(firstRead.includes("Read("), firstRead)
-      equal(readConfirmCalls, 1)
-      ok(readState.alwaysAllowRules.session.some((rule) => (
-        rule.toolName === "Read"
-        && rule.match === "wildcard"
-        && rule.ruleContent.startsWith("Read(")
-      )))
+      equal(readConfirmCalls, 0)
+      equal(readState.alwaysAllowRules.session.length, 0)
 
       const secondRead = await commandTool.execute({ command: readCommand, readOnly: true }, readCtx)
       ok(secondRead.includes("external-read"), secondRead)
-      equal(readConfirmCalls, 1)
+      equal(readConfirmCalls, 0)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -2018,7 +2110,7 @@ describe("commandTool 权限模式", () => {
     }
   })
 
-  it("Windows system config reads should hard deny before confirmation", async () => {
+  it("Windows system config reads should require confirmation instead of hard denial", async () => {
     if (process.platform !== "win32") return
     const { root, workspace } = tempWorkspace()
     const windowsRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows"
@@ -2039,7 +2131,7 @@ describe("commandTool 权限模式", () => {
           },
         },
       )
-      equal(confirmCalls, 0)
+      equal(confirmCalls, 1)
       ok(result.length > 0, result)
     } finally {
       rmSync(root, { recursive: true, force: true })

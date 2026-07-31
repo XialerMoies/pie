@@ -36,12 +36,17 @@ describe("chat route workspace", () => {
   }
 
   it("POST /api/chat 设置 currentWorkspace", async () => {
-    const ctx = chatCtx({ session: { _cwd: "/other/path" } });
-    const req = makeReq("POST", "/api/chat", { message: "hello", workspace: "/my/project" });
+    const targetWorkspace = resolve(ROOT, "src");
+    const ctx = chatCtx({
+      session: { _cwd: ROOT },
+      currentWorkspace: ROOT,
+      ctx: { paths: { APP_ROOT: ROOT } },
+    });
+    const req = makeReq("POST", "/api/chat", { message: "hello", workspace: targetWorkspace });
     const res = makeRes();
     await handleChat(req, res, ctx);
     await new Promise(r => setTimeout(r, 50));
-    assert.strictEqual(ctx.chatStream.currentWorkspace, "/my/project", "currentWorkspace 应被设置");
+    assert.strictEqual(ctx.chatStream.currentWorkspace, targetWorkspace, "currentWorkspace 应被设置");
   });
 
   it("POST /api/chat 不带 workspace 不影响 currentWorkspace", async () => {
@@ -54,13 +59,18 @@ describe("chat route workspace", () => {
 
   it("POST /api/chat 同路径不重复切换（_cwd 相同）", async () => {
     let reloadCalled = false;
-    const ctx = chatCtx({ session: { _cwd: "/my/project", reload: async () => { reloadCalled = true; } }, currentWorkspace: "/my/project" });
-    const req = makeReq("POST", "/api/chat", { message: "hi", workspace: "/my/project" });
+    const ctx = chatCtx({
+      session: { _cwd: ROOT, reload: async () => { reloadCalled = true; } },
+      currentWorkspace: ROOT,
+      ctx: { paths: { APP_ROOT: ROOT } },
+    });
+    const req = makeReq("POST", "/api/chat", { message: "hi", workspace: ROOT });
     const res = makeRes();
     await handleChat(req, res, ctx);
     await new Promise(r => setTimeout(r, 30));
     assert.strictEqual(reloadCalled, false, "同路径不应 reload");
   });
+
 });
 
 describe("tagSessionWorkspace（已废弃，不再移动文件）", () => {

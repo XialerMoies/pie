@@ -1,7 +1,7 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-422%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-972%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
   <img src="https://img.shields.io/badge/license-AGPLv3-6366F1?style=flat&labelColor=1a1a2e" alt="License">
-  <img src="https://img.shields.io/badge/electron-30-F59E0B?style=flat&labelColor=1a1a2e" alt="Electron">
+  <img src="https://img.shields.io/badge/electron-39-F59E0B?style=flat&labelColor=1a1a2e" alt="Electron">
   <img src="https://img.shields.io/badge/typescript-5.9-3178C6?style=flat&labelColor=1a1a2e" alt="TypeScript">
 </p>
 
@@ -130,16 +130,16 @@ npm run dist:portable
 ### 测试
 
 ```bash
-npm test            # 全量 422 项测试（约 12s）
+npm test            # 全量 972 项测试（unit + routes + frontend）
 npm run test:build  # 构建验证 + smoke test
 npm run typecheck   # TypeScript 类型检查
 ```
 
 | 套件 | 数量 | 覆盖 |
 |------|------|------|
-| unit | 217 | prompts（14 节）/ tree / explorer-service / tool 输入验证 / ui-state-store / usage-index / mcp-config / mcp-trust / mcp-client / mcp-client-service / tab-store / search-replace / agent-memory / str-replace-editor（32 项） |
-| routes | 120 | 全部 API handler / session / block 协议 / SSE / trace / code-actions / organize-imports / search-replace / conversation-search |
-| frontend | 85 | 消息渲染 / chat-ui / session-ui（含 openConvMatch）/ workspace-ui / app-tabs / file-restore / problems-store / bottom-bar |
+| unit | 638 | Shell/权限安全、工具、状态存储、MCP、搜索替换、Agent memory |
+| routes | 220 | API、PathGuard、桌面认证、权限确认、session、SSE、TS、附件与 trace |
+| frontend | 114 | 消息、会话、workspace、tabs、权限中心、Explorer/Search/Git 与桌面认证启动 |
 | CSS | 20+20 | 变量定义完整性扫描（dark + light 各 20 项） |
 
 ---
@@ -168,7 +168,7 @@ MCP 服务器配置：
 
 | 层 | 技术 |
 |------|------|
-| 桌面壳 | Electron 30 + TypeScript |
+| 桌面壳 | Electron 39 + TypeScript |
 | 前端 | Vanilla TypeScript + esbuild + Vite (Monaco bundle) |
 | 编辑器 | Monaco Editor 0.55 |
 | 后端 | Node.js HTTP + SSE + tsserver |
@@ -245,7 +245,7 @@ src/
 │   ├── services/        # TabStore / ProblemsStore / UiStateStore
 │   ├── pane/            # 5 面板（explorer / chat / search / git / mcp）
 │   └── ui/              # Tree 组件 + ContextMenu
-test/                    # 30 个测试文件，422 项
+test/                    # 49 个测试文件，972 项（另有 build smoke / packaged E2E）
 scripts/                 # 编译/构建/清理脚本
 ```
 

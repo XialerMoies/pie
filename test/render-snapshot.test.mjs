@@ -182,6 +182,34 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes("复制错误"), "显示复制错误按钮");
     assert.ok(html.includes("刷新工作区"), "显示刷新工作区按钮");
     assert.ok(html.includes("打开设置"), "显示打开设置按钮");
+
+    const host = doc.createElement("div");
+    host.innerHTML = html;
+    doc.body.appendChild(host);
+    assert.strictEqual(host.querySelectorAll("[onclick], [onchange], [oninput]").length, 0);
+
+    const calls = [];
+    const originals = {
+      retryLastTurn: win.App.Chat.retryLastTurn,
+      copyLastError: win.App.Chat.copyLastError,
+      refreshWorkspaceState: win.App.Chat.refreshWorkspaceState,
+      openSettingsModal: win.App.Settings.openSettingsModal,
+    };
+    win.App.Chat.retryLastTurn = () => calls.push("retry");
+    win.App.Chat.copyLastError = () => { calls.push("copy"); return Promise.resolve(); };
+    win.App.Chat.refreshWorkspaceState = () => calls.push("refresh");
+    win.App.Settings.openSettingsModal = () => calls.push("settings");
+    for (const action of ["retry", "copy", "refresh", "settings"]) {
+      host.querySelector(`[data-chat-error-action="${action}"]`)?.click();
+    }
+    assert.deepStrictEqual(calls, ["retry", "copy", "refresh", "settings"]);
+    Object.assign(win.App.Chat, {
+      retryLastTurn: originals.retryLastTurn,
+      copyLastError: originals.copyLastError,
+      refreshWorkspaceState: originals.refreshWorkspaceState,
+    });
+    win.App.Settings.openSettingsModal = originals.openSettingsModal;
+    host.remove();
   });
 
   it("block tool_use 渲染为工具节点", () => {
@@ -431,6 +459,17 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes('trace-text'), "最后一个节点是 text block");
     const lastNodeMatch = html.match(/<div class="trace-node trace-text">/g);
     assert.ok(lastNodeMatch, "text 节点存在");
+  });
+});
+
+describe("shortcut modal", () => {
+  it("closes through DOM events without inline JavaScript", () => {
+    doc.dispatchEvent(new win.KeyboardEvent("keydown", { key: "F1", bubbles: true }));
+    const modal = doc.getElementById("shortcuts-modal");
+    assert.ok(modal);
+    assert.strictEqual(modal.querySelectorAll("[onclick], [onchange], [oninput]").length, 0);
+    modal.querySelector("[data-shortcuts-action='close']")?.click();
+    assert.strictEqual(doc.getElementById("shortcuts-modal"), null);
   });
 });
 
