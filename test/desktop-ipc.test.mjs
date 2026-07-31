@@ -41,15 +41,23 @@ class IpcMainMock {
   }
 
   async invoke(channel, ...args) {
+    return this.invokeWithEvent(channel, {}, ...args);
+  }
+
+  async invokeWithEvent(channel, event, ...args) {
     const handler = this.handles.get(channel);
     assert.ok(handler, `missing invoke handler: ${channel}`);
-    return await handler({}, ...args);
+    return await handler(event, ...args);
   }
 
   send(channel, ...args) {
+    return this.sendWithEvent(channel, {}, ...args);
+  }
+
+  sendWithEvent(channel, event, ...args) {
     const handler = this.listeners.get(channel);
     assert.ok(handler, `missing send listener: ${channel}`);
-    handler({}, ...args);
+    return handler(event, ...args);
   }
 }
 
@@ -122,6 +130,7 @@ describe("desktop IPC governance", () => {
       trashItem: async () => {},
       spawnTerminal: () => true,
       getDesktopSessionToken: () => "desktop-token",
+      validateSender: () => {},
       trustedRoots,
     });
 
@@ -162,6 +171,7 @@ describe("desktop IPC governance", () => {
       trashItem: async (filePath) => { calls.push(`trash:${filePath}`); },
       spawnTerminal: () => { calls.push("terminal"); return true; },
       getDesktopSessionToken: () => "desktop-token",
+      validateSender: () => {},
       trustedRoots,
     });
 
@@ -189,5 +199,56 @@ describe("desktop IPC governance", () => {
     await assert.rejects(() => ipcMain.invoke("trash-item", "relative.txt"), /expects exactly one absolute path argument/);
     await assert.rejects(() => ipcMain.invoke("dialog-open-file", "unexpected"), /does not accept renderer arguments/);
     await assert.rejects(() => ipcMain.invoke("desktop-session-token", "unexpected"), /does not accept renderer arguments/);
+  });
+
+  it("rejects untrusted IPC senders before privileged side effects", async () => {
+    const root = makeTempDir();
+    const file = join(root, "file.txt");
+    writeFileSync(file, "ok");
+
+    const trustedEvent = { sender: "trusted" };
+    const untrustedEvent = { sender: "untrusted" };
+    const calls = [];
+    const ipcMain = new IpcMainMock();
+    const trustedRoots = new TrustedDesktopRoots();
+    trustedRoots.addRoot(root);
+
+    registerDesktopIpcHandlers({
+      ipcMain,
+      getMainWindow: () => ({
+        minimize: () => calls.push("minimize"),
+        isMaximized: () => false,
+        maximize: () => calls.push("maximize"),
+        unmaximize: () => calls.push("unmaximize"),
+        close: () => calls.push("close"),
+      }),
+      createWindow: () => calls.push("new-window"),
+      showOpenDialog: async () => {
+        calls.push("dialog");
+        return { canceled: true, filePaths: [] };
+      },
+      showItemInFolder: () => calls.push("reveal"),
+      trashItem: async () => { calls.push("trash"); },
+      spawnTerminal: () => { calls.push("terminal"); return true; },
+      getDesktopSessionToken: () => "desktop-token",
+      validateSender: (event) => {
+        if (event !== trustedEvent) throw new Error("untrusted IPC sender");
+      },
+      trustedRoots,
+    });
+
+    assert.throws(
+      () => ipcMain.sendWithEvent("window-close", untrustedEvent),
+      /untrusted IPC sender/,
+    );
+    await assert.rejects(
+      () => ipcMain.invokeWithEvent("spawn-terminal", untrustedEvent),
+      /untrusted IPC sender/,
+    );
+    await assert.rejects(
+      () => ipcMain.invokeWithEvent("trash-item", untrustedEvent, file),
+      /untrusted IPC sender/,
+    );
+    assert.deepStrictEqual(calls, []);
   });
 });

@@ -55,7 +55,8 @@ export interface DesktopIpcHandlerDeps {
   showItemInFolder(filePath: string): void;
   trashItem(filePath: string): Promise<void>;
   spawnTerminal(): Promise<boolean> | boolean;
-  getDesktopSessionToken(event: unknown): string;
+  getDesktopSessionToken(): string;
+  validateSender(event: unknown): void;
   trustedRoots: TrustedDesktopRoots;
 }
 
@@ -127,16 +128,19 @@ export class TrustedDesktopRoots {
 
 export function registerDesktopIpcHandlers(deps: DesktopIpcHandlerDeps): void {
   deps.ipcMain.handle("desktop-session-token", (event, ...args) => {
+    deps.validateSender(event);
     assertNoArgs("desktop-session-token", args);
-    return deps.getDesktopSessionToken(event);
+    return deps.getDesktopSessionToken();
   });
 
-  deps.ipcMain.on("window-minimize", (_event, ...args) => {
+  deps.ipcMain.on("window-minimize", (event, ...args) => {
+    deps.validateSender(event);
     assertNoArgs("window-minimize", args);
     deps.getMainWindow()?.minimize();
   });
 
-  deps.ipcMain.on("window-maximize", (_event, ...args) => {
+  deps.ipcMain.on("window-maximize", (event, ...args) => {
+    deps.validateSender(event);
     assertNoArgs("window-maximize", args);
     const win = deps.getMainWindow();
     if (!win) return;
@@ -144,17 +148,20 @@ export function registerDesktopIpcHandlers(deps: DesktopIpcHandlerDeps): void {
     else win.maximize();
   });
 
-  deps.ipcMain.on("window-close", (_event, ...args) => {
+  deps.ipcMain.on("window-close", (event, ...args) => {
+    deps.validateSender(event);
     assertNoArgs("window-close", args);
     deps.getMainWindow()?.close();
   });
 
-  deps.ipcMain.on("window-new", (_event, ...args) => {
+  deps.ipcMain.on("window-new", (event, ...args) => {
+    deps.validateSender(event);
     assertNoArgs("window-new", args);
     deps.createWindow();
   });
 
-  deps.ipcMain.handle("dialog-open-file", async (_event, ...args) => {
+  deps.ipcMain.handle("dialog-open-file", async (event, ...args) => {
+    deps.validateSender(event);
     assertNoArgs("dialog-open-file", args);
     const result = await deps.showOpenDialog({ properties: ["openFile"] });
     const selected = result.canceled ? null : result.filePaths[0] || null;
@@ -170,21 +177,30 @@ export function registerDesktopIpcHandlers(deps: DesktopIpcHandlerDeps): void {
     return selected;
   };
 
-  deps.ipcMain.handle("dialog-open-folder", (_event, ...args) => openFolder("dialog-open-folder", args));
-  deps.ipcMain.handle("open-folder-dialog", (_event, ...args) => openFolder("open-folder-dialog", args));
+  deps.ipcMain.handle("dialog-open-folder", (event, ...args) => {
+    deps.validateSender(event);
+    return openFolder("dialog-open-folder", args);
+  });
+  deps.ipcMain.handle("open-folder-dialog", (event, ...args) => {
+    deps.validateSender(event);
+    return openFolder("open-folder-dialog", args);
+  });
 
-  deps.ipcMain.handle("show-item-in-folder", (_event, ...args) => {
+  deps.ipcMain.handle("show-item-in-folder", (event, ...args) => {
+    deps.validateSender(event);
     const filePath = expectPathArg("show-item-in-folder", args);
     deps.showItemInFolder(deps.trustedRoots.guardPath(filePath, "reveal"));
   });
 
-  deps.ipcMain.handle("trash-item", async (_event, ...args) => {
+  deps.ipcMain.handle("trash-item", async (event, ...args) => {
+    deps.validateSender(event);
     const filePath = expectPathArg("trash-item", args);
     await deps.trashItem(deps.trustedRoots.guardPath(filePath, "trash"));
     return true;
   });
 
-  deps.ipcMain.handle("spawn-terminal", async (_event, ...args) => {
+  deps.ipcMain.handle("spawn-terminal", async (event, ...args) => {
+    deps.validateSender(event);
     assertNoArgs("spawn-terminal", args);
     return deps.spawnTerminal();
   });

@@ -450,13 +450,16 @@ function spawnCliTerminal(): boolean {
   return true;
 }
 
-function getDesktopSessionToken(event: unknown): string {
+function validateDesktopIpcSender(event: unknown): void {
   const ipcEvent = event as IpcMainInvokeEvent;
   const sender = ipcEvent.sender;
   const senderUrl = ipcEvent.senderFrame?.url || sender?.getURL?.() || "";
   if (!mainWindow || sender !== mainWindow.webContents || !isAllowedAppUrl(senderUrl)) {
-    throw new Error("Desktop session token request is not from the trusted app window");
+    throw new Error("Desktop IPC request is not from the trusted app window");
   }
+}
+
+function getDesktopSessionToken(): string {
   return DESKTOP_SECURITY_TOKEN;
 }
 
@@ -469,6 +472,7 @@ registerDesktopIpcHandlers({
   trashItem: (filePath) => shell.trashItem(filePath),
   spawnTerminal: spawnCliTerminal,
   getDesktopSessionToken,
+  validateSender: validateDesktopIpcSender,
   trustedRoots: trustedDesktopRoots,
 });
 

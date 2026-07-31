@@ -18,6 +18,7 @@ import "monaco-editor/esm/nls.messages.zh-cn.js";
 import * as monaco from "monaco-editor";
 import { tsFetch, tsOpenFile, tsChangeFile, tsCloseFile, tsDiagnostics, tsserverAbsPath, tsserverRoot } from "./monaco-tsserver";
 import { mapCompletionKind, langFromPath, defineThemes } from "./monaco-theme";
+import { ObserverOwner } from "./observer-owner";
 
 // ─── 不再需要 addExtraLib — tsserver 子进程直接读文件系统 node_modules
 
@@ -47,6 +48,7 @@ self.MonacoEnvironment = {
 let editor: monaco.editor.IStandaloneCodeEditor | null = null;
 let _currentFilePath = "";
 let _diagTimer: ReturnType<typeof setInterval> | null = null;
+const translationObserver = new ObserverOwner();
 
 // ─── 诊断轮询 ──────────────────────────────────────────────────
 
@@ -333,6 +335,7 @@ defineThemes();
 // ─── 编辑器创建 ─────────────────────────────────────────────────
 
 export function monacoCreateEditor(container: HTMLElement): void {
+  translationObserver.clear();
   if (editor) {
     editor.dispose();
     if (_diagTimer) { clearInterval(_diagTimer); _diagTimer = null; }
@@ -445,11 +448,12 @@ export function monacoCreateEditor(container: HTMLElement): void {
       if (label && raw !== label) el.textContent = label;
     });
   }
-  const zhObs = new MutationObserver(() => {
+  const nextObserver = new MutationObserver(() => {
     queueMicrotask(applyZhFallback);
     requestAnimationFrame(applyZhFallback);
   });
-  zhObs.observe(document.body, { childList: true, subtree: true, characterData: true });
+  translationObserver.replace(nextObserver);
+  nextObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
 
   // ─── Code Action 持久化命令 ─────────────────────────
   const _rootCache = () => App.State.getWorkspacePath();
@@ -669,6 +673,7 @@ export async function monacoRefreshDiagnosticsForFile(filePath: string): Promise
 
 export function monacoDispose(): void {
   if (_diagTimer) { clearInterval(_diagTimer); _diagTimer = null; }
+  translationObserver.clear();
   editor?.dispose();
   editor = null;
 }
