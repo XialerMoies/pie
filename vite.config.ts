@@ -10,8 +10,17 @@ export default defineConfig({
   build: {
     outDir: "../../dist/frontend",
     emptyOutDir: true,
+    cssCodeSplit: false,
     rollupOptions: {
-      input: resolve(__dirname, "src/frontend/dashboard.html"),
+      input: {
+        dashboard: resolve(__dirname, "src/frontend/dashboard.html"),
+        "monaco-entry": resolve(__dirname, "src/frontend/editor/monaco-setup.ts"),
+      },
+      output: {
+        entryFileNames: (chunk) => chunk.name === "monaco-entry"
+          ? "js/monaco-entry.js"
+          : "assets/[name]-[hash].js",
+      },
     },
   },
   server: {

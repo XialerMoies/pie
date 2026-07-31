@@ -1,12 +1,16 @@
 // ExplorerService — API 调用 + 状态管理（服务层）
 /// <reference path="../../dashboard.d.ts" />
 
-const WS_KEY = (window as any).App?.Constants?.WS_KEY || 'workspace_path';
-
 export class ExplorerService {
   static _filterEnabled = true;
   static _lastRefreshKey = '';
   static _pendingDeletedPaths = new Set<string>();
+  static _eventsStarted = false;
+  static _eventSource: EventSource | null = null;
+  static _eventsReady: Promise<void> | null = null;
+  static _eventReadyTimer: ReturnType<typeof setTimeout> | null = null;
+  static startEvents(): Promise<void> { return Promise.resolve(); }
+  static stopEvents(): void {}
 
   static _makeRefreshKey(items: TreeNode[], workspacePath?: string): string {
     const ws = workspacePath ?? ExplorerService.getWorkspacePath();
@@ -46,12 +50,12 @@ export class ExplorerService {
 
   /** 获取工作区路径 */
   static getWorkspacePath(): string {
-    return localStorage.getItem(WS_KEY) || '';
+    return App.State.getWorkspacePath();
   }
 
   /** 设置工作区路径 */
   static setWorkspacePath(p: string): void {
-    localStorage.setItem(WS_KEY, p);
+    App.State.setWorkspacePath(p);
   }
 
   /** 选择文件夹（Electron 原生 / 浏览器 fallback） */
@@ -255,10 +259,27 @@ ExplorerService.refreshTree = async function (): Promise<void> {
 };
 
 // ─── 文件变更自动刷新（SSE）────────────────────────────────
-(() => {
-  try {
-    const es = new EventSource('/api/events');
-    es.onmessage = (e) => {
+ExplorerService.startEvents = function (): Promise<void> {
+  if (ExplorerService._eventsReady) return ExplorerService._eventsReady;
+  ExplorerService._eventsStarted = true;
+  const pending = new Promise<void>((resolve, reject) => {
+    try {
+      const es = new EventSource('/api/events');
+      ExplorerService._eventSource = es;
+      let ready = false;
+      const finishReady = () => {
+        if (ready) return;
+        ready = true;
+        if (ExplorerService._eventReadyTimer) clearTimeout(ExplorerService._eventReadyTimer);
+        ExplorerService._eventReadyTimer = null;
+        resolve();
+      };
+      ExplorerService._eventReadyTimer = setTimeout(() => {
+        es.close();
+        reject(new Error('Permission event channel timed out'));
+      }, 5000);
+      es.onopen = finishReady;
+      es.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
         if (d.type === 'permission_confirm') {
@@ -267,7 +288,10 @@ ExplorerService.refreshTree = async function (): Promise<void> {
             source: d.source || '',
             operation: d.operation || '',
             toolName: d.toolName || '',
+            toolOperations: Array.isArray(d.toolOperations) ? d.toolOperations : [],
             riskLevel: d.riskLevel || '',
+            workspaceBounded: typeof d.workspaceBounded === 'boolean' ? d.workspaceBounded : undefined,
+            permissionRequired: typeof d.permissionRequired === 'boolean' ? d.permissionRequired : undefined,
             root: d.root || '',
             path: d.path || '',
             relativePath: d.relativePath || '',
@@ -299,7 +323,31 @@ ExplorerService.refreshTree = async function (): Promise<void> {
           ExplorerService.refreshTree();
         }
       } catch { /* ignore */ }
-    };
-    es.onerror = () => { /* SSE connection lost, will auto-reconnect */ };
-  } catch { /* SSE not available */ }
-})();
+      };
+      es.onerror = () => {
+        if (!ready) reject(new Error('Permission event channel failed'));
+      };
+    } catch (error) {
+      reject(error);
+    }
+  });
+  ExplorerService._eventsReady = pending.catch((error) => {
+    if (ExplorerService._eventReadyTimer) clearTimeout(ExplorerService._eventReadyTimer);
+    ExplorerService._eventReadyTimer = null;
+    ExplorerService._eventsStarted = false;
+    ExplorerService._eventSource?.close?.();
+    ExplorerService._eventSource = null;
+    ExplorerService._eventsReady = null;
+    throw error;
+  });
+  return ExplorerService._eventsReady;
+};
+
+ExplorerService.stopEvents = function (): void {
+  if (ExplorerService._eventReadyTimer) clearTimeout(ExplorerService._eventReadyTimer);
+  ExplorerService._eventReadyTimer = null;
+  ExplorerService._eventSource?.close?.();
+  ExplorerService._eventSource = null;
+  ExplorerService._eventsStarted = false;
+  ExplorerService._eventsReady = null;
+};

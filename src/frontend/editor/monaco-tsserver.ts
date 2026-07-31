@@ -5,8 +5,8 @@
  * 方便独立测试和模块化加载。
  */
 
-function tsserverRoot(): string {
-  return localStorage.getItem(App.Constants.WS_KEY) || "";
+export function tsserverRoot(): string {
+  return App.State.getWorkspacePath();
 }
 
 export function tsserverAbsPath(filePath: string): string {
@@ -16,10 +16,12 @@ export function tsserverAbsPath(filePath: string): string {
 
 export async function tsFetch(command: string, body: Record<string, unknown>): Promise<unknown> {
   try {
+    const projectRoot = tsserverRoot();
+    const payload = projectRoot && !body.projectRoot ? { ...body, projectRoot } : body;
     const r = await fetch("/api/ts/" + command, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     });
     const data = await r.json();
     if (data && data.success === false) return null;
@@ -53,7 +55,10 @@ export async function tsCloseFile(filePath: string): Promise<void> {
 /** 获取诊断（原始数据） */
 export async function tsDiagnostics(filePath: string): Promise<unknown[]> {
   try {
-    const r = await fetch(`/api/ts/diagnostics?file=${encodeURIComponent(tsserverAbsPath(filePath))}`);
+    const params = new URLSearchParams({ file: tsserverAbsPath(filePath) });
+    const projectRoot = tsserverRoot();
+    if (projectRoot) params.set("projectRoot", projectRoot);
+    const r = await fetch(`/api/ts/diagnostics?${params.toString()}`);
     if (!r.ok) return [];
     const data = await r.json();
     if (data?.success === false) return [];

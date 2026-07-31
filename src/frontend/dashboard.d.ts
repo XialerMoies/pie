@@ -55,6 +55,7 @@ interface ProviderKeyInfo {
 }
 
 interface ElectronAPI {
+  getDesktopSessionToken(): Promise<string>;
   minimize(): void;
   maximize(): void;
   close(): void;
@@ -90,7 +91,7 @@ interface TabsState {
   activeId: string | null;
 }
 
-interface AppState {
+interface DashboardState {
   D: DashboardData | null;
   M: Message[];
   IL: boolean;
@@ -104,7 +105,6 @@ interface AppState {
   _sessionTitleSources?: Record<string, 'auto' | 'manual'>;
   _activeSessionTabId?: string | null;
   tabs?: TabsState;
-  _uiStateStore?: any;
 }
 
 interface FileTab {
@@ -125,6 +125,7 @@ interface AppUI {
   winCtrl(action: string): void;
   toast(msg: string, type?: 'info' | 'error' | 'success'): void;
   bootstrapApi(): Promise<void>;
+  syncStartupWorkspace(): Promise<void>;
   getD(): Promise<void>;
   refresh(): Promise<void>;
   layout(): void;
@@ -159,7 +160,7 @@ interface AppChat {
   scheduleMessagesRender(scroll?: boolean): void;
 }
 interface AppFile {
-  toggleFileMenu(ev: MouseEvent): void;
+  toggleFileMenu(ev: MouseEvent, trigger?: HTMLElement): void;
   closeFM(): void;
   fileAction(action: string): void;
   launchCli(): void;
@@ -214,6 +215,7 @@ interface TabStoreAPI {
   getTabs(): AppTab[];
   getActiveTab(): AppTab | null;
   getTab(id: string): AppTab | undefined;
+  restoreTabs(items: AppTab[], activeId: string | null): void;
   openTab(tab: Omit<AppTab, 'order'>): AppTab;
   activateTab(id: string | null): void;
   closeTab(id: string): AppTab | undefined;
@@ -243,9 +245,39 @@ interface AppGit {
 interface AppConstants {
   WS_KEY: string;
 }
+interface WorkspaceUiSnapshot {
+  schemaVersion: 2;
+  workspacePath: string;
+  activeView: { type: 'chat' } | { type: 'session'; id: string } | { type: 'file'; id: string };
+  tabs: {
+    sessions: string[];
+    files: Array<{ id: string; label: string; content?: string; lang?: string }>;
+    chatOpen: boolean;
+    labels: Record<string, string>;
+    titleSources?: Record<string, 'auto' | 'manual'>;
+    items?: AppTab[];
+    activeId?: string | null;
+  };
+  panel: { active: string; closed: boolean; width: number };
+  recent: { sessions: Record<string, number>; lastSessionId?: string };
+}
+interface AppStateFacade {
+  hydrate(): Promise<WorkspaceUiSnapshot>;
+  saveNow(): Promise<boolean>;
+  getSnapshot(): WorkspaceUiSnapshot;
+  getWorkspacePath(): string;
+  setWorkspacePath(workspacePath: string): void;
+  resetWorkspace(workspacePath: string): void;
+  syncTabs(items: AppTab[], activeId: string | null): void;
+  updateSessionMetadata(labels: Record<string, string>, titleSources: Record<string, 'auto' | 'manual'>): void;
+  updatePanel(panel: Partial<WorkspaceUiSnapshot['panel']>): void;
+  setChatOpen(chatOpen: boolean): void;
+  touchSession(sessionId: string, timestamp?: number): void;
+}
 
 interface AppNamespace {
   Constants: AppConstants;
+  State: AppStateFacade;
   UI: AppUI;
   Chat: AppChat;
   File: AppFile;
@@ -284,7 +316,7 @@ interface OnceSessionActivated {
 interface Window {
   electronAPI?: ElectronAPI;
   _provOrder?: string[];
-  __state: AppState;
+  __state: DashboardState;
   App: AppNamespace;
   __monaco: MonacoAPI;
   __problemsStore: ProblemsStoreAPI;
@@ -311,7 +343,10 @@ declare function confirmPermissionAsync(input: {
   source?: string;
   operation?: string;
   toolName?: string;
+  toolOperations?: string[];
   riskLevel?: string;
+  workspaceBounded?: boolean;
+  permissionRequired?: boolean;
   root?: string;
   path?: string;
   relativePath?: string;
@@ -322,6 +357,7 @@ declare function F(s: number): string;
 declare function sb(id: string): void;
 declare function toast(msg: string, type?: 'info' | 'error' | 'success'): void;
 declare function bootstrapApi(): Promise<void>;
+declare function syncStartupWorkspace(): Promise<void>;
 declare function getD(): Promise<void>;
 declare function refresh(): Promise<void>;
 declare function winCtrl(action: string): void;
@@ -340,7 +376,7 @@ declare function showModelPicker(e: MouseEvent): void;
 declare function retryLastTurn(): void;
 declare function copyLastError(): Promise<void>;
 declare function refreshWorkspaceState(): void;
-declare function toggleFileMenu(ev: MouseEvent): void;
+declare function toggleFileMenu(ev: MouseEvent, trigger?: HTMLElement): void;
 declare function closeFM(): void;
 declare function fileAction(action: string): void;
 declare function launchCli(): void;
@@ -484,4 +520,6 @@ declare class ExplorerService {
   static _setTree(t: Tree | null): void;
   static _getTree(): Tree | null;
   static refreshTree(): Promise<void>;
+  static startEvents(): Promise<void>;
+  static stopEvents(): void;
 }

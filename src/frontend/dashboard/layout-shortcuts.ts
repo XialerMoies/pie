@@ -107,7 +107,7 @@ function showShortcutsHelp(): void {
   overlay.innerHTML = `<div class="modal-box" style="width:400px;height:auto;min-height:unset;padding:16px">
     <div class="modal-header" style="padding:0 0 12px;border:none">
       <span class="modal-title">快捷键</span>
-      <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+      <button class="modal-close" data-shortcuts-action="close">✕</button>
     </div>
     <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 20px;font-size:.78rem">
       ${shortcuts.map(([k, d]) => `<span style="font-family:var(--fm);color:var(--am);white-space:nowrap">${k}</span><span style="color:var(--ts)">${d}</span>`).join('')}
@@ -115,7 +115,13 @@ function showShortcutsHelp(): void {
     <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--bd);font-size:.68rem;color:var(--tm);text-align:center">macOS 下 Ctrl 替换为 Cmd</div>
   </div>`;
   document.body.appendChild(overlay);
-  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
+  overlay.addEventListener('click', (ev) => {
+    const eventTarget = ev.target as Element | null;
+    const closeButton = typeof eventTarget?.closest === 'function'
+      ? eventTarget.closest('[data-shortcuts-action="close"]')
+      : null;
+    if (closeButton || ev.target === overlay) overlay.remove();
+  });
 }
 
 // ─── 全局快捷键 ─────────────────────────────────────────────

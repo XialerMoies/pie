@@ -16,7 +16,10 @@ interface PermissionAuditEntry {
   reason?: string;
   code?: string;
   toolName?: string;
+  toolOperations?: string[];
   riskLevel?: string;
+  workspaceBounded?: boolean;
+  permissionRequired?: boolean;
 }
 
 interface PermissionRuleView {
@@ -145,9 +148,26 @@ function renderAuditEntry(entry: PermissionAuditEntry): string {
       <div class="perm-path" title="${E(entry.path || pathLabel)}">${E(pathLabel)}</div>
       ${entry.reason || entry.code ? `<div class="perm-reason">${E(entry.reason || entry.code || "")}</div>` : ""}
       ${entry.riskLevel ? `<div class="perm-reason">Risk: ${E(entry.riskLevel)}</div>` : ""}
+      ${renderAuditToolDetails(entry)}
       <div class="perm-time">${E(formatPermissionTime(entry.timestamp))}</div>
     </div>
   `;
+}
+
+function renderAuditToolDetails(entry: PermissionAuditEntry): string {
+  if (entry.operation !== "tool") return "";
+  const details = [
+    Array.isArray(entry.toolOperations) && entry.toolOperations.length
+      ? `Ops: ${entry.toolOperations.join(", ")}`
+      : "",
+    typeof entry.permissionRequired === "boolean"
+      ? `Prompt: ${entry.permissionRequired ? "required" : "tracked"}`
+      : "",
+    typeof entry.workspaceBounded === "boolean"
+      ? `Scope: ${entry.workspaceBounded ? "workspace" : "external"}`
+      : "",
+  ].filter(Boolean);
+  return details.length ? `<div class="perm-reason">${E(details.join(" · "))}</div>` : "";
 }
 
 function formatPermissionOperation(operation: PermissionOperation): string {

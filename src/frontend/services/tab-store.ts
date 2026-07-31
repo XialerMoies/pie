@@ -1,3 +1,5 @@
+/// <reference path="../dashboard.d.ts" />
+
 /**
  * TabStore — 统一标签数据层
  *
@@ -94,24 +96,7 @@ function _syncToState(): void {
   const st = (window as any).__state;
   if (!st) return;
   st.tabs = { items: _items, activeId: _activeId };
-  // 同步到 UiStateStore 并触发保存
-  // NOTE: 不能用 st._uiStateStore（那是 hydrate 设的原始 WorkspaceUiState 对象，没有 _state getter）
-  // 必须用 __uiStateStore 包装器访问模块内部的 _state
-  const uisWrapper = (window as any).__uiStateStore;
-  if (uisWrapper && uisWrapper._state) {
-    const state = uisWrapper._state;
-    state.tabs = state.tabs || {};
-    state.tabs.items = _items.map(t => ({ ...t }));
-    state.tabs.activeId = _activeId;
-    // 同步旧格式字段保持兼容
-    state.tabs.sessions = _items.filter(t => t.kind === 'session' || t.kind === 'chat').map(t => t.id);
-    const activeFile = _items.find(t => t.id === _activeId && t.kind === 'file');
-    const activeSession = _items.find(t => t.id === _activeId && (t.kind === 'session' || t.kind === 'chat'));
-    if (activeFile) state.activeView = { type: 'file', id: activeFile.id };
-    else if (activeSession) state.activeView = { type: 'session', id: activeSession.id };
-    else state.activeView = { type: 'chat' };
-    if (typeof uisWrapper.saveNow === 'function') uisWrapper.saveNow();
-  }
+  (window as any).App.State.syncTabs(_items, _activeId);
 }
 
 // ─── 公开 API ─────────────────────────────────────────
@@ -135,6 +120,15 @@ export function getActiveTab(): AppTab | null {
 export function getTab(id: string): AppTab | undefined {
   _ensureInit();
   return _items.find(t => t.id === id);
+}
+
+/** 用持久化快照原子恢复标签状态，不触发重复持久化。 */
+export function restoreTabs(items: AppTab[], activeId: string | null): void {
+  _items = items.map((tab, index) => ({ ...tab, order: index }));
+  _activeId = activeId && _items.some(tab => tab.id === activeId) ? activeId : null;
+  _initialized = true;
+  const st = (window as any).__state;
+  if (st) st.tabs = { items: _items, activeId: _activeId };
 }
 
 /** 追加新标签到末尾 */
@@ -261,7 +255,7 @@ export function getTabBehavior(kind: TabKind): TabBehavior | undefined {
 
 const _public = {
   getState, getTabs, getActiveTab, getTab,
-  openTab, activateTab, closeTab, replaceTab, moveTab,
+  restoreTabs, openTab, activateTab, closeTab, replaceTab, moveTab,
   getSessionTabIds, getFileTabIds,
   getActiveSessionTabId, getActiveFileTabId,
   reset,

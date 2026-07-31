@@ -1,8 +1,6 @@
 // Tab 标签页管理 — 切换/打开/关闭/拖拽排序/右键菜单
 // 从 dashboard-layout.ts 拆出
 
-const FILE_TABS_KEY = 'file-tabs';
-const LAST_ACTIVE_KEY = 'last-active-tab';
 let _monacoLoadPromise: Promise<void> | null = null;
 
 async function loadMonaco(): Promise<void> {
@@ -25,13 +23,6 @@ async function loadMonaco(): Promise<void> {
 
 function _syncTabsToStore(): void {
   // TabStore._syncToState 已处理 items/activeId → UiStateStore
-  // last-active-tab 仅当活跃 tab 是 file 时写入，切到 session/chat/null 时清除
-  const ts = (window as any).__tabs;
-  const activeFileId = ts?.getActiveFileTabId?.();
-  try {
-    if (activeFileId) localStorage.setItem('last-active-tab', activeFileId);
-    else localStorage.removeItem('last-active-tab');
-  } catch {}
   if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
 }
 

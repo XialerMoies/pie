@@ -16,7 +16,7 @@
  */
 import "monaco-editor/esm/nls.messages.zh-cn.js";
 import * as monaco from "monaco-editor";
-import { tsFetch, tsOpenFile, tsChangeFile, tsCloseFile, tsDiagnostics, tsserverAbsPath } from "./monaco-tsserver";
+import { tsFetch, tsOpenFile, tsChangeFile, tsCloseFile, tsDiagnostics, tsserverAbsPath, tsserverRoot } from "./monaco-tsserver";
 import { mapCompletionKind, langFromPath, defineThemes } from "./monaco-theme";
 
 // ─── 不再需要 addExtraLib — tsserver 子进程直接读文件系统 node_modules
@@ -271,6 +271,7 @@ monaco.languages.registerCodeActionProvider("typescript", {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           file: tsserverAbsPath(filePath),
+          projectRoot: tsserverRoot(),
           line: requestRange.startLineNumber,
           offset: requestRange.startColumn,
           endLine: requestRange.endLineNumber,
@@ -451,10 +452,7 @@ export function monacoCreateEditor(container: HTMLElement): void {
   zhObs.observe(document.body, { childList: true, subtree: true, characterData: true });
 
   // ─── Code Action 持久化命令 ─────────────────────────
-  const _rootCache = () => {
-    const ws = (window as any).App?.Constants?.WS_KEY;
-    return ws ? (window as any).localStorage?.getItem?.(ws) || "" : "";
-  };
+  const _rootCache = () => App.State.getWorkspacePath();
   const _toast = (msg: string, type?: 'info' | 'error' | 'success') =>
     (window as any).App?.UI?.toast?.(msg, type);
 
@@ -466,7 +464,7 @@ export function monacoCreateEditor(container: HTMLElement): void {
       fetch("/api/ts/apply-code-action", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ changes }),
+                body: JSON.stringify({ changes, projectRoot: tsserverRoot() }),
       })
         .then(r => r.json())
         .then((data: any) => {
@@ -537,6 +535,7 @@ export function monacoCreateEditor(container: HTMLElement): void {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             file,
+            projectRoot: tsserverRoot(),
             tabSize: parseInt(localStorage.getItem("editor-tab-size") || "2", 10),
             useTabs: localStorage.getItem("editor-use-tabs") === "1",
           }),

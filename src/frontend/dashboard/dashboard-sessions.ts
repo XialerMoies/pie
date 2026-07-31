@@ -34,9 +34,6 @@ interface SessionDataCache {
 let _sessionDataCache: SessionDataCache | null = null;
 
 let _sessionListSeq = 0;
-const SESSION_TABS_KEY = 'session-tabs';
-const SESSION_TAB_LABELS_KEY = 'session-tab-labels';
-const ACTIVE_SESSION_TAB_KEY = 'active-session-tab';
 const DRAFT_SESSION_PREFIX = 'draft:';
 let _sessionTabLookup = new Map<string, SessionInfo>();
 
@@ -69,27 +66,8 @@ function normalizeSessionTabIds(ids: unknown[]): string[] {
 }
 
 function readSessionTabIds(): string[] {
-  // TabStore 优先
   const tabs = (window as any).__tabs;
-  if (tabs) { const ids = tabs.getSessionTabIds(); if (ids.length > 0) return ids; }
-  // 降级：store → __state → localStorage
-  const store = window.__state?._uiStateStore;
-  if (Array.isArray(store?.tabs?.items)) {
-    const ids = store.tabs.items
-      .filter((tab: AppTab) => tab.kind === 'session' || tab.kind === 'chat')
-      .map((tab: AppTab) => tab.id);
-    if (ids.length > 0) return ids;
-  }
-  if (store?.tabs?.sessions && Array.isArray(store.tabs.sessions)) return store.tabs.sessions;
-  const stateIds = window.__state._sessionTabs;
-  if (Array.isArray(stateIds) && stateIds.length > 0) return stateIds;
-  try {
-    const raw = localStorage.getItem(SESSION_TABS_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (Array.isArray(parsed)) return normalizeSessionTabIds(parsed);
-  } catch {}
-  window.__state._sessionTabs = [];
-  return [];
+  return tabs?.getSessionTabIds ? tabs.getSessionTabIds() : [];
 }
 
 function writeSessionTabIds(ids: string[]): void {
@@ -123,15 +101,7 @@ function getActiveSessionTabId(): string | null {
   _getActiveSessionTabIdDepth++;
   try {
     const tabs = (window as any).__tabs;
-    if (tabs) { const id = tabs.getActiveSessionTabId(); if (id) return id; }
-    const store = window.__state?._uiStateStore;
-    if (store?.activeView?.type === 'session' && store.activeView.id) {
-      if (readSessionTabIds().includes(store.activeView.id)) return store.activeView.id;
-    }
-    const stateId = window.__state._activeSessionTabId;
-    if (stateId && readSessionTabIds().includes(stateId)) return stateId;
-    try { const id = localStorage.getItem(ACTIVE_SESSION_TAB_KEY); if (id && readSessionTabIds().includes(id)) return id; } catch {}
-    return null;
+    return tabs?.getActiveSessionTabId ? tabs.getActiveSessionTabId() : null;
   } finally { _getActiveSessionTabIdDepth--; }
 }
 
@@ -149,10 +119,7 @@ function readOpenRealSessionIds(): Set<string> {
 }
 
 function readSessionTabLabels(): Record<string, string> {
-  const store = window.__state?._uiStateStore;
-  if (store?.tabs?.labels && Object.keys(store.tabs.labels).length > 0) return store.tabs.labels;
-  let result: Record<string, string> = {};
-  try { const raw = localStorage.getItem(SESSION_TAB_LABELS_KEY); const parsed = raw ? JSON.parse(raw) : {}; if (parsed && typeof parsed === 'object') result = parsed as Record<string, string>; } catch {}
+  let result: Record<string, string> = { ...App.State.getSnapshot().tabs.labels };
   const stateLabels = (window.__state as any)._sessionTabLabels;
   if (stateLabels && typeof stateLabels === 'object') result = { ...result, ...stateLabels };
   return result;
@@ -164,8 +131,7 @@ function normalizeTitleSource(value: unknown): SessionTitleSource | undefined {
 
 function readSessionTitleSources(): Record<string, SessionTitleSource> {
   let result: Record<string, SessionTitleSource> = {};
-  const store = window.__state?._uiStateStore;
-  const storeSources = (store?.tabs as any)?.titleSources;
+  const storeSources = App.State.getSnapshot().tabs.titleSources;
   if (storeSources && typeof storeSources === 'object') {
     for (const [id, source] of Object.entries(storeSources)) {
       const normalized = normalizeTitleSource(source);
@@ -184,12 +150,7 @@ function readSessionTitleSources(): Record<string, SessionTitleSource> {
 
 function writeSessionTitleSources(sources: Record<string, SessionTitleSource>): void {
   (window.__state as any)._sessionTitleSources = sources;
-  const store = window.__state?._uiStateStore as any;
-  if (store) {
-    store.tabs = store.tabs || { sessions: [], files: [], chatOpen: true, labels: {}, titleSources: {} };
-    store.tabs.titleSources = sources;
-    if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
-  }
+  App.State.updateSessionMetadata(readSessionTabLabels(), sources);
 }
 
 function writeSessionTitleSource(id: string, source: SessionTitleSource): void {
@@ -208,8 +169,7 @@ function writeSessionTabLabel(id: string, label: string, source?: SessionTitleSo
   if (!id || !label.trim()) return;
   const labels = { ...readSessionTabLabels(), [id]: label.trim() };
   (window.__state as any)._sessionTabLabels = labels;
-  const store = window.__state?._uiStateStore;
-  if (store) { store.tabs.labels = labels; if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave(); }
+  App.State.updateSessionMetadata(labels, readSessionTitleSources());
   // 同步到 TabStore 标题
   const tabs = (window as any).__tabs;
   if (tabs) tabs.replaceTab(id, { title: label.trim() });
@@ -221,8 +181,7 @@ function removeSessionTabLabel(id: string): void {
   if (id in labels) {
     delete labels[id];
     (window.__state as any)._sessionTabLabels = labels;
-    const store = window.__state?._uiStateStore;
-    if (store) { store.tabs.labels = labels; if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave(); }
+    App.State.updateSessionMetadata(labels, readSessionTitleSources());
   }
   removeSessionTitleSource(id);
 }
@@ -252,13 +211,7 @@ function commitSessionTab(draftId: string, sessionId: string, label?: string): v
   else delete sources[sessionId];
   (window.__state as any)._sessionTabLabels = labels;
   (window.__state as any)._sessionTitleSources = sources;
-  // 同步到 UiStateStore
-  const store = window.__state?._uiStateStore;
-  if (store) {
-    (store.tabs as any).labels = labels;
-    (store.tabs as any).titleSources = sources;
-    if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
-  }
+  App.State.updateSessionMetadata(labels, sources);
 
   setActiveSessionTabId(sessionId);
   renderSessionTabs(sessionId);
@@ -428,51 +381,20 @@ function renderSessionTabs(activeId?: string): void {
 
 /** UiStateStore 保存快捷通道——通过 store 的 saveNow 写服务端 */
 (window as any)._uiStateSave = function _uiStateSave(): void {
-  const uis = (window as any).__uiStateStore;
-  if (!uis?._state) return;
-  const store = uis._state;
-  const activeId = store.activeView?.type === 'session' ? store.activeView.id : null;
-  if (activeId) {
-    store.recent.lastSessionId = activeId;
-    store.recent.sessions[activeId] = Date.now();
-  }
-  uis.saveNow();
+  const activeView = App.State.getSnapshot().activeView;
+  if (activeView.type === 'session') App.State.touchSession(activeView.id);
+  void App.State.saveNow();
 };
 
 /** 保存 UI 状态到服务端（不受随机端口影响） */
 function saveUiState(): void {
   const tabs = (window as any).__tabs;
-  // 确保 TabStore 同步到 UiStateStore（_syncToState 已处理 items/activeId 和 activeView）
   if (tabs) { tabs.getState(); } // 确保初始化
-  const uis = (window as any).__uiStateStore;
-  if (uis?._state) {
-    const store = uis._state;
-    const activeId = getActiveSessionTabId();
-    store.panel.active = (window as any).__state?._activePanel || 'explorer';
-    if (activeId) {
-      store.recent.lastSessionId = activeId;
-      store.recent.sessions[activeId] = Date.now();
-    }
-    uis.saveNow();
-    return;
-  }
-
-  // 降级：没有 store 时用旧格式
-  const ids = readSessionTabIds();
   const activeId = getActiveSessionTabId();
   const activePanel = (window as any).__state?._activePanel || 'explorer';
-  try {
-    fetch('/api/ui-state', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        openSessionIds: ids,
-        activeView: activeId ? { type: 'session', id: activeId } : { type: 'chat' },
-        activePanel,
-        panelClosed: false,
-      }),
-    }).catch(() => {});
-  } catch {}
+  App.State.updatePanel({ active: activePanel });
+  if (activeId) App.State.touchSession(activeId);
+  void App.State.saveNow();
 }
 
 /** 启动时恢复完整 UI 状态：会话标签 + 活跃 session 消息 + 面板 */
@@ -480,25 +402,21 @@ async function restoreSessionTabs(): Promise<void> {
   // 先拉取会话元数据索引，确保顶部标签尽早显示正确标题
   fetchSessionIndex().catch(() => {});
 
-  // 从 UiStateStore hydrate（从服务端读，失败降级 localStorage）
-  const uis = (window as any).__uiStateStore;
-  if (uis?.hydrate) {
-    const state = await uis.hydrate();
-    window.__state._uiStateStore = state;
-  }
+  const store = await App.State.hydrate();
+  const items = store.tabs.items || [];
+  const persistedActiveId = store.tabs.activeId || (store.activeView.type !== 'chat' ? store.activeView.id : null);
+  const activeId = store.activeView.type === 'session' ? store.activeView.id : null;
+  (window as any).__tabs?.restoreTabs?.(items, persistedActiveId);
   // hydrate 后立即恢复文件标签（确保 UiStateStore.tabs.items 可用，避免独立定时器的竞态）
   if (typeof (window as any).restoreFileTabs === 'function') (window as any).restoreFileTabs();
-  // 从 hydrate 后的 store 读取状态（已含 workspace 隔离）
-  const store = window.__state?._uiStateStore;
-  const ids: string[] = store?.tabs?.sessions || readSessionTabIds();
-  const activeId: string | null = store?.activeView?.type === 'session' ? store.activeView.id : getActiveSessionTabId() || null;
-  const activePanel: string = store?.panel?.active || 'explorer';
+  const ids = items.filter(tab => tab.kind === 'session' || tab.kind === 'chat').map(tab => tab.id);
+  const activePanel = store.panel.active || 'explorer';
 
   if (!activeId && ids.length === 0 && readSessionTabIds().length === 0) {
     return; // 无历史状态
   }
 
-  // 回写 session-tabs + active-session-tab（同步 localStorage 供下游使用）
+  // 更新旧字段投影，持久化仍由 TabStore/App.State 负责。
   writeSessionTabIds(ids);
   if (activeId) setActiveSessionTabId(activeId);
   renderSessionTabs(activeId || '');
@@ -510,7 +428,7 @@ async function restoreSessionTabs(): Promise<void> {
   // 激活会话：加载消息
   if (activeId && !isDraftSessionId(activeId)) {
     try {
-      const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
+      const ws = App.State.getWorkspacePath();
       const r = await fetch('/api/sessions/activate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -871,7 +789,7 @@ function setSessionPanelStatus(text: string, kind: 'loading' | 'ready' | 'error'
  * 无论左侧面板是什么都调用，确保标签标题尽早回填。
  */
 function fetchSessionIndex(): Promise<void> {
-  const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
+  const ws = App.State.getWorkspacePath();
   setSessionPanelStatus('正在刷新任务线程…', 'loading');
   return fetch('/api/sessions?workspace=' + encodeURIComponent(ws) + '&other=1')
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
@@ -1090,7 +1008,7 @@ function pinSession(id: string, pinned: boolean): void {
 }
 
 function branchSession(id: string): void {
-  const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
+  const ws = App.State.getWorkspacePath();
   fetch('/api/sessions/branch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1128,7 +1046,7 @@ function switchSession(id: string, options?: ApplySessionMessagesOptions): void 
   }
   // 降级：TabStore 无此 tab 时直接执行（兼容测试/未迁移场景）
   if (isDraftSessionId(id)) { _setupDraftSession(id); return; }
-  const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
+  const ws = App.State.getWorkspacePath();
   fetch('/api/sessions/activate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, workspace: ws }) })
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then((data: any) => {
@@ -1228,7 +1146,7 @@ function _sessionActivate(tab: AppTab, options?: ApplySessionMessagesOptions): v
     _setupDraftSession(tab.id);
     return;
   }
-  const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
+  const ws = App.State.getWorkspacePath();
   fetch('/api/sessions/activate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1307,12 +1225,7 @@ function migrateSessionTabLabels(): void {
     if (changed) {
       (window.__state as any)._sessionTabLabels = labels;
       (window.__state as any)._sessionTitleSources = sources;
-      const store = window.__state?._uiStateStore;
-      if (store) {
-        (store.tabs as any).labels = labels;
-        (store.tabs as any).titleSources = sources;
-        if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
-      }
+      App.State.updateSessionMetadata(labels, sources);
     }
   } catch {}
 }

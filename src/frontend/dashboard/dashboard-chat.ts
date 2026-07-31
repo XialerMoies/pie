@@ -16,12 +16,7 @@ let activeSendContext: ChatSendContext | null = null;
 function chatGetActiveSessionTabId(): string | null {
   const fn = (window as any).getActiveSessionTabId;
   if (typeof fn === 'function') return fn();
-  try {
-    const id = localStorage.getItem('active-session-tab');
-    return id || null;
-  } catch {
-    return null;
-  }
+  return (window as any).__tabs?.getActiveSessionTabId?.() || null;
 }
 
 function chatIsDraftSessionId(id: string | null | undefined): boolean {
@@ -29,13 +24,7 @@ function chatIsDraftSessionId(id: string | null | undefined): boolean {
 }
 
 function chatReadLocalSessionTabIds(): string[] {
-  try {
-    const raw = localStorage.getItem('session-tabs');
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
-  } catch {
-    return [];
-  }
+  return (window as any).__tabs?.getSessionTabIds?.() || [];
 }
 
 function chatWriteLocalSessionTabIds(ids: string[]): void {
@@ -74,7 +63,7 @@ async function ensureSessionForSend(): Promise<ChatSendContext> {
     return { sessionId: activeTabId, persistent: true };
   }
 
-  const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
+  const ws = App.State.getWorkspacePath();
   try {
     const response = await fetch('/api/sessions/new', {
       method: 'POST',
@@ -283,7 +272,7 @@ function bind(): void {
     st.M.push({ role: 'user', content: ciVal }); st.IL = true;
     st.M.push({ role: 'assistant', content: '', thinking: '', streaming: true });
     updateUI(); sb('ms');
-    const _ws = localStorage.getItem(App.Constants.WS_KEY) || '';
+    const _ws = App.State.getWorkspacePath();
     const gen = ++_streamGen;
     const activeTabId = chatGetActiveSessionTabId();
     activeSendContext = activeTabId && !chatIsDraftSessionId(activeTabId)

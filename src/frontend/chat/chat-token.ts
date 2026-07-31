@@ -485,7 +485,7 @@ async function doCompact(): Promise<void> {
     // 触发消息刷新（保留完整字段：turnId/blocks/error 等）
     const activeId = (window as any).getActiveSessionTabId?.();
     if (activeId && !activeId.startsWith('draft:')) {
-      const ws = localStorage.getItem(App.Constants.WS_KEY) || '';
+      const ws = App.State.getWorkspacePath();
       try {
         const r2 = await fetch('/api/sessions/activate', {
           method: 'POST',

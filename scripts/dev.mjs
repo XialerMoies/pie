@@ -12,6 +12,7 @@
  */
 import { spawn, execSync } from "child_process";
 import { createServer } from "net";
+import { randomBytes } from "crypto";
 import { watch } from "chokidar";
 import * as path from "path";
 import * as fs from "fs";
@@ -25,6 +26,8 @@ const PID_FILE = path.resolve(ROOT, "data", "pi", ".dev.pid");
 
 const DEV_PORT = 3099;
 const VITE_PORT = 5173;
+const DESKTOP_SECURITY_TOKEN = process.env.MY_CODE_AGENT_DESKTOP_TOKEN || randomBytes(32).toString("base64url");
+const DEV_APP_ORIGIN = `http://127.0.0.1:${VITE_PORT}`;
 
 // ─── 端口检测 & 释放 ─────────────────────────────────────────
 function isPortInUse(port) {
@@ -138,7 +141,12 @@ async function startServerInner() {
     const started = Date.now();
     serverProcess = spawn("npx", ["tsx", "src/server/server.ts"], {
       cwd: ROOT, stdio: ["pipe", "pipe", "inherit"], shell: true,
-      env: { ...process.env, PI_DEV_PORT: String(DEV_PORT) },
+      env: {
+        ...process.env,
+        PI_DEV_PORT: String(DEV_PORT),
+        MY_CODE_AGENT_DESKTOP_TOKEN: DESKTOP_SECURITY_TOKEN,
+        MY_CODE_AGENT_ALLOWED_ORIGINS: DEV_APP_ORIGIN,
+      },
     });
     let resolved = false;
     serverProcess.stdout?.on("data", (chunk) => {
@@ -183,7 +191,12 @@ function startElectron() {
   delete electronEnv.ELECTRON_RUN_AS_NODE;
   const child = spawn("npx", ["electron", "."], {
     cwd: ROOT, stdio: "inherit", shell: true,
-    env: { ...electronEnv, NODE_ENV: "development", VITE_DEV_PORT: String(VITE_PORT) },
+    env: {
+      ...electronEnv,
+      NODE_ENV: "development",
+      VITE_DEV_PORT: String(VITE_PORT),
+      MY_CODE_AGENT_DESKTOP_TOKEN: DESKTOP_SECURITY_TOKEN,
+    },
   });
   electronProcess = child;
   registerPid(electronProcess.pid);

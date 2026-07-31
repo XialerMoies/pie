@@ -87,8 +87,37 @@ function renderErrorCard(error: ChatErrorState): string {
   const steps = nextSteps.length > 0
     ? `<div class="msg-error-block"><div class="msg-error-label">下一步操作</div><ul class="msg-error-steps">${nextSteps.map(step => `<li>${E(step)}</li>`).join('')}</ul></div>`
     : '';
-  return `<details class="msg-error"><summary><span class="msg-error-title">${E(error.title || '发生了错误')}</span><span class="msg-error-summary">${E(error.message || '点击查看详情')}</span></summary><div class="msg-error-body"><div class="msg-error-message">${E(error.message || '发生了错误')}</div>${reason}${steps}${raw}<div class="msg-error-actions"><button type="button" class="msg-error-btn" onclick="App.Chat.retryLastTurn()">重新发送</button><button type="button" class="msg-error-btn" onclick="App.Chat.copyLastError()">复制错误</button><button type="button" class="msg-error-btn" onclick="App.Chat.refreshWorkspaceState()">刷新工作区</button><button type="button" class="msg-error-btn" onclick="openSettingsModal()">打开设置</button></div></div></details>`;
+  return `<details class="msg-error"><summary><span class="msg-error-title">${E(error.title || '发生了错误')}</span><span class="msg-error-summary">${E(error.message || '点击查看详情')}</span></summary><div class="msg-error-body"><div class="msg-error-message">${E(error.message || '发生了错误')}</div>${reason}${steps}${raw}<div class="msg-error-actions"><button type="button" class="msg-error-btn" data-chat-error-action="retry">重新发送</button><button type="button" class="msg-error-btn" data-chat-error-action="copy">复制错误</button><button type="button" class="msg-error-btn" data-chat-error-action="refresh">刷新工作区</button><button type="button" class="msg-error-btn" data-chat-error-action="settings">打开设置</button></div></div></details>`;
 }
+
+function bindChatErrorActions(): void {
+  const guardedDocument = document as Document & { __chatErrorActionsBound?: boolean };
+  if (guardedDocument.__chatErrorActionsBound) return;
+  guardedDocument.__chatErrorActionsBound = true;
+  document.addEventListener('click', (event: MouseEvent) => {
+    const eventTarget = event.target as Element | null;
+    const target = typeof eventTarget?.closest === 'function'
+      ? eventTarget.closest<HTMLElement>('[data-chat-error-action]')
+      : null;
+    if (!target) return;
+    const appNamespace = (window as any).App;
+    switch (target.dataset.chatErrorAction) {
+      case 'retry':
+        appNamespace?.Chat?.retryLastTurn?.();
+        break;
+      case 'copy':
+        void appNamespace?.Chat?.copyLastError?.();
+        break;
+      case 'refresh':
+        appNamespace?.Chat?.refreshWorkspaceState?.();
+        break;
+      case 'settings':
+        appNamespace?.Settings?.openSettingsModal?.();
+        break;
+    }
+  });
+}
+bindChatErrorActions();
 
 function hasTraceValue(value: unknown): boolean {
   if (value === undefined || value === null) return false;

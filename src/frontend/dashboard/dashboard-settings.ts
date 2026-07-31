@@ -6,6 +6,66 @@ let _st: string = 'model';
 let _selectedProvider: string | null = null;
 let _provKeys: Record<string, ProviderKeyInfo> = {};
 
+function providerListHTML(listOrder: string[]): string {
+  return listOrder.map((prov, index) => {
+    const onClass = prov === _selectedProvider || (!_selectedProvider && index === 0) ? ' on' : '';
+    const has = _provKeys[prov]?.hasKey;
+    return `<div class="msl-item${onClass}" draggable="true" data-prov="${E(prov)}" data-index="${index}">
+      <span class="msl-name">${E(prov)}</span><span class="msl-drag">⠿</span><span class="msl-status${has?' on':''}"></span>
+    </div>`;
+  }).join('');
+}
+
+function bindSettingsModalEvents(overlay: HTMLElement): void {
+  overlay.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement;
+    const action = target.closest<HTMLElement>('[data-settings-action]')?.dataset.settingsAction;
+    if (action === 'close') { closeSettingsModal(); return; }
+    if (action === 'font-decrease') { changeFontSize(-1); return; }
+    if (action === 'font-increase') { changeFontSize(1); return; }
+    if (action === 'toggle-key') {
+      const provider = target.closest<HTMLElement>('[data-provider]')?.dataset.provider;
+      if (provider) toggleKeyVis(provider);
+      return;
+    }
+    if (action === 'save-key') {
+      const provider = target.closest<HTMLElement>('[data-provider]')?.dataset.provider;
+      if (provider) saveApiKey(provider);
+      return;
+    }
+
+    const tab = target.closest<HTMLElement>('.ms-item[data-st]')?.dataset.st;
+    if (tab) { switchSettingsModal(tab); return; }
+
+    const provider = target.closest<HTMLElement>('.msl-item[data-prov]')?.dataset.prov;
+    if (provider) { selectProvider(provider); return; }
+
+    const model = target.closest<HTMLElement>('.rp-model-item[data-model-id]');
+    const modelProvider = model?.dataset.modelProvider;
+    const modelId = model?.dataset.modelId;
+    if (modelProvider && modelId) selectModel(modelProvider, modelId);
+  });
+
+  overlay.addEventListener('change', (event) => {
+    const target = event.target as HTMLElement;
+    if (target.id === 'gs-autosave') toggleAutoSaveSetting();
+    else if (target.matches('#gs-indent-type, #gs-tab-size, #gs-theme')) applyGeneralSetting();
+  });
+
+  overlay.addEventListener('dragstart', (event) => {
+    const index = Number((event.target as HTMLElement).closest<HTMLElement>('.msl-item[data-index]')?.dataset.index);
+    if (Number.isInteger(index)) provDragStart(event, index);
+  });
+  overlay.addEventListener('dragover', (event) => {
+    const index = Number((event.target as HTMLElement).closest<HTMLElement>('.msl-item[data-index]')?.dataset.index);
+    if (Number.isInteger(index)) provDragOver(event, index);
+  });
+  overlay.addEventListener('drop', (event) => {
+    const index = Number((event.target as HTMLElement).closest<HTMLElement>('.msl-item[data-index]')?.dataset.index);
+    if (Number.isInteger(index)) provDrop(event, index);
+  });
+}
+
 function openSettingsModal(): void { _st = 'model'; showSettingsModal(); }
 
 function showSettingsModal(): void {
@@ -16,18 +76,19 @@ function showSettingsModal(): void {
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal-box">
-      <div class="modal-header"><span class="modal-title">设置</span><button class="modal-close" onclick="closeSettingsModal()">✕</button></div>
+      <div class="modal-header"><span class="modal-title">设置</span><button type="button" class="modal-close" data-settings-action="close" aria-label="关闭设置">✕</button></div>
       <div class="modal-body">
         <div class="modal-sidebar">
-          <div class="ms-item on" data-st="model" onclick="switchSettingsModal('model')">模型</div>
-          <div class="ms-item" data-st="general" onclick="switchSettingsModal('general')">通用</div>
-          <div class="ms-item" data-st="about" onclick="switchSettingsModal('about')">关于</div>
+          <div class="ms-item on" data-st="model">模型</div>
+          <div class="ms-item" data-st="general">通用</div>
+          <div class="ms-item" data-st="about">关于</div>
         </div>
         <div class="modal-content" id="mc-settings"></div>
       </div>
     </div>
   `;
   document.body.appendChild(overlay);
+  bindSettingsModalEvents(overlay);
   switchSettingsModal('model');
 }
 
@@ -65,21 +126,17 @@ function switchSettingsModal(tab: string): void {
       const configured = allProvs.filter(p => cfg[p] && cfg[p].hasKey);
       const unconfigured = allProvs.filter(p => !configured.includes(p));
       const savedOrder = localStorage.getItem('providers_order');
-      const order: string[] = (savedOrder ? JSON.parse(savedOrder) : configured.concat(unconfigured));
-      allProvs.forEach(p => { if (!order.includes(p)) order.push(p); });
-
-      function renderList(listOrder: string[]): void {
-        list.innerHTML = listOrder.map((prov, i) => {
-          const onClass = i === 0 ? ' on' : '';
-          const has = cfg[prov] && cfg[prov].hasKey;
-          return `<div class="msl-item${onClass}" draggable="true" data-prov="${prov}" ondragstart="provDragStart(event,${i})" ondragover="provDragOver(event,${i})" ondrop="provDrop(event,${i})" onclick="selectProvider('${prov}')">
-            <span class="msl-name">${prov}</span><span class="msl-drag">⠿</span><span class="msl-status${has?' on':''}"></span>
-          </div>`;
-        }).join('');
-        if (listOrder.length > 0) selectProvider(listOrder[0]);
+      let order: string[] = configured.concat(unconfigured);
+      if (savedOrder) {
+        try {
+          const parsed = JSON.parse(savedOrder);
+          if (Array.isArray(parsed)) order = parsed.filter((provider): provider is string => typeof provider === 'string');
+        } catch {}
       }
-      renderList(order);
+      allProvs.forEach(p => { if (!order.includes(p)) order.push(p); });
       window._provOrder = order;
+      list.innerHTML = providerListHTML(order);
+      if (order.length > 0) selectProvider(order[0]);
     }).catch(() => { const l = $('msl-list'); if (l) l.innerHTML = '<p style="color:var(--rs);font-size:.72rem">加载失败</p>'; toast('加载厂商列表失败', 'error'); });
   } else if (tab === 'general') {
     const fontSize = localStorage.getItem('editor-font-size') || '13';
@@ -96,7 +153,7 @@ function switchSettingsModal(tab: string): void {
           <div class="gs-row" style="border:none">
             <span class="gs-label">自动保存</span>
             <div class="gs-control">
-              <label class="gs-toggle"><input type="checkbox" id="gs-autosave" onchange="toggleAutoSaveSetting()"${localStorage.getItem('auto-save')==='1'?' checked':''}><span class="gs-toggle-slider"></span></label>
+              <label class="gs-toggle"><input type="checkbox" id="gs-autosave"${localStorage.getItem('auto-save')==='1'?' checked':''}><span class="gs-toggle-slider"></span></label>
             </div>
           </div>
         </div>
@@ -108,19 +165,19 @@ function switchSettingsModal(tab: string): void {
           <div class="gs-row">
             <span class="gs-label">字体大小</span>
             <div class="gs-control">
-              <button class="gs-btn" onclick="changeFontSize(-1)">−</button>
+              <button type="button" class="gs-btn" data-settings-action="font-decrease">−</button>
               <span class="gs-value" id="gs-fontsize">${fontSize}</span>
-              <button class="gs-btn" onclick="changeFontSize(1)">+</button>
+              <button type="button" class="gs-btn" data-settings-action="font-increase">+</button>
             </div>
           </div>
           <div class="gs-row">
             <span class="gs-label">缩进</span>
             <div class="gs-control">
-              <select class="gs-select" id="gs-indent-type" onchange="applyGeneralSetting()">
+              <select class="gs-select" id="gs-indent-type">
                 <option value="0"${useTabs?'':' selected'}>空格</option>
                 <option value="1"${useTabs?' selected':''}>制表符</option>
               </select>
-              <select class="gs-select" id="gs-tab-size" onchange="applyGeneralSetting()">
+              <select class="gs-select" id="gs-tab-size">
                 <option value="2"${tabSize==='2'?' selected':''}>2</option>
                 <option value="4"${tabSize==='4'?' selected':''}>4</option>
                 <option value="8"${tabSize==='8'?' selected':''}>8</option>
@@ -130,7 +187,7 @@ function switchSettingsModal(tab: string): void {
           <div class="gs-row" style="border:none">
             <span class="gs-label">主题</span>
             <div class="gs-control">
-              <select class="gs-select" id="gs-theme" onchange="applyGeneralSetting()">
+              <select class="gs-select" id="gs-theme">
                 <option value="vs-dark"${theme==='vs-dark'?' selected':''}>应用暗色</option>
                 <option value="vs"${theme==='vs'?' selected':''}>应用亮色</option>
               </select>
@@ -164,20 +221,20 @@ function selectProvider(prov: string): void {
     : '输入 API Key...';
   let html = `
     <div class="rp-header">
-      <div class="rp-prov-name">${prov}</div>
+      <div class="rp-prov-name">${E(prov)}</div>
       <span class="rp-status${info.hasKey?' on':''}">${info.hasKey?'已配置':'未配置'}</span>
     </div>
   `;
   if (info.hasKey) {
-    html += `<div class="rp-models" id="rp-models-${prov}">加载中...</div>`;
+    html += `<div class="rp-models" id="rp-models" data-provider="${E(prov)}">加载中...</div>`;
   }
   html += `
     <div class="rp-key-section">
       <div class="rp-key-label">API Key</div>
       <div class="rp-key-row">
-        <input class="rp-key-input" type="password" id="key-input-${prov}" placeholder="${E(placeholder)}" value=""/>
-        <button class="rp-key-toggle" onclick="toggleKeyVis('${prov}')">👁</button>
-        <button class="rp-save-btn" onclick="saveApiKey('${prov}')">保存</button>
+        <input class="rp-key-input" type="password" id="key-input" data-provider="${E(prov)}" placeholder="${E(placeholder)}" value=""/>
+        <button type="button" class="rp-key-toggle" data-settings-action="toggle-key" data-provider="${E(prov)}" aria-label="显示或隐藏 API Key">👁</button>
+        <button type="button" class="rp-save-btn" data-settings-action="save-key" data-provider="${E(prov)}">保存</button>
       </div>
     </div>
   `;
@@ -186,14 +243,14 @@ function selectProvider(prov: string): void {
 }
 
 function toggleKeyVis(prov: string): void {
-  const input = document.getElementById('key-input-' + prov) as HTMLInputElement | null;
-  if (!input) return;
+  const input = $('key-input') as HTMLInputElement | null;
+  if (!input || input.dataset.provider !== prov) return;
   input.type = (input.type === 'password' ? 'text' : 'password');
 }
 
 function saveApiKey(provider: string): void {
-  const input = document.getElementById('key-input-' + provider) as HTMLInputElement | null;
-  if (!input || !input.value.trim()) { toast('请输入 API Key'); return; }
+  const input = $('key-input') as HTMLInputElement | null;
+  if (!input || input.dataset.provider !== provider || !input.value.trim()) { toast('请输入 API Key'); return; }
   fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, apiKey: input.value.trim() }) })
     .then(r => r.json()).then((r: { ok: boolean }) => {
       if (r.ok) {
@@ -205,16 +262,17 @@ function saveApiKey(provider: string): void {
 }
 
 function loadProviderModels(prov: string): void {
-  const container = document.getElementById('rp-models-' + prov) as HTMLElement | null;
-  if (!container) return;
+  const container = $('rp-models') as HTMLElement | null;
+  if (!container || container.dataset.provider !== prov) return;
   fetch('/api/models').then(r => r.json()).then((data: { models?: Array<{ provider: string; id: string }> }) => {
+    if (_selectedProvider !== prov || $('rp-models') !== container) return;
     const models = (data.models || []).filter(m => m.provider === prov);
     if (models.length === 0) { container.innerHTML = '<p style="color:var(--tm);font-size:.72rem">无可用模型</p>'; return; }
     let html = '<div class="rp-models-title">可用模型</div>';
     models.forEach(m => {
       const stD = window.__state.D;
       const active = (m.provider === stD?.modelProvider && m.id === stD?.modelId);
-      html += `<div class="rp-model-item${active?' on':''}" onclick="selectModel('${m.provider}','${m.id}')">${E(m.id)}</div>`;
+      html += `<div class="rp-model-item${active?' on':''}" data-model-provider="${E(m.provider)}" data-model-id="${E(m.id)}">${E(m.id)}</div>`;
     });
     container.innerHTML = html;
   }).catch(() => { container.innerHTML = '<p style="color:var(--rs);font-size:.72rem">加载失败</p>'; toast('加载模型列表失败', 'error'); });
@@ -226,7 +284,10 @@ function selectModel(provider: string, modelId: string): void {
       if (r.ok) {
         toast('已切换: ' + modelId, 'success');
         getD();
-        document.querySelectorAll('.rp-model-item').forEach(el => (el as HTMLElement).classList.toggle('on', el.textContent!.trim() === modelId));
+        document.querySelectorAll('.rp-model-item').forEach(el => {
+          const item = el as HTMLElement;
+          item.classList.toggle('on', item.dataset.modelProvider === provider && item.dataset.modelId === modelId);
+        });
       } else { toast('切换失败: ' + (r.error || ''), 'error'); }
     }).catch(() => { toast('切换失败', 'error'); });
 }
@@ -275,8 +336,17 @@ function applyEditorSettings(): void {
 
 let _dragIdx: number = -1;
 
-function provDragStart(ev: DragEvent, idx: number): void { _dragIdx = idx; ev.dataTransfer!.effectAllowed = 'move'; ev.dataTransfer!.setData('text/plain', String(idx)); }
-function provDragOver(ev: DragEvent, _idx: number): void { ev.preventDefault(); ev.dataTransfer!.dropEffect = 'move'; }
+function provDragStart(ev: DragEvent, idx: number): void {
+  _dragIdx = idx;
+  if (ev.dataTransfer) {
+    ev.dataTransfer.effectAllowed = 'move';
+    ev.dataTransfer.setData('text/plain', String(idx));
+  }
+}
+function provDragOver(ev: DragEvent, _idx: number): void {
+  ev.preventDefault();
+  if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
+}
 
 function provDrop(ev: DragEvent, idx: number): void {
   ev.preventDefault();
@@ -288,13 +358,7 @@ function provDrop(ev: DragEvent, idx: number): void {
   localStorage.setItem('providers_order', JSON.stringify(order));
   const list = $('msl-list');
   if (!list) return;
-  list.innerHTML = order.map((prov: string, i: number) => {
-    const onClass = (prov === _selectedProvider ? ' on' : '');
-    const has = _provKeys[prov] && _provKeys[prov].hasKey;
-    return `<div class="msl-item${onClass}" draggable="true" data-prov="${prov}" ondragstart="provDragStart(event,${i})" ondragover="provDragOver(event,${i})" ondrop="provDrop(event,${i})" onclick="selectProvider('${prov}')">
-      <span class="msl-name">${prov}</span><span class="msl-drag">⠿</span><span class="msl-status${has?' on':''}"></span>
-    </div>`;
-  }).join('');
+  list.innerHTML = providerListHTML(order);
   _dragIdx = -1;
 }
 

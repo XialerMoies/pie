@@ -6,10 +6,9 @@
  * 4. 更新 HTML：注入 marked.umd.js + dashboard.js
  */
 import { execSync } from "child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, copyFileSync } from "fs";
-import { resolve, dirname, relative } from "path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from "fs";
+import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import * as esbuild from "esbuild";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -18,10 +17,14 @@ const OUT = resolve(ROOT, "dist", "frontend");
 
 // 1. Vite build
 console.log("→ Vite build…");
+console.log("-> Compile frontend TS...");
+execSync("node scripts/compile-frontend-ts.mjs", { cwd: ROOT, stdio: "inherit" });
 execSync("npx vite build", { cwd: ROOT, stdio: "inherit" });
 
 // 1.5 编译 preload.ts（Electron 需要 CommonJS 格式）
-import("./compile-preload.mjs").then(m => { m.compilePreload(); console.log("→ preload.js compiled"); }).catch(e => { console.error("❌ preload build failed:", e.message); process.exit(1); });
+const { compilePreload } = await import("./compile-preload.mjs");
+compilePreload();
+console.log("-> preload.js compiled");
 
 // 1.6 复制 marked.umd.js（常规 script 引用，Vite 不会自动处理）
 const markedSrc = resolve(SRC, "marked.umd.js");
@@ -33,32 +36,18 @@ if (existsSync(markedSrc) && !existsSync(markedDst)) {
 
 // 2. 收集前端 TS 文件（排除 monaco-setup，它单独作为模块加载）
 console.log("→ Bundle JS…");
-function findTs(dir) {
-  const entries = readdirSync(dir, { withFileTypes: true });
-  let files = [];
-  for (const e of entries) {
-    const full = resolve(dir, e.name);
-    if (e.isDirectory()) files = files.concat(findTs(full));
-    else if (e.name.endsWith(".ts") && !e.name.endsWith(".d.ts")) files.push(full);
-  }
-  return files;
-}
-const tsFiles = findTs(SRC).sort();
-const bundleFiles = tsFiles.filter(f => !f.includes("monaco-setup") && !f.includes("marked.umd"));
-
 // 用 esbuild 真 bundle（IIFE，不依赖全局变量顺序）
-const entry = bundleFiles.map(f => `import "${f.replace(/\\/g, "/")}";`).join("\n");
-const result = await esbuild.build({
-  stdin: { contents: entry, resolveDir: SRC, sourcefile: "entry.ts" },
-  bundle: true,
-  minify: true,
-  format: "iife",
-  write: false,
-  logLevel: "warning",
-  external: ["monaco-editor"],
-});
-const bundleJs = result.outputFiles[0].text;
-console.log(`  Bundle: ${(bundleJs.length / 1024).toFixed(0)} KB (${bundleFiles.length} files)`);
+const generatedBundle = resolve(SRC, "gen", "dashboard.js");
+const generatedStartup = resolve(SRC, "gen", "dashboard", "dashboard-startup.js");
+if (!existsSync(generatedBundle) || !existsSync(generatedStartup)) {
+  throw new Error("Frontend compiler did not emit the dashboard bundle and startup entry");
+}
+let bundleJs = `${readFileSync(generatedBundle, "utf-8")}\n${readFileSync(generatedStartup, "utf-8")}`;
+bundleJs = bundleJs.replace(
+  /import\(["']\.\.\/editor\/monaco-setup["']\)/g,
+  'import("./monaco-entry.js")',
+);
+console.log(`  Bundle: ${(bundleJs.length / 1024).toFixed(0)} KB (ordered global scripts + startup)`);
 
 mkdirSync(resolve(OUT, "js"), { recursive: true });
 writeFileSync(resolve(OUT, "js", "dashboard.js"), bundleJs, "utf-8");

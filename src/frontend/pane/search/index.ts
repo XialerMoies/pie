@@ -58,7 +58,7 @@ let _replaceExpanded = false;
 
 // NOTE: WS_KEY is in App.Constants.WS_KEY — don't redeclare const
 function getSearchRoot(): string {
-  return localStorage.getItem(App.Constants.WS_KEY) || "";
+  return App.State.getWorkspacePath();
 }
 
 // ─── DOM refs ───────────────────────────────────────────────────
@@ -115,20 +115,22 @@ function renderResults(): void {
   const total = _results.reduce((s, r) => s + r.matches.length, 0);
   let html = `<div class="search-count">${_results.length} 个文件${_searchType === "text" ? `，${total} 处匹配` : ""}</div>`;
 
-  for (const result of _results) {
+  for (let resultIndex = 0; resultIndex < _results.length; resultIndex++) {
+    const result = _results[resultIndex];
     const fileName = result.file.split("/").pop() || result.file;
     const iconHtml = (window as any).ExplorerService?.iconFor(fileName, false) || S("ifolder", 14);
     const nameHtml = _searchType === "filename" ? highlightText(fileName, query, _searchCase) : E(fileName);
 
-    html += `<div class="search-file" data-file="${E(result.file)}">`;
-    html += `<div class="search-file-name" onclick="App.File.openSearchResult('${E(result.file)}')">`;
+    html += `<div class="search-file" data-result-index="${resultIndex}">`;
+    html += `<div class="search-file-name" data-search-action="open-result">`;
     html += `${iconHtml} ${nameHtml} <span class="search-file-path">${E(result.file)}</span>`;
     html += "</div>";
 
     if (_searchType === "text" && result.matches.length > 0) {
-      for (const m of result.matches.slice(0, 5)) {
+      for (let matchIndex = 0; matchIndex < Math.min(result.matches.length, 5); matchIndex++) {
+        const m = result.matches[matchIndex];
         const matchText = highlightText(m.text.trim(), query, _searchCase);
-        html += `<div class="search-match" onclick="App.File.openSearchResult('${E(result.file)}', ${m.line})">`;
+        html += `<div class="search-match" data-search-action="open-result" data-match-index="${matchIndex}">`;
         html += `<span class="search-match-line">${m.line}</span>`;
         html += `<span class="search-match-text">${matchText}</span>`;
         html += "</div>";
@@ -425,6 +427,54 @@ function toggleReplaceRegex(): void {
   clearReplaceUI();
 }
 
+function handleSearchPaneClick(event: Event): void {
+  const eventTarget = event.target as Element | null;
+  const target = typeof eventTarget?.closest === "function"
+    ? eventTarget.closest<HTMLElement>("[data-search-action]")
+    : null;
+  if (!target) return;
+
+  switch (target.dataset.searchAction) {
+    case "set-type": {
+      const type = target.dataset.searchType === "text" ? "text" : "filename";
+      const externalHandler = (window as any).App?.Settings?.setSearchType;
+      if (typeof externalHandler === "function") externalHandler(type);
+      else setSearchType(type);
+      break;
+    }
+    case "toggle-case": {
+      const externalHandler = (window as any).App?.Settings?.toggleCaseSensitive;
+      if (typeof externalHandler === "function") externalHandler();
+      else toggleCaseSensitive();
+      break;
+    }
+    case "toggle-replace":
+      toggleReplaceSection();
+      break;
+    case "toggle-regex":
+      toggleReplaceRegex();
+      break;
+    case "preview-replace":
+      void doReplacePreview();
+      break;
+    case "apply-replace":
+      void doReplaceAll();
+      break;
+    case "open-result": {
+      const resultElement = target.closest<HTMLElement>(".search-file[data-result-index]");
+      const resultIndex = Number(resultElement?.dataset.resultIndex);
+      const result = Number.isInteger(resultIndex) ? _results[resultIndex] : undefined;
+      if (!result) return;
+      const matchIndex = target.dataset.matchIndex === undefined
+        ? undefined
+        : Number(target.dataset.matchIndex);
+      const line = Number.isInteger(matchIndex) ? result.matches[matchIndex!]?.line : undefined;
+      void openSearchResult(result.file, line);
+      break;
+    }
+  }
+}
+
 // ─── Export for App namespace ─────────────────────────────────
 
 (window as any).openSearchResult = openSearchResult;
@@ -443,32 +493,34 @@ function searchPaneRender(container: HTMLElement): void {
     `<div class="search-controls">`,
     // Type toggle
     `<div class="search-type-toggle">`,
-    `<button class="search-type-btn on" id="search-type-file" onclick="App.Settings?.setSearchType?.('filename') || setSearchType('filename')">文件名</button>`,
-    `<button class="search-type-btn" id="search-type-text" onclick="App.Settings?.setSearchType?.('text') || setSearchType('text')">全文</button>`,
-    `<button class="search-case-btn" id="search-case" onclick="App.Settings?.toggleCaseSensitive?.() || toggleCaseSensitive()" title="区分大小写">Aa</button>`,
+    `<button class="search-type-btn on" id="search-type-file" data-search-action="set-type" data-search-type="filename">文件名</button>`,
+    `<button class="search-type-btn" id="search-type-text" data-search-action="set-type" data-search-type="text">全文</button>`,
+    `<button class="search-case-btn" id="search-case" data-search-action="toggle-case" title="区分大小写">Aa</button>`,
     `</div>`,
     // Input
     `<input class="s-search" id="search-input" placeholder="搜索文件..." autofocus>`,
     `</div>`,
     // Replace section (collapsible, only visible for text search with results)
     `<div class="search-replace" id="search-replace-section" style="display:none">`,
-    `<div class="search-replace-header" id="search-replace-header" onclick="toggleReplaceSection()">`,
+    `<div class="search-replace-header" id="search-replace-header" data-search-action="toggle-replace">`,
     `<span class="search-replace-arrow" id="replace-arrow">▸</span>`,
     `<span>替换</span>`,
     `</div>`,
     `<div class="search-replace-body" id="search-replace-body" style="display:none">`,
     `<input class="s-search" id="replace-input" placeholder="替换为…">`,
     `<div class="search-replace-controls">`,
-    `<button class="search-type-btn${_replaceRegex ? ' on' : ''}" id="replace-regex" onclick="toggleReplaceRegex()" title="使用正则表达式">.*</button>`,
-    `<button class="search-replace-preview-btn" id="replace-preview-btn" onclick="doReplacePreview()">预览替换</button>`,
+    `<button class="search-type-btn${_replaceRegex ? ' on' : ''}" id="replace-regex" data-search-action="toggle-regex" title="使用正则表达式">.*</button>`,
+    `<button class="search-replace-preview-btn" id="replace-preview-btn" data-search-action="preview-replace">预览替换</button>`,
     `</div>`,
     `<div class="replace-preview" id="replace-preview"></div>`,
-    `<button class="search-replace-all" id="replace-all-btn" style="display:none" onclick="doReplaceAll()">全部替换</button>`,
+    `<button class="search-replace-all" id="replace-all-btn" style="display:none" data-search-action="apply-replace">全部替换</button>`,
     `</div>`,
     `</div>`,
     // Results
     `<div class="search-results" id="search-results"><div class="search-status dim">输入关键词开始搜索</div></div>`,
   ].join("");
+
+  container.addEventListener("click", handleSearchPaneClick);
 
   // Bind input
   const input = el("search-input") as HTMLInputElement | null;

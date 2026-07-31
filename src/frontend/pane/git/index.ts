@@ -57,7 +57,7 @@ function el(id: string): HTMLElement | null {
 }
 
 function getRoot(): string {
-  return localStorage.getItem(App.Constants.WS_KEY) || "";
+  return App.State.getWorkspacePath();
 }
 
 // ─── Status label & color ───────────────────────────────────────
@@ -115,7 +115,7 @@ function renderGit(): void {
     const curPath = getRoot() || "(未设置)";
     container.innerHTML = `<div class="git-empty">当前工作区不是 Git 仓库</div>
       <div style="font-size:.6rem;color:var(--tm);text-align:center;padding:0 8px;word-break:break-all">路径: ${E(curPath)}</div>
-      <div class="git-action" onclick="App.Git.refreshGit()" style="justify-content:center;padding:8px">${_svg("irefresh",12)} 刷新</div>`;
+      <div class="git-action" data-git-action="refresh" style="justify-content:center;padding:8px">${_svg("irefresh",12)} 刷新</div>`;
     return;
   }
 
@@ -169,12 +169,13 @@ function renderGit(): void {
     if (deleted > 0) html += `<span class="git-chip git-chip-d">${deleted} 删除</span>`;
     html += `</div>`;
 
-    for (const e of entries) {
+    for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
+      const e = entries[entryIndex];
       const iconClass = statusIconClass(e.x, e.y);
       const label = statusLabel(e.x, e.y);
       const fileName = e.path.split("/").pop() || e.path;
       const iconHtml = (window as any).ExplorerService?.iconFor(fileName, false) || "";
-      html += `<div class="git-file" onclick="App.Git.openGitFile('${E(e.path)}')">`;
+      html += `<div class="git-file" data-git-action="open-file" data-entry-index="${entryIndex}">`;
       html += `<span class="git-status-badge ${iconClass}">${label}</span>`;
       html += `${iconHtml} `;
       html += `<span class="git-file-name">${E(e.path)}</span>`;
@@ -187,7 +188,7 @@ function renderGit(): void {
   html += `<div class="git-commit-area">`;
   html += `<textarea class="git-commit-msg" id="git-commit-msg" rows="2" placeholder="提交信息…"></textarea>`;
   html += `<div class="git-commit-actions">`;
-  html += `<button class="git-btn git-btn-commit" onclick="App.Git.commit()" id="git-commit-btn">提交</button>`;
+  html += `<button class="git-btn git-btn-commit" data-git-action="commit" id="git-commit-btn">提交</button>`;
   html += `</div>`;
   html += `</div>`;
 
@@ -210,9 +211,9 @@ function renderGit(): void {
 
   // ─── Actions bar ────────────────────────────
   html += `<div class="git-actions-bar">`;
-  html += `<span class="git-action" onclick="App.Git.push()">${_svg("iup", 12)} 推送</span>`;
-  html += `<span class="git-action" onclick="App.Git.pull()">${_svg("idown", 12)} 拉取</span>`;
-  html += `<span class="git-action git-action-refresh" onclick="App.Git.refreshGit()">${_svg("irefresh", 12)} 刷新</span>`;
+  html += `<span class="git-action" data-git-action="push">${_svg("iup", 12)} 推送</span>`;
+  html += `<span class="git-action" data-git-action="pull">${_svg("idown", 12)} 拉取</span>`;
+  html += `<span class="git-action git-action-refresh" data-git-action="refresh">${_svg("irefresh", 12)} 刷新</span>`;
   html += `</div>`;
 
   container.innerHTML = html;
@@ -327,6 +328,35 @@ async function pull(): Promise<void> {
   } catch { toast("拉取失败", "error"); }
 }
 
+function handleGitPaneClick(event: Event): void {
+  const eventTarget = event.target as Element | null;
+  const target = typeof eventTarget?.closest === "function"
+    ? eventTarget.closest<HTMLElement>("[data-git-action]")
+    : null;
+  if (!target) return;
+
+  switch (target.dataset.gitAction) {
+    case "open-file": {
+      const entryIndex = Number(target.dataset.entryIndex);
+      const entry = Number.isInteger(entryIndex) ? _statusData?.entries[entryIndex] : undefined;
+      if (entry) void openGitFile(entry.path);
+      break;
+    }
+    case "commit":
+      void commit();
+      break;
+    case "push":
+      void push();
+      break;
+    case "pull":
+      void pull();
+      break;
+    case "refresh":
+      void refreshGit();
+      break;
+  }
+}
+
 // ─── Panel render entry ─────────────────────────────────────────
 
 function gitPaneRender(container: HTMLElement): void {
@@ -335,6 +365,8 @@ function gitPaneRender(container: HTMLElement): void {
     `<div class="sg-t">${_svg("igit", 14)} Git</div>`,
     `<div id="git-container" style="flex:1;min-height:0;overflow-y:auto;padding:0 4px"></div>`,
   ].join("");
+
+  container.addEventListener("click", handleGitPaneClick);
 
   // Load data
   refreshGit();

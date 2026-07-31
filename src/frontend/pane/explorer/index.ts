@@ -2,13 +2,14 @@
 /// <reference path="../../dashboard.d.ts" />
 
 function explorerRender(container: HTMLElement): void {
+  bindExplorerActions(container);
   const ws = ExplorerService.getWorkspacePath();
   if (!ws) {
     container.innerHTML = [
       `<div class="sg-t">资源管理器</div>`,
       `<div style="padding:12px;font-size:.72rem;color:var(--tm);text-align:center">`,
       `  <p style="margin-bottom:10px">尚未选择工作区</p>`,
-      `  <button class="sa-btn" onclick="ExplorerService.applyWorkspace()">选择文件夹</button>`,
+      `  <button class="sa-btn" data-explorer-action="select-workspace">选择文件夹</button>`,
       `</div>`,
     ].join('');
     return;
@@ -17,7 +18,7 @@ function explorerRender(container: HTMLElement): void {
   container.style.cssText = 'display:flex;flex-direction:column;height:100%;min-height:0';
   const showAll = !ExplorerService.getFilterEnabled();
   container.innerHTML = [
-    `<div class="sg-t" style="display:flex;align-items:center;justify-content:space-between">资源管理器<button class="sg-more" onclick="toggleExplorerFilter()" title="显示选项">···</button></div>`,
+    `<div class="sg-t" style="display:flex;align-items:center;justify-content:space-between">资源管理器<button class="sg-more" data-explorer-action="toggle-filter" title="显示选项">···</button></div>`,
     `<div id="exp-tree-cont" style="flex:1;min-height:0"></div>`,
   ].join('');
 
@@ -27,6 +28,23 @@ function explorerRender(container: HTMLElement): void {
   const treeContainer = document.getElementById('exp-tree-cont');
   if (!treeContainer) return;
   initTree(treeContainer);
+}
+
+function bindExplorerActions(container: HTMLElement): void {
+  if (container.dataset.explorerActions === '1') return;
+  container.dataset.explorerActions = '1';
+  container.addEventListener('click', (event: MouseEvent) => {
+    const eventTarget = event.target as Element | null;
+    const target = typeof eventTarget?.closest === 'function'
+      ? eventTarget.closest<HTMLElement>('[data-explorer-action]')
+      : null;
+    if (!target || !container.contains(target)) return;
+    if (target.dataset.explorerAction === 'select-workspace') {
+      void ExplorerService.applyWorkspace();
+    } else if (target.dataset.explorerAction === 'toggle-filter') {
+      toggleExplorerFilter();
+    }
+  });
 }
 
 function getTree(): Tree { return (ExplorerService as any)._getTree(); }
@@ -264,7 +282,7 @@ function toggleExplorerFilter(): void {
     const item = document.createElement('div'); item.className = 'ctx-item';
     item.style.display = 'flex'; item.style.alignItems = 'center'; item.style.gap = '8px';
     item.innerHTML = `<span style="width:14px;text-align:center;flex-shrink:0">${a.checked ? '✓' : ''}</span><span>${a.label}</span>`;
-    item.onclick = () => { menu.remove(); a.fn(); };
+    item.addEventListener('click', () => { menu.remove(); a.fn(); });
     menu.appendChild(item);
   }
   document.body.appendChild(menu);

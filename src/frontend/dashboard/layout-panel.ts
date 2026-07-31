@@ -2,41 +2,40 @@
 // 从 dashboard-layout.ts 拆出
 
 function _panelWidth(): number {
-  const store = (window as any).__state?._uiStateStore;
-  if (store?.panel?.width && store.panel.width > 50) return store.panel.width;
-  try { return parseInt(localStorage.getItem('panel-width') || '', 10); } catch { return 0; }
+  const width = App.State.getSnapshot().panel.width;
+  return width > 50 ? width : 0;
 }
 
-function _syncPanelToStore(): void {
-  const store = (window as any).__state?._uiStateStore;
-  if (!store) return;
+function _syncPanelToStore(active = App.State.getSnapshot().panel.active || 'explorer'): void {
   const si = document.getElementById('si');
-  store.panel.active = (window as any).__state?._activePanel || 'explorer';
-  store.panel.closed = si?.classList.contains('closed') ?? false;
+  const panel: Partial<WorkspaceUiSnapshot['panel']> = {
+    active,
+    closed: si?.classList.contains('closed') ?? false,
+  };
   // 只在面板打开时保存宽度（关闭时不覆盖，保留上一次打开的值）
   if (si && !si.classList.contains('closed') && si.offsetWidth > 50) {
-    store.panel.width = si.offsetWidth;
+    panel.width = si.offsetWidth;
   }
-  if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
+  App.State.updatePanel(panel);
 }
 
 function togglePanel(name: string): void {
   const si = $('si'), pc = $('pc');
   if (!si || !pc) return;
-  if ((window as any).__state._activePanel === name && !si.classList.contains('closed')) {
+  const activePanel = App.State.getSnapshot().panel.active || 'explorer';
+  if (activePanel === name && !si.classList.contains('closed')) {
     si.classList.add('closed');
     si.style.width = '';
     document.querySelectorAll('.sbar .b[data-side]').forEach(b => (b as HTMLElement).classList.remove('on'));
-    _syncPanelToStore();
+    _syncPanelToStore(name);
     return;
   }
-  (window as any).__state._activePanel = name;
   si.classList.remove('closed');
   const savedWidth = _panelWidth();
   si.style.width = (savedWidth > 50 ? savedWidth : 260) + 'px';
   document.querySelectorAll('.sbar .b[data-side]').forEach(b => (b as HTMLElement).classList.toggle('on', (b as HTMLElement).dataset.side === name));
   renderPanel(name, pc);
-  _syncPanelToStore();
+  _syncPanelToStore(name);
 }
 
 /** 启动时恢复左侧面板（由 restoreSessionTabs 调用） */
@@ -46,12 +45,10 @@ function restorePanel(name: string): void {
   const si = $('si');
   if (!si) return;
 
-  // 从 store 读取面板状态（包含 closed/width）
-  const store = (window as any).__state?._uiStateStore;
-  const isClosed = store?.panel?.closed === true;
-  const savedWidth = store?.panel?.width && store.panel.width > 50 ? store.panel.width : _panelWidth();
+  const panel = App.State.getSnapshot().panel;
+  const isClosed = panel.closed === true;
+  const savedWidth = panel.width > 50 ? panel.width : _panelWidth();
 
-  (window as any).__state._activePanel = name;
   if (isClosed) {
     si.classList.add('closed');
     si.style.width = '';
@@ -61,7 +58,7 @@ function restorePanel(name: string): void {
   }
   document.querySelectorAll('.sbar .b[data-side]').forEach(b => (b as HTMLElement).classList.toggle('on', (b as HTMLElement).dataset.side === name));
   if (!isClosed) renderPanel(name, pc);
-  _syncPanelToStore();
+  _syncPanelToStore(name);
 }
 
 function initResizeHandle(): void {

@@ -1,18 +1,12 @@
 // Layout core — 组件组装器 + HTML 构建 + 标签渲染 + 会话恢复
 // Tab/事件/快捷键/面板已拆至 layout-tabs / layout-panel / layout-shortcuts
 
-const CHAT_TAB_OPEN_KEY = 'chat-tab-open';
-
 function isChatTabOpen(): boolean {
-  try { return localStorage.getItem(CHAT_TAB_OPEN_KEY) !== '0'; } catch { return true; }
+  return App.State.getSnapshot().tabs.chatOpen !== false;
 }
 
 function hasOpenSessionTabs(): boolean {
-  try {
-    const raw = localStorage.getItem('session-tabs');
-    const ids = raw ? JSON.parse(raw) : [];
-    return Array.isArray(ids) && ids.length > 0;
-  } catch { return false; }
+  return ((window as any).__tabs?.getSessionTabIds?.() || []).length > 0;
 }
 
 function closeChatTab(): void {
@@ -22,9 +16,7 @@ function closeChatTab(): void {
     const active = tabs.getActiveTab();
     if (active && active.kind === 'chat') tabs.closeTab(active.id);
   }
-  const store = window.__state?._uiStateStore;
-  if (store) store.tabs.chatOpen = false;
-  if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
+  App.State.setChatOpen(false);
   if (window.__state._activeFileTab === null && window.__state._fileTabs.length > 0) {
     (window as any).App?.Tabs?.activate(window.__state._fileTabs[0].id);
     return;
@@ -33,15 +25,18 @@ function closeChatTab(): void {
 }
 
 function layout(): void {
-  $('app')!.innerHTML = buildTopBar() + buildSideBar() + buildSidePanel() + buildMainArea() + buildStatusBar();
+  const app = $('app')!;
+  app.innerHTML = buildTopBar() + buildSideBar() + buildSidePanel() + buildMainArea() + buildStatusBar();
+  bindLayoutActions(app);
   initResizeHandle();
   renderTabs();
+  const activePanel = App.State.getSnapshot().panel.active || 'explorer';
   document.querySelectorAll('.sbar .b[data-side]').forEach(b =>
-    (b as HTMLElement).classList.toggle('on', (b as HTMLElement).dataset.side === window.__state._activePanel));
+    (b as HTMLElement).classList.toggle('on', (b as HTMLElement).dataset.side === activePanel));
   const pc = $('pc');
-  if (pc) renderPanel(window.__state._activePanel, pc);
+  if (pc) renderPanel(activePanel, pc);
   bind();
-  // 从 localStorage 恢复会话标签页（读取 session-tabs / active-session-tab / last-closed）
+  // 从 UiStateStore 快照恢复会话和文件标签页。
   (window as any).App?.Session?.restoreSessionTabs?.();
   // Problems 底部栏初始化（DOM 已就绪）
   _initProblemsBar();
@@ -58,29 +53,29 @@ function buildTopBar(): string {
   return `<div class="topbar">
     <div class="nm"><span>PI</span></div>
     <div class="top-tabs">
-      <button class="top-tab" onclick="toggleFileMenu(event)">文件</button>
+      <button class="top-tab" data-layout-action="file-menu">文件</button>
     </div>
     <div class="win-controls">
-      <button class="win-btn" onclick="winCtrl('minimize')">─</button>
-      <button class="win-btn" onclick="winCtrl('maximize')">□</button>
-      <button class="win-btn close" onclick="winCtrl('close')">✕</button>
+      <button class="win-btn" data-layout-action="window" data-window-action="minimize">─</button>
+      <button class="win-btn" data-layout-action="window" data-window-action="maximize">□</button>
+      <button class="win-btn close" data-layout-action="window" data-window-action="close">✕</button>
     </div>
   </div>`;
 }
 
 function buildSideBar(): string {
   return `<div class="sbar">
-    <button class="b" data-side="explorer" onclick="togglePanel('explorer')" title="资源管理器">${S('ifolder',20)}</button>
-    <button class="b" data-side="chat" onclick="togglePanel('chat')" title="会话资源管理器">${S('imsg',20)}</button>
-    <button class="b" data-side="search" onclick="togglePanel('search')" title="搜索">${S('isearch',20)}</button>
-    <button class="b" data-side="git" onclick="togglePanel('git')" title="Git">${S('igit',20)}</button>
-    <button class="b" data-side="mcp" onclick="togglePanel('mcp')" title="MCP">${S('iatom',20)}</button>
-    <button class="b" data-side="permissions" onclick="togglePanel('permissions')" title="权限">${S('ishield',20)}</button>
+    <button class="b" data-side="explorer" data-layout-action="panel" title="资源管理器">${S('ifolder',20)}</button>
+    <button class="b" data-side="chat" data-layout-action="panel" title="会话资源管理器">${S('imsg',20)}</button>
+    <button class="b" data-side="search" data-layout-action="panel" title="搜索">${S('isearch',20)}</button>
+    <button class="b" data-side="git" data-layout-action="panel" title="Git">${S('igit',20)}</button>
+    <button class="b" data-side="mcp" data-layout-action="panel" title="MCP">${S('iatom',20)}</button>
+    <button class="b" data-side="permissions" data-layout-action="panel" title="权限">${S('ishield',20)}</button>
     <div class="mcp-bar" id="mcp-bar" title="MCP 服务器">MCP <span id="mcp-bar-count">0</span></div>
     <div class="spcr"></div>
     <div class="bb">
-      <button class="b" title="CLI" onclick="launchCli()">${S('iterm',20)}</button>
-      <button class="b" title="设置" onclick="openSettingsModal()">${S('is',20)}</button>
+      <button class="b" title="CLI" data-layout-action="launch-cli">${S('iterm',20)}</button>
+      <button class="b" title="设置" data-layout-action="settings">${S('is',20)}</button>
     </div>
   </div>`;
 }
@@ -149,6 +144,43 @@ function buildStatusBar(): string {
       <span class="status-problems-counts" id="pb-status-counts"></span>
     </button>
   </footer>`;
+}
+
+function bindLayoutActions(container: HTMLElement): void {
+  if (container.dataset.layoutActions === '1') return;
+  container.dataset.layoutActions = '1';
+  container.addEventListener('click', (event: MouseEvent) => {
+    const eventTarget = event.target as Element | null;
+    const target = typeof eventTarget?.closest === 'function'
+      ? eventTarget.closest<HTMLElement>('[data-layout-action]')
+      : null;
+    if (!target || !container.contains(target)) return;
+
+    const appNamespace = (window as any).App;
+    switch (target.dataset.layoutAction) {
+      case 'file-menu': {
+        const handler = appNamespace?.File?.toggleFileMenu || (window as any).toggleFileMenu;
+        if (typeof handler === 'function') handler(event, target);
+        break;
+      }
+      case 'window':
+        if (target.dataset.windowAction) winCtrl(target.dataset.windowAction);
+        break;
+      case 'panel':
+        if (target.dataset.side) togglePanel(target.dataset.side);
+        break;
+      case 'launch-cli': {
+        const handler = appNamespace?.File?.launchCli || (window as any).launchCli;
+        if (typeof handler === 'function') handler();
+        break;
+      }
+      case 'settings': {
+        const handler = appNamespace?.Settings?.openSettingsModal || (window as any).openSettingsModal;
+        if (typeof handler === 'function') handler();
+        break;
+      }
+    }
+  });
 }
 
 // ─── 标签渲染（统一容器）───────────────────────────────────
@@ -323,12 +355,10 @@ document.addEventListener('wheel', (e) => {
 // ─── 恢复上次的文件标签页 ──────────────────────────────
 function restoreFileTabs(): void {
   try {
-    const intendedTarget = localStorage.getItem('last-active-tab') ?? '__chat__';
     // 从 UiStateStore.tabs.items 读取持久化的 file tab 列表
-    const uis = (window as any).__uiStateStore;
-    const items: any[] = uis?._state?.tabs?.items ?? [];
+    const items = App.State.getSnapshot().tabs.items || [];
     const fileTabs = items.filter((t: any) => t.kind === 'file');
-    if (fileTabs.length === 0) { restoreActiveTabWith(intendedTarget); return; }
+    if (fileTabs.length === 0) { restoreActiveTab(); return; }
 
     let loaded = 0;
     const total = fileTabs.length;
@@ -339,7 +369,7 @@ function restoreFileTabs(): void {
         const ext = '.' + (ft.id.split('.').pop() || '').toLowerCase();
         openFileTab(ft.id, '', ext, ft.renderer);
         loaded++;
-        if (loaded >= total) restoreActiveTabWith(intendedTarget);
+        if (loaded >= total) restoreActiveTab();
         continue;
       }
       if (ws) {
@@ -352,21 +382,20 @@ function restoreFileTabs(): void {
           .catch(() => {})
           .finally(() => {
             loaded++;
-            if (loaded >= total) restoreActiveTabWith(intendedTarget);
+            if (loaded >= total) restoreActiveTab();
           });
       } else {
         loaded++;
-        if (loaded >= total) restoreActiveTabWith(intendedTarget);
+        if (loaded >= total) restoreActiveTab();
       }
     }
   } catch {}
 }
 
-function restoreActiveTabWith(target: string): void {
+function restoreActiveTab(): void {
   try {
     // UiStateStore.activeView 是权威恢复源
-    const uis = (window as any).__uiStateStore;
-    const activeView = uis?._state?.activeView;
+    const activeView = App.State.getSnapshot().activeView;
 
     if (activeView?.type === 'session' && activeView.id) {
       App?.Tabs?.activate(activeView.id);
@@ -376,14 +405,8 @@ function restoreActiveTabWith(target: string): void {
       const exists = window.__state._fileTabs.some(t => t.id === activeView.id);
       if (exists) { App?.Tabs?.activate(activeView.id); return; }
     }
-    if (activeView?.type === 'chat' || !target || target === '__chat__') {
-      const ts = (window as any).__tabs; if (ts) ts.activateTab(null);
-      return;
-    }
-    // localStorage last-active-tab 仅作为旧格式兜底（UiStateStore.activeView 不存在或不可用时）
-    const exists = window.__state._fileTabs.some(t => t.id === target);
-    if (exists) App?.Tabs?.activate(target);
-    else { const ts = (window as any).__tabs; if (ts) ts.activateTab(null); }
+    const ts = (window as any).__tabs;
+    if (ts) ts.activateTab(null);
   } catch { const ts = (window as any).__tabs; if (ts) ts.activateTab(null); }
 }
 
@@ -391,10 +414,8 @@ function restoreActiveTabWith(target: string): void {
 document.addEventListener('DOMContentLoaded', () => { mark('dom_ready');
   const si = $('si');
   if (si) {
-    try {
-      const savedWidth = parseInt(localStorage.getItem('panel-width') || '', 10);
-      if (savedWidth > 50) si.style.width = savedWidth + 'px';
-    } catch {}
+    const savedWidth = App.State.getSnapshot().panel.width;
+    if (savedWidth > 50) si.style.width = savedWidth + 'px';
   }
 });
 

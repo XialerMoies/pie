@@ -38,17 +38,21 @@ function renderAttachments(): void {
       info = ` · ${a.startLine}-${a.endLine}`;
     }
     const iconHtml = ExplorerService.iconFor(a.name, a.kind === 'folder');
-    return `<div class="fi-attach-pill" data-attach-id="${a.id}" data-kind="${a.kind}" title="${E(a.path)}">
+    return `<div class="fi-attach-pill" data-attach-id="${E(a.id)}" data-kind="${E(a.kind)}" title="${E(a.path)}">
       ${iconHtml}
       <span class="fi-attach-pill-name">${E(a.name)}</span>
       <span class="fi-attach-pill-info">${info}</span>
-      <button class="fi-attach-del" onclick="event.stopPropagation();App.Chat.removeAttachment('${a.id}')">✕</button>
+      <button type="button" class="fi-attach-del" aria-label="删除附件">✕</button>
     </div>`;
   }).join('');
   bar.querySelectorAll('.fi-attach-pill').forEach(pill => {
     pill.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('.fi-attach-del')) return;
       const id = (pill as HTMLElement).dataset.attachId || '';
+      if ((e.target as HTMLElement).closest('.fi-attach-del')) {
+        e.stopPropagation();
+        if (id) removeAttachment(id);
+        return;
+      }
       const att = _pendingAttachments.find(a => a.id === id);
       if (!att) return;
       if (att.kind === 'clip' && att.startLine != null) {

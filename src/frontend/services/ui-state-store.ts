@@ -66,6 +66,18 @@ const OLD = {
   WS_KEY: "workspace_path",
 };
 
+const WORKSPACE_LEGACY_KEYS = [
+  "file-tabs",
+  "last-active-tab",
+  OLD.SESSION_TABS,
+  OLD.ACTIVE_SESSION,
+  OLD.SESSION_LABELS,
+  OLD.LAST_SESSION,
+  OLD.CHAT_TAB,
+  OLD.ACTIVE_PANEL,
+  OLD.PANEL_WIDTH,
+] as const;
+
 function readLS(key: string): string | null {
   try { return localStorage.getItem(key); } catch { return null; }
 }
@@ -161,6 +173,104 @@ function ensureTabsFormat(state: WorkspaceUiState): void {
 
 function isHydrated(): boolean { return _hydrated; }
 function getState(): WorkspaceUiState { return _state; }
+function getSnapshot(): WorkspaceUiState {
+  return {
+    ..._state,
+    activeView: { ..._state.activeView },
+    tabs: {
+      ..._state.tabs,
+      sessions: [...(_state.tabs.sessions || [])],
+      files: (_state.tabs.files || []).map(file => ({ ...file })),
+      labels: { ...(_state.tabs.labels || {}) },
+      titleSources: { ...(_state.tabs.titleSources || {}) },
+      items: (_state.tabs.items || []).map(tab => ({ ...tab })),
+    },
+    panel: { ..._state.panel },
+    recent: {
+      ..._state.recent,
+      sessions: { ...(_state.recent.sessions || {}) },
+    },
+  };
+}
+
+function getWorkspacePath(): string {
+  return _state.workspacePath || readLS(OLD.WS_KEY) || "";
+}
+
+function setWorkspacePath(workspacePath: string): void {
+  _state.workspacePath = workspacePath;
+  try { localStorage.setItem(OLD.WS_KEY, workspacePath); } catch {}
+  _notify();
+  _scheduleSave();
+}
+
+function resetWorkspace(workspacePath: string): void {
+  _state = {
+    schemaVersion: 2,
+    workspacePath,
+    activeView: { type: "chat" },
+    tabs: { ...makeDefaultTabs(), items: [], activeId: null },
+    panel: { ...DEFAULT_STATE.panel },
+    recent: { sessions: {} },
+  };
+  try {
+    for (const key of WORKSPACE_LEGACY_KEYS) localStorage.removeItem(key);
+    localStorage.setItem(OLD.WS_KEY, workspacePath);
+  } catch {}
+  _notify();
+  _scheduleSave();
+}
+
+function syncTabs(items: AppTab[], activeId: string | null): void {
+  const copiedItems = items.map((tab, index) => ({ ...tab, order: index }));
+  const activeTab = copiedItems.find(tab => tab.id === activeId);
+  _state.tabs = {
+    ..._state.tabs,
+    items: copiedItems,
+    activeId: activeTab ? activeId : null,
+  };
+  if (activeTab?.kind === "file") _state.activeView = { type: "file", id: activeTab.id };
+  else if (activeTab?.kind === "session" || activeTab?.kind === "chat") _state.activeView = { type: "session", id: activeTab.id };
+  else _state.activeView = { type: "chat" };
+  _notify();
+  _scheduleSave();
+}
+
+function updateSessionMetadata(
+  labels: Record<string, string>,
+  titleSources: Record<string, "auto" | "manual">,
+): void {
+  _state.tabs = {
+    ..._state.tabs,
+    labels: { ...labels },
+    titleSources: { ...titleSources },
+  };
+  _notify();
+  _scheduleSave();
+}
+
+function updatePanel(panel: Partial<WorkspaceUiState["panel"]>): void {
+  _state.panel = { ..._state.panel, ...panel };
+  _notify();
+  _scheduleSave();
+}
+
+function setChatOpen(chatOpen: boolean): void {
+  _state.tabs = { ..._state.tabs, chatOpen };
+  _notify();
+  _scheduleSave();
+}
+
+function touchSession(sessionId: string, timestamp = Date.now()): void {
+  if (!sessionId) return;
+  _state.recent = {
+    ..._state.recent,
+    lastSessionId: sessionId,
+    sessions: { ..._state.recent.sessions, [sessionId]: timestamp },
+  };
+  _notify();
+  _scheduleSave();
+}
 
 /** 启动时调用：优先从服务端读取新结构数据，否则从旧 localStorage 迁移 */
 async function hydrate(): Promise<WorkspaceUiState> {
@@ -242,8 +352,24 @@ function _notify(): void {
 
 (window as any).__uiStateStore = {
   hydrate, getState, patchState, subscribe, saveNow,
-  isHydrated,
+  isHydrated, getSnapshot, getWorkspacePath, setWorkspacePath, resetWorkspace,
+  syncTabs, updateSessionMetadata, updatePanel, setChatOpen, touchSession,
   /** 直接引用 _state 供已有代码同步（迁移期过渡用） */
   get _state() { return _state; },
   get _hydrated() { return _hydrated; },
+};
+
+const app = (window as any).App || ((window as any).App = {});
+app.State = {
+  hydrate,
+  saveNow,
+  getSnapshot,
+  getWorkspacePath,
+  setWorkspacePath,
+  resetWorkspace,
+  syncTabs,
+  updateSessionMetadata,
+  updatePanel,
+  setChatOpen,
+  touchSession,
 };

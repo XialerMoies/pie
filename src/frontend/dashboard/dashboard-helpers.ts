@@ -169,16 +169,43 @@ function toast(msg: string, type?: 'info' | 'error' | 'success'): void {
 
 let _bootstrapPromise: Promise<void> | null = null;
 
-function bootstrapApi(): Promise<void> {
+export function bootstrapApi(): Promise<void> {
   if (!_bootstrapPromise) {
-    _bootstrapPromise = fetch('/api/bootstrap', {
-      credentials: 'include',
-      cache: 'no-store',
-    }).then(() => undefined).catch(() => {
+    _bootstrapPromise = (async () => {
+      const api = window.electronAPI;
+      if (!api?.getDesktopSessionToken) throw new Error('Electron preload API is unavailable');
+      const token = await api.getDesktopSessionToken();
+      if (!token) throw new Error('Desktop session token is unavailable');
+      const response = await fetch('/api/bootstrap', {
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { 'X-My-Code-Agent-Token': token },
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(`Desktop API bootstrap failed: ${response.status}${body ? ` ${body}` : ''}`);
+      }
+    })();
+    _bootstrapPromise = _bootstrapPromise.catch((error) => {
       _bootstrapPromise = null;
+      throw error;
     });
   }
   return _bootstrapPromise;
+}
+
+export async function syncStartupWorkspace(): Promise<void> {
+  const workspace = window.App?.State?.getWorkspacePath?.() || '';
+  if (!workspace) return;
+  const response = await fetch('/api/workspace/switch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace }),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Workspace startup sync failed: ${response.status}${body ? ` ${body}` : ''}`);
+  }
 }
 
 async function getD(): Promise<void> {
@@ -331,7 +358,10 @@ type PermissionConfirmInput = {
   source?: string;
   operation?: string;
   toolName?: string;
+  toolOperations?: string[];
   riskLevel?: string;
+  workspaceBounded?: boolean;
+  permissionRequired?: boolean;
   root?: string;
   path?: string;
   relativePath?: string;
@@ -351,7 +381,10 @@ function permissionOperationLabel(operation?: string): string {
 function permissionConfirmBoxHTML(input: PermissionConfirmInput, suggestionLabels: string[], inline = false): string {
   const details = [
     input.toolName ? `Tool: ${input.toolName}` : '',
+    input.toolOperations?.length ? `Ops: ${input.toolOperations.join(', ')}` : '',
     input.riskLevel ? `Risk: ${input.riskLevel}` : '',
+    typeof input.permissionRequired === 'boolean' ? `Prompt: ${input.permissionRequired ? 'required' : 'tracked'}` : '',
+    typeof input.workspaceBounded === 'boolean' ? `Scope: ${input.workspaceBounded ? 'workspace' : 'external'}` : '',
     input.source ? `来源: ${input.source}` : '',
     input.operation ? `操作: ${permissionOperationLabel(input.operation)}` : '',
     input.root ? `Root: ${input.root}` : '',
@@ -476,6 +509,7 @@ App.UI.F = F;
 App.UI.sb = sb;
 App.UI.toast = toast;
 App.UI.bootstrapApi = bootstrapApi;
+App.UI.syncStartupWorkspace = syncStartupWorkspace;
 App.UI.getD = getD;
 App.UI.refresh = refresh;
 App.UI.winCtrl = winCtrl;
@@ -488,6 +522,7 @@ App.Tabs = App.Tabs || {};
 window.$ = $; window.S = S; window.E = E; window.F = F;
 window.sb = sb; window.toast = toast as any;
 window.bootstrapApi = bootstrapApi;
+window.syncStartupWorkspace = syncStartupWorkspace;
 window.getD = getD; window.refresh = refresh;
 window.winCtrl = winCtrl;
 window.placeContextMenu = placeContextMenu;
