@@ -1,6 +1,13 @@
-﻿import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert";
 import { Window } from "happy-dom";
+
+function attachEventListeners(source) {
+  source.addEventListener = (type, listener) => { source[`on${type}`] = listener; };
+  source.removeEventListener = (type, listener) => {
+    if (source[`on${type}`] === listener) source[`on${type}`] = null;
+  };
+}
 
 function setupDom() {
   const win = new Window();
@@ -30,11 +37,7 @@ global.logTiming = () => {};
     '<div id="fi-slash"></div>',
   ].join('');
 
-  win.__state = {
-    D: null,
-    M: [{ role: "assistant", content: "hello" }],
-    IL: false,
-    CS: null,
+  const testState = {
     CT: "chat",
     _activePanel: "explorer",
     _fileTabs: [],
@@ -78,21 +81,25 @@ global.logTiming = () => {};
     Git: {},
   };
   global.App = win.App;
-  win.__tabs = {
-    getSessionTabIds: () => [...win.__state._sessionTabs],
-    getActiveSessionTabId: () => win.__state._activeSessionTabId || null,
+  Object.defineProperty(testState, "M", {
+    get: () => win.App.ChatState.getMessages(),
+    set: (value) => win.App.ChatState.replaceMessages(value),
+  });
+  win.App.Tabs = {
+    getSessionTabIds: () => [...testState._sessionTabs],
+    getActiveSessionTabId: () => testState._activeSessionTabId || null,
     getActiveTab: () => {
-      const id = win.__state._activeSessionTabId;
+      const id = testState._activeSessionTabId;
       return id ? { id, kind: id.startsWith("draft:") ? "chat" : "session", title: id, order: 0 } : null;
     },
-    getTab: (id) => win.__state._sessionTabs.includes(id) ? { id, kind: id.startsWith("draft:") ? "chat" : "session", title: id, order: 0 } : undefined,
-    openTab: (tab) => { if (!win.__state._sessionTabs.includes(tab.id)) win.__state._sessionTabs.push(tab.id); },
-    closeTab: (id) => { win.__state._sessionTabs = win.__state._sessionTabs.filter((tabId) => tabId !== id); },
+    getTab: (id) => testState._sessionTabs.includes(id) ? { id, kind: id.startsWith("draft:") ? "chat" : "session", title: id, order: 0 } : undefined,
+    openTab: (tab) => { if (!testState._sessionTabs.includes(tab.id)) testState._sessionTabs.push(tab.id); },
+    closeTab: (id) => { testState._sessionTabs = testState._sessionTabs.filter((tabId) => tabId !== id); },
     replaceTab: (id, updates) => {
-      const index = win.__state._sessionTabs.indexOf(id);
-      if (index >= 0 && updates.id) win.__state._sessionTabs[index] = updates.id;
+      const index = testState._sessionTabs.indexOf(id);
+      if (index >= 0 && updates.id) testState._sessionTabs[index] = updates.id;
     },
-    activateTab: (id) => { win.__state._activeSessionTabId = id; },
+    activateTab: (id) => { testState._activeSessionTabId = id; },
   };
 
   global.$ = (id) => doc.getElementById(id);
@@ -106,9 +113,9 @@ global.logTiming = () => {};
   global.ExplorerService = { getWorkspacePath: () => "", _getTree: () => null };
   global.fetch = async () => ({ ok: true, json: async () => ({}) });
   win.fetch = global.fetch;
-  win.msgs = () => win.__state.M.map((message) => `<div class="m"><div class="mt">${message.content}</div></div>`).join('');
+  win.msgs = () => testState.M.map((message) => `<div class="m"><div class="mt">${message.content}</div></div>`).join('');
 
-  return { win, doc };
+  return { win, doc, state: testState };
 }
 
 describe("chat ui state", () => {
@@ -118,6 +125,7 @@ describe("chat ui state", () => {
     env = setupDom();
     const ts = Date.now() + Math.random();
     await import(`../src/frontend/services/chat-runtime-store.ts?t=${ts}`);
+    env.win.App.ChatState.replaceMessages([{ role: "assistant", content: "hello" }]);
     await import(`../src/frontend/services/chat-stream.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/dashboard-chat.ts?t=${ts}`);
@@ -158,7 +166,7 @@ describe("chat ui state", () => {
       return origReplaceWith.apply(this, args);
     };
 
-    env.win.__state.M[0].content = "hello again";
+    env.state.M[0].content = "hello again";
     env.win.updateUI();
 
     assert.ok(replaces > 0, "消息变化时应有 replaceWith 调用");
@@ -179,7 +187,7 @@ describe("chat ui state", () => {
     };
 
     // 同长度替换：hello(5) → world(5)，content.length 不变
-    env.win.__state.M[0].content = "world";
+    env.state.M[0].content = "world";
     env.win.updateUI();
 
     assert.ok(replaces > 0, "同长度内容替换也应触发 replaceWith");
@@ -193,7 +201,7 @@ describe("chat ui state", () => {
     class MockEventSource {
       constructor() {
         this.onmessage = null;
-        this.onerror = null;
+        this.onerror = null; attachEventListeners(this);
         streams.push(this);
       }
       close() {}
@@ -222,7 +230,7 @@ describe("chat ui state", () => {
       data: JSON.stringify({ type: "done", text: "final", blocks: finalBlocks }),
     });
 
-    const last = env.win.__state.M.at(-1);
+    const last = env.state.M.at(-1);
     assert.deepStrictEqual(last.blocks, finalBlocks);
     assert.strictEqual(last.streaming, false);
   });
@@ -235,7 +243,7 @@ describe("chat ui state", () => {
     };
     const streams = [];
     class MockEventSource {
-      constructor() { this.onmessage = null; this.onerror = null; streams.push(this); }
+      constructor() { this.onmessage = null; this.onerror = null; attachEventListeners(this); streams.push(this); }
       close() {}
     }
     global.EventSource = MockEventSource;
@@ -266,7 +274,7 @@ describe("chat ui state", () => {
   it("done SSE 不替换最后一条 assistant 消息", () => {
     const streams = [];
     class MockEventSource {
-      constructor() { this.onmessage = null; this.onerror = null; streams.push(this); }
+      constructor() { this.onmessage = null; this.onerror = null; attachEventListeners(this); streams.push(this); }
       close() {}
     }
     global.EventSource = MockEventSource;
@@ -318,11 +326,11 @@ describe("chat ui state", () => {
   });
 
   it("block 流开始后 delta 不创建重复 assistant 消息", () => {
-    env.win.__state.M = [];
+    env.state.M = [];
     env.win.App.Chat.updateLastBlock = () => true;
     const streams = [];
     class MockEventSource {
-      constructor() { this.onmessage = null; this.onerror = null; streams.push(this); }
+      constructor() { this.onmessage = null; this.onerror = null; attachEventListeners(this); streams.push(this); }
       close() {}
     }
     global.EventSource = MockEventSource;
@@ -338,16 +346,16 @@ describe("chat ui state", () => {
     stream.onmessage({ data: JSON.stringify({ type: "block", block: { type: "text", text: "你好", blockId: "text-0", seq: 2 } }) });
     stream.onmessage({ data: JSON.stringify({ type: "delta", text: "！" }) });
 
-    assert.deepStrictEqual(env.win.__state.M.map(message => message.role), ["user", "assistant"]);
-    assert.strictEqual(env.win.__state.M[1].blocks.length, 1);
-    assert.strictEqual(env.win.__state.M[1].blocks[0].text, "你好");
+    assert.deepStrictEqual(env.state.M.map(message => message.role), ["user", "assistant"]);
+    assert.strictEqual(env.state.M[1].blocks.length, 1);
+    assert.strictEqual(env.state.M[1].blocks[0].text, "你好");
   });
 
   it("默认空白页发送后删除临时会话", async () => {
-    env.win.__state.M = [];
+    env.state.M = [];
     const streams = [];
     class MockEventSource {
-      constructor() { this.onmessage = null; this.onerror = null; streams.push(this); }
+      constructor() { this.onmessage = null; this.onerror = null; attachEventListeners(this); streams.push(this); }
       close() {}
     }
     global.EventSource = MockEventSource;
@@ -380,14 +388,14 @@ describe("chat ui state", () => {
   });
 
   it("草稿标签首次发送会升级为真实会话", async () => {
-    env.win.__state.M = [];
-    env.win.__state._sessionTabs = ["draft:test"];
-    env.win.__state._activeSessionTabId = "draft:test";
+    env.state.M = [];
+    env.state._sessionTabs = ["draft:test"];
+    env.state._activeSessionTabId = "draft:test";
     localStorage.setItem("session-tabs", JSON.stringify(["draft:test"]));
     localStorage.setItem("active-session-tab", "draft:test");
     const streams = [];
     class MockEventSource {
-      constructor() { this.onmessage = null; this.onerror = null; streams.push(this); }
+      constructor() { this.onmessage = null; this.onerror = null; attachEventListeners(this); streams.push(this); }
       close() {}
     }
     global.EventSource = MockEventSource;
@@ -396,7 +404,7 @@ describe("chat ui state", () => {
     let committed = null;
     env.win.commitSessionTab = (oldId, newId) => {
       committed = [oldId, newId];
-      env.win.__state._sessionTabs = [newId];
+      env.state._sessionTabs = [newId];
     };
 
     const fetchCalls = [];
@@ -420,21 +428,21 @@ describe("chat ui state", () => {
     streams[0].onmessage({ data: JSON.stringify({ type: "done", text: "持久回答", sessionId: "real-session" }) });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.deepStrictEqual(env.win.__state._sessionTabs, ["real-session"]);
+    assert.deepStrictEqual(env.state._sessionTabs, ["real-session"]);
     assert.ok(!fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/delete") && method === "POST"));
   });
 
   it("done 后为默认标题的持久会话自动生成标题", async () => {
-    env.win.__state.M = [];
-    env.win.__state._sessionTabs = ["draft:auto-title"];
-    env.win.__state._activeSessionTabId = "draft:auto-title";
-    env.win.__state._sessionTabLabels = {};
-    env.win.__state._sessionTitleSources = {};
+    env.state.M = [];
+    env.state._sessionTabs = ["draft:auto-title"];
+    env.state._activeSessionTabId = "draft:auto-title";
+    env.state._sessionTabLabels = {};
+    env.state._sessionTitleSources = {};
     localStorage.setItem("session-tabs", JSON.stringify(["draft:auto-title"]));
     localStorage.setItem("active-session-tab", "draft:auto-title");
     const streams = [];
     class MockEventSource {
-      constructor() { this.onmessage = null; this.onerror = null; streams.push(this); }
+      constructor() { this.onmessage = null; this.onerror = null; attachEventListeners(this); streams.push(this); }
       close() {}
     }
     global.EventSource = MockEventSource;
@@ -483,19 +491,19 @@ describe("chat ui state", () => {
     localStorage.removeItem("session-tab-labels"); // 恢复干净状态
 
     // setActiveSessionTabId used to write active-session-tab and last-session-id
-    env.win.__state._sessionTabs = ["sess-a"];
+    env.state._sessionTabs = ["sess-a"];
     env.win.setActiveSessionTabId("sess-a");
     for (const key of LEGACY_KEYS) {
       assert.strictEqual(localStorage.getItem(key), null, `setActiveSessionTabId: ${key}`);
     }
 
     // commitSessionTab used to write session-tabs, session-tab-labels, active-session-tab, last-session-id
-    env.win.__state._sessionTabs = ["draft:regression"];
+    env.state._sessionTabs = ["draft:regression"];
     env.win.commitSessionTab("draft:regression", "sess-real", "手动标题");
     for (const key of LEGACY_KEYS) {
       assert.strictEqual(localStorage.getItem(key), null, `commitSessionTab: ${key}`);
     }
-    assert.deepStrictEqual(env.win.__state._sessionTabs, ["sess-real"]);
+    assert.deepStrictEqual(env.state._sessionTabs, ["sess-real"]);
     assert.strictEqual(env.win.App.State.getSnapshot().tabs.labels?.["sess-real"], "手动标题");
   });
 
@@ -511,8 +519,8 @@ describe("chat ui state", () => {
     };
 
     const prefix = "A".repeat(40), suffix = "A".repeat(40);
-    env.win.__state.M[0].content = prefix + "B".repeat(20) + suffix;
-    env.win.__state.M[0]._rv = 1;
+    env.state.M[0].content = prefix + "B".repeat(20) + suffix;
+    env.state.M[0]._rv = 1;
     env.win.updateUI();
 
     assert.ok(replaces > 0, "_rv bump 应触发 replaceWith");
@@ -526,7 +534,7 @@ describe("chat ui state", () => {
   });
 
   it("空 M 时 updateUI 渲染欢迎屏", () => {
-    env.win.__state.M = [];
+    env.state.M = [];
     env.win.updateUI();
     const panel = env.doc.getElementById("ms");
     assert.ok(panel.innerHTML.includes("Pi"), "空 M 时应渲染欢迎屏");

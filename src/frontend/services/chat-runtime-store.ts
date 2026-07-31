@@ -1,41 +1,13 @@
 /**
  * Chat runtime state facade.
  *
- * The legacy window.__state fields remain as a compatibility projection while
- * chat and session modules migrate to App.ChatState.
+ * App.ChatState is the sole owner; consumers must not keep browser-global
+ * compatibility mirrors.
  */
 
-type ChatStateHost = {
-  D?: DashboardData | null;
-  M?: Message[];
-  IL?: boolean;
-};
-
-const chatStateHost = ((window as any).__state || ((window as any).__state = {})) as ChatStateHost;
-let chatStateMessages: Message[] = Array.isArray(chatStateHost.M) ? chatStateHost.M : [];
-let chatStateBusy = chatStateHost.IL === true;
-let chatStateDashboard: DashboardData | null = chatStateHost.D ?? null;
-
-function defineChatStateProjection<K extends keyof ChatStateHost>(key: K, read: () => ChatStateHost[K], write: (value: ChatStateHost[K]) => void): void {
-  const descriptor = Object.getOwnPropertyDescriptor(chatStateHost, key);
-  if (descriptor && descriptor.configurable === false) return;
-  Object.defineProperty(chatStateHost, key, {
-    configurable: true,
-    enumerable: true,
-    get: read,
-    set: write,
-  });
-}
-
-defineChatStateProjection('M', () => chatStateMessages, (value) => {
-  chatStateMessages = Array.isArray(value) ? value : [];
-});
-defineChatStateProjection('IL', () => chatStateBusy, (value) => {
-  chatStateBusy = value === true;
-});
-defineChatStateProjection('D', () => chatStateDashboard, (value) => {
-  chatStateDashboard = value ?? null;
-});
+let chatStateMessages: Message[] = [];
+let chatStateBusy = false;
+let chatStateDashboard: DashboardData | null = null;
 
 const chatStateApi: AppChatState = {
   getMessages(): Message[] {

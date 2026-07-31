@@ -9,7 +9,7 @@
 
 interface McpServerStatus {
   name: string;
-  state: "connected" | "connecting" | "disconnected" | "error";
+  state: unknown;
   tools: string[];
   error?: string;
   config?: { command?: string; args?: string[]; url?: string; transport?: string; enabled?: boolean };
@@ -106,23 +106,26 @@ async function fetchMcpServers(): Promise<void> {
 
     if (barCount) barCount.textContent = String(servers.length);
 
-    content.innerHTML = servers.map((s) => `
-      <div class="mcp-server" data-source="${E(s.name)}">
-        <div class="mcp-server-top">
-          <span class="mcp-dot mcp-dot--${s.state}"></span>
-          <span class="mcp-server-name">${E(s.name)}</span>
-          <span class="mcp-server-state mcp-state--${s.state}">${stateLabel(s.state)}</span>
+    content.innerHTML = servers.map((s) => {
+      const state = App.McpState.normalize(s.state);
+      return `
+        <div class="mcp-server" data-source="${E(s.name)}">
+          <div class="mcp-server-top">
+            <span class="mcp-dot mcp-dot--${state}"></span>
+            <span class="mcp-server-name">${E(s.name)}</span>
+            <span class="mcp-server-state mcp-state--${state}">${App.McpState.label(state)}</span>
+          </div>
+          ${s.error ? `<div class="mcp-server-error">${E(s.error)}</div>` : ""}
+          ${s.tools.length > 0 ? `<div class="mcp-server-tools">${s.tools.map((t) => `<span class="mcp-tool-tag">${E(t)}</span>`).join("")}</div>` : ""}
+          <div class="mcp-server-actions">
+            ${s.config ? `<button class="mcp-btn mcp-btn-toggle" data-name="${E(s.name)}">${s.config.enabled !== false ? "停用" : "启用"}</button>` : ""}
+            ${s.error?.includes("未信任") ? `<button class="mcp-btn mcp-btn-trust" data-name="${E(s.name)}">信任</button>` : ""}
+            ${s.canDelete !== false ? `<button class="mcp-btn mcp-btn-remove" data-name="${E(s.name)}">删除</button>` : ""}
+          </div>
+          ${s.config ? `<div class="mcp-server-cmd">${s.config.transport === "http" || s.config.transport === "sse" ? E(s.config.url ?? "") : E(s.config.command ?? "") + " " + (s.config.args || []).map(a => E(a)).join(" ")}</div>` : ""}
         </div>
-        ${s.error ? `<div class="mcp-server-error">${E(s.error)}</div>` : ""}
-        ${s.tools.length > 0 ? `<div class="mcp-server-tools">${s.tools.map((t) => `<span class="mcp-tool-tag">${E(t)}</span>`).join("")}</div>` : ""}
-        <div class="mcp-server-actions">
-          ${s.config ? `<button class="mcp-btn mcp-btn-toggle" data-name="${E(s.name)}">${s.config.enabled !== false ? "停用" : "启用"}</button>` : ""}
-          ${s.error?.includes("未信任") ? `<button class="mcp-btn mcp-btn-trust" data-name="${E(s.name)}">信任</button>` : ""}
-          ${s.canDelete !== false ? `<button class="mcp-btn mcp-btn-remove" data-name="${E(s.name)}">删除</button>` : ""}
-        </div>
-        ${s.config ? `<div class="mcp-server-cmd">${s.config.transport === "http" || s.config.transport === "sse" ? E(s.config.url ?? "") : E(s.config.command ?? "") + " " + (s.config.args || []).map(a => E(a)).join(" ")}</div>` : ""}
-      </div>
-    `).join("");
+      `;
+    }).join("");
 
     bindToggleEvents(content);
     bindTrustEvents(content);
@@ -159,7 +162,7 @@ function bindTrustEvents(container: HTMLElement): void {
         if (!data.ok) { toast(`信任失败: ${data.error}`, "error"); return; }
         toast(`已信任 ${name}，重启后生效`, "info");
         // 立即更新显示，不再显示旧错误
-        const serverEl = container.querySelector(`.mcp-server-actions .mcp-btn-trust[data-name="${E(name)}"]`)?.closest(".mcp-server");
+        const serverEl = btnEl.closest(".mcp-server");
         if (serverEl) {
           const errorEl = serverEl.querySelector(".mcp-server-error");
           if (errorEl) errorEl.textContent = "✅ 已信任，重启后生效";
@@ -332,18 +335,6 @@ function bindInstallEvents(container: HTMLElement): void {
       }
     });
   });
-}
-
-// ─── 辅助 ──────────────────────────────────────
-
-function stateLabel(state: string): string {
-  switch (state) {
-    case "connected": return "已连接";
-    case "connecting": return "连接中";
-    case "disconnected": return "已断开";
-    case "error": return "错误";
-    default: return state;
-  }
 }
 
 // ─── 初始化 ────────────────────────────────────

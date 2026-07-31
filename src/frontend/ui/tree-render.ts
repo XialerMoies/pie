@@ -36,7 +36,7 @@
         }
       }
 
-      row.onclick = (e: MouseEvent) => { e.stopPropagation(); this._selectAndActivate(n); };
+      row.addEventListener('click', (e: MouseEvent) => { e.stopPropagation(); this._selectAndActivate(n); });
     }
   };
 

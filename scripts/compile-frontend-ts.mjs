@@ -134,6 +134,7 @@ const bundleOrder = [
   "gen/pane/chat/index.js",
   "gen/pane/search/index.js",
   "gen/pane/git/index.js",
+  "gen/pane/mcp/mcp-state.js",
   "gen/pane/mcp/index.js",
   "gen/pane/permissions/index.js",
   "gen/dashboard/dashboard-menus.js",

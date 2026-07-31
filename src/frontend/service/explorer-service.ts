@@ -9,6 +9,8 @@ export class ExplorerService {
   static _eventSource: EventSource | null = null;
   static _eventsReady: Promise<void> | null = null;
   static _eventReadyTimer: ReturnType<typeof setTimeout> | null = null;
+  static _eventGeneration = 0;
+  static _eventCleanup: (() => void) | null = null;
   static startEvents(): Promise<void> { return Promise.resolve(); }
   static stopEvents(): void {}
 
@@ -262,24 +264,29 @@ ExplorerService.refreshTree = async function (): Promise<void> {
 ExplorerService.startEvents = function (): Promise<void> {
   if (ExplorerService._eventsReady) return ExplorerService._eventsReady;
   ExplorerService._eventsStarted = true;
+  const generation = ++ExplorerService._eventGeneration;
   const pending = new Promise<void>((resolve, reject) => {
     try {
       const es = new EventSource('/api/events');
       ExplorerService._eventSource = es;
       let ready = false;
+      const isCurrent = () => ExplorerService._eventGeneration === generation
+        && ExplorerService._eventSource === es;
       const finishReady = () => {
-        if (ready) return;
+        if (ready || !isCurrent()) return;
         ready = true;
         if (ExplorerService._eventReadyTimer) clearTimeout(ExplorerService._eventReadyTimer);
         ExplorerService._eventReadyTimer = null;
         resolve();
       };
       ExplorerService._eventReadyTimer = setTimeout(() => {
+        if (!isCurrent()) return;
         es.close();
         reject(new Error('Permission event channel timed out'));
       }, 5000);
-      es.onopen = finishReady;
-      es.onmessage = (e) => {
+      const handleOpen = () => finishReady();
+      const handleMessage = (e: MessageEvent) => {
+      if (!isCurrent()) return;
       try {
         const d = JSON.parse(e.data);
         if (d.type === 'permission_confirm') {
@@ -324,18 +331,29 @@ ExplorerService.startEvents = function (): Promise<void> {
         }
       } catch { /* ignore */ }
       };
-      es.onerror = () => {
-        if (!ready) reject(new Error('Permission event channel failed'));
+      const handleError = () => {
+        if (isCurrent() && !ready) reject(new Error('Permission event channel failed'));
+      };
+      es.addEventListener('open', handleOpen);
+      es.addEventListener('message', handleMessage);
+      es.addEventListener('error', handleError);
+      ExplorerService._eventCleanup = () => {
+        es.removeEventListener('open', handleOpen);
+        es.removeEventListener('message', handleMessage);
+        es.removeEventListener('error', handleError);
+        es.close();
       };
     } catch (error) {
       reject(error);
     }
   });
   ExplorerService._eventsReady = pending.catch((error) => {
+    if (ExplorerService._eventGeneration !== generation) throw error;
     if (ExplorerService._eventReadyTimer) clearTimeout(ExplorerService._eventReadyTimer);
     ExplorerService._eventReadyTimer = null;
     ExplorerService._eventsStarted = false;
-    ExplorerService._eventSource?.close?.();
+    ExplorerService._eventCleanup?.();
+    ExplorerService._eventCleanup = null;
     ExplorerService._eventSource = null;
     ExplorerService._eventsReady = null;
     throw error;
@@ -344,9 +362,11 @@ ExplorerService.startEvents = function (): Promise<void> {
 };
 
 ExplorerService.stopEvents = function (): void {
+  ExplorerService._eventGeneration++;
   if (ExplorerService._eventReadyTimer) clearTimeout(ExplorerService._eventReadyTimer);
   ExplorerService._eventReadyTimer = null;
-  ExplorerService._eventSource?.close?.();
+  ExplorerService._eventCleanup?.();
+  ExplorerService._eventCleanup = null;
   ExplorerService._eventSource = null;
   ExplorerService._eventsStarted = false;
   ExplorerService._eventsReady = null;

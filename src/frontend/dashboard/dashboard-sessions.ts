@@ -66,14 +66,14 @@ function normalizeSessionTabIds(ids: unknown[]): string[] {
 }
 
 function readSessionTabIds(): string[] {
-  const tabs = (window as any).__tabs;
+  const tabs = App.Tabs;
   return tabs?.getSessionTabIds ? tabs.getSessionTabIds() : [];
 }
 
 function writeSessionTabIds(ids: string[]): void {
   const next = normalizeSessionTabIds(ids);
   // 同步到 TabStore（作为 adapter 写入）
-  const tabs = (window as any).__tabs;
+  const tabs = App.Tabs;
   if (tabs) {
     const existing = tabs.getSessionTabIds();
     for (const id of next) {
@@ -99,14 +99,14 @@ function getActiveSessionTabId(): string | null {
   if (_getActiveSessionTabIdDepth > 5) { _getActiveSessionTabIdDepth = 0; return null; }
   _getActiveSessionTabIdDepth++;
   try {
-    const tabs = (window as any).__tabs;
+    const tabs = App.Tabs;
     return tabs?.getActiveSessionTabId ? tabs.getActiveSessionTabId() : null;
   } finally { _getActiveSessionTabIdDepth--; }
 }
 
 function setActiveSessionTabId(id: string | null): void {
   // 同步到 TabStore（_syncToState 已处理 activeView → UiStateStore）
-  const tabs = (window as any).__tabs;
+  const tabs = App.Tabs;
   if (tabs) tabs.activateTab(id);
   // TabStore 不可用时回退触发保存
   if (!tabs && typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
@@ -157,7 +157,7 @@ function writeSessionTabLabel(id: string, label: string, source?: SessionTitleSo
   const labels = { ...readSessionTabLabels(), [id]: label.trim() };
   App.State.updateSessionMetadata(labels, readSessionTitleSources());
   // 同步到 TabStore 标题
-  const tabs = (window as any).__tabs;
+  const tabs = App.Tabs;
   if (tabs) tabs.replaceTab(id, { title: label.trim() });
   if (source) writeSessionTitleSource(id, source);
 }
@@ -174,7 +174,7 @@ function removeSessionTabLabel(id: string): void {
 function commitSessionTab(draftId: string, sessionId: string, label?: string): void {
   if (!sessionId) return;
   // TabStore 原地升级（chat→session）
-  const tabs = (window as any).__tabs;
+  const tabs = App.Tabs;
   if (tabs && tabs.getTab(draftId)) {
     tabs.replaceTab(draftId, { kind: 'session', id: sessionId, sessionId, draftId: undefined, status: 'running' });
     tabs.activateTab(sessionId);
@@ -202,7 +202,7 @@ function commitSessionTab(draftId: string, sessionId: string, label?: string): v
 
 function rememberSessionTab(id: string): void {
   if (!id) return;
-  const tabs = (window as any).__tabs;
+  const tabs = App.Tabs;
   if (tabs && !tabs.getTab(id)) {
     const isDraft = id.startsWith('draft:');
     tabs.openTab({ kind: isDraft ? 'chat' : 'session', id, title: '新会话', ...(isDraft ? { draftId: id } : { sessionId: id }) });
@@ -217,7 +217,7 @@ function forgetSessionTab(id: string): string | null {
   if (index < 0) return ids[0] || null;
   const next = ids.filter(tabId => tabId !== id);
   // 先算好 next，再关闭 TabStore（避免 closeTab 后 ids 已不含 id 导致 index 误判）
-  const tabs = (window as any).__tabs;
+  const tabs = App.Tabs;
   if (tabs) tabs.closeTab(id);
   writeSessionTabIds(next);
   removeSessionTabLabel(id);
@@ -368,7 +368,7 @@ function renderSessionTabs(activeId?: string): void {
 
 /** 保存 UI 状态到服务端（不受随机端口影响） */
 function saveUiState(): void {
-  const tabs = (window as any).__tabs;
+  const tabs = App.Tabs;
   if (tabs) { tabs.getState(); } // 确保初始化
   const activeId = getActiveSessionTabId();
   const activePanel = App.State.getSnapshot().panel.active || 'explorer';
@@ -386,7 +386,7 @@ async function restoreSessionTabs(): Promise<void> {
   const items = store.tabs.items || [];
   const persistedActiveId = store.tabs.activeId || (store.activeView.type !== 'chat' ? store.activeView.id : null);
   const activeId = store.activeView.type === 'session' ? store.activeView.id : null;
-  (window as any).__tabs?.restoreTabs?.(items, persistedActiveId);
+  App.Tabs?.restoreTabs?.(items, persistedActiveId);
   // hydrate 后立即恢复文件标签（确保 UiStateStore.tabs.items 可用，避免独立定时器的竞态）
   if (typeof (window as any).restoreFileTabs === 'function') (window as any).restoreFileTabs();
   const ids = items.filter(tab => tab.kind === 'session' || tab.kind === 'chat').map(tab => tab.id);
@@ -576,7 +576,7 @@ function activateDraftSession(id: string): void {
 /** App.Tabs.close 的降级入口 */
 function closeSessionTab(id: string): void {
   const T = (window as any).App?.Tabs;
-  const ts = (window as any).__tabs;
+  const ts = App.Tabs;
   const tab = ts?.getTab?.(id);
   if (tab && (tab.kind === 'session' || tab.kind === 'chat')) {
     const handler = ts?.getTabBehavior?.(tab.kind);
@@ -690,7 +690,7 @@ function renderSessionCard(session: SessionInfo, openSessionIds: Set<string>, sc
   const pinIcon = session.pinned ? S('ipin-off', 14) : S('ipin', 14);
   const branchText = session.branchFrom?.name ? `从 ${session.branchFrom.name} 分支` : session.branchFrom?.id ? '分支线程' : '';
   const hint = [threadStatusHint(status), messageText, scopeLabel, branchText].filter(Boolean).join(' · ');
-  return `<div class="${className}" title="${E(hint)}" data-session-id="${session.id}">
+  return `<div class="${className}" title="${E(hint)}" data-session-id="${E(session.id)}">
     <div class="thread-row">
       <div class="sess-info thread-info">
         <div class="sess-name thread-name">
@@ -699,10 +699,10 @@ function renderSessionCard(session: SessionInfo, openSessionIds: Set<string>, sc
       </div>
       <div class="thread-time">${E(timeText)}</div>
       <div class="sess-ops thread-ops">
-        <button class="sess-pin" title="${pinTitle}" aria-label="${pinTitle}" data-action="pin" data-session-id="${session.id}" data-pinned="${session.pinned ? 'true' : 'false'}">${pinIcon}</button>
-        <button class="sess-branch" title="创建分支" aria-label="创建分支" data-action="branch" data-session-id="${session.id}">${S('ibranch', 14)}</button>
-        <button class="sess-rename" title="重命名" aria-label="重命名" data-action="rename" data-session-id="${session.id}">${S('iedit', 14)}</button>
-        <button class="sess-del" title="删除" aria-label="删除" data-action="delete" data-session-id="${session.id}">${S('itrash', 14)}</button>
+        <button class="sess-pin" title="${pinTitle}" aria-label="${pinTitle}" data-action="pin" data-session-id="${E(session.id)}" data-pinned="${session.pinned ? 'true' : 'false'}">${pinIcon}</button>
+        <button class="sess-branch" title="创建分支" aria-label="创建分支" data-action="branch" data-session-id="${E(session.id)}">${S('ibranch', 14)}</button>
+        <button class="sess-rename" title="重命名" aria-label="重命名" data-action="rename" data-session-id="${E(session.id)}">${S('iedit', 14)}</button>
+        <button class="sess-del" title="删除" aria-label="删除" data-action="delete" data-session-id="${E(session.id)}">${S('itrash', 14)}</button>
       </div>
     </div>
   </div>`;
@@ -916,8 +916,8 @@ function renameSession(el: HTMLElement, id: string): void {
         }).catch(() => { nm.textContent = oldName; toast('重命名失败'); });
     } else { nm.textContent = oldName; }
   }
-  input.onkeydown = function (e: KeyboardEvent) { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } };
-  input.onblur = save;
+  input.addEventListener('keydown', function (e: KeyboardEvent) { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
+  input.addEventListener('blur', save);
 }
 
 async function deleteSession(id: string): Promise<void> {
@@ -937,7 +937,7 @@ async function deleteSession(id: string): Promise<void> {
 
         // forgetSessionTab 会调用 TabStore.closeTab 自动选下一个标签
         const nextId = forgetSessionTab(id);
-        const ts = (window as any).__tabs;
+        const ts = App.Tabs;
 
         if (nextId) {
           // 有下一个会话标签 → 切换到它
@@ -1013,7 +1013,7 @@ function branchSession(id: string): void {
 /** App.Tabs.activate 的降级入口（当 handler/fallback 调用时保留完整逻辑） */
 function switchSession(id: string, options?: ApplySessionMessagesOptions): void {
   const T = (window as any).App?.Tabs;
-  const ts = (window as any).__tabs;
+  const ts = App.Tabs;
   const tab = ts?.getTab?.(id);
   if (tab && (tab.kind === 'session' || tab.kind === 'chat')) {
     const handler = ts?.getTabBehavior?.(tab.kind);
@@ -1147,7 +1147,7 @@ function _sessionClose(tab: AppTab): void {
       // 先同步更新 DOM（让标签立即消失）
       renderSessionTabs(nextId);
       // 再异步激活下个 tab（加载消息、刷新列表）
-      const tabs = (window as any).__tabs;
+      const tabs = App.Tabs;
       const nextTab = tabs?.getTab?.(nextId);
       if (nextTab) { const handler = tabs?.getTabBehavior?.(nextTab.kind); handler?.activate?.(nextTab); }
       else switchSession(nextId);
@@ -1169,7 +1169,7 @@ function _sessionClose(tab: AppTab): void {
 }
 
 // ─── TabBehavior 注册 ───────────────────────────────
-{ const tabs = (window as any).__tabs;
+{ const tabs = App.Tabs;
   if (tabs?.registerTabBehavior) {
     tabs.registerTabBehavior('chat', {
       activate(tab: AppTab, options?: ApplySessionMessagesOptions) { _sessionActivate(tab, options); },

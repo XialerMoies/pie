@@ -127,7 +127,7 @@ win.App = {
       if (!win.__state._sessionTabs.includes(id)) win.__state._sessionTabs.push(id);
       win.__state._activeSessionTabId = id;
       win.__state._activeFileTab = null;
-      win.__state.M = [{ role: "user", content: "切换后" }];
+      win.App.ChatState.replaceMessages([{ role: "user", content: "切换后" }]);
       if (typeof win.renderTabs === 'function') win.renderTabs();
     },
     close(id) {
@@ -171,6 +171,7 @@ win.__tabs = {
     win.__state._activeFileTab = null;
   },
 };
+Object.assign(win.App.Tabs, win.__tabs);
 
 const fetchCalls = [];
 let sessionListState = 0;
@@ -444,10 +445,10 @@ describe("session ui state", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     fetchCalls.length = 0;
-    win.__state.M = [
+    win.App.ChatState.replaceMessages([
       { role: "user", content: "请帮我实现自动会话标题" },
       { role: "assistant", content: "已完成" },
-    ];
+    ]);
 
     const title = await win.maybeAutoTitleSession("sess-new-empty", "已完成");
 
@@ -530,13 +531,13 @@ describe("session ui state", () => {
 
     assert.ok(fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/branch") && method === "POST"));
     assert.ok(win.__state._sessionTabs.includes("branch-new"));
-    assert.strictEqual(win.__state.M.length, 2);
-    assert.strictEqual(win.__state.M[1].content, "分支上下文");
+    assert.strictEqual(win.App.ChatState.getMessages().length, 2);
+    assert.strictEqual(win.App.ChatState.getMessages()[1].content, "分支上下文");
   });
 
   it("App.Tabs.activate 会添加并激活会话标签", async () => {
     sessionListState = 1;
-    win.__state.M = [{ role: "user", content: "旧消息" }];
+    win.App.ChatState.replaceMessages([{ role: "user", content: "旧消息" }]);
     await win.App.Tabs.activate("sess-b");
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -544,7 +545,7 @@ describe("session ui state", () => {
     assert.strictEqual(win.__state._activeSessionTabId, "sess-b");
     assert.strictEqual(win.__state._activeFileTab, null);
     // App.Tabs.activate mock 会设置消息
-    assert.strictEqual(win.__state.M.length, 1);
+    assert.strictEqual(win.App.ChatState.getMessages().length, 1);
   });
 
   it("空会话时只显示新会话入口", async () => {
@@ -815,9 +816,7 @@ describe("session ui state", () => {
     const originalMs = doc.querySelector("#ms");
     const originalParent = originalMs?.parentNode;
     const originalNext = originalMs?.nextSibling;
-    const originalTabs = win.__tabs;
-    win.__tabs = { getActiveTab: () => ({ id: "sess-a", kind: "session", title: "sess-a", order: 0 }) };
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     const originalGetActiveTab = tabs.getActiveTab;
 
     try {
@@ -856,7 +855,6 @@ describe("session ui state", () => {
     } finally {
       win.App.Tabs.activate = originalActivate;
       tabs.getActiveTab = originalGetActiveTab;
-      win.__tabs = originalTabs;
       doc.querySelector("#ms")?.remove();
       if (originalMs && originalParent) {
         originalParent.insertBefore(originalMs, originalNext || null);
@@ -869,13 +867,13 @@ describe("session ui state", () => {
     const originalMs = doc.querySelector("#ms");
     const originalParent = originalMs?.parentNode;
     const originalNext = originalMs?.nextSibling;
-    const originalTabs = win.__tabs;
+    const originalGetActiveTab = win.App.Tabs.getActiveTab;
     const originalScrollIntoView = win.HTMLElement.prototype.scrollIntoView;
     let activeId = "sess-old";
     let scrolledText = "";
 
     try {
-      win.__tabs = { getActiveTab: () => ({ id: activeId, kind: "session", title: activeId, order: 0 }) };
+      win.App.Tabs.getActiveTab = () => ({ id: activeId, kind: "session", title: activeId, order: 0 });
       originalMs?.remove();
       const ms = doc.createElement("div");
       ms.id = "ms";
@@ -905,7 +903,7 @@ describe("session ui state", () => {
       assert.ok(!scrolledText.includes("latest reply"), "不应停在最新回复");
     } finally {
       win.App.Tabs.activate = originalActivate;
-      win.__tabs = originalTabs;
+      win.App.Tabs.getActiveTab = originalGetActiveTab;
       Object.defineProperty(win.HTMLElement.prototype, "scrollIntoView", {
         configurable: true,
         value: originalScrollIntoView,
@@ -922,7 +920,7 @@ describe("session ui state", () => {
     const originalMs = doc.querySelector("#ms");
     const originalParent = originalMs?.parentNode;
     const originalNext = originalMs?.nextSibling;
-    const originalTabs = win.__tabs;
+    const originalGetActiveTab = win.App.Tabs.getActiveTab;
     const originalScrollIntoView = win.HTMLElement.prototype.scrollIntoView;
     const scrolled = [];
     let activeId = "";
@@ -930,7 +928,7 @@ describe("session ui state", () => {
     try {
       originalMs?.remove();
       win.App.Tabs.activate = () => {};
-      win.__tabs = { getActiveTab: () => activeId ? ({ id: activeId, kind: "session", title: activeId, order: 0 }) : null };
+      win.App.Tabs.getActiveTab = () => activeId ? ({ id: activeId, kind: "session", title: activeId, order: 0 }) : null;
 
       Object.defineProperty(win.HTMLElement.prototype, "scrollIntoView", {
         configurable: true,
@@ -972,7 +970,7 @@ describe("session ui state", () => {
       assert.strictEqual(scrolled.length, 1, "再次激活后无额外 scroll（hook 已清空）");
     } finally {
       win.App.Tabs.activate = originalActivate;
-      win.__tabs = originalTabs;
+      win.App.Tabs.getActiveTab = originalGetActiveTab;
       Object.defineProperty(win.HTMLElement.prototype, "scrollIntoView", {
         configurable: true,
         value: originalScrollIntoView,

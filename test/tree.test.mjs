@@ -8,6 +8,8 @@
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 // 全局 mock DOM + localStorage
 const store = {};
@@ -16,6 +18,18 @@ global.localStorage = {
   setItem: (key, val) => { store[key] = val; },
   removeItem: (key) => { delete store[key]; },
 };
+
+describe("Tree DOM event ownership", () => {
+  it("binds row and context-menu clicks through event listeners", () => {
+    for (const file of [
+      "src/frontend/ui/tree-render.ts",
+      "src/frontend/ui/tree-events.ts",
+    ]) {
+      const source = readFileSync(resolve(process.cwd(), file), "utf8");
+      assert.doesNotMatch(source, /\.onclick\s*=/, `${file} must not assign onclick properties`);
+    }
+  });
+});
 
 // mock document.createElement 供 Tree 构造函数
 function makeMockEl() {

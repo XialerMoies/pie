@@ -84,7 +84,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   beforeEach(() => {
-    win.__tabs.reset();
+    win.App.Tabs.reset();
     win.document.querySelectorAll(".ctx-menu, #toast-el").forEach((el) => el.remove());
     // 清除 __state.tabs 以防 re-init 读到旧数据
     delete win.__state.tabs;
@@ -128,7 +128,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
       win.App.Chat.updateModelName = () => {};
 
       await win.getD();
-      assert.strictEqual(win.__state.D, null);
+      assert.strictEqual(win.App.ChatState.getDashboard(), null);
 
       await win.getD();
 
@@ -140,7 +140,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
       assert.strictEqual(calls[1][1].headers["X-My-Code-Agent-Token"], "desktop-token");
       assert.strictEqual(calls[2][0], "/api/dashboard");
       assert.strictEqual(calls[2][1].credentials, "include");
-      assert.strictEqual(win.__state.D.modelId, "bootstrapped-model");
+      assert.strictEqual(win.App.ChatState.getDashboard().modelId, "bootstrapped-model");
     } finally {
       globalThis.fetch = previousFetch;
       global.fetch = previousFetch;
@@ -222,7 +222,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   it("更多菜单中的会话标签使用实时标题", () => {
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
     ts.openTab({ kind: "session", id: "sess-real-title", title: "新会话", sessionId: "sess-real-title" });
     win.sessionTabLabel = (id) => id === "sess-real-title" ? "真实会话标题" : "新会话";
 
@@ -235,7 +235,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   // ─── Activate dispatch ──────────────────────────────
 
   it("activate(file) 调用 file handler", () => {
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
     ts.openTab({ kind: "file", id: "/a.ts", title: "a.ts", path: "/a.ts" });
     let called = "";
     ts.registerTabBehavior("file", {
@@ -247,7 +247,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   it("activate(session) 调用 session handler", () => {
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
     ts.openTab({ kind: "session", id: "sess-1", title: "S1", sessionId: "sess-1" });
     let called = "";
     ts.registerTabBehavior("session", {
@@ -259,7 +259,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   it("activate(chat) 调用 chat handler", () => {
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
     ts.openTab({ kind: "chat", id: "draft:1", title: "新会话", draftId: "draft:1" });
     let called = "";
     ts.registerTabBehavior("chat", {
@@ -272,7 +272,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
 
   it("activate 对不存在的 id 静默不报错", () => {
     let called = "";
-    win.__tabs.registerTabBehavior("file", { activate() { called = "x"; }, close() {} });
+    win.App.Tabs.registerTabBehavior("file", { activate() { called = "x"; }, close() {} });
     win.App.Tabs.activate("nonexistent");
     assert.strictEqual(called, "");
   });
@@ -280,7 +280,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   // ─── Close dispatch ─────────────────────────────────
 
   it("close(file) 调用 file close handler", () => {
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
     ts.openTab({ kind: "file", id: "/b.ts", title: "b.ts", path: "/b.ts" });
     let called = "";
     ts.registerTabBehavior("file", {
@@ -292,7 +292,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   it("close(session) 调用 session close handler", () => {
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
     ts.openTab({ kind: "session", id: "sess-2", title: "S2", sessionId: "sess-2" });
     let called = "";
     ts.registerTabBehavior("session", {
@@ -304,7 +304,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   it("close(chat) 调用 chat close handler", () => {
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
     ts.openTab({ kind: "chat", id: "draft:2", title: "新会话", draftId: "draft:2" });
     let called = "";
     ts.registerTabBehavior("chat", {
@@ -318,7 +318,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   // ─── Context menu dispatch ──────────────────────────
 
   it("contextMenu(file) 调用 file contextMenu handler", () => {
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
     ts.openTab({ kind: "file", id: "/menu.ts", title: "menu.ts", path: "/menu.ts" });
     let called = "";
     ts.registerTabBehavior("file", {
@@ -331,7 +331,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   it("contextMenu(session) 不抛错（无 contextMenu handler）", () => {
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
     ts.openTab({ kind: "session", id: "sess-m", title: "M", sessionId: "sess-m" });
     ts.registerTabBehavior("session", { activate() {}, close() {} });
     assert.doesNotThrow(() => win.App.Tabs.contextMenu(new MouseEvent("contextmenu"), "sess-m"));
@@ -340,7 +340,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   // ─── 无 handler 时不做降级（安全 no-op） ──────────────
 
   it("无 handler 时不触发旧函数 fallback（已删除）", () => {
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
     ts.openTab({ kind: "file", id: "/noop.ts", title: "f.ts", path: "/noop.ts" });
     // 不注册 handler，不设旧 window 别名，不应报错
     assert.doesNotThrow(() => win.App.Tabs.activate("/noop.ts"));
@@ -349,7 +349,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   // ─── 完整链路：草稿 → 升级 → 关闭 → 下一个 ──────────
 
   it("完整链路：chat→session upgrade + close + 下一个", () => {
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
 
     // 打开三个 tab：draft, sess-a, sess-b
     ts.openTab({ kind: "chat", id: "draft:lifecycle", title: "草稿", draftId: "draft:lifecycle" });
@@ -376,7 +376,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     // 需要 dashboard-sessions 模块提供 commitSessionTab 和真实 handler
     await import("../src/frontend/dashboard/dashboard-sessions.ts?t=" + Date.now());
 
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
     const beforeLen = ts.getTabs().length;
 
     // 准备：创建草稿 tab（模拟 newSession 行为）
@@ -406,7 +406,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   // ─── handler 优先于 fallback ─────────────────────────
 
   it("handler 存在时 handler 优先，不走 fallback", () => {
-    const ts = win.__tabs;
+    const ts = win.App.Tabs;
     ts.openTab({ kind: "file", id: "/prio.ts", title: "prio.ts", path: "/prio.ts" });
     let handlerCalled = false;
     let fallbackCalled = false;

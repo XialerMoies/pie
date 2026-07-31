@@ -30,24 +30,18 @@ describe("TabStore", () => {
   });
 
   beforeEach(() => {
-    win.__state = {
-      D: null, M: [], IL: false, CS: null, CT: "chat",
-      _activePanel: "explorer",
-      _fileTabs: [], _activeFileTab: null,
-      _sessionTabs: [], _sessionTabLabels: {},
-    };
-    win.__tabs.reset();
+    win.App.Tabs.reset();
   });
 
   it("空状态返回空列表和 null active", () => {
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     assert.deepStrictEqual(tabs.getTabs(), []);
     assert.strictEqual(tabs.getActiveTab(), null);
     assert.strictEqual(tabs.getState().activeId, null);
   });
 
   it("restoreTabs atomically replaces persisted tabs and activeId", () => {
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     const persisted = [
       { id: "sess-a", kind: "session", title: "A", order: 7, sessionId: "sess-a" },
       { id: "/a.ts", kind: "file", title: "a.ts", order: 9, path: "/a.ts" },
@@ -68,20 +62,19 @@ describe("TabStore", () => {
   });
 
   it("reset clears the compatibility projection without rehydrating stale tabs", () => {
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     tabs.openTab({ kind: "file", id: "/stale.ts", title: "stale.ts", path: "/stale.ts" });
     tabs.activateTab("/stale.ts");
 
     tabs.reset();
 
-    assert.deepStrictEqual(win.__state.tabs, { items: [], activeId: null });
     assert.deepStrictEqual(tabs.getTabs(), []);
     assert.strictEqual(tabs.getActiveTab(), null);
   });
 
   it("openTab 追加到末尾并返回完整 tab", () => {
 
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     const t1 = tabs.openTab({ kind: "session", id: "sess-a", title: "会话 A", sessionId: "sess-a" });
     assert.strictEqual(t1.order, 0);
     assert.strictEqual(t1.kind, "session");
@@ -96,7 +89,7 @@ describe("TabStore", () => {
 
   it("activateTab 设置 activeId，null 清空", () => {
 
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     tabs.openTab({ kind: "session", id: "sess-a", title: "A", sessionId: "sess-a" });
     tabs.openTab({ kind: "session", id: "sess-b", title: "B", sessionId: "sess-b" });
 
@@ -111,7 +104,7 @@ describe("TabStore", () => {
 
   it("activateTab 对不存在的 id 无操作", () => {
 
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     tabs.openTab({ kind: "session", id: "sess-a", title: "A", sessionId: "sess-a" });
     tabs.activateTab("sess-a");
     tabs.activateTab("nonexistent");
@@ -120,7 +113,7 @@ describe("TabStore", () => {
 
   it("closeTab 移除标签并返回", () => {
 
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     tabs.openTab({ kind: "session", id: "sess-a", title: "A", sessionId: "sess-a" });
     tabs.openTab({ kind: "session", id: "sess-b", title: "B", sessionId: "sess-b" });
 
@@ -132,7 +125,7 @@ describe("TabStore", () => {
 
   it("关闭当前 active tab 自动切换到相邻 tab", () => {
 
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     tabs.openTab({ kind: "session", id: "sess-a", title: "A", sessionId: "sess-a" });
     tabs.openTab({ kind: "session", id: "sess-b", title: "B", sessionId: "sess-b" });
     tabs.openTab({ kind: "session", id: "sess-c", title: "C", sessionId: "sess-c" });
@@ -150,7 +143,7 @@ describe("TabStore", () => {
 
   it("replaceTab 原地升级 chat→session", () => {
 
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     tabs.openTab({ kind: "chat", id: "draft:abc", title: "新会话", draftId: "draft:abc" });
     tabs.openTab({ kind: "file", id: "/a.ts", title: "a.ts", path: "/a.ts" });
     tabs.activateTab("draft:abc");
@@ -180,7 +173,7 @@ describe("TabStore", () => {
 
   it("moveTab 拖拽重排", () => {
 
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     tabs.openTab({ kind: "chat", id: "chat:1", title: "草稿1", draftId: "chat:1" });
     tabs.openTab({ kind: "chat", id: "chat:2", title: "草稿2", draftId: "chat:1" });
     tabs.openTab({ kind: "chat", id: "chat:3", title: "草稿3", draftId: "chat:1" });
@@ -194,7 +187,7 @@ describe("TabStore", () => {
 
   it("getSessionTabIds 返回 session+chat 的 id 列表", () => {
 
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     tabs.openTab({ kind: "chat", id: "draft:1", title: "草稿", draftId: "draft:1" });
     tabs.openTab({ kind: "session", id: "sess-a", title: "A", sessionId: "sess-a" });
     tabs.openTab({ kind: "file", id: "/a.ts", title: "a.ts", path: "/a.ts" });
@@ -205,7 +198,7 @@ describe("TabStore", () => {
 
   it("getFileTabIds 返回 file 的 id 列表", () => {
 
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     tabs.openTab({ kind: "file", id: "/a.ts", title: "a.ts", path: "/a.ts" });
     tabs.openTab({ kind: "file", id: "/b.ts", title: "b.ts", path: "/b.ts" });
     tabs.openTab({ kind: "session", id: "sess-a", title: "A", sessionId: "sess-a" });
@@ -215,7 +208,7 @@ describe("TabStore", () => {
 
   it("getActiveSessionTabId 仅在 session/chat active 时返回", () => {
 
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     tabs.openTab({ kind: "file", id: "/a.ts", title: "a.ts", path: "/a.ts" });
     tabs.openTab({ kind: "session", id: "sess-a", title: "A", sessionId: "sess-a" });
 
@@ -228,7 +221,7 @@ describe("TabStore", () => {
 
   it("getActiveFileTabId 仅在 file active 时返回", () => {
 
-    const tabs = win.__tabs;
+    const tabs = win.App.Tabs;
     tabs.openTab({ kind: "file", id: "/a.ts", title: "a.ts", path: "/a.ts" });
     tabs.openTab({ kind: "session", id: "sess-a", title: "A", sessionId: "sess-a" });
 

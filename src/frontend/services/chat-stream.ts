@@ -15,29 +15,22 @@ interface ChatStreamEntry {
   source: EventSource;
   generation: number;
   handlers: ChatStreamHandlers;
+  listeners: {
+    message: (event: MessageEvent) => void;
+    error: (event: Event) => void;
+    open: (event: Event) => void;
+  };
 }
-
-type ChatStreamHost = {
-  CS?: EventSource | null;
-};
 
 let chatStreamGeneration = 0;
 let activeChatStream: ChatStreamEntry | null = null;
-const chatStreamHost = ((window as any).__state || ((window as any).__state = {})) as ChatStreamHost;
 
 function disposeChatStream(entry: ChatStreamEntry | null): void {
   if (!entry) return;
-  entry.source.onmessage = null;
-  entry.source.onerror = null;
-  entry.source.onopen = null;
+  entry.source.removeEventListener('message', entry.listeners.message);
+  entry.source.removeEventListener('error', entry.listeners.error);
+  entry.source.removeEventListener('open', entry.listeners.open);
   entry.source.close();
-  if (chatStreamHost.CS === entry.source) chatStreamHost.CS = null;
-}
-
-// Adopt a stream created by the legacy path so workspace/session changes can
-// still close it during the migration window.
-if (chatStreamHost.CS) {
-  activeChatStream = { source: chatStreamHost.CS, generation: ++chatStreamGeneration, handlers: {} };
 }
 
 const chatStreamApi: AppChatStream = {
@@ -46,21 +39,28 @@ const chatStreamApi: AppChatStream = {
     activeChatStream = null;
     const currentGeneration = ++chatStreamGeneration;
     const source = new EventSource('/api/chat/stream');
-    const entry: ChatStreamEntry = { source, generation: currentGeneration, handlers };
+    const entry = {
+      source,
+      generation: currentGeneration,
+      handlers,
+      listeners: {} as ChatStreamEntry['listeners'],
+    } as ChatStreamEntry;
     activeChatStream = entry;
-    chatStreamHost.CS = source;
-    source.onmessage = (event: MessageEvent) => {
+    entry.listeners.message = (event: MessageEvent) => {
       if (activeChatStream !== entry) return;
       entry.handlers.onMessage?.(event);
     };
-    source.onerror = (event: Event) => {
+    entry.listeners.error = (event: Event) => {
       if (activeChatStream !== entry) return;
       entry.handlers.onError?.(event);
     };
-    source.onopen = (event: Event) => {
+    entry.listeners.open = (event: Event) => {
       if (activeChatStream !== entry) return;
       entry.handlers.onOpen?.(event);
     };
+    source.addEventListener('message', entry.listeners.message);
+    source.addEventListener('error', entry.listeners.error);
+    source.addEventListener('open', entry.listeners.open);
     return currentGeneration;
   },
   setHandlers(candidate: number, handlers: ChatStreamHandlers): boolean {

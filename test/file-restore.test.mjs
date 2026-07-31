@@ -66,6 +66,7 @@ describe("File tab restore", () => {
       close() {},
       contextMenu() {},
     };
+    Object.assign(win.App.Tabs, win.__tabs);
     global.App = win.App;
     global.ExplorerService = { iconFor: () => '<svg></svg>', getWorkspacePath: () => "/test" };
     win.ExplorerService = global.ExplorerService;

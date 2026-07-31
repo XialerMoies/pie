@@ -196,7 +196,7 @@ function initTree(container: HTMLElement): void {
     if (unsupportedVideoExt.has(ext)) { toast(`${ext} 格式不支持浏览器预览，建议用外部播放器打开`, 'info'); openFileTab(path, `[二进制文件，不支持预览: ${ext}]`, ext, 'text'); return; }
 
     // 文本文件
-    const tabs = (window as any).__tabs;
+    const tabs = App.Tabs;
     const existingTab = tabs?.getTab?.(path);
 
     // 已打开且有内容 → 只激活，不重新读

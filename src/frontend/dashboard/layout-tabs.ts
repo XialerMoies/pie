@@ -29,12 +29,12 @@ function _syncTabsToStore(): void {
 /** App.Tabs.activate 的降级入口 */
 function switchTab(fileId: string | null): void {
   if (fileId === null) {
-    const tabs = (window as any).__tabs; if (tabs) tabs.activateTab(null);
+    const tabs = App.Tabs; if (tabs) tabs.activateTab(null);
     renderTabs(); _syncTabsToStore();
     return;
   }
   // 优先走 handler
-  const ts = (window as any).__tabs;
+  const ts = App.Tabs;
   const tab = ts?.getTab?.(fileId);
   if (tab?.kind === 'file') {
     const handler = ts?.getTabBehavior?.('file');
@@ -60,7 +60,7 @@ function _saveFileTabs(): void {
 
 function openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video'): void {
   const label = id.split('/').pop() || id;
-  const tabs = (window as any).__tabs;
+  const tabs = App.Tabs;
   // 写入 TabStore（含 content/lang 缓存）
   if (tabs) {
     const existing = tabs.getTab(id);
@@ -73,7 +73,7 @@ function openFileTab(id: string, content: string, lang?: string, renderer?: 'tex
 
 /** App.Tabs.close 的降级入口 */
 function closeFileTab(id: string): void {
-  const ts = (window as any).__tabs;
+  const ts = App.Tabs;
   const tab = ts?.getTab?.(id);
   if (tab?.kind === 'file') {
     const handler = ts?.getTabBehavior?.('file');
@@ -145,12 +145,12 @@ function setupTabDrag(el: HTMLElement): void {
     el, '.tb-scroll',
     () => {
       // 使用 TabStore 获取当前全部 tabs 列表
-      const tabs = (window as any).__tabs;
+      const tabs = App.Tabs;
       return tabs?.getTabs?.() ?? [];
     },
     (tabs) => {
       // 按拖拽后的顺序重排 TabStore
-      const ts = (window as any).__tabs;
+      const ts = App.Tabs;
       if (!ts) return;
       const items = tabs as any[];
       // 逐一比对顺序，调用 moveTab
@@ -188,7 +188,7 @@ function tabContextMenu(e: MouseEvent, id: string): void {
     if (a.label === '-') { const s = document.createElement('div'); s.className = 'ctx-sep'; menu.appendChild(s); continue; }
     const item = document.createElement('div');
     item.className = 'ctx-item'; item.textContent = a.label;
-    item.onclick = () => { menu.remove(); a.action(); };
+    item.addEventListener('click', () => { menu.remove(); a.action(); });
     menu.appendChild(item);
   }
   setTimeout(() => document.addEventListener('click', () => menu.remove(), { once: true }), 0);
@@ -196,7 +196,7 @@ function tabContextMenu(e: MouseEvent, id: string): void {
 
 function tabMoreMenu(e: MouseEvent): void {
   document.querySelectorAll('.ctx-menu').forEach(el => el.remove());
-  const ts = (window as any).__tabs;
+  const ts = App.Tabs;
   const allTabs: AppTab[] = ts?.getTabs?.() ?? [];
   const maxH = Math.min(allTabs.length * 28 + 70, 450);
   const menu = document.createElement('div');
@@ -209,7 +209,7 @@ function tabMoreMenu(e: MouseEvent): void {
   ];
   for (const a of actions) {
     const item = document.createElement('div'); item.className = 'ctx-item'; item.textContent = a.label;
-    item.onclick = () => { menu.remove(); a.fn(); }; menu.appendChild(item);
+    item.addEventListener('click', () => { menu.remove(); a.fn(); }); menu.appendChild(item);
   }
   if (allTabs.length > 0) {
     const sep = document.createElement('div'); sep.className = 'ctx-sep'; menu.appendChild(sep);
@@ -242,7 +242,7 @@ function tabMoreMenu(e: MouseEvent): void {
 // ─── File handler ────────────────────────────
 async function _fileActivate(tab: AppTab): Promise<void> {
   mark("file-activate-start");
-  const ts = (window as any).__tabs;
+  const ts = App.Tabs;
   if (ts) ts.activateTab(tab.id);
   const editorEl = $('fc-editor');
   if (!editorEl) return;
@@ -308,14 +308,14 @@ function _fileClose(tab: AppTab): void {
   const pstore = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
   if (pstore) pstore.clearFile(tab.id);
   // TabStore 处理移除 + 自动切换 activeId（_fileTabs 已投影自 TabStore，无需手动 splice）
-  const ts = (window as any).__tabs;
+  const ts = App.Tabs;
   if (ts) ts.closeTab(tab.id);
   _syncTabsToStore();
   renderTabs();
 }
 
 // ─── TabBehavior 注册 ──────────────────────────────
-{ const tabs = (window as any).__tabs;
+{ const tabs = App.Tabs;
   if (tabs?.registerTabBehavior) {
     tabs.registerTabBehavior('file', {
       activate(tab: AppTab) { _fileActivate(tab); },

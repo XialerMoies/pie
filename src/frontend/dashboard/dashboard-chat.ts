@@ -16,7 +16,7 @@ let activeSendContext: ChatSendContext | null = null;
 function chatGetActiveSessionTabId(): string | null {
   const fn = (window as any).getActiveSessionTabId;
   if (typeof fn === 'function') return fn();
-  return (window as any).__tabs?.getActiveSessionTabId?.() || null;
+  return App.Tabs?.getActiveSessionTabId?.() || null;
 }
 
 function chatIsDraftSessionId(id: string | null | undefined): boolean {
@@ -24,7 +24,7 @@ function chatIsDraftSessionId(id: string | null | undefined): boolean {
 }
 
 function chatReadLocalSessionTabIds(): string[] {
-  return (window as any).__tabs?.getSessionTabIds?.() || [];
+  return App.Tabs?.getSessionTabIds?.() || [];
 }
 
 function chatWriteLocalSessionTabIds(ids: string[]): void {
@@ -495,14 +495,14 @@ function bind(): void {
   // ─── Wire up model button ───
   const modelBtn = $('fi-model-btn');
   if (modelBtn) {
-    modelBtn.onclick = (e) => {
+    modelBtn.addEventListener('click', (e) => {
       const st = App.ChatState.getDashboard();
       if (!st || st.modelId === 'N/A' || st.modelId === 'unknown') {
         (window as any).openSettingsModal?.();
       } else {
         showModelPicker(e);
       }
-    };
+    });
     updateModelName();
   }
 
@@ -510,13 +510,13 @@ function bind(): void {
   App.Chat?.loadModeState?.();
   const modeBtn = $('fi-mode-btn');
   if (modeBtn) {
-    modeBtn.onclick = () => App.Chat?.showModePopup?.(modeBtn);
+    modeBtn.addEventListener('click', () => App.Chat?.showModePopup?.(modeBtn));
   }
 
   // ─── Wire up file attach + button ───
   const fileBtn = $('fi-file-btn');
   if (fileBtn) {
-    fileBtn.onclick = async () => {
+    fileBtn.addEventListener('click', async () => {
       const api = (window as any).electronAPI as ElectronAPI | undefined;
       if (api?.openFile) {
         const p = await api.openFile();
@@ -529,7 +529,7 @@ function bind(): void {
       } else {
         toast('请使用 Electron 桌面版', 'info');
       }
-    };
+    });
   }
 
   // ─── Drag & Drop from explorer tree ───
@@ -653,15 +653,15 @@ function showModelPicker(e: MouseEvent): void {
         const active = (m.provider === stD?.modelProvider && m.id === stD?.modelId);
         item.style.cssText = `padding:6px 10px;border-radius:4px;cursor:pointer;font-size:.78rem;font-family:var(--fm);color:${active?'var(--am)':'var(--ts)'};background:${active?'rgba(245,158,11,.1)':'transparent'}`;
         item.textContent = m.id;
-        item.onmouseenter = () => { item.style.background = 'var(--bc)'; };
-        item.onmouseleave = () => { item.style.background = active ? 'rgba(245,158,11,.1)' : 'transparent'; };
-        item.onclick = () => {
+        item.addEventListener('mouseenter', () => { item.style.background = 'var(--bc)'; });
+        item.addEventListener('mouseleave', () => { item.style.background = active ? 'rgba(245,158,11,.1)' : 'transparent'; });
+        item.addEventListener('click', () => {
           fetch('/api/model/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, modelId: m.id }) })
             .then(r => r.json()).then((r: { ok: boolean; error?: string }) => {
               if (r.ok) { toast('已切换: ' + m.id, 'success'); getD(); picker.remove(); }
               else toast('切换失败: ' + (r.error || ''), 'error');
             }).catch(() => toast('切换失败', 'error'));
-        };
+        });
         picker.appendChild(item);
       }
     }

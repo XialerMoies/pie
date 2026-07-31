@@ -442,10 +442,12 @@ function _pbRenderGroup(label: string, items: ProblemItem[], color: string): str
   for (const [filePath, fileProblems] of byFile) {
     const fileName = filePath.split('/').pop() || filePath;
     for (const p of fileProblems) {
-      html += `<div class="pf-item" data-file="${E(p.filePath)}" data-line="${p.line}" data-col="${p.column}" title="${E(p.message)}">
+      const line = _pbNormalizePosition(p.line);
+      const column = _pbNormalizePosition(p.column);
+      html += `<div class="pf-item" data-file="${E(p.filePath)}" data-line="${line}" data-col="${column}" title="${E(p.message)}">
         <span class="pf-sev-dot" style="background:${color}"></span>
         <span class="pf-msg">${E(p.message)}</span>
-        <span class="pf-loc">${E(fileName)}:${p.line}:${p.column}</span>
+        <span class="pf-loc">${E(fileName)}:${line}:${column}</span>
       </div>`;
     }
   }
@@ -453,14 +455,19 @@ function _pbRenderGroup(label: string, items: ProblemItem[], color: string): str
   return html;
 }
 
+function _pbNormalizePosition(value: unknown): number {
+  const position = Number(value);
+  return Number.isFinite(position) && position >= 1 ? Math.trunc(position) : 1;
+}
+
 function _pbBindClicks(container: HTMLElement): void {
   container.querySelectorAll('.pf-item').forEach(el => {
-    (el as HTMLElement).onclick = () => {
+    el.addEventListener('click', () => {
       const file = (el as HTMLElement).dataset.file;
       if (!file) return;
       _pbNavigateToProblem(file, parseInt((el as HTMLElement).dataset.line || '1', 10), parseInt((el as HTMLElement).dataset.col || '1', 10));
       _pbToggle(false);
-    };
+    });
   });
 }
 
@@ -509,7 +516,7 @@ function _initProblemsBar(): void {
   if (_pbUnsubscribe) { _pbUnsubscribe(); _pbUnsubscribe = null; }
 
   const trigger = $('pb-status-trigger');
-  if (trigger) trigger.onclick = () => _pbToggle();
+  if (trigger) trigger.addEventListener('click', () => _pbToggle());
 
   const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
   if (store) {

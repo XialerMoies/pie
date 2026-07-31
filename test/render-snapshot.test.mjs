@@ -57,10 +57,24 @@ globalThis.AbortController = class { constructor() { this.signal = {}; } abort()
 globalThis.localStorage = store;
 
 // App state
-global.window.__state = {
+const state = {
   D: null, M: [], IL: false, CS: null, CT: "chat",
   _activePanel: "explorer", _fileTabs: [], _activeFileTab: null,
 };
+Object.defineProperties(state, {
+  D: {
+    get: () => win.App.ChatState.getDashboard(),
+    set: (value) => win.App.ChatState.setDashboard(value),
+  },
+  M: {
+    get: () => win.App.ChatState.getMessages(),
+    set: (value) => win.App.ChatState.replaceMessages(value),
+  },
+  IL: {
+    get: () => win.App.ChatState.isBusy(),
+    set: (value) => win.App.ChatState.setBusy(value),
+  },
+});
 
 // ExplorerService mock
 global.ExplorerService = {
@@ -74,6 +88,8 @@ before(async () => {
   await import(`../src/frontend/dashboard/dashboard-helpers.ts?t=${ts}`);
   await import(`../src/frontend/services/chat-runtime-store.ts?t=${ts}`);
   await import(`../src/frontend/services/preferences.ts?t=${ts}`);
+  await import(`../src/frontend/services/ui-state-store.ts?t=${ts}`);
+  await import(`../src/frontend/services/tab-store.ts?t=${ts}`);
   global.App = win.App;
   await import(`../src/frontend/service/explorer-service.ts?t=${ts}`);
   await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
@@ -85,34 +101,34 @@ before(async () => {
 
 describe("msgs() 渲染", () => {
   it("空消息返回欢迎页", () => {
-    win.__state.M = [];
+    state.M = [];
     const html = win.msgs();
     assert.ok(html.includes("Pi"));
     assert.ok(html.includes("输入"));
   });
 
   it("用户消息渲染", () => {
-    win.__state.M = [{ role: "user", content: "你好" }];
+    state.M = [{ role: "user", content: "你好" }];
     const html = win.msgs();
     assert.ok(html.includes("你"));
     assert.ok(html.includes("你好"));
   });
 
   it("AI 回复渲染", () => {
-    win.__state.M = [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }];
+    state.M = [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }];
     const html = win.msgs();
     assert.ok(html.includes("Pi"));
     assert.ok(html.includes("hello"));
   });
 
   it("流式消息带打字动画", () => {
-    win.__state.M = [{ role: "assistant", content: "思考", streaming: true }];
+    state.M = [{ role: "assistant", content: "思考", streaming: true }];
     const html = win.msgs();
     assert.ok(html.includes("ty"));
   });
 
   it("div 标签成对闭合", () => {
-    win.__state.M = [{ role: "user", content: "a" }, { role: "assistant", content: "b" }];
+    state.M = [{ role: "user", content: "a" }, { role: "assistant", content: "b" }];
     const html = win.msgs();
     const opens = (html.match(/<div/g) || []).length;
     const closes = (html.match(/<\/div>/g) || []).length;
@@ -120,7 +136,7 @@ describe("msgs() 渲染", () => {
   });
 
   it("markdown 加粗和斜体", () => {
-    win.__state.M = [{ role: "assistant", content: "**bold** and *italic*" }];
+    state.M = [{ role: "assistant", content: "**bold** and *italic*" }];
     const html = win.msgs();
     assert.ok(html.includes("<strong>bold</strong>"), "加粗渲染");
     assert.ok(html.includes("<em>italic</em>"), "斜体渲染");
@@ -128,7 +144,7 @@ describe("msgs() 渲染", () => {
   });
 
   it("markdown 代码块渲染为 <pre><code>", () => {
-    win.__state.M = [{ role: "assistant", content: "```ts\nconst x = 1;\n```" }];
+    state.M = [{ role: "assistant", content: "```ts\nconst x = 1;\n```" }];
     const html = win.msgs();
     assert.ok(html.includes("<pre"), "代码块为 <pre>");
     assert.ok(html.includes("<code"), "代码块为 <code>");
@@ -136,7 +152,7 @@ describe("msgs() 渲染", () => {
   });
 
   it("markdown 表格渲染为 <table>", () => {
-    win.__state.M = [{ role: "assistant", content: "| a | b |\n|---|---|\n| 1 | 2 |" }];
+    state.M = [{ role: "assistant", content: "| a | b |\n|---|---|\n| 1 | 2 |" }];
     const html = win.msgs();
     assert.ok(html.includes("<table>"), "表格为 <table>");
     assert.ok(html.includes("<th>"), "表头渲染");
@@ -144,14 +160,14 @@ describe("msgs() 渲染", () => {
   });
 
   it("markdown 过滤 <link> 标签", () => {
-    win.__state.M = [{ role: "assistant", content: '<link rel="stylesheet" href="/admin/style.css">\nhello' }];
+    state.M = [{ role: "assistant", content: '<link rel="stylesheet" href="/admin/style.css">\nhello' }];
     const html = win.msgs();
     assert.ok(!html.includes('<link rel="stylesheet"'), "<link> 被过滤");
     assert.ok(html.includes("hello"), "其他内容保留");
   });
 
   it("无 block/无 trace 时仅显示内容", () => {
-    win.__state.M = [{
+    state.M = [{
       role: "assistant",
       content: "这是回复内容",
     }];
@@ -163,7 +179,7 @@ describe("msgs() 渲染", () => {
   });
 
   it("错误卡片展示原因、下一步和操作按钮", () => {
-    win.__state.M = [{
+    state.M = [{
       role: "assistant",
       content: "",
       error: {
@@ -216,7 +232,7 @@ describe("msgs() 渲染", () => {
   });
 
   it("block tool_use 渲染为工具节点", () => {
-    win.__state.M = [{
+    state.M = [{
       role: "assistant",
       blocks: [
         { type: "tool_use", status: "running", name: "search", toolCallId: "call1", blockId: "b1", seq: 1 },
@@ -231,7 +247,7 @@ describe("msgs() 渲染", () => {
   });
 
   it("block text + tool_use 共存在同一气泡内", () => {
-    win.__state.M = [{
+    state.M = [{
       role: "assistant",
       blocks: [
         { type: "text", text: "正在检查代码", blockId: "t1", seq: 1 },
@@ -250,7 +266,7 @@ describe("msgs() 渲染", () => {
 
   it("成对工具 block 合并为无重复文案的单节点", () => {
     const output = "Git 根目录：C:/repo\n分支：main\n变更总数：0";
-    win.__state.M = [{
+    state.M = [{
       role: "assistant",
       blocks: [
         { type: "tool_use", status: "running", name: "git-status", input: {}, toolCallId: "call1", blockId: "b1", seq: 1 },
@@ -267,7 +283,7 @@ describe("msgs() 渲染", () => {
   });
 
   it("block tool_result 错误时显示 error 标记", () => {
-    win.__state.M = [{
+    state.M = [{
       role: "assistant",
       blocks: [
         { type: "tool_use", status: "error", name: "file-read", toolCallId: "call1", blockId: "b1", seq: 1 },
@@ -281,7 +297,7 @@ describe("msgs() 渲染", () => {
   });
 
   it("流式 text block 原位更新且不重绘消息列表", () => {
-    win.__state.M = [{
+    state.M = [{
       role: "assistant",
       streaming: true,
       blocks: [{ type: "text", text: "par", blockId: "text-0", seq: 1 }],
@@ -299,7 +315,7 @@ describe("msgs() 渲染", () => {
     });
 
     const block = { type: "text", text: "partial", blockId: "text-0", seq: 1 };
-    win.__state.M[0].blocks[0] = block;
+    state.M[0].blocks[0] = block;
     const updated = win.App.Chat.updateLastBlock(block);
 
     assert.strictEqual(updated, true);
@@ -310,7 +326,7 @@ describe("msgs() 渲染", () => {
   });
 
   it("流式 tool_use block 原位更新且不替换 block flow", () => {
-    win.__state.M = [{
+    state.M = [{
       role: "assistant",
       streaming: true,
       blocks: [{ type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" }],
@@ -321,7 +337,7 @@ describe("msgs() 渲染", () => {
     const targetBefore = panel.querySelector('[data-block-id="tool-1"]');
 
     const block = { type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\nstep 2\n" };
-    win.__state.M[0].blocks[0] = block;
+    state.M[0].blocks[0] = block;
     const updated = win.App.Chat.updateLastBlock(block);
 
     assert.strictEqual(updated, true);
@@ -331,13 +347,13 @@ describe("msgs() 渲染", () => {
   });
 
   it("首个 tool_use block 只填充消息内容区", () => {
-    win.__state.M = [{ role: "assistant", content: "", streaming: true }];
+    state.M = [{ role: "assistant", content: "", streaming: true }];
     const panel = doc.getElementById("ms");
     panel.innerHTML = win.msgs();
     const messageBefore = panel.querySelector('.m');
 
     const block = { type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" };
-    win.__state.M[0].blocks = [block];
+    state.M[0].blocks = [block];
     const updated = win.App.Chat.updateLastBlock(block);
 
     assert.strictEqual(updated, true);
@@ -347,7 +363,7 @@ describe("msgs() 渲染", () => {
   });
 
   it("成对 tool_result block 只刷新对应 tool_use 节点", () => {
-    win.__state.M = [{
+    state.M = [{
       role: "assistant",
       streaming: true,
       blocks: [{ type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" }],
@@ -358,7 +374,7 @@ describe("msgs() 渲染", () => {
     const targetBefore = panel.querySelector('[data-block-id="tool-1"]');
 
     const result = { type: "tool_result", toolUseId: "call1", output: "done\n", blockId: "result-1", seq: 2 };
-    win.__state.M[0].blocks.push(result);
+    state.M[0].blocks.push(result);
     const updated = win.App.Chat.updateLastBlock(result);
 
     assert.strictEqual(updated, true);
@@ -368,7 +384,7 @@ describe("msgs() 渲染", () => {
   });
 
   it("done 结束态不替换 assistant 气泡", () => {
-    win.__state.M = [{
+    state.M = [{
       role: "assistant",
       streaming: true,
       blocks: [{ type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" }],
@@ -378,8 +394,8 @@ describe("msgs() 渲染", () => {
     const messageBefore = panel.querySelector('.m');
     const targetBefore = panel.querySelector('[data-block-id="tool-1"]');
 
-    win.__state.M[0].streaming = false;
-    win.__state.M[0].blocks = [
+    state.M[0].streaming = false;
+    state.M[0].blocks = [
       { type: "tool_use", status: "success", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\ndone\n" },
       { type: "tool_result", toolUseId: "call1", output: "done\n", blockId: "result-1", seq: 2 },
     ];
@@ -394,7 +410,7 @@ describe("msgs() 渲染", () => {
   });
 
   it("block text → tool_use → tool_result 保持 seq 顺序", () => {
-    win.__state.M = [{
+    state.M = [{
       role: "assistant",
       blocks: [
         { type: "tool_result", toolUseId: "call1", output: "result", blockId: "r1", seq: 3 },
@@ -475,7 +491,7 @@ describe("markdown security", () => {
       .replace(/\"/g, "&quot;")
       .replace(/'/g, "&#39;");
     globalThis.E = escape;
-    win.__state.M = [{ role: "assistant", content: '<script>alert(1)</script> [run](javascript:alert(1)) ![x](data:text/html,alert(1))' }];
+    state.M = [{ role: "assistant", content: '<script>alert(1)</script> [run](javascript:alert(1)) ![x](data:text/html,alert(1))' }];
     const html = win.msgs();
     assert.ok(!html.includes("<script>"), "raw script tags must not enter the DOM");
     assert.ok(html.includes("&lt;script&gt;"), "raw HTML should render as text");
@@ -498,13 +514,13 @@ describe("shortcut modal", () => {
 
 describe("sinfoHTML() 渲染", () => {
   it("无数据时返回非空字符串", () => {
-    win.__state.D = null;
+    state.D = null;
     const html = win.sinfoHTML();
     assert.ok(typeof html === "string" && html.length > 0);
   });
 
   it("显示模型信息", () => {
-    win.__state.D = {
+    state.D = {
       modelProvider: "deepseek", modelId: "deepseek-v4",
       modelContextWindow: "200000", modelMaxTokens: "4096",
       thinkingLevel: "high", runtime: 3600, messagesCount: 42,

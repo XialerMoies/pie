@@ -180,24 +180,42 @@ describe("ExplorerService", () => {
   });
 
   describe("events permission confirmation", () => {
+    function createMockEventSource(onCreate) {
+      return class {
+        constructor(url) {
+          this.url = url;
+          this.closed = false;
+          this.listeners = new Map();
+          onCreate(this);
+        }
+        addEventListener(type, listener) {
+          this.listeners.set(type, listener);
+        }
+        removeEventListener(type, listener) {
+          if (this.listeners.get(type) === listener) this.listeners.delete(type);
+        }
+        emit(type, event = {}) {
+          this.listeners.get(type)?.(event);
+        }
+        close() {
+          this.closed = true;
+        }
+      };
+    }
+
     it("does not connect until startEvents is called", async () => {
       let eventSource;
       const oldEventSource = global.EventSource;
       try {
-        global.EventSource = class {
-          constructor(url) {
-            this.url = url;
-            eventSource = this;
-          }
-        };
+        global.EventSource = createMockEventSource((source) => { eventSource = source; });
 
         await import(`../src/frontend/service/explorer-service.ts?event-gate=${Date.now()}`);
         assert.equal(eventSource, undefined);
         const ready = ExplorerService.startEvents();
         assert.ok(eventSource, "EventSource should be created after authentication");
         assert.strictEqual(eventSource.url, "/api/events");
-        assert.strictEqual(typeof eventSource.onopen, "function");
-        eventSource.onopen();
+        assert.strictEqual(typeof eventSource.listeners.get("open"), "function");
+        eventSource.emit("open");
         await ready;
       } finally {
         ExplorerService.stopEvents();
@@ -214,12 +232,7 @@ describe("ExplorerService", () => {
       const oldFetch = global.fetch;
       const oldRefreshPermissionsPanel = global.refreshPermissionsPanel;
       try {
-        global.EventSource = class {
-          constructor(url) {
-            this.url = url;
-            eventSource = this;
-          }
-        };
+        global.EventSource = createMockEventSource((source) => { eventSource = source; });
         global.confirmPermissionAsync = async (input) => {
           calls.push({ type: "confirm", input });
           return "session";
@@ -236,10 +249,10 @@ describe("ExplorerService", () => {
         const ready = ExplorerService.startEvents();
         assert.ok(eventSource, "EventSource should be created");
         assert.strictEqual(eventSource.url, "/api/events");
-        eventSource.onopen();
+        eventSource.emit("open");
         await ready;
 
-        eventSource.onmessage({
+        eventSource.emit("message", {
           data: JSON.stringify({
             type: "permission_confirm",
             id: "perm-test",
@@ -275,6 +288,64 @@ describe("ExplorerService", () => {
         global.confirmAsync = oldConfirmAsync;
         global.fetch = oldFetch;
         global.refreshPermissionsPanel = oldRefreshPermissionsPanel;
+      }
+    });
+
+    it("detaches stopped listeners and ignores stale events after restart", async () => {
+      const streams = [];
+      const oldEventSource = global.EventSource;
+      const oldFetch = global.fetch;
+      try {
+        global.EventSource = createMockEventSource((source) => { streams.push(source); });
+        const refreshes = [];
+        const originalRefresh = ExplorerService.refreshTree;
+        ExplorerService.refreshTree = async () => { refreshes.push("refresh"); };
+        global.fetch = async () => ({ ok: true, json: async () => ({ ok: true }) });
+
+        const firstReady = ExplorerService.startEvents();
+        streams[0].emit("open");
+        await firstReady;
+        const staleMessage = streams[0].listeners.get("message");
+
+        ExplorerService.stopEvents();
+        assert.equal(streams[0].closed, true);
+        assert.equal(streams[0].listeners.size, 0);
+
+        const secondReady = ExplorerService.startEvents();
+        streams[1].emit("open");
+        await secondReady;
+        staleMessage?.({ data: JSON.stringify({ type: "refresh" }) });
+        streams[1].emit("message", { data: JSON.stringify({ type: "refresh" }) });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        assert.deepStrictEqual(refreshes, ["refresh"]);
+        ExplorerService.refreshTree = originalRefresh;
+      } finally {
+        ExplorerService.stopEvents();
+        global.EventSource = oldEventSource;
+        global.fetch = oldFetch;
+      }
+    });
+
+    it("disposes listeners after a startup error and permits a clean retry", async () => {
+      const streams = [];
+      const oldEventSource = global.EventSource;
+      try {
+        global.EventSource = createMockEventSource((source) => { streams.push(source); });
+
+        const failed = ExplorerService.startEvents();
+        streams[0].emit("error");
+        await assert.rejects(failed, /event channel failed/);
+        assert.equal(streams[0].closed, true);
+        assert.equal(streams[0].listeners.size, 0);
+
+        const retried = ExplorerService.startEvents();
+        streams[1].emit("open");
+        await retried;
+        assert.equal(ExplorerService._eventSource, streams[1]);
+      } finally {
+        ExplorerService.stopEvents();
+        global.EventSource = oldEventSource;
       }
     });
   });

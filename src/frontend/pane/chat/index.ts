@@ -208,8 +208,17 @@ function isConversationSearchActive(): boolean {
   return _convQuery.trim().length > 0 || _convSearching;
 }
 
+function normalizeMatchIndex(value: unknown): number | undefined {
+  const index = Number(value);
+  return Number.isFinite(index) && index >= 0 ? Math.trunc(index) : undefined;
+}
+
 function firstMessageMatchIndex(matches: Array<{ msgIndex?: number }>): number | undefined {
-  return matches.find((m) => m.msgIndex !== undefined)?.msgIndex;
+  for (const match of matches) {
+    const index = normalizeMatchIndex(match.msgIndex);
+    if (index !== undefined) return index;
+  }
+  return undefined;
 }
 
 function renderConvResults(list: HTMLElement, data: any): void {
@@ -218,7 +227,7 @@ function renderConvResults(list: HTMLElement, data: any): void {
     list.innerHTML = '<div class="cs-empty">未找到匹配的对话</div>';
     return;
   }
-  let html = `<div class="cs-count">${data.results.length} 个会话，${data.total} 处匹配</div>`;
+  let html = `<div class="cs-count">${data.results.length} 个会话，${normalizeMatchIndex(data.total) ?? 0} 处匹配</div>`;
   for (const r of data.results) {
     const matchCount = r.matches.length;
     const timeStr = r.updatedAt ? shortRelTime(r.updatedAt) : "";
@@ -238,7 +247,9 @@ function renderConvResults(list: HTMLElement, data: any): void {
         icon = m.role === "user" ? "→" : "←";
       }
       const highlighted = highlightTextWithPositions(m.text, m.matchPos);
-      html += `<div class="cs-match" data-session-id="${E(r.sessionId)}" data-msg-index="${m.msgIndex !== undefined ? m.msgIndex : ''}" data-match-ordinal="${m.matchOrdinal !== undefined ? m.matchOrdinal : 0}"><span class="cs-match-role">${icon}</span><span class="cs-match-text">${highlighted}</span></div>`;
+      const msgIndex = normalizeMatchIndex(m.msgIndex);
+      const matchOrdinal = normalizeMatchIndex(m.matchOrdinal) ?? 0;
+      html += `<div class="cs-match" data-session-id="${E(r.sessionId)}" data-msg-index="${msgIndex ?? ''}" data-match-ordinal="${matchOrdinal}"><span class="cs-match-role">${icon}</span><span class="cs-match-text">${highlighted}</span></div>`;
     }
     html += `</div>`;
   }

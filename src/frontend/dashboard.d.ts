@@ -91,29 +91,6 @@ interface TabsState {
   activeId: string | null;
 }
 
-interface DashboardState {
-  D: DashboardData | null;
-  M: Message[];
-  IL: boolean;
-  CS: EventSource | null;
-  CT: string;
-  _activePanel: string;
-  _fileTabs: FileTab[];
-  _activeFileTab: string | null;
-  _sessionTabs: string[];
-  _sessionTabLabels?: Record<string, string>;
-  _sessionTitleSources?: Record<string, 'auto' | 'manual'>;
-  _activeSessionTabId?: string | null;
-  tabs?: TabsState;
-}
-
-interface FileTab {
-  id: string;      // file path
-  label: string;   // file name
-  content: string;
-  lang: string;
-}
-
 // ─── App 命名空间 ─────────────────────────────────────────────
 // 收敛所有全局函数，逐步替代 window.xxx 模式
 interface AppUI {
@@ -254,13 +231,8 @@ interface TabStoreAPI {
   getTabBehavior(kind: TabKind): TabBehavior | undefined;
 }
 
-interface AppTabs {
-  getState(): TabsState;
-  getTabs(): AppTab[];
-  getActiveTab(): AppTab | null;
-  getTab(id: string): AppTab | undefined;
-  getFileTabIds(): string[];
-  getActiveFileTabId(): string | null;
+interface AppTabs extends TabStoreAPI {
+  _attachStore(store: TabStoreAPI): void;
   clearActiveTab(): void;
   activate(id: string, options?: SessionActivationOptions): void;
   close(id: string): void;
@@ -272,6 +244,11 @@ interface AppGit {
   commit(): Promise<void>;
   push(): Promise<void>;
   pull(): Promise<void>;
+}
+type McpConnectionState = 'connected' | 'connecting' | 'disconnected' | 'error';
+interface AppMcpState {
+  normalize(value: unknown): McpConnectionState;
+  label(value: unknown): string;
 }
 interface AppConstants {
   WS_KEY: string;
@@ -318,6 +295,7 @@ interface AppNamespace {
   Session: AppSession;
   Settings: AppSettings;
   Git: AppGit;
+  McpState: AppMcpState;
   Tabs: AppTabs;
 }
 
@@ -350,7 +328,6 @@ interface OnceSessionActivated {
 interface Window {
   electronAPI?: ElectronAPI;
   _provOrder?: string[];
-  __state: DashboardState;
   App: AppNamespace;
   __monaco: MonacoAPI;
   __problemsStore: ProblemsStoreAPI;

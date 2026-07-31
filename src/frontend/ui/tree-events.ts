@@ -260,7 +260,7 @@
       const item = document.createElement('div');
       item.className = 'ctx-item' + (a.disabled ? ' ctx-disabled' : '');
       item.textContent = a.label;
-      if (!a.disabled) item.onclick = a.action;
+      if (!a.disabled) item.addEventListener('click', a.action);
       menu.appendChild(item);
     }
     return menu;

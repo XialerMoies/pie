@@ -15,7 +15,17 @@ describe("ChatStream lifecycle", () => {
         this.onmessage = null;
         this.onerror = null;
         this.closed = false;
+        this.listeners = new Map();
         streams.push(this);
+      }
+      addEventListener(type, listener) {
+        this.listeners.set(type, listener);
+      }
+      removeEventListener(type, listener) {
+        if (this.listeners.get(type) === listener) this.listeners.delete(type);
+      }
+      emit(type, event = {}) {
+        this.listeners.get(type)?.(event);
       }
       close() {
         this.closed = true;
@@ -44,8 +54,8 @@ describe("ChatStream lifecycle", () => {
     assert.equal(win.App.ChatStream.isCurrent(firstGeneration), false);
     assert.equal(win.App.ChatStream.isCurrent(secondGeneration), true);
 
-    first.onmessage?.({ data: "stale" });
-    second.onmessage?.({ data: "current" });
+    first.emit("message", { data: "stale" });
+    second.emit("message", { data: "current" });
     assert.deepEqual(received, [["second", "current"]]);
 
     win.App.ChatStream.close();
@@ -53,5 +63,7 @@ describe("ChatStream lifecycle", () => {
     assert.equal(win.App.ChatStream.isCurrent(secondGeneration), false);
     assert.equal(second.onmessage, null);
     assert.equal(second.onerror, null);
+    assert.equal(second.listeners.size, 0);
+    assert.equal(win.__state, undefined);
   });
 });

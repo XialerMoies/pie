@@ -64,7 +64,7 @@ function restorePanel(name: string): void {
 function initResizeHandle(): void {
   const handle = $('si-handle'), si = $('si');
   if (!handle || !si) return;
-  handle.onmousedown = function (e: MouseEvent) {
+  handle.addEventListener('mousedown', function (e: MouseEvent) {
     e.preventDefault();
     si!.classList.add('dragging');
     const startX = e.clientX, startW = si!.offsetWidth;
@@ -85,7 +85,7 @@ function initResizeHandle(): void {
     }
     document.addEventListener('mousemove', onMove as any);
     document.addEventListener('mouseup', onUp as any);
-  };
+  });
 }
 
 function renderPanel(name: string, pc?: HTMLElement | null): void {
@@ -121,7 +121,11 @@ function refreshSinfo(): void {
   const si = $('si');
   if (si) si.innerHTML = sinfoHTML();
   const modelEls = si?.querySelectorAll('.sg-r[data-model]');
-  if (modelEls) modelEls.forEach(el => { (el as HTMLElement).style.cursor = 'pointer'; (el as HTMLElement).onclick = (window as any).showModelPicker as any; });
+  if (modelEls) modelEls.forEach(el => {
+    const modelEl = el as HTMLElement;
+    modelEl.style.cursor = 'pointer';
+    modelEl.addEventListener('click', (window as any).showModelPicker as EventListener);
+  });
 }
 
 // ─── window 别名 ──────────────────────────────────

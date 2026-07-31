@@ -17,7 +17,7 @@ function saveCurrentFile(): Promise<void> {
   }).then(r => r.json()).then(d => {
     if (!d.error) {
       if (status) { status.textContent = '已保存'; setTimeout(() => { if (status) status.textContent = ''; }, 2000); }
-      const ts = (window as any).__tabs;
+      const ts = App.Tabs;
       const appTab = ts?.getTab?.(id);
       if (appTab) ts?.replaceTab(id, { content });
       toast('✅ 已保存: ' + (id.split('/').pop() || id), 'success');

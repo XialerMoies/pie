@@ -137,6 +137,32 @@ describe("Problems Bottom Bar", () => {
     assert.ok(counts.textContent.length > 0, "counts should be updated");
   });
 
+  it("normalizes server-fed diagnostic positions before rendering HTML", () => {
+    const { doc, win } = env;
+    doc.body.innerHTML = `
+      <button id="pb-status-trigger" type="button" aria-expanded="false"></button>
+      <span id="pb-status-counts"></span>
+      <section id="pb-panel" style="display:none"><div id="pb-body"></div></section>
+    `;
+
+    globalThis._initProblemsBar();
+    win.__problemsStore.setProblems("/test.ts", [{
+      filePath: "/test.ts",
+      line: '7" onclick="globalThis.__problemInjected=true',
+      column: "not-a-column",
+      severity: "error",
+      message: "hostile position",
+    }]);
+    globalThis._pbToggle(true);
+
+    const item = doc.querySelector(".pf-item");
+    assert.ok(item);
+    assert.strictEqual(item.getAttribute("data-line"), "1");
+    assert.strictEqual(item.getAttribute("data-col"), "1");
+    assert.strictEqual(item.hasAttribute("onclick"), false);
+    assert.match(item.querySelector(".pf-loc")?.textContent || "", /:1:1$/);
+  });
+
   it("renders correct HTML structure for problems panel and status bar", () => {
     const { doc } = env;
 

@@ -52,7 +52,7 @@ function resetWorkspaceState(workspace: string): void {
   App.ChatState.setBusy(false);
   App.Chat?.resetMsgKeys?.();
   App.ChatState.clearMessages();
-  const tabs = (window as any).__tabs;
+  const tabs = App.Tabs;
   if (tabs) {
     // TabStore 自己清空兼容投影，避免新 workspace 恢复旧标签。
     tabs.reset();
@@ -67,7 +67,7 @@ function resetWorkspaceState(workspace: string): void {
   if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = S('iup', 16); }
   const m = (window as any).__monaco;
   if (m?.dispose) m.dispose();
-  (window as any).__tabs?.activateTab(null);
+  App.Tabs?.activateTab(null);
   (window as any).renderSessionTabs?.();
 }
 

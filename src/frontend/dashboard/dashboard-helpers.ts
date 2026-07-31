@@ -1,39 +1,4 @@
 // ═══════════════════════════════════════════════════════════════════
-//  State — 全局状态（通过 window.__state 访问）
-// ═══════════════════════════════════════════════════════════════════
-
-window.__state = {
-  D: null,
-  M: [],
-  IL: false,
-  CS: null,
-  CT: 'chat',
-  _activePanel: 'explorer',
-  _sessionTabs: [],
-};
-
-// _activeFileTab 改为从 TabStore 投影的 getter，写入变为 no-op
-Object.defineProperty(window.__state, '_activeFileTab', {
-  get() {
-    const ts = (window as any).__tabs;
-    return ts ? ts.getActiveFileTabId() : null;
-  },
-  set(v) { /* 投影自 TabStore，直接写入已弃用 */ },
-});
-
-// _fileTabs 改为从 TabStore 投影的 getter（含 content/lang 缓存），写入投射到 TabStore
-Object.defineProperty(window.__state, '_fileTabs', {
-  get() {
-    const ts = (window as any).__tabs;
-    if (!ts) return [];
-    return ts.getTabs().filter((t: any) => t.kind === 'file').map((t: any) => ({
-      id: t.id, label: t.title, content: t.content || '', lang: t.lang || '',
-    }));
-  },
-  set(v) { /* 投影自 TabStore，直接写入已弃用 */ },
-});
-
-// ═══════════════════════════════════════════════════════════════════
 //  App 命名空间 — 收敛全局函数
 // ═══════════════════════════════════════════════════════════════════
 // 目标：所有 window.xxx  函数归到 App.* 下。
@@ -47,45 +12,20 @@ Object.defineProperty(window.__state, '_fileTabs', {
 //   App.Settings  — settings modal, API keys, model list
 // ═══════════════════════════════════════════════════════════════════
 
-function legacyTabsState(): TabsState {
-  const state = (window as any).__state;
-  const items: AppTab[] = [];
-  for (const file of state?._fileTabs || []) {
-    items.push({ id: file.id, kind: 'file', title: file.label, order: items.length, path: file.id });
-  }
+let attachedTabStore: TabStoreAPI | null = null;
 
-  let sessionIds: string[] = [];
-  if (typeof (window as any).readSessionTabIds === 'function') {
-    sessionIds = (window as any).readSessionTabIds();
-  }
-  if (!sessionIds.length) sessionIds = state?._sessionTabs || [];
-  const getLabel = (window as any).sessionTabLabel || ((id: string) => id.startsWith('draft:') ? '新会话' : '新会话');
-  for (const id of sessionIds) {
-    const isDraft = id.startsWith('draft:');
-    items.push({
-      id,
-      kind: isDraft ? 'chat' : 'session',
-      title: getLabel(id),
-      order: items.length,
-      ...(isDraft ? { draftId: id } : { sessionId: id }),
-    });
-  }
-
-  return {
-    items,
-    activeId: state?._activeFileTab ?? state?._activeSessionTabId ?? null,
-  };
+function requireTabStore(): TabStoreAPI {
+  if (!attachedTabStore) throw new Error('TabStore is not attached');
+  return attachedTabStore;
 }
 
 function currentTabsState(): TabsState {
-  const state = (window as any).__tabs?.getState?.();
-  if (state && Array.isArray(state.items)) {
-    return {
-      items: state.items.map((tab: AppTab) => ({ ...tab })),
-      activeId: state.activeId ?? null,
-    };
-  }
-  return legacyTabsState();
+  if (!attachedTabStore) return { items: [], activeId: null };
+  const state = attachedTabStore.getState();
+  return {
+    items: state.items.map((tab: AppTab) => ({ ...tab })),
+    activeId: state.activeId ?? null,
+  };
 }
 
 (window as any).App = {
@@ -96,6 +36,7 @@ function currentTabsState(): TabsState {
   Session: {} as Record<string, Function>,
   Settings: {} as Record<string, Function>,
   Tabs: {
+    _attachStore(store: TabStoreAPI): void { attachedTabStore = store; },
     getState(): TabsState { return currentTabsState(); },
     getTabs(): AppTab[] { return currentTabsState().items; },
     getActiveTab(): AppTab | null {
@@ -106,17 +47,49 @@ function currentTabsState(): TabsState {
       return currentTabsState().items.find(tab => tab.id === id);
     },
     getFileTabIds(): string[] {
-      return currentTabsState().items.filter(tab => tab.kind === 'file').map(tab => tab.id);
+      return attachedTabStore?.getFileTabIds() ?? [];
+    },
+    getSessionTabIds(): string[] {
+      return attachedTabStore?.getSessionTabIds() ?? [];
     },
     getActiveFileTabId(): string | null {
-      const tab = this.getActiveTab();
-      return tab?.kind === 'file' ? tab.id : null;
+      return attachedTabStore?.getActiveFileTabId() ?? null;
+    },
+    getActiveSessionTabId(): string | null {
+      return attachedTabStore?.getActiveSessionTabId() ?? null;
     },
     clearActiveTab(): void {
-      (window as any).__tabs?.activateTab?.(null);
+      attachedTabStore?.activateTab(null);
+    },
+    restoreTabs(items: AppTab[], activeId: string | null): void {
+      requireTabStore().restoreTabs(items, activeId);
+    },
+    openTab(tab: Omit<AppTab, 'order'>): AppTab {
+      return requireTabStore().openTab(tab);
+    },
+    activateTab(id: string | null): void {
+      requireTabStore().activateTab(id);
+    },
+    closeTab(id: string): AppTab | undefined {
+      return requireTabStore().closeTab(id);
+    },
+    replaceTab(id: string, updates: Partial<AppTab>): AppTab | undefined {
+      return requireTabStore().replaceTab(id, updates);
+    },
+    moveTab(from: number, to: number): void {
+      requireTabStore().moveTab(from, to);
+    },
+    reset(): void {
+      attachedTabStore?.reset();
+    },
+    registerTabBehavior(kind: TabKind, behavior: TabBehavior): void {
+      requireTabStore().registerTabBehavior(kind, behavior);
+    },
+    getTabBehavior(kind: TabKind): TabBehavior | undefined {
+      return attachedTabStore?.getTabBehavior(kind);
     },
     activate(id: string, options?: SessionActivationOptions) {
-      const tabs = (window as any).__tabs;
+      const tabs = attachedTabStore;
       const tab = tabs?.getTab?.(id);
       if (tab) {
         const handler = tabs?.getTabBehavior?.(tab.kind);
@@ -145,7 +118,7 @@ function currentTabsState(): TabsState {
       }
     },
     close(id: string) {
-      const tabs = (window as any).__tabs;
+      const tabs = attachedTabStore;
       const tab = tabs?.getTab?.(id);
       if (tab) {
         const handler = tabs?.getTabBehavior?.(tab.kind);
@@ -159,7 +132,7 @@ function currentTabsState(): TabsState {
       }
     },
     contextMenu(e: MouseEvent, id: string) {
-      const tabs = (window as any).__tabs;
+      const tabs = attachedTabStore;
       const tab = tabs?.getTab?.(id);
       if (tab) {
         const handler = tabs?.getTabBehavior?.(tab.kind);

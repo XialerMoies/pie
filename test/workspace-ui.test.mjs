@@ -23,17 +23,27 @@ global.logTiming = () => {};
     '<div id="fi-attach-bar">old attachments</div>',
   ].join('');
 
-  const oldStream = {
-    closed: false,
-    onmessage: () => {},
-    onerror: () => {},
-    close() { this.closed = true; },
-  };
+  const streams = [];
+  class MockEventSource {
+    constructor(url) {
+      this.url = url;
+      this.closed = false;
+      this.listeners = new Map();
+      streams.push(this);
+    }
+    addEventListener(type, listener) { this.listeners.set(type, listener); }
+    removeEventListener(type, listener) {
+      if (this.listeners.get(type) === listener) this.listeners.delete(type);
+    }
+    close() { this.closed = true; }
+  }
+  global.EventSource = MockEventSource;
+  win.EventSource = MockEventSource;
   win.__state = {
     D: null,
     M: [{ role: "user", content: "old" }, { role: "assistant", content: "stream", streaming: true }],
     IL: true,
-    CS: oldStream,
+    CS: null,
     CT: "chat",
     _activePanel: "explorer",
     _fileTabs: [{ id: "old.ts", label: "old.ts", content: "", lang: "ts" }],
@@ -54,6 +64,10 @@ global.logTiming = () => {};
     Session: {},
     Settings: {},
     Git: { refreshGit: () => calls.push(["refreshGit"]) },
+    Tabs: {
+      activateTab: (id) => calls.push(["activateTab", id]),
+      reset: () => calls.push(["resetTabs"]),
+    },
   };
   global.App = win.App;
   win.electronAPI = { openFolder: async () => "E:\\new-workspace" };
@@ -64,7 +78,6 @@ global.logTiming = () => {};
   global.E = (value) => String(value ?? "");
   global.toast = (message, type) => calls.push(["toast", message, type || "info"]);
   global.switchTab = (id) => calls.push(["switchTab", id]);
-  win.__tabs = { activateTab: (id) => { calls.push(["activateTab", id]); if (id === null) win.__state._activeFileTab = null; }, reset: () => {} };
   global.renderPanel = (name, container) => calls.push(["renderPanel", name, Boolean(container)]);
   global.loadSessions = () => calls.push(["loadSessions"]);
   win.msgs = () => "<div class=\"wl\">empty</div>";
@@ -80,7 +93,7 @@ global.logTiming = () => {};
   localStorage.setItem("file-tabs", JSON.stringify([{ id: "old.ts" }]));
   localStorage.setItem("last-session-id", "old-session");
 
-  return { win, doc, calls, fetchCalls, oldStream };
+  return { win, doc, calls, fetchCalls, streams, oldStream: null };
 }
 
 describe("workspace ui isolation", () => {
@@ -90,6 +103,10 @@ describe("workspace ui isolation", () => {
     env = setupDom();
     await import(`../src/frontend/services/chat-runtime-store.ts?workspace-ui=${Date.now()}-${Math.random()}`);
     await import(`../src/frontend/services/chat-stream.ts?workspace-ui=${Date.now()}-${Math.random()}`);
+    env.win.App.ChatState.replaceMessages([{ role: "user", content: "old" }, { role: "assistant", content: "stream", streaming: true }]);
+    env.win.App.ChatState.setBusy(true);
+    env.win.App.ChatStream.open();
+    env.oldStream = env.streams[0];
     await import(`../src/frontend/dashboard/dashboard-menus.ts?workspace-ui=${Date.now()}-${Math.random()}`);
   });
 
@@ -103,13 +120,12 @@ describe("workspace ui isolation", () => {
     assert.strictEqual(JSON.parse(env.fetchCalls[0][1].body).workspace, "E:\\new-workspace");
 
     assert.strictEqual(env.oldStream.closed, true);
-    assert.strictEqual(env.oldStream.onmessage, null);
-    assert.strictEqual(env.oldStream.onerror, null);
-    assert.strictEqual(env.win.__state.CS, null);
-    assert.strictEqual(env.win.__state.IL, false);
-    assert.deepStrictEqual(env.win.__state.M, []);
+    assert.strictEqual(env.oldStream.listeners.size, 0);
+    assert.strictEqual(env.win.App.ChatStream.isOpen(), false);
+    assert.strictEqual(env.win.App.ChatState.isBusy(), false);
+    assert.deepStrictEqual(env.win.App.ChatState.getMessages(), []);
     // _fileTabs 是 TabStore 投影，不再直接清除；TabStore.reset() 和 activateTab(null) 已验证
-    assert.strictEqual(env.win.__state._activeFileTab, null);
+    assert.ok(env.calls.some((call) => call[0] === "resetTabs"));
 
     assert.strictEqual(env.doc.getElementById("ms").innerHTML, '<div class="wl">empty</div>');
     assert.strictEqual(env.doc.getElementById("ci").disabled, false);

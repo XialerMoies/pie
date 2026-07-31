@@ -486,7 +486,7 @@ export function monacoCreateEditor(container: HTMLElement): void {
                   .then(r => r.json())
                   .then((d: any) => {
                     if (typeof d?.content !== 'string') return;
-                    const tabs = (window as any).__tabs;
+                    const tabs = App.Tabs;
                     if (tabs?.replaceTab) tabs.replaceTab(changedFile, { content: d.content });
                     if (changedFile === _currentFilePath && editor) {
                       if (editor.getValue() !== d.content) editor.setValue(d.content);

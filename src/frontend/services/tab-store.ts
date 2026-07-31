@@ -4,7 +4,7 @@
  * TabStore — 统一标签数据层
  *
  * 将 chat/session/file 三种标签合并为 tabs.items[] + tabs.activeId 单模型。
- * 挂载到 window.__tabs 和 window.__state.tabs。
+ * 通过 App.Tabs facade 暴露，持久化由 App.State 负责。
  *
  * Layer 1 只做数据统一，不碰 DOM 渲染。
  */
@@ -38,65 +38,16 @@ export interface TabsState {
 
 let _items: AppTab[] = [];
 let _activeId: string | null = null;
-let _initialized = false;
-
-// ─── 初始化 ──────────────────────────────────────────
-
-/** 从 __state 构建初始 tab 列表（合并新旧格式） */
-function _init(): void {
-  if (_initialized) return;
-  _initialized = true;
-
-  const st = (window as any).__state;
-
-  // 优先从新格式 __state.tabs 恢复
-  if (st?.tabs?.items && Array.isArray(st.tabs.items)) {
-    _items = st.tabs.items.map((t: any, i: number) => ({ ...t, order: i }));
-    _activeId = st.tabs.activeId ?? null;
-    return;
-  }
-
-  // 降级：从旧字段构建
-  const items: AppTab[] = [];
-  const fileTabs: Array<{ id: string; label: string }> = st?._fileTabs ?? [];
-  for (const ft of fileTabs) {
-    items.push({ id: ft.id, kind: 'file', title: ft.label, order: items.length, path: ft.id });
-  }
-  const sessionTabs: string[] = st?._sessionTabs ?? [];
-  const labels: Record<string, string> = st?._sessionTabLabels ?? {};
-  for (const sid of sessionTabs) {
-    const isDraft = sid.startsWith('draft:');
-    items.push({
-      id: sid,
-      kind: isDraft ? 'chat' : 'session',
-      title: labels[sid] || (isDraft ? '新会话' : '新会话'),
-      order: items.length,
-      ...(isDraft ? { draftId: sid } : { sessionId: sid }),
-    });
-  }
-
-  _items = items;
-
-  // activeId 优先从新格式读，其次 _activeSessionTabId
-  // _activeFileTab 已改为 TabStore getter，初始化时序下返回 null，不再作为降级源
-  if (st?.tabs?.activeId) {
-    _activeId = st.tabs.activeId;
-  } else if (st?._activeSessionTabId) {
-    _activeId = st._activeSessionTabId;
-  }
-}
+const tabStoreApp = (window as any).App || ((window as any).App = {});
 
 function _ensureInit(): void {
-  if (!_initialized) _init();
+  // State restoration is explicit through restoreTabs().
 }
 
 // ─── 辅助 ─────────────────────────────────────────────
 
 function _syncToState(): void {
-  const st = (window as any).__state;
-  if (!st) return;
-  st.tabs = { items: _items, activeId: _activeId };
-  (window as any).App.State.syncTabs(_items, _activeId);
+  tabStoreApp.State.syncTabs(_items, _activeId);
 }
 
 // ─── 公开 API ─────────────────────────────────────────
@@ -126,9 +77,6 @@ export function getTab(id: string): AppTab | undefined {
 export function restoreTabs(items: AppTab[], activeId: string | null): void {
   _items = items.map((tab, index) => ({ ...tab, order: index }));
   _activeId = activeId && _items.some(tab => tab.id === activeId) ? activeId : null;
-  _initialized = true;
-  const st = (window as any).__state;
-  if (st) st.tabs = { items: _items, activeId: _activeId };
 }
 
 /** 追加新标签到末尾 */
@@ -193,10 +141,7 @@ export function moveTab(from: number, to: number): void {
 export function reset(): void {
   _items = [];
   _activeId = null;
-  _initialized = true;
   _behaviors.clear();
-  const st = (window as any).__state;
-  if (st) st.tabs = { items: [], activeId: null };
 }
 
 /** 关闭后自动选下一个 active */
@@ -264,4 +209,5 @@ const _public = {
   registerTabBehavior, getTabBehavior,
 };
 
-(window as any).__tabs = _public;
+if (tabStoreApp.Tabs?._attachStore) tabStoreApp.Tabs._attachStore(_public);
+else tabStoreApp.Tabs = _public;

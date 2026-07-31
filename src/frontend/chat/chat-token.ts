@@ -61,7 +61,7 @@ interface UsageCurrentResponse {
 // ─── Token Rail 更新 ────────────────────────────────────
 
 function isChatTabActive(): boolean {
-  const tabs = (window as any).__tabs;
+  const tabs = App.Tabs;
   const active = tabs?.getActiveTab?.();
   return active != null && (active.kind === 'chat' || active.kind === 'session');
 }
@@ -217,7 +217,7 @@ function renderCurrentSessionUsage(container: HTMLElement): void {
     <div class="usage-section">
       <div class="usage-section-hd">Compaction</div>
       <div style="font-size:.75rem;display:grid;grid-template-columns:auto 1fr;gap:4px 12px">
-        <span class="usage-dl">压缩次数</span><span class="usage-dv" style="text-align:left">${d.compactCount}</span>
+        <span class="usage-dl">压缩次数</span><span class="usage-dv" style="text-align:left">${fmt(d.compactCount)}</span>
         ${d.lastCompactionAt ? `<span class="usage-dl">最近压缩</span><span class="usage-dv" style="text-align:left">${new Date(d.lastCompactionAt).toLocaleString('zh-CN')}</span>` : ''}
       </div>
       ${d.lastCompactionSummary ? `<div class="usage-summary-text">${escapeHtml(d.lastCompactionSummary)}</div>` : ''}
@@ -277,7 +277,7 @@ function renderSummaryUsage(container: HTMLElement): void {
   container.innerHTML = `
     <div class="usage-grid">
       <div class="usage-card">
-        <div class="usage-card-val">${s.sessions}</div>
+        <div class="usage-card-val">${fmt(s.sessions)}</div>
         <div class="usage-card-lb">总会话数</div>
       </div>
       <div class="usage-card">

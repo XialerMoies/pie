@@ -10,11 +10,10 @@ describe("ChatState facade", () => {
     win = dom;
     global.window = win;
     global.document = win.document;
-    win.__state = { D: null, M: [], IL: false, CS: null };
     win.App = {};
   });
 
-  it("owns messages, busy state, and dashboard data while preserving legacy projection", async () => {
+  it("owns messages, busy state, and dashboard data without a legacy projection", async () => {
     await import(`../src/frontend/services/chat-runtime-store.ts?${Date.now()}-${Math.random()}`);
 
     const state = win.App.ChatState;
@@ -28,13 +27,11 @@ describe("ChatState facade", () => {
     assert.deepStrictEqual(state.getMessages(), messages);
     assert.strictEqual(state.isBusy(), true);
     assert.deepStrictEqual(state.getDashboard(), dashboard);
-    assert.strictEqual(win.__state.M, messages);
-    assert.strictEqual(win.__state.IL, true);
-    assert.strictEqual(win.__state.D, dashboard);
+    assert.strictEqual(win.__state, undefined);
 
     state.clearMessages();
     assert.deepStrictEqual(state.getMessages(), []);
-    assert.deepStrictEqual(win.__state.M, []);
+    assert.strictEqual(win.__state, undefined);
   });
 
   it("appends messages without exposing a second message array", async () => {
@@ -47,6 +44,6 @@ describe("ChatState facade", () => {
     state.appendMessage(message);
 
     assert.strictEqual(state.getMessages()[0], message);
-    assert.strictEqual(win.__state.M[0], message);
+    assert.strictEqual(win.__state, undefined);
   });
 });
