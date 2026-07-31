@@ -94,6 +94,23 @@ describe("UiStateStore", () => {
     assert.match(source, /App\.Chat\?\.isBusy\?\.\(\)/);
   });
 
+  it("keeps tab, session, and panel consumers off legacy window state projections", () => {
+    for (const file of [
+      "src/frontend/dashboard/layout-tabs.ts",
+      "src/frontend/dashboard/layout-shortcuts.ts",
+      "src/frontend/dashboard/dashboard-menus.ts",
+      "src/frontend/dashboard/dashboard-chat.ts",
+      "src/frontend/pane/chat/index.ts",
+    ]) {
+      const source = readFileSync(resolve(process.cwd(), file), "utf8");
+      assert.doesNotMatch(
+        source,
+        /(?:window|\(window as any\))\.__state/,
+        `${file} must read tab, session, and panel state through public facades`,
+      );
+    }
+  });
+
   it("keeps session tab metadata out of legacy window state projections", () => {
     const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-sessions.ts"), "utf8");
     assert.doesNotMatch(source, /window\.__state[^\n]*_(?:sessionTabs|activeSessionTabId|sessionTabLabels|sessionTitleSources)/);

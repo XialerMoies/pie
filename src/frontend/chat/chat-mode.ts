@@ -45,14 +45,30 @@ let _currentEffort = 'medium';
 let _availableLevels: string[] = Object.keys(EFFORT_LABELS);
 let _supportsThinking = false;
 
+function applyThinkingState(data: unknown): void {
+  const state = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+  _supportsThinking = state.supportsThinking === true;
+  if (Array.isArray(state.availableLevels)) {
+    const knownLevels = state.availableLevels.filter(
+      (level): level is string => typeof level === 'string' && Object.hasOwn(EFFORT_LABELS, level),
+    );
+    _availableLevels = [...new Set(knownLevels)];
+    if (_availableLevels.length === 0) _availableLevels = Object.keys(EFFORT_LABELS);
+  }
+  if (!_supportsThinking) return;
+  if (typeof state.level === 'string' && _availableLevels.includes(state.level)) {
+    _currentEffort = state.level;
+  } else if (!_availableLevels.includes(_currentEffort)) {
+    _currentEffort = _availableLevels[0] || 'medium';
+  }
+}
+
 /** 从服务端同步思考档位状态 */
 async function syncThinkingLevel(): Promise<void> {
   try {
     const r = await fetch('/api/thinking-level');
     const d = await r.json();
-    if (Array.isArray(d.availableLevels)) _availableLevels = d.availableLevels;
-    _supportsThinking = !!d.supportsThinking;
-    if (_supportsThinking && d.level) _currentEffort = d.level;
+    applyThinkingState(d);
   } catch {}
 }
 
@@ -86,15 +102,13 @@ async function setEffort(effort: string): Promise<void> {
       body: JSON.stringify({ level: effort }),
     });
     const d = await r.json();
-    _supportsThinking = !!d.supportsThinking;
-    if (Array.isArray(d.availableLevels)) _availableLevels = d.availableLevels;
-    if (_supportsThinking && d.level) _currentEffort = d.level;
+    applyThinkingState(d);
   } catch {}
 }
 
 function updateEffortControl(root: HTMLElement, effortKeys: string[]): void {
   const idx = Math.max(0, effortKeys.indexOf(_currentEffort));
-  const pct = idx / (effortKeys.length - 1) * 100;
+  const pct = idx / Math.max(1, effortKeys.length - 1) * 100;
   const fill = root.querySelector<HTMLElement>('#effort-fill');
   const knob = root.querySelector<HTMLElement>('#effort-knob');
   const value = root.querySelector<HTMLElement>('#effort-value');
@@ -143,7 +157,7 @@ function showModePopup(btn: HTMLElement): void {
   html += `<div id="effort-fill" class="effort-fill" style="width:${pct}%"></div>`;
   html += `<div id="effort-knob" class="effort-knob" style="left:${pct}%"></div>`;
   effortKeys.forEach((key, i) => {
-    html += `<span class="effort-dot" data-effort="${key}" style="left:${i/(effortKeys.length-1)*100}%"></span>`;
+    html += `<span class="effort-dot" data-effort="${key}" style="left:${i / Math.max(1, effortKeys.length - 1) * 100}%"></span>`;
   });
   html += '</div></div></div>';
 

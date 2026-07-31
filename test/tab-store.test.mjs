@@ -67,6 +67,18 @@ describe("TabStore", () => {
     assert.strictEqual(tabs.getState().activeId, null);
   });
 
+  it("reset clears the compatibility projection without rehydrating stale tabs", () => {
+    const tabs = win.__tabs;
+    tabs.openTab({ kind: "file", id: "/stale.ts", title: "stale.ts", path: "/stale.ts" });
+    tabs.activateTab("/stale.ts");
+
+    tabs.reset();
+
+    assert.deepStrictEqual(win.__state.tabs, { items: [], activeId: null });
+    assert.deepStrictEqual(tabs.getTabs(), []);
+    assert.strictEqual(tabs.getActiveTab(), null);
+  });
+
   it("openTab 追加到末尾并返回完整 tab", () => {
 
     const tabs = win.__tabs;

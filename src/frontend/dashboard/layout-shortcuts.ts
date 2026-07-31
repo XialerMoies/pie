@@ -2,7 +2,7 @@
 // 从 dashboard-layout.ts 拆出
 
 function saveCurrentFile(): Promise<void> {
-  const id = (window as any).__state._activeFileTab;
+  const id = App.Tabs.getActiveFileTabId();
   if (!id) return Promise.resolve();
   const m = (window as any).__monaco;
   const content = m?.getValue() ?? '';
@@ -135,28 +135,28 @@ document.addEventListener('keydown', (e) => {
   }
   if (ctrl && key === 'w') {
     e.preventDefault();
-    const active = (window as any).__state._activeFileTab;
-    if (active) { (window as any).App?.Tabs?.close(active); return; }
+    const active = App.Tabs.getActiveFileTabId();
+    if (active) { App.Tabs.close(active); return; }
   }
   if (ctrl && key === 'tab' && !e.shiftKey) {
     e.preventDefault();
-    const tabs = (window as any).__state._fileTabs;
+    const tabs = App.Tabs.getTabs().filter(tab => tab.kind === 'file');
     if (tabs.length === 0) return;
-    const active = (window as any).__state._activeFileTab;
-    const idx = active ? tabs.findIndex((t: any) => t.id === active) : -1;
+    const active = App.Tabs.getActiveFileTabId();
+    const idx = active ? tabs.findIndex(tab => tab.id === active) : -1;
     const next = (idx + 1) % tabs.length;
     const target = tabs[next >= 0 ? next : 0]?.id;
-    if (target) (window as any).App?.Tabs?.activate(target);
+    if (target) App.Tabs.activate(target);
   }
   if (ctrl && key === 'tab' && e.shiftKey) {
     e.preventDefault();
-    const tabs = (window as any).__state._fileTabs;
+    const tabs = App.Tabs.getTabs().filter(tab => tab.kind === 'file');
     if (tabs.length === 0) return;
-    const active = (window as any).__state._activeFileTab;
-    const idx = active ? tabs.findIndex((t: any) => t.id === active) : 0;
+    const active = App.Tabs.getActiveFileTabId();
+    const idx = active ? tabs.findIndex(tab => tab.id === active) : 0;
     const prev = (idx - 1 + tabs.length) % tabs.length;
     const target = tabs[prev >= 0 ? prev : tabs.length - 1]?.id;
-    if (target) (window as any).App?.Tabs?.activate(target);
+    if (target) App.Tabs.activate(target);
   }
   if (ctrl && key === 'n') {
     e.preventDefault();
@@ -166,7 +166,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (ctrl && key === 'b') {
     e.preventDefault();
-    togglePanel((window as any).__state._activePanel);
+    togglePanel(App.State.getSnapshot().panel.active || 'explorer');
   }
   if (ctrl && key === 'p') {
     e.preventDefault();

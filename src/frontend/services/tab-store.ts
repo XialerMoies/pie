@@ -189,12 +189,14 @@ export function moveTab(from: number, to: number): void {
   _syncToState();
 }
 
-/** 重置（测试用） */
+/** 清空标签状态及兼容投影。 */
 export function reset(): void {
   _items = [];
   _activeId = null;
-  _initialized = false;
+  _initialized = true;
   _behaviors.clear();
+  const st = (window as any).__state;
+  if (st) st.tabs = { items: [], activeId: null };
 }
 
 /** 关闭后自动选下一个 active */

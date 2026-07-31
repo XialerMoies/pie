@@ -170,8 +170,8 @@ function setupTabDrag(el: HTMLElement): void {
 function tabContextMenu(e: MouseEvent, id: string): void {
   e.preventDefault();
   document.querySelectorAll('.ctx-menu').forEach(el => el.remove());
-  const tabs = (window as any).__state._fileTabs;
-  const idx = tabs.findIndex((t: any) => t.id === id);
+  const tabs = App.Tabs.getTabs().filter(tab => tab.kind === 'file');
+  const idx = tabs.findIndex(tab => tab.id === id);
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
   placeContextMenu(menu, e.clientX, e.clientY);

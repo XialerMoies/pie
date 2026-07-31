@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-973%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-995%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
   <img src="https://img.shields.io/badge/license-AGPLv3-6366F1?style=flat&labelColor=1a1a2e" alt="License">
   <img src="https://img.shields.io/badge/electron-39-F59E0B?style=flat&labelColor=1a1a2e" alt="Electron">
   <img src="https://img.shields.io/badge/typescript-5.9-3178C6?style=flat&labelColor=1a1a2e" alt="TypeScript">
@@ -130,16 +130,16 @@ npm run dist:portable
 ### 测试
 
 ```bash
-npm test            # 全量 992 项测试（unit + routes + frontend）
+npm test            # 全量 995 项测试（unit + routes + frontend）
 npm run test:build  # 构建验证 + smoke test
 npm run typecheck   # TypeScript 类型检查
 ```
 
 | 套件 | 数量 | 覆盖 |
 |------|------|------|
-| unit | 645 | Shell/权限安全、工具、状态存储、偏好 facade、MCP、搜索替换、Agent memory |
+| unit | 647 | Shell/权限安全、工具、状态存储、偏好 facade、MCP、搜索替换、Agent memory |
 | routes | 229 | API、PathGuard、root provenance、桌面认证、权限确认、session、SSE 重放、TS、附件与 trace |
-| frontend | 118 | 消息、会话、workspace、tabs、聊天流生命周期、权限中心、Explorer/Search/Git、桌面认证启动与 Monaco 生命周期 |
+| frontend | 119 | 消息、会话、workspace、tabs、聊天流生命周期、权限中心、Explorer/Search/Git、桌面认证启动与 Monaco 生命周期 |
 | CSS | 20+20 | 变量定义完整性扫描（dark + light 各 20 项） |
 
 ---
@@ -245,7 +245,7 @@ src/
 │   ├── services/        # TabStore / ProblemsStore / UiStateStore
 │   ├── pane/            # 5 面板（explorer / chat / search / git / mcp）
 │   └── ui/              # Tree 组件 + ContextMenu
-test/                    # 55 个测试文件，992 项（另有 build smoke / packaged E2E）
+test/                    # 59 个测试文件，995 项（另有 build smoke / packaged E2E）
 scripts/                 # 编译/构建/清理脚本
 ```
 

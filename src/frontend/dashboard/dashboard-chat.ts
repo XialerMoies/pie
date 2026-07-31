@@ -143,7 +143,7 @@ function refreshWorkspaceState(): void {
   loadSessions();
   getD();
   const pc = $('pc');
-  if (pc) renderPanel(window.__state._activePanel, pc);
+  if (pc) renderPanel(App.State.getSnapshot().panel.active || 'explorer', pc);
   if (App.Git?.refreshGit) setTimeout(() => App.Git.refreshGit(), 200);
 }
 

@@ -84,10 +84,9 @@ function shortRelTime(iso: string): string {
 }
 
 function isActiveSession(sessionId: string): boolean {
-  const activeTab = (window as any).__tabs?.getActiveTab?.();
+  const activeTab = App.Tabs.getActiveTab();
   if (activeTab?.id === sessionId) return true;
-  if (typeof getActiveSessionTabId === "function" && getActiveSessionTabId() === sessionId) return true;
-  return (window as any).__state?._activeSessionTabId === sessionId;
+  return App.Session.getActiveSessionTabId() === sessionId;
 }
 
 function clearInlineHighlight(): void {

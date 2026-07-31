@@ -110,6 +110,8 @@ win.App = {
     },
     getTabs() { return this.getState().items; },
     getActiveTab() {
+      const storeTab = win.__tabs?.getActiveTab?.();
+      if (storeTab !== undefined) return storeTab;
       const state = this.getState();
       return state.items.find(tab => tab.id === state.activeId) || null;
     },

@@ -48,17 +48,14 @@ function closeFMOutside(ev: MouseEvent): void {
 }
 
 function resetWorkspaceState(workspace: string): void {
-  const st = window.__state;
   App.ChatStream.close();
   App.ChatState.setBusy(false);
   App.Chat?.resetMsgKeys?.();
   App.ChatState.clearMessages();
-  delete (st as any)._sessionTabLabels;
   const tabs = (window as any).__tabs;
   if (tabs) {
+    // TabStore 自己清空兼容投影，避免新 workspace 恢复旧标签。
     tabs.reset();
-    // 清除 st.tabs 防止 TabStore 下一次 _init() 从陈旧 st.tabs 恢复数据
-    delete (st as any).tabs;
   }
   App.State.resetWorkspace(workspace);
   App.Chat?.clearAttachments?.();
