@@ -1126,6 +1126,10 @@ export const commandTool: AgentTool = {
   isReadOnly: false,
   isDestructive: true,
   isConcurrencySafe: false,
+  operations: ["execute"],
+  riskLevel: "high",
+  needsPermission: false,
+  workspaceBounded: false,
   execute: async (args, ctx) => {
     const cmd = String(args.command ?? "").trim()
     if (!cmd) return "请输入要执行的命令"

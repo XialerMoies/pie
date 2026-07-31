@@ -33,6 +33,11 @@ export const writeAgentMdTool: AgentTool = {
   },
   isReadOnly: false,
   isDestructive: false,
+  isConcurrencySafe: false,
+  operations: ["create", "write"],
+  riskLevel: "medium",
+  needsPermission: false,
+  workspaceBounded: true,
   execute: async ({ content }, ctx) => {
     const root = ctx.workspace || APP_ROOT;
     const agentMdPath = resolve(root, "AGENT.md");

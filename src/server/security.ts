@@ -5,6 +5,7 @@ export interface DesktopSecurityConfig {
   token: string;
   cookieName: string;
   cookieMaxAgeSeconds: number;
+  allowedOrigins: readonly string[];
 }
 
 export type SecurityDecision =
@@ -14,6 +15,7 @@ export type SecurityDecision =
 const DEFAULT_COOKIE_NAME = "mca_token";
 const DEFAULT_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const DESKTOP_TOKEN_ENV = "MY_CODE_AGENT_DESKTOP_TOKEN";
+const DESKTOP_ALLOWED_ORIGINS_ENV = "MY_CODE_AGENT_ALLOWED_ORIGINS";
 const PUBLIC_READ_API_PATHS = new Set([
   "/api/bootstrap",
   "/api/mcp/catalog",
@@ -24,6 +26,7 @@ export function createDesktopSecurityConfig(token = process.env[DESKTOP_TOKEN_EN
     token,
     cookieName: DEFAULT_COOKIE_NAME,
     cookieMaxAgeSeconds: DEFAULT_COOKIE_MAX_AGE_SECONDS,
+    allowedOrigins: parseAllowedOrigins(process.env[DESKTOP_ALLOWED_ORIGINS_ENV]),
   };
 }
 
@@ -39,7 +42,7 @@ export function authorizeLocalApiRequest(req: IncomingMessage, security?: Deskto
   if (!security?.token || !isApiRequest(req.url || "")) return { ok: true };
 
   const origin = headerValue(req.headers.origin);
-  if (origin && !isAllowedLoopbackOrigin(origin)) {
+  if (origin && !isAllowedRequestOrigin(req, origin, security)) {
     return { ok: false, status: 403, code: "bad_origin", error: "Origin is not allowed" };
   }
 
@@ -48,9 +51,15 @@ export function authorizeLocalApiRequest(req: IncomingMessage, security?: Deskto
     return { ok: false, status: 403, code: "cross_site", error: "Cross-site API requests are not allowed" };
   }
 
-  if (req.method === "OPTIONS" || !requiresDesktopToken(req)) return { ok: true };
+  if (req.method === "OPTIONS") return { ok: true };
 
   const suppliedToken = getRequestToken(req, security.cookieName);
+  if (!requiresDesktopToken(req)) {
+    if (suppliedToken && !constantTimeEqual(suppliedToken, security.token)) {
+      return { ok: false, status: 403, code: "bad_token", error: "Desktop API token is missing or invalid" };
+    }
+    return { ok: true };
+  }
   if (!constantTimeEqual(suppliedToken, security.token)) {
     return { ok: false, status: 403, code: "bad_token", error: "Desktop API token is missing or invalid" };
   }
@@ -102,7 +111,7 @@ function withSecurityHeaders(req: IncomingMessage, headers: OutgoingHttpHeaders 
   removeHeader(out, "access-control-allow-headers");
 
   const origin = headerValue(req.headers.origin);
-  if (origin && isAllowedLoopbackOrigin(origin)) {
+  if (origin && isAllowedRequestOrigin(req, origin, security)) {
     out["Access-Control-Allow-Origin"] = origin;
     out["Access-Control-Allow-Credentials"] = "true";
     appendVary(out, "Origin");
@@ -114,7 +123,10 @@ function withSecurityHeaders(req: IncomingMessage, headers: OutgoingHttpHeaders 
     out["Access-Control-Max-Age"] = "600";
   }
 
-  appendSetCookie(out, `${security.cookieName}=${security.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${security.cookieMaxAgeSeconds}`);
+  const suppliedToken = getRequestToken(req, security.cookieName);
+  if (isApiRequest(req.url || "") && constantTimeEqual(suppliedToken, security.token)) {
+    appendSetCookie(out, `${security.cookieName}=${security.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${security.cookieMaxAgeSeconds}`);
+  }
   return out;
 }
 
@@ -161,6 +173,37 @@ export function isAllowedLoopbackOrigin(origin: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isAllowedRequestOrigin(req: IncomingMessage, origin: string, security: DesktopSecurityConfig): boolean {
+  const normalizedOrigin = normalizeLoopbackOrigin(origin);
+  if (!normalizedOrigin) return false;
+
+  const host = headerValue(req.headers.host);
+  const requestOrigin = host ? normalizeLoopbackOrigin(`http://${host}`) : null;
+  if (requestOrigin === normalizedOrigin) return true;
+
+  return security.allowedOrigins.some((allowed) => normalizeLoopbackOrigin(allowed) === normalizedOrigin);
+}
+
+function normalizeLoopbackOrigin(origin: string): string | null {
+  try {
+    const parsed = new URL(origin);
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !isLoopbackHost(parsed.hostname)) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+function parseAllowedOrigins(raw: string | undefined): string[] {
+  if (!raw) return [];
+  const origins = new Set<string>();
+  for (const value of raw.split(",")) {
+    const normalized = normalizeLoopbackOrigin(value.trim());
+    if (normalized) origins.add(normalized);
+  }
+  return [...origins];
 }
 
 function isLoopbackHost(hostname: string): boolean {

@@ -14,7 +14,7 @@ export type {
   TrustStoreFile,
   McpConnectionState,
   McpServerStatus,
-} from "./types"
+} from "./types.js"
 
 export {
   validateServerConfig,
@@ -23,26 +23,26 @@ export {
   loadMcpConfig,
   getEnabledServers,
   defaultGlobalConfigPath,
-} from "./config"
+} from "./config.js"
 
-export type { McpDiscoveryOptions, McpLoadResult, ValidationError } from "./config"
+export type { McpDiscoveryOptions, McpLoadResult, ValidationError } from "./config.js"
 
 export {
   TrustStore,
   hashServerCommand,
   defaultTrustStorePath,
-} from "./trust-store"
+} from "./trust-store.js"
 
-export type { TrustStoreOptions } from "./trust-store"
+export type { TrustStoreOptions } from "./trust-store.js"
 
 export {
   normalizeServerName,
   buildMcpToolName,
   formatMcpContent,
   createMcpToolAdapter,
-} from "./MCPToolAdapter"
+} from "./MCPToolAdapter.js"
 
-export type { McpToolAdapterOptions } from "./MCPToolAdapter"
+export type { McpToolAdapterOptions } from "./MCPToolAdapter.js"
 
 export {
   connectAll,
@@ -50,4 +50,4 @@ export {
   disconnectAllSync,
   getServersStatus,
   reset as resetMcpService,
-} from "./MCPClientService"
+} from "./MCPClientService.js"

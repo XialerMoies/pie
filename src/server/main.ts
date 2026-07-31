@@ -9,11 +9,11 @@
  *   tsx src/main.ts --cli        ↑ 同上
  *   node scripts/dev.mjs         → 启动桌面（Electron + Vite HMR）
  */
-import { initAgent } from "../agent/index";
+import { initAgent } from "../agent/index.js";
 import { createInterface } from "readline";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { shellDialectFromEnv } from "../agent/tools/command/shell-parser";
+import { shellDialectFromEnv } from "../agent/tools/command/shell-parser.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(__dirname, "..");

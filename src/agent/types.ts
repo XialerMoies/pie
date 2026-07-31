@@ -92,6 +92,7 @@ export interface ToolAuthorizationRequest {
   operations: readonly ToolOperation[]
   riskLevel: ToolRiskLevel
   workspaceBounded: boolean
+  permissionRequired?: boolean
   args: Record<string, unknown>
 }
 
@@ -199,8 +200,9 @@ export async function authorizeToolExecution(
   args: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<void> {
-  if (!tool.needsPermission) return
+  const permissionRequired = tool.needsPermission === true
   if (!ctx.authorizeTool) {
+    if (!permissionRequired) return
     throw new Error(`Tool authorization unavailable: ${tool.name}`)
   }
   const decision = await ctx.authorizeTool({
@@ -209,6 +211,7 @@ export async function authorizeToolExecution(
     operations: tool.operations || [],
     riskLevel: tool.riskLevel || "medium",
     workspaceBounded: tool.workspaceBounded !== false,
+    permissionRequired,
     args,
   })
   if (!decision.allow) {

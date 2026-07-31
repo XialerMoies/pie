@@ -20,11 +20,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
-import type { AgentTool, ToolTraceEmitter } from "../types"
-import { loadMcpConfig, getEnabledServers } from "./config"
-import { TrustStore, hashServerCommand } from "./trust-store"
-import { createMcpToolAdapter } from "./MCPToolAdapter"
-import type { McpServerConfig, McpServerStatus, McpConnectionState } from "./types"
+import type { AgentTool, ToolTraceEmitter } from "../types.js"
+import { loadMcpConfig, getEnabledServers } from "./config.js"
+import { TrustStore, hashServerCommand } from "./trust-store.js"
+import { createMcpToolAdapter } from "./MCPToolAdapter.js"
+import type { McpServerConfig, McpServerStatus, McpConnectionState } from "./types.js"
 
 // ─── 常量 ──────────────────────────────────────────
 

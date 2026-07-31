@@ -1,26 +1,28 @@
 /**
- * My Code Agent — IPC preload
- * 暴露窗口控制和应用 API 给渲染进程
+ * My Code Agent IPC preload.
  *
- * 保持最小暴露原则：只暴露 Electron 能力，不做业务逻辑。
+ * Exposes a minimal Electron capability surface to the renderer. Business
+ * logic stays in the renderer/server; privileged OS actions stay in IPC.
  */
 import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("electronAPI", {
-  // 窗口控制
+  getDesktopSessionToken: () => ipcRenderer.invoke("desktop-session-token"),
+
+  // Window controls
   minimize: () => ipcRenderer.send("window-minimize"),
   maximize: () => ipcRenderer.send("window-maximize"),
   close: () => ipcRenderer.send("window-close"),
   newWindow: () => ipcRenderer.send("window-new"),
 
-  // 文件对话框
+  // File dialogs
   openFile: () => ipcRenderer.invoke("dialog-open-file"),
   openFolder: () => ipcRenderer.invoke("open-folder-dialog"),
 
-  // 文件操作
+  // File actions
   showItemInFolder: (path: string) => ipcRenderer.invoke("show-item-in-folder", path),
   trashItem: (path: string) => ipcRenderer.invoke("trash-item", path),
 
-  // 终端
+  // Terminal
   spawnTerminal: () => ipcRenderer.invoke("spawn-terminal"),
 });

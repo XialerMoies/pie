@@ -1,17 +1,18 @@
 /**
  * Dashboard route — /api/dashboard, /api/paths, /layout-config, /api/usage/*
  */
-import type { RouteHandler, ServerContext } from "./types";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import type { RouteHandler, ServerContext } from "./types.js";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from "fs";
 import { resolve, dirname } from "path";
-import { parseBody } from "./parse-body";
-import { fullScan, incrementalScan, updateSessionInIndex, loadIndex, saveIndex, type UsageIndex } from "../usage-index";
-import { getServersStatus } from "../../agent/mcp/MCPClientService";
-import { loadMcpConfig, defaultGlobalConfigPath } from "../../agent/mcp/config";
-import { MCP_CATALOG, type CatalogEntry } from "../../agent/mcp/builtin-list";
-import { isPathInside, normalizePermissionPath } from "../../agent/permissions";
-import { TrustStore, hashServerCommand, defaultTrustStorePath } from "../../agent/mcp/trust-store";
-import { authorizeRoutePath, ServerPermissionError, writeServerPermissionError } from "../permission-service";
+import { parseBody } from "./parse-body.js";
+import { fullScanFiles, incrementalScanFiles, loadIndex, saveIndex } from "../usage-index.js";
+import { getServersStatus } from "../../agent/mcp/MCPClientService.js";
+import { defaultGlobalConfigPath, getCandidatePaths, loadMcpConfigFromCandidates } from "../../agent/mcp/config.js";
+import { MCP_CATALOG, type CatalogEntry } from "../../agent/mcp/builtin-list.js";
+import { isPathInside, normalizePermissionPath } from "../../agent/permissions.js";
+import { TrustStore, hashServerCommand, defaultTrustStorePath } from "../../agent/mcp/trust-store.js";
+import { authorizeRoutePath, isServerPermissionError, ServerPermissionError, writeServerPermissionError } from "../permission-service.js";
+import { writePathGuardError } from "./path-guard.js";
 
 export const handleDashboard: RouteHandler = (req, res, ctx) => {
   const { url, method } = req;
@@ -118,58 +119,64 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
 
   // GET /api/usage/summary — 全部会话累计统计（基于 usage-index 增量扫描）
   if (url === "/api/usage/summary") {
-    const indexPath = resolve(p.PI_CONFIG_DIR, "usage-index.json");
+    return (async (): Promise<boolean> => {
+      try {
+        const indexPath = resolve(p.PI_CONFIG_DIR, "usage-index.json");
+        const indexRoot = existingAncestorForPath(indexPath);
+        const authorizedIndexPath = (await authorizeRoutePath(ctx, indexRoot, indexPath, "read", "usage.summary.index")).path;
+        const authorizedFiles = await findAuthorizedUsageSessionFiles(ctx, p.SESSIONS_DIR, "usage.summary");
+        const existingIndex = loadIndex(authorizedIndexPath);
+        const index = existingIndex
+          ? incrementalScanFiles(p.SESSIONS_DIR, authorizedFiles, existingIndex)
+          : fullScanFiles(p.SESSIONS_DIR, authorizedFiles);
+        const writableIndexPath = (await authorizeRoutePath(ctx, indexRoot, indexPath, "write", "usage.summary.index")).path;
+        saveIndex(writableIndexPath, index);
 
-    // 加载既有索引，增量扫描
-    let index: UsageIndex | null = loadIndex(indexPath);
-    if (index) {
-      index = incrementalScan(p.SESSIONS_DIR, index);
-    } else {
-      index = fullScan(p.SESSIONS_DIR);
-    }
-    saveIndex(indexPath, index);
+        const sessions = Object.keys(index.sessions).length;
+        let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0;
+        let totalCost = 0, totalCompact = 0;
+        let lastUpdatedAt = "";
+        const topSessions: Array<{
+          id: string; name: string; workspace: string;
+          totalTokens: number; messageCount?: number; updatedAt: string;
+        }> = [];
 
-    // 汇总
-    const sessions = Object.keys(index.sessions).length;
-    let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0;
-    let totalCost = 0, totalCompact = 0;
-    let lastUpdatedAt = "";
-    const topSessions: Array<{
-      id: string; name: string; workspace: string;
-      totalTokens: number; messageCount?: number; updatedAt: string;
-    }> = [];
+        for (const [id, s] of Object.entries(index.sessions)) {
+          totalInput += s.input;
+          totalOutput += s.output;
+          totalCacheRead += s.cacheRead;
+          totalCacheWrite += s.cacheWrite;
+          totalCost += s.cost;
+          totalCompact += s.compactCount;
+          if (s.updatedAt > lastUpdatedAt) lastUpdatedAt = s.updatedAt;
+          const totalTokens = s.input + s.output + s.cacheRead + s.cacheWrite;
+          topSessions.push({ id, name: s.name, workspace: s.workspace, totalTokens, updatedAt: s.updatedAt });
+        }
 
-    for (const [id, s] of Object.entries(index.sessions)) {
-      totalInput += s.input;
-      totalOutput += s.output;
-      totalCacheRead += s.cacheRead;
-      totalCacheWrite += s.cacheWrite;
-      totalCost += s.cost;
-      totalCompact += s.compactCount;
-      if (s.updatedAt > lastUpdatedAt) lastUpdatedAt = s.updatedAt;
-      // 从路径估算消息数（每个 message line 的 usage 通常在 assistant 上）
-      const totalTokens = s.input + s.output + s.cacheRead + s.cacheWrite;
-      topSessions.push({ id, name: s.name, workspace: s.workspace, totalTokens, updatedAt: s.updatedAt });
-    }
+        topSessions.sort((a, b) => b.totalTokens - a.totalTokens);
 
-    topSessions.sort((a, b) => b.totalTokens - a.totalTokens);
-    const top5 = topSessions.slice(0, 5);
-
-    res.writeHead(200, { "Content-Type": "application/json", ...cors });
-    res.end(JSON.stringify({
-      sessions,
-      tokens: {
-        input: totalInput,
-        output: totalOutput,
-        cacheRead: totalCacheRead,
-        cacheWrite: totalCacheWrite,
-      },
-      cost: roundCost(totalCost),
-      compactCount: totalCompact,
-      lastUpdatedAt,
-      topSessions: top5,
-    }));
-    return true;
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({
+          sessions,
+          tokens: {
+            input: totalInput,
+            output: totalOutput,
+            cacheRead: totalCacheRead,
+            cacheWrite: totalCacheWrite,
+          },
+          cost: roundCost(totalCost),
+          compactCount: totalCompact,
+          lastUpdatedAt,
+          topSessions: topSessions.slice(0, 5),
+        }));
+      } catch (err) {
+        if (writeServerPermissionError(res, cors, err)) return true;
+        if (writePathGuardError(res, cors, err)) return true;
+        res.writeHead(400, { ...cors });
+        res.end(JSON.stringify({ error: (err as Error).message }));
+      }
+      return true;
+    })();
   }
 
   // Path info
@@ -185,12 +192,21 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
 
   // Read layout config
   if (url === "/layout-config.json") {
-    const layoutPath = resolve(p.APP_ROOT, "src", "layout-config.json");
-    let content = "{}";
-    try { content = readFileSync(layoutPath, "utf-8"); } catch {}
-    res.writeHead(200, { "Content-Type": "application/json", ...cors });
-    res.end(content);
-    return true;
+    return (async (): Promise<boolean> => {
+      try {
+        const layoutPath = (await authorizeRoutePath(ctx, p.APP_ROOT, "src/layout-config.json", "read", "dashboard.layout-config")).path;
+        let content = "{}";
+        try { content = readFileSync(layoutPath, "utf-8"); } catch {}
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(content);
+      } catch (err: unknown) {
+        if (writeServerPermissionError(res, cors, err)) return true;
+        if (writePathGuardError(res, cors, err)) return true;
+        res.writeHead(400, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: (err as Error).message }));
+      }
+      return true;
+    })();
   }
 
   // POST /api/compact — 手动压缩上下文
@@ -199,12 +215,12 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
       try {
         if ((session as any).isStreaming) {
           res.writeHead(409, { "Content-Type": "application/json", ...cors });
-          res.end(JSON.stringify({ ok: false, error: "请等待当前回复完成后再压缩" }));
+          res.end(JSON.stringify({ ok: false, error: "Please wait for the current response to finish before compacting." }));
           return true;
         }
         if ((session as any).isCompacting) {
           res.writeHead(409, { "Content-Type": "application/json", ...cors });
-          res.end(JSON.stringify({ ok: false, error: "正在压缩中，请稍候" }));
+          res.end(JSON.stringify({ ok: false, error: "Compaction is already in progress." }));
           return true;
         }
 
@@ -216,38 +232,39 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
 
         if (typeof (session as any).compact !== "function") {
           res.writeHead(400, { "Content-Type": "application/json", ...cors });
-          res.end(JSON.stringify({ ok: false, error: "当前会话不支持压缩" }));
+          res.end(JSON.stringify({ ok: false, error: "The current session does not support compaction." }));
           return true;
         }
 
-        const result = await (session as any).compact(focus);
+        const indexPath = resolve(p.PI_CONFIG_DIR, "usage-index.json");
+        const indexRoot = existingAncestorForPath(indexPath);
+        const authorizedIndexPath = (await authorizeRoutePath(ctx, indexRoot, indexPath, "read", "usage.compact.index")).path;
+        const authorizedFiles = await findAuthorizedUsageSessionFiles(ctx, p.SESSIONS_DIR, "usage.compact");
+        const writableIndexPath = (await authorizeRoutePath(ctx, indexRoot, indexPath, "write", "usage.compact.index")).path;
 
-        // 更新 usage-index（不存在则创建）
-        try {
-          const indexPath = resolve(p.PI_CONFIG_DIR, "usage-index.json");
-          let idx = loadIndex(indexPath);
-          if (!idx) idx = fullScan(p.SESSIONS_DIR);
-          if ((session as any).sessionFile) {
-            idx = updateSessionInIndex(p.SESSIONS_DIR, (session as any).sessionFile, idx);
-            saveIndex(indexPath, idx);
-          }
-        } catch {}
+        const result = await (session as any).compact(focus);
+        const existingIndex = loadIndex(authorizedIndexPath);
+        const idx = existingIndex
+          ? incrementalScanFiles(p.SESSIONS_DIR, authorizedFiles, existingIndex)
+          : fullScanFiles(p.SESSIONS_DIR, authorizedFiles);
+        saveIndex(writableIndexPath, idx);
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({
           ok: true,
           compacted: true,
-          message: result?.summary ? "压缩完成" : "压缩完成",
+          message: result?.summary ? "Compaction completed" : "Compaction completed",
         }));
         return true;
       } catch (err: any) {
-        const msg = err?.message || "压缩失败";
-        // "Already compacted" 和 "Nothing to compact" 是预期内非错误
+        const msg = err?.message || "Compaction failed";
         if (msg.includes("Already compacted") || msg.includes("Nothing to compact")) {
           res.writeHead(200, { "Content-Type": "application/json", ...cors });
           res.end(JSON.stringify({ ok: true, compacted: false, message: msg }));
           return true;
         }
+        if (writeServerPermissionError(res, cors, err)) return true;
+        if (writePathGuardError(res, cors, err)) return true;
         res.writeHead(500, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: false, error: msg }));
         return true;
@@ -257,27 +274,33 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
 
   // MCP 状态：合并已配置 server + 运行时状态（脱敏返回）
   if (url === "/api/mcp/servers" && method === "GET") {
-    const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
-    const runtimeStatus = getServersStatus();
-    const configResult = loadMcpConfig({ projectRoot: workspace });
+    return (async (): Promise<boolean> => {
+      try {
+        const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
+        const runtimeStatus = getServersStatus();
+        const configResult = await loadAuthorizedMcpConfig(ctx, workspace, "mcp.servers.config");
+        const merged = configResult.servers.map((source) => {
+          const runtime = runtimeStatus.find((s) => s.name === source.name);
+          return {
+            name: source.name,
+            state: runtime?.state ?? (source.config.enabled === false ? "disconnected" : "connecting"),
+            tools: runtime?.tools ?? [],
+            error: runtime?.error,
+            config: { command: source.config.command, args: source.config.args, url: source.config.url, transport: source.config.transport ?? "stdio", enabled: source.config.enabled ?? true },
+            canDelete: true,
+          };
+        });
 
-    // 每个已配置的 server 与运行时状态合并
-    const rootConfigPath = resolve(workspace, ".mcp.json");
-    const merged = configResult.servers.map((source) => {
-      const runtime = runtimeStatus.find((s) => s.name === source.name);
-      return {
-        name: source.name,
-        state: runtime?.state ?? (source.config.enabled === false ? "disconnected" : "connecting"),
-        tools: runtime?.tools ?? [],
-        error: runtime?.error,
-        config: { command: source.config.command, args: source.config.args, url: source.config.url, transport: source.config.transport ?? "stdio", enabled: source.config.enabled ?? true },
-        canDelete: true,
-      };
-    });
-
-    res.writeHead(200, { "Content-Type": "application/json", ...cors });
-    res.end(JSON.stringify(merged));
-    return true;
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify(merged));
+      } catch (e: any) {
+        if (writeServerPermissionError(res, cors, e)) return true;
+        if (writePathGuardError(res, cors, e)) return true;
+        res.writeHead(500, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+      return true;
+    })();
   }
 
   // POST /api/mcp/servers/:name/toggle — 切换 server 启用状态（修改 .mcp.json）
@@ -290,7 +313,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
 
         // 从当前 workspace 查找
         const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
-        const result = loadMcpConfig({ projectRoot: workspace });
+        const result = await loadAuthorizedMcpConfig(ctx, workspace, "mcp.toggle.config");
         const source = result.servers.find((s) => s.name === name);
         if (!source) { res.writeHead(404, {"Content-Type":"application/json",...cors}); res.end(JSON.stringify({ok:false,error:"未找到 server"})); return true; }
 
@@ -322,7 +345,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         if (!name) { res.writeHead(400, {"Content-Type":"application/json",...cors}); res.end(JSON.stringify({ok:false,error:"缺少 server 名"})); return true; }
 
         const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
-        const result = loadMcpConfig({ projectRoot: workspace });
+        const result = await loadAuthorizedMcpConfig(ctx, workspace, "mcp.trust.config");
         const source = result.servers.find((s) => s.name === name);
         if (!source) { res.writeHead(404, {"Content-Type":"application/json",...cors}); res.end(JSON.stringify({ok:false,error:"未找到 server"})); return true; }
 
@@ -420,7 +443,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         // 自动预信任（用户主动安装视为同意）
         try {
           const trustStore = await createAuthorizedTrustStore(ctx, "mcp.install.trust");
-          const srvConfig: import("../../agent/mcp/types").McpServerConfig = {
+          const srvConfig: import("../../agent/mcp/types.js").McpServerConfig = {
             command: entry.command, args: entry.args, transport: "stdio",
           };
           const hash = hashServerCommand(srvConfig);
@@ -454,7 +477,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
 
         // 从配置源中找到这个 server 所在的文件
-        const result = loadMcpConfig({ projectRoot: workspace });
+        const result = await loadAuthorizedMcpConfig(ctx, workspace, "mcp.uninstall.config");
         const source = result.servers.find((s) => s.name === name);
 
         if (!source) {
@@ -509,6 +532,38 @@ async function authorizeMcpConfigFileWrite(ctx: ServerContext, workspace: string
   throw new ServerPermissionError("MCP config path is outside workspace/global config roots", 403, "permission_denied");
 }
 
+async function authorizeMcpConfigFileRead(ctx: ServerContext, workspace: string, filePath: string, source: string): Promise<string> {
+  const resolvedFile = resolve(filePath);
+  if (isPathInside(resolvedFile, workspace)) {
+    return (await authorizeRoutePath(ctx, workspace, resolvedFile, "read", source)).path;
+  }
+
+  const globalPath = resolve(defaultGlobalConfigPath());
+  if (normalizePermissionPath(resolvedFile) === normalizePermissionPath(globalPath)) {
+    return (await authorizeRoutePath(ctx, existingAncestorForPath(globalPath), resolvedFile, "read", source)).path;
+  }
+
+  throw new ServerPermissionError("MCP config path is outside workspace/global config roots", 403, "permission_denied");
+}
+
+async function loadAuthorizedMcpConfig(ctx: ServerContext, workspace: string, source: string) {
+  const candidates = [];
+  for (const candidate of getCandidatePaths(workspace)) {
+    if (!pathExists(candidate.path)) continue;
+    let authorizedPath: string;
+    try {
+      authorizedPath = await authorizeMcpConfigFileRead(ctx, workspace, candidate.path, source);
+    } catch (error) {
+      if (candidate.priority === 2 && !isServerPermissionError(error)) continue;
+      throw error;
+    }
+    if (pathExists(authorizedPath)) {
+      candidates.push({ ...candidate, path: authorizedPath });
+    }
+  }
+  return loadMcpConfigFromCandidates(candidates);
+}
+
 async function createAuthorizedTrustStore(ctx: ServerContext, source: string): Promise<TrustStore> {
   const trustPath = defaultTrustStorePath();
   const authorizedPath = (await authorizeRoutePath(ctx, existingAncestorForPath(trustPath), trustPath, "write", source)).path;
@@ -517,10 +572,87 @@ async function createAuthorizedTrustStore(ctx: ServerContext, source: string): P
 
 function existingAncestorForPath(filePath: string): string {
   let current = dirname(resolve(filePath));
-  while (!existsSync(current)) {
+  while (!pathExists(current)) {
     const parent = dirname(current);
     if (parent === current) return current;
     current = parent;
   }
   return current;
+}
+
+function pathExists(filePath: string): boolean {
+  try {
+    return existsSync(filePath);
+  } catch {
+    return false;
+  }
+}
+
+async function findAuthorizedUsageSessionFiles(
+  ctx: ServerContext,
+  sessionsDir: string,
+  sourcePrefix: string,
+): Promise<string[]> {
+  const root = (await authorizeRoutePath(
+    ctx,
+    existingAncestorForPath(sessionsDir),
+    sessionsDir,
+    "read",
+    `${sourcePrefix}.root`,
+  )).path;
+  return collectAuthorizedUsageSessionFiles(ctx, root, root, sourcePrefix);
+}
+
+async function collectAuthorizedUsageSessionFiles(
+  ctx: ServerContext,
+  sessionsRoot: string,
+  currentDir: string,
+  sourcePrefix: string,
+): Promise<string[]> {
+  let entries;
+  try {
+    entries = readdirSync(currentDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const files: string[] = [];
+  for (const entry of entries) {
+    const entryPath = resolve(currentDir, entry.name);
+
+    if (entry.isDirectory() || entry.isSymbolicLink()) {
+      const guarded = (await authorizeRoutePath(
+        ctx,
+        sessionsRoot,
+        entryPath,
+        "read",
+        `${sourcePrefix}.project`,
+      )).path;
+
+      let stat;
+      try {
+        stat = statSync(guarded);
+      } catch {
+        continue;
+      }
+
+      if (stat.isDirectory()) {
+        files.push(...await collectAuthorizedUsageSessionFiles(ctx, sessionsRoot, guarded, sourcePrefix));
+      } else if (entry.name.endsWith(".jsonl")) {
+        files.push(guarded);
+      }
+      continue;
+    }
+
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+    files.push((await authorizeRoutePath(
+      ctx,
+      sessionsRoot,
+      entryPath,
+      "read",
+      `${sourcePrefix}.file`,
+    )).path);
+  }
+
+  return files;
 }

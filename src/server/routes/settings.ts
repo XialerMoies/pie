@@ -1,12 +1,11 @@
 /**
  * Settings routes — API keys, model switching, settings persistence
  */
-import type { RouteHandler } from "./types";
+import type { RouteHandler } from "./types.js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import { resolve } from "path";
-import { parseBody } from "./parse-body";
-import { writePathGuardError } from "./path-guard";
-import { authorizeRoutePath, writeServerPermissionError } from "../permission-service";
+import { parseBody } from "./parse-body.js";
+import { writePathGuardError } from "./path-guard.js";
+import { authorizeRoutePath, writeServerPermissionError } from "../permission-service.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
@@ -18,19 +17,35 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
 
   // List available models (only those with configured API key in auth.json)
   if (url === "/api/models") {
-    const all = modelRegistry.getAvailable();
-    // Read auth.json to see which providers have keys configured in storage (not env vars)
-    let configuredProviders: string[] = [];
     try {
-      const authRaw = readFileSync(resolve(p.DATA_DIR, "pi", "auth.json"), "utf-8");
-      const auth = JSON.parse(authRaw);
-      configuredProviders = Object.keys(auth).filter(k => auth[k]?.apiKey);
-    } catch { /* no auth.json yet */ }
-    const filtered = configuredProviders.length === 0
-      ? all.map((m: { provider: string; id: string }) => ({ provider: (m as { provider: string; id: string }).provider, id: (m as { provider: string; id: string }).id }))  // first run: show all
-      : all.filter((m: { provider: string }) => configuredProviders.includes((m as { provider: string }).provider)).map((m: { provider: string; id: string }) => ({ provider: m.provider, id: m.id }));
-    res.writeHead(200, { "Content-Type": "application/json", ...cors });
-    res.end(JSON.stringify({ models: filtered }));
+      const all = modelRegistry.getAvailable();
+      // Read auth.json to see which providers have keys configured in storage (not env vars)
+      let configuredProviders: string[] = [];
+      try {
+        if (existsSync(p.PI_CONFIG_DIR)) {
+          const authFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "auth.json", "read", "settings.models.auth")).path;
+          if (existsSync(authFile)) {
+            const authRaw = readFileSync(authFile, "utf-8");
+            const auth = JSON.parse(authRaw);
+            configuredProviders = Object.keys(auth).filter(k => auth[k]?.apiKey);
+          }
+        }
+      } catch (err: unknown) {
+        if (writeServerPermissionError(res, cors, err)) return true;
+        if (writePathGuardError(res, cors, err)) return true;
+        configuredProviders = [];
+      }
+      const filtered = configuredProviders.length === 0
+        ? all.map((m: { provider: string; id: string }) => ({ provider: (m as { provider: string; id: string }).provider, id: (m as { provider: string; id: string }).id }))  // first run: show all
+        : all.filter((m: { provider: string }) => configuredProviders.includes((m as { provider: string }).provider)).map((m: { provider: string; id: string }) => ({ provider: m.provider, id: m.id }));
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ models: filtered }));
+    } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
+      res.writeHead(400, { ...cors });
+      res.end(JSON.stringify({ error: (err as Error).message }));
+    }
     return true;
   }
 
@@ -60,7 +75,7 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
   // Get auth keys
   if (url === "/api/auth" && method === "GET") {
     try {
-      const authFile = resolve(p.PI_CONFIG_DIR, "auth.json");
+      const authFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "auth.json", "read", "settings.auth.read")).path;
       const authData = existsSync(authFile) ? JSON.parse(readFileSync(authFile, "utf-8")) : {};
       const providerKeys = Object.keys(authData).map((provider) => ({
         provider,
@@ -70,6 +85,8 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ providers: providerKeys }));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }

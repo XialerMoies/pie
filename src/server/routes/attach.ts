@@ -5,8 +5,8 @@
  */
 import { readFileSync, readdirSync, type Dirent } from "fs";
 import { resolve, relative } from "path";
-import { guardPathWithinRoot, isPathGuardError } from "./path-guard";
-import { authorizeRoutePath, type ServerPermissionService } from "../permission-service";
+import { guardPathWithinRoot, isPathGuardError } from "./path-guard.js";
+import { authorizeRoutePath, type ServerPermissionService } from "../permission-service.js";
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -40,27 +40,42 @@ function isTextFile(filePath: string): boolean {
   } catch { return false; }
 }
 
-/** Walk a directory, returning text file paths (relative) */
-function walkFolder(dir: string, baseDir: string, maxFiles: number): string[] {
+/** Walk a directory, returning text file paths (relative to workspace). */
+async function walkFolder(dir: string, baseDir: string, maxFiles: number, permissionService?: ServerPermissionService): Promise<string[]> {
   const results: string[] = [];
-  function walk(current: string) {
+  const root = resolve(baseDir);
+
+  async function authorizeWalkPath(current: string, source: string): Promise<string | null> {
+    try {
+      const rel = relative(root, current).replace(/\\/g, "/");
+      return (await authorizeRoutePath({ permissionService }, root, rel || ".", "read", source)).path;
+    } catch {
+      return null;
+    }
+  }
+
+  async function walk(current: string) {
     if (results.length >= maxFiles) return;
+    const authorizedCurrent = await authorizeWalkPath(current, "chat.attachment.folder.dir");
+    if (!authorizedCurrent) return;
     let entries: Dirent[];
-    try { entries = readdirSync(current, { withFileTypes: true }); } catch { return; }
+    try { entries = readdirSync(authorizedCurrent, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
       if (results.length >= maxFiles) return;
       if (ATTACH_EXCLUDE_DIRS.has(e.name)) continue;
       if (e.name.startsWith('.')) continue;
-      const full = resolve(current, e.name);
+      const full = resolve(authorizedCurrent, e.name);
       if (e.isDirectory()) {
-        walk(full);
+        await walk(full);
       } else if (e.isFile()) {
-        const rel = relative(baseDir, full).replace(/\\/g, '/');
-        if (isTextFile(full)) results.push(rel);
+        const authorizedFile = await authorizeWalkPath(full, "chat.attachment.folder");
+        if (!authorizedFile) continue;
+        const rel = relative(root, authorizedFile).replace(/\\/g, '/');
+        if (isTextFile(authorizedFile)) results.push(rel);
       }
     }
   }
-  walk(baseDir);
+  await walk(dir);
   return results.slice(0, maxFiles);
 }
 
@@ -96,7 +111,7 @@ export async function processAttachments(atts: Array<Record<string, unknown>>, w
     }
 
     if (kind === 'folder') {
-      const files = walkFolder(fullPath, ws, ATTACH_FOLDER_MAX_FILES);
+      const files = await walkFolder(fullPath, ws, ATTACH_FOLDER_MAX_FILES, permissionService);
       let folderBytes = 0;
       for (const relPath of files) {
         if (totalBytes >= ATTACH_TOTAL_MAX_BYTES) break;

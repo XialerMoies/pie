@@ -5,7 +5,7 @@
  *
  * 崩溃恢复：pi-server 退出时自动重启，定期健康检查
  */
-import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, shell, type IpcMainInvokeEvent } from "electron";
 import { spawn, execSync, type ChildProcess } from "child_process";
 import { randomBytes } from "crypto";
 import * as http from "http";
@@ -20,11 +20,21 @@ const __dirname = path.dirname(__filename);
 // ─── 便携路径 ──────────────────────────────────────────────────────
 const APP_ROOT = app.getAppPath();
 const RUNTIME_ROOT = app.isPackaged ? path.dirname(process.execPath) : APP_ROOT;
-const DATA_DIR = path.join(RUNTIME_ROOT, "data");
+const E2E_RESULT_FILE = process.env.NODE_ENV === "test" && process.env.MY_CODE_AGENT_E2E_RESULT_FILE
+  ? path.resolve(process.env.MY_CODE_AGENT_E2E_RESULT_FILE)
+  : null;
+const E2E_DATA_DIR = E2E_RESULT_FILE && process.env.MY_CODE_AGENT_E2E_DATA_DIR
+  ? path.resolve(process.env.MY_CODE_AGENT_E2E_DATA_DIR)
+  : null;
+const E2E_MODE = app.isPackaged && !!E2E_RESULT_FILE;
+delete process.env.MY_CODE_AGENT_E2E_RESULT_FILE;
+delete process.env.MY_CODE_AGENT_E2E_DATA_DIR;
+const DATA_DIR = E2E_DATA_DIR || path.join(RUNTIME_ROOT, "data");
 const PI_CONFIG_DIR = path.join(DATA_DIR, "pi");
 const SESSIONS_DIR = path.join(PI_CONFIG_DIR, "sessions");
 const AUTH_FILE = path.join(PI_CONFIG_DIR, "auth.json");
-const DESKTOP_SECURITY_TOKEN = randomBytes(32).toString("base64url");
+const DESKTOP_SECURITY_TOKEN = process.env.MY_CODE_AGENT_DESKTOP_TOKEN || randomBytes(32).toString("base64url");
+delete process.env.MY_CODE_AGENT_DESKTOP_TOKEN;
 const trustedDesktopRoots = new TrustedDesktopRoots();
 
 function ensureDir(dir: string) {
@@ -73,6 +83,100 @@ let mainWindow: BrowserWindow | null = null;
 let restartCount = 0;
 const MAX_RESTART_COUNT = 5;
 let healthCheckTimer: ReturnType<typeof setInterval> | null = null;
+let e2eProbeStarted = false;
+const e2eDiagnostics: string[] = [];
+
+function requestStatus(url: string): Promise<number> {
+  return new Promise((resolveStatus, reject) => {
+    const request = http.get(url, (response) => {
+      response.resume();
+      resolveStatus(response.statusCode || 0);
+    });
+    request.once("error", reject);
+    request.setTimeout(5000, () => request.destroy(new Error("E2E HTTP request timed out")));
+  });
+}
+
+async function waitForRendererReady(win: BrowserWindow): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  let snapshot: unknown = null;
+  while (Date.now() < deadline) {
+    snapshot = await win.webContents.executeJavaScript(
+      `({
+        readyState: document.readyState,
+        pageUrl: location.href,
+        electronApiType: typeof window.electronAPI,
+        appChildCount: document.querySelector('#app')?.childElementCount ?? -1,
+        bodyText: document.body?.innerText?.slice(0, 300) || '',
+        bootstrapApiType: typeof window.bootstrapApi,
+        layoutType: typeof window.layout,
+        appStateType: typeof window.App?.State,
+        scripts: Array.from(document.scripts).map((script) => script.src || '[inline]'),
+      })`,
+      true,
+    );
+    const state = snapshot as { electronApiType?: string; appChildCount?: number };
+    if (state.electronApiType === "object" && Number(state.appChildCount) > 0) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+  throw new Error(`Renderer did not finish dashboard bootstrap within 30 seconds: ${JSON.stringify(snapshot)}`);
+}
+
+async function collectRendererE2EResult(win: BrowserWindow): Promise<Record<string, unknown>> {
+  return win.webContents.executeJavaScript(`(async () => {
+    const api = window.electronAPI;
+    const preloadMethods = api ? Object.keys(api).sort() : [];
+    const token = api?.getDesktopSessionToken ? await api.getDesktopSessionToken() : '';
+    const response = await fetch('/api/dashboard', {
+      cache: 'no-store',
+      headers: token ? { 'X-My-Code-Agent-Token': token } : {},
+    });
+    const popup = window.open('https://example.com', '_blank');
+    return {
+      appRendered: Boolean(document.querySelector('#app')?.childElementCount),
+      apiStatus: response.status,
+      desktopTokenPresent: typeof token === 'string' && token.length > 0,
+      nodeRequireType: typeof globalThis.require,
+      inlineHandlerCount: document.querySelectorAll('[onclick],[onchange],[oninput],[onsubmit]').length,
+      popupOpened: popup !== null,
+      preloadMethods,
+    };
+  })()`, true);
+}
+
+function writeE2EResult(result: Record<string, unknown>): void {
+  if (!E2E_RESULT_FILE) return;
+  ensureDir(path.dirname(E2E_RESULT_FILE));
+  fs.writeFileSync(E2E_RESULT_FILE, JSON.stringify(result, null, 2), "utf-8");
+}
+
+async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
+  if (!E2E_MODE || e2eProbeStarted) return;
+  e2eProbeStarted = true;
+  try {
+    await waitForRendererReady(win);
+    const renderer = await collectRendererE2EResult(win);
+    const unauthorizedApiStatus = await requestStatus(`http://127.0.0.1:${serverPort}/api/dashboard`);
+    writeE2EResult({
+      ok: true,
+      packaged: app.isPackaged,
+      pageUrl: win.webContents.getURL(),
+      pageTitle: win.webContents.getTitle(),
+      renderer,
+      unauthorizedApiStatus,
+      windowCount: BrowserWindow.getAllWindows().length,
+    });
+  } catch (error) {
+    writeE2EResult({
+      ok: false,
+      error: error instanceof Error ? error.stack || error.message : String(error),
+      diagnostics: e2eDiagnostics,
+    });
+  } finally {
+    stopPiServer();
+    app.quit();
+  }
+}
 
 function getAppIconPath(): string | undefined {
   const candidates = [
@@ -290,7 +394,7 @@ function createWindow() {
 
   // ready-to-show 未触发时的兜底：5 秒后强制显示
   const showTimer = setTimeout(() => {
-    if (mainWindow && !mainWindow.isVisible()) {
+    if (!E2E_MODE && mainWindow && !mainWindow.isVisible()) {
       console.log("⏰ Force-showing window (ready-to-show timeout)");
       mainWindow.show();
     }
@@ -298,22 +402,29 @@ function createWindow() {
 
   mainWindow.once("ready-to-show", () => {
     clearTimeout(showTimer);
-    mainWindow?.show();
+    if (!E2E_MODE) mainWindow?.show();
     console.log("✅ Window ready");
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
+    if (mainWindow) void runPackagedE2EProbe(mainWindow);
     console.log("📄 Page loaded:", mainWindow?.webContents.getTitle());
   });
 
   mainWindow.webContents.on("did-fail-load", (_event: unknown, errorCode: number, errorDescription: string, url: string) => {
+    if (E2E_MODE) e2eDiagnostics.push(`did-fail-load ${errorCode} ${errorDescription} ${url}`);
     console.error(`❌ Window load failed: ${errorDescription} (code: ${errorCode}) url: ${url}`);
   });
 
   mainWindow.webContents.on("console-message" as any, (_event: Electron.Event, level: number, message: string, line: number, sourceId: number) => {
+    if (E2E_MODE) e2eDiagnostics.push(`console[${level}] ${sourceId}:${line} ${message}`);
     if (message.includes("404") || message.includes("Failed") || message.includes("Error")) {
       console.warn(`[page:${sourceId}:${line}] ${message}`);
     }
+  });
+
+  mainWindow.webContents.on("preload-error" as any, (_event: Electron.Event, preloadPath: string, error: Error) => {
+    if (E2E_MODE) e2eDiagnostics.push(`preload-error ${preloadPath}: ${error.stack || error.message}`);
   });
 
   mainWindow.once("focus", () => console.log("🔲 Window focused"));
@@ -339,6 +450,16 @@ function spawnCliTerminal(): boolean {
   return true;
 }
 
+function getDesktopSessionToken(event: unknown): string {
+  const ipcEvent = event as IpcMainInvokeEvent;
+  const sender = ipcEvent.sender;
+  const senderUrl = ipcEvent.senderFrame?.url || sender?.getURL?.() || "";
+  if (!mainWindow || sender !== mainWindow.webContents || !isAllowedAppUrl(senderUrl)) {
+    throw new Error("Desktop session token request is not from the trusted app window");
+  }
+  return DESKTOP_SECURITY_TOKEN;
+}
+
 registerDesktopIpcHandlers({
   ipcMain,
   getMainWindow: () => mainWindow,
@@ -347,6 +468,7 @@ registerDesktopIpcHandlers({
   showItemInFolder: (filePath) => shell.showItemInFolder(filePath),
   trashItem: (filePath) => shell.trashItem(filePath),
   spawnTerminal: spawnCliTerminal,
+  getDesktopSessionToken,
   trustedRoots: trustedDesktopRoots,
 });
 

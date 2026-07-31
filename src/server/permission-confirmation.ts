@@ -1,6 +1,6 @@
 import type { ServerResponse } from "http";
-import type { CommandConfirmationResult } from "../agent/types";
-import type { ServerPermissionConfirmationRequest } from "./permission-service";
+import type { CommandConfirmationResult } from "../agent/types.js";
+import type { ServerPermissionConfirmationRequest } from "./permission-service.js";
 
 const PERMISSION_CONFIRM_TIMEOUT_MS = 120_000;
 

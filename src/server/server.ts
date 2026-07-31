@@ -7,26 +7,42 @@
  *   PI_DESKTOP_CONFIG  - pi 配置目录
  *   PI_DESKTOP_SESSIONS - 会话目录
  */
-import { initAgent, type AgentRuntime } from "../agent/index";
+import { initAgent, type AgentRuntime } from "../agent/index.js";
 import { createServer } from "http";
 import { resolve, dirname } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { appendFileSync, readFileSync, writeFileSync, existsSync, statSync, watch } from "fs";
-import { dispatchRoute } from "./routes/index";
-import { createCommandConfirmCallback } from "./routes/chat";
-import type { ServerContext, ChatStreamState, TraceEvent, AssistantBlock } from "./routes/types";
-import { TsserverManager } from "./ts-server";
-import { mark, logTiming } from "./timing";
-import { shellDialectFromEnv } from "../agent/tools/command/shell-parser";
-import { createSessionPermissionState } from "../agent/permissions";
-import { authorizeLocalApiRequest, clearDesktopSessionTokenEnv, createDesktopSecurityConfig, installSecurityHeaders, isApiPreflight, writeSecurityError } from "./security";
-import { ServerPermissionService } from "./permission-service";
-import { cancelPermissionConfirmationsForResponse, createPermissionConfirmCallback } from "./permission-confirmation";
-import { FilePermissionAuditStore } from "./permission-audit-store";
+import { dispatchRoute } from "./routes/index.js";
+import { createCommandConfirmCallback } from "./routes/chat.js";
+import type { ServerContext, ChatStreamState, TraceEvent, AssistantBlock } from "./routes/types.js";
+import { TsserverManager } from "./ts-server.js";
+import { mark, logTiming } from "./timing.js";
+import { shellDialectFromEnv } from "../agent/tools/command/shell-parser.js";
+import { createSessionPermissionState } from "../agent/permissions.js";
+import { authorizeLocalApiRequest, clearDesktopSessionTokenEnv, createDesktopSecurityConfig, installSecurityHeaders, isApiPreflight, writeSecurityError } from "./security.js";
+import { authorizeRoutePath, ServerPermissionService } from "./permission-service.js";
+import { cancelPermissionConfirmationsForResponse, createPermissionConfirmCallback } from "./permission-confirmation.js";
+import { FilePermissionAuditStore } from "./permission-audit-store.js";
+import { contentTypeForStaticAsset, resolveStaticAssetPath } from "./static-assets.js";
+
+export type SessionWriteAuthorizer = (sessionFile: string, source: string) => void;
+
+export interface SessionPersistenceOptions {
+  persist?: boolean;
+  force?: boolean;
+  minIntervalMs?: number;
+  authorizeSessionWrite?: SessionWriteAuthorizer;
+}
+
 // 不再移动活跃 session 文件——只在 header 标记 workspace
-export function tagSessionHeader(sessionFile: string | undefined, ws: string): void {
+export function tagSessionHeader(
+  sessionFile: string | undefined,
+  ws: string,
+  authorizeSessionWrite?: SessionWriteAuthorizer,
+): void {
   if (!sessionFile) return
   try {
+    authorizeSessionWrite?.(sessionFile, "sessions.header");
     const content = readFileSync(sessionFile, "utf-8")
     const lines = content.trim().split("\n")
     const header = JSON.parse(lines[0])
@@ -45,7 +61,8 @@ const PI_CONFIG_DIR = process.env.PI_DESKTOP_CONFIG || resolve(APP_ROOT, "data",
 const SESSIONS_DIR = process.env.PI_DESKTOP_SESSIONS || resolve(APP_ROOT, "data", "pi", "sessions");
 const SETTINGS_FILE = resolve(PI_CONFIG_DIR, "settings.json");
 const FRONTEND_DIR = resolve(APP_ROOT, "dist", "frontend");
-const HAS_BUILT_FRONTEND = existsSync(resolve(FRONTEND_DIR, "index.html"));
+const FRONTEND_ENTRY_FILE = "dashboard.html";
+const HAS_BUILT_FRONTEND = existsSync(resolve(FRONTEND_DIR, FRONTEND_ENTRY_FILE));
 const FRONTEND_SRC_DIR = resolve(APP_ROOT, "src", "frontend");
 
 // ─── 启动 Pi ──────────────────────────────────────────────────────
@@ -123,14 +140,18 @@ function cleanupTracePersistState(turnId: string): void {
   }
 }
 
-export function flushPendingTracePersist(runtime: AgentRuntime, turnId: string): void {
+export function flushPendingTracePersist(
+  runtime: AgentRuntime,
+  turnId: string,
+  options?: SessionPersistenceOptions,
+): void {
   if (!turnId) return;
   const entries = [...pendingTracePersist.entries()]
     .filter(([key]) => key.startsWith(`${turnId}:`))
     .map(([, trace]) => trace)
     .sort((a, b) => (a.seq || 0) - (b.seq || 0));
   for (const trace of entries) {
-    persistTraceEvent(runtime, trace, { force: true });
+    persistTraceEvent(runtime, trace, { ...options, force: true });
     pendingTracePersist.delete(tracePersistKey(trace));
   }
 }
@@ -144,7 +165,11 @@ function blockPersistKey(block: AssistantBlock): string {
   return `${block.turnId}:${block.blockId}`;
 }
 
-export function persistBlockEvent(runtime: AgentRuntime, block: AssistantBlock): boolean {
+export function persistBlockEvent(
+  runtime: AgentRuntime,
+  block: AssistantBlock,
+  options?: SessionPersistenceOptions,
+): boolean {
   const sessionFile = runtime.session.sessionFile;
   if (!sessionFile || !block.turnId) return false;
   const sessionFlushed = Boolean((runtime.session.sessionManager as any)?.flushed);
@@ -153,6 +178,7 @@ export function persistBlockEvent(runtime: AgentRuntime, block: AssistantBlock):
     return false;
   }
   try {
+    options?.authorizeSessionWrite?.(sessionFile, "sessions.assistant_block");
     appendFileSync(sessionFile, JSON.stringify({
       type: "assistant_block",
       turnId: block.turnId,
@@ -166,29 +192,42 @@ export function persistBlockEvent(runtime: AgentRuntime, block: AssistantBlock):
   return false;
 }
 
-export function flushPendingBlockPersist(runtime: AgentRuntime, turnId: string): void {
+export function flushPendingBlockPersist(
+  runtime: AgentRuntime,
+  turnId: string,
+  options?: SessionPersistenceOptions,
+): void {
   if (!turnId) return;
   const entries = [...pendingBlockPersist.entries()]
     .filter(([key]) => key.startsWith(`${turnId}:`))
     .map(([, block]) => block)
     .sort((a, b) => (a.seq || 0) - (b.seq || 0));
   for (const block of entries) {
-    persistBlockEvent(runtime, block);
+    persistBlockEvent(runtime, block, options);
   }
 }
 
-export function emitBlock(runtime: AgentRuntime, chatStream: ChatStreamState, block: AssistantBlock, options?: { persist?: boolean }): void {
+export function emitBlock(
+  runtime: AgentRuntime,
+  chatStream: ChatStreamState,
+  block: AssistantBlock,
+  options?: SessionPersistenceOptions,
+): void {
   const idx = chatStream.blocks.findIndex(b => b.blockId === block.blockId);
   if (idx >= 0) chatStream.blocks[idx] = block;
   else chatStream.blocks.push(block);
   if (options?.persist !== false) {
-    persistBlockEvent(runtime, block);
+    persistBlockEvent(runtime, block, options);
   }
   try {
     chatStream.response?.write(`data: ${JSON.stringify({ type: "block", block })}\n\n`);
   } catch { /* ignore */ }
 }
-export function persistTraceEvent(runtime: AgentRuntime, trace: TraceEvent, options?: { force?: boolean; minIntervalMs?: number }): boolean {
+export function persistTraceEvent(
+  runtime: AgentRuntime,
+  trace: TraceEvent,
+  options?: SessionPersistenceOptions,
+): boolean {
   const sessionFile = runtime.session.sessionFile;
   if (!sessionFile || !trace.turnId) return false;
   const sessionFlushed = Boolean((runtime.session.sessionManager as any)?.flushed);
@@ -207,6 +246,7 @@ export function persistTraceEvent(runtime: AgentRuntime, trace: TraceEvent, opti
   if (!force && minIntervalMs > 0 && last && now - last.lastWriteAt < minIntervalMs) return false;
 
   try {
+    options?.authorizeSessionWrite?.(sessionFile, "sessions.trace");
     appendFileSync(sessionFile, JSON.stringify({
       type: "trace",
       turnId: trace.turnId,
@@ -221,7 +261,12 @@ export function persistTraceEvent(runtime: AgentRuntime, trace: TraceEvent, opti
   return false;
 }
 
-export function emitTrace(runtime: AgentRuntime, chatStream: ChatStreamState, trace: TraceEvent, options?: { force?: boolean; minIntervalMs?: number }): void {
+export function emitTrace(
+  runtime: AgentRuntime,
+  chatStream: ChatStreamState,
+  trace: TraceEvent,
+  options?: SessionPersistenceOptions,
+): void {
   const turnId = trace.turnId || chatStream.turnId;
   if (!turnId) return;
   const normalized = assignTraceSeq(chatStream, { ...trace, turnId } as TraceEvent);
@@ -231,7 +276,17 @@ export function emitTrace(runtime: AgentRuntime, chatStream: ChatStreamState, tr
   } catch { /* ignore */ }
 }
 
-export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStreamState): void {
+export function attachSessionEvents(
+  runtime: AgentRuntime,
+  chatStream: ChatStreamState,
+  ctx?: ServerContext,
+): void {
+  const authorizeSessionWrite: SessionWriteAuthorizer | undefined = ctx?.permissionService
+    ? (sessionFile, source) => {
+      ctx.permissionService!.authorizePathSync(ctx.paths.SESSIONS_DIR, sessionFile, "write", source);
+    }
+    : undefined;
+
   runtime.onEvent((event: any) => {
     if (!chatStream.response && event.type !== "agent_end") return;
 
@@ -240,10 +295,10 @@ export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStrea
 
     // lifecycle 步骤不再生成 step 事件（旧 session 仍可回放，新 session 不再写入）
     if (event.type === "message_end" && event.message?.role === "toolResult") {
-      flushPendingTracePersist(runtime, turnId);
+      flushPendingTracePersist(runtime, turnId, { authorizeSessionWrite });
     }
     if (event.type === "turn_end") {
-      flushPendingTracePersist(runtime, turnId);
+      flushPendingTracePersist(runtime, turnId, { authorizeSessionWrite });
     }
 
     // ─── Tool trace ─────────────────────────────────────────
@@ -257,7 +312,7 @@ export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStrea
           turnId,
           id: tid,
         };
-        emitTrace(runtime, chatStream, trace, { force: true });
+        emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
         const seq = nextBlockSeq(chatStream);
         const block: AssistantBlock = {
           type: "tool_use", status: "running",
@@ -268,7 +323,7 @@ export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStrea
           blockId: "tool-" + seq,
           seq,
         };
-        emitBlock(runtime, chatStream, block);
+        emitBlock(runtime, chatStream, block, { authorizeSessionWrite });
       }
     }
 
@@ -282,7 +337,7 @@ export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStrea
         turnId,
         id: tid,
       };
-      emitTrace(runtime, chatStream, trace, { minIntervalMs: 250 });
+      emitTrace(runtime, chatStream, trace, { minIntervalMs: 250, authorizeSessionWrite });
       if (event.partialResult) {
         const toolBlock = chatStream.blocks.find(
           (b): b is AssistantBlock & { type: "tool_use" } => b.type === "tool_use" && b.toolCallId === event.toolCallId
@@ -317,7 +372,7 @@ export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStrea
           turnId,
           id: tid,
         };
-        emitTrace(runtime, chatStream, trace, { force: true });
+        emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
         const flowBlock2 = chatStream.blocks.find(
           (b): b is AssistantBlock & { type: "tool_use" } =>
             b.type === "tool_use" && b.toolCallId === event.toolCallId
@@ -332,7 +387,7 @@ export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStrea
           blockId: "result-" + seq,
           seq,
         };
-        emitBlock(runtime, chatStream, block);
+        emitBlock(runtime, chatStream, block, { authorizeSessionWrite });
       }
     }
 
@@ -380,7 +435,7 @@ export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStrea
             turnId,
             id: tidThinking,
           };
-          emitTrace(runtime, chatStream, trace, { minIntervalMs: 250 });
+          emitTrace(runtime, chatStream, trace, { minIntervalMs: 250, authorizeSessionWrite });
           // 同步更新 thinking block（流式不持久化）
           const block: AssistantBlock = {
             type: "thinking",
@@ -406,22 +461,22 @@ export function attachSessionEvents(runtime: AgentRuntime, chatStream: ChatStrea
       const tidThinking = "thinking@" + turnId;
       if (chatStream.thinkingBuffer && turnId) {
         const trace: TraceEvent = { type: "thinking", status: "done", text: chatStream.thinkingBuffer, turnId, id: tidThinking };
-        flushPendingTracePersist(runtime, turnId);
-        emitTrace(runtime, chatStream, trace, { force: true });
+        flushPendingTracePersist(runtime, turnId, { authorizeSessionWrite });
+        emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
       }
-      flushPendingTracePersist(runtime, turnId);
-      flushPendingBlockPersist(runtime, turnId);
+      flushPendingTracePersist(runtime, turnId, { authorizeSessionWrite });
+      flushPendingBlockPersist(runtime, turnId, { authorizeSessionWrite });
 
       // 持久化流式 text / thinking block（之前 persist: false 未落盘）
       for (const block of chatStream.blocks) {
         if (block.type === "text" || block.type === "thinking") {
-          persistBlockEvent(runtime, block);
+          persistBlockEvent(runtime, block, { authorizeSessionWrite });
         }
       }
 
       if (ws) {
         console.log(`  agent_end: tagging workspace "${ws}" session=${sessionId}`);
-        tagSessionHeader(runtime.session.sessionFile, ws);
+        tagSessionHeader(runtime.session.sessionFile, ws, authorizeSessionWrite);
       }
 
       try {
@@ -487,43 +542,10 @@ async function main() {
   console.log("Pi session ready");
   mark("agent_ready");
 
-  // ─── 启动恢复：切换到上次活跃 workspace ──────────────────────
-  try {
-    const uiStateFile = resolve(PI_CONFIG_DIR, "ui-state.json");
-    if (existsSync(uiStateFile)) {
-      const uiData = JSON.parse(readFileSync(uiStateFile, "utf-8"));
-      const workspaces = uiData.workspaces || {};
-      for (const [ws, state] of Object.entries(workspaces) as any) {
-        if (ws !== "_default" && state.activeView?.type === "session" && state.activeView?.id) {
-          console.log(`[startup] 恢复 workspace: "${ws}", session: ${state.activeView.id}`);
-          const { findSessionFileById } = await import("./routes/sessions");
-          const sessionFile = findSessionFileById(SESSIONS_DIR, state.activeView.id);
-          if (sessionFile) {
-            // openSession 内部处理跨 workspace 切换，无需额外 switchWorkspace
-            await runtime.openSession(sessionFile, ws);
-          } else {
-            // 找不到 session 文件则只切 workspace
-            await runtime.switchWorkspace(ws);
-          }
-          break;
-        }
-      }
-    }
-  } catch (e) {
-    console.log(`[startup] 恢复失败: ${e}`);
-  }
-
-  attachSessionEvents(runtime, chatStream);
-
-  // ─── tsserver（TypeScript 语言服务，延迟启动）────────────────────
-  const tsServer = new TsserverManager();
-
-  // ─── 上下文对象 ──────────────────────────────────────────────────
-  const ctx: ServerContext = {
+  const baseCtx: ServerContext = {
     runtime,
     chatStream,
     sseClients,
-    tsServer,
     security,
     permissionService,
     paths: {
@@ -536,6 +558,59 @@ async function main() {
       FRONTEND_SRC_DIR,
       HAS_BUILT_FRONTEND,
     },
+  };
+
+  // ─── 启动恢复：切换到上次活跃 workspace ──────────────────────
+  try {
+    const uiStateFile = (await authorizeRoutePath(
+      baseCtx,
+      PI_CONFIG_DIR,
+      "ui-state.json",
+      "read",
+      "ui-state.startup.restore",
+    )).path;
+    if (existsSync(uiStateFile)) {
+      const uiData = JSON.parse(readFileSync(uiStateFile, "utf-8"));
+      const workspaces = uiData.workspaces || {};
+      const activeWorkspace = typeof uiData.activeWorkspace === "string" ? uiData.activeWorkspace : "";
+      const activeState = activeWorkspace && activeWorkspace !== "_default" ? workspaces[activeWorkspace] : undefined;
+      const candidates = activeState
+        ? [[activeWorkspace, activeState]]
+        : Object.entries(workspaces).filter(([ws, state]: any) => (
+            ws !== "_default" && state.activeView?.type === "session" && state.activeView?.id
+          ));
+      for (const [ws, state] of candidates as any) {
+        if (ws !== "_default") {
+          console.log(`[startup] 恢复 workspace: "${ws}", session: ${state.activeView?.id || "none"}`);
+          if (state.activeView?.type === "session" && state.activeView?.id) {
+            const { findAuthorizedSessionFileById } = await import("./routes/sessions.js");
+            const sessionFile = await findAuthorizedSessionFileById(baseCtx, state.activeView.id, "sessions.startup.restore");
+            if (sessionFile) {
+              // openSession 内部处理跨 workspace 切换，无需额外 switchWorkspace
+              await runtime.openSession(sessionFile, ws);
+            } else {
+              await runtime.switchWorkspace(ws);
+            }
+          } else {
+            await runtime.switchWorkspace(ws);
+          }
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    console.log(`[startup] 恢复失败: ${e}`);
+  }
+
+  attachSessionEvents(runtime, chatStream, baseCtx);
+
+  // ─── tsserver（TypeScript 语言服务，延迟启动）────────────────────
+  const tsServer = new TsserverManager();
+
+  // ─── 上下文对象 ──────────────────────────────────────────────────
+  const ctx: ServerContext = {
+    ...baseCtx,
+    tsServer,
   };
 
   // ─── HTTP 服务器 ─────────────────────────────────────────────
@@ -566,7 +641,7 @@ async function main() {
     const reqPath = url.includes("?") ? url.slice(0, url.indexOf("?")) : url;
     if (reqPath.startsWith("/icons/") && reqPath.endsWith(".svg")) {
       try {
-        const iconFile = resolve(FRONTEND_SRC_DIR, reqPath.slice(1));
+        const iconFile = resolveStaticAssetPath(FRONTEND_SRC_DIR, reqPath);
         const content = readFileSync(iconFile);
         res.writeHead(200, { "Content-Type": "image/svg+xml", "Cache-Control": "max-age=3600" });
         res.end(content);
@@ -579,12 +654,11 @@ async function main() {
 
     // 静态文件 — 构建产物优先，无则从 src/ 回退
     if (HAS_BUILT_FRONTEND) {
-      const filePath = url === "/" ? "/index.html" : url;
-      const fullPath = resolve(FRONTEND_DIR, filePath.slice(1));
+      const filePath = reqPath === "/" ? `/${FRONTEND_ENTRY_FILE}` : reqPath;
+      const fullPath = resolveStaticAssetPath(FRONTEND_DIR, filePath);
       if (existsSync(fullPath) && statSync(fullPath).isFile()) {
-        const ext = fullPath.endsWith(".css") ? "css" : "javascript";
-        const content = readFileSync(fullPath, fullPath.endsWith(".html") ? "utf-8" : "utf-8");
-        res.writeHead(200, { "Content-Type": `text/${ext}; charset=utf-8` });
+        const content = readFileSync(fullPath);
+        res.writeHead(200, { "Content-Type": contentTypeForStaticAsset(fullPath) });
         res.end(content);
         return;
       }
@@ -593,9 +667,9 @@ async function main() {
       const pathname = url.includes("?") ? url.slice(0, url.indexOf("?")) : url;
       if ((pathname.startsWith("/dashboard") || pathname.startsWith("/ui/") || pathname.startsWith("/pane/") || pathname.startsWith("/service/") || pathname.startsWith("/devicon") || pathname.startsWith("/fonts/") || pathname.startsWith("/devicon-colors") || pathname.startsWith("/icons/") || pathname.startsWith("/core/") || pathname.startsWith("/shell/") || pathname.startsWith("/services/")) && (pathname.endsWith(".css") || pathname.endsWith(".js") || pathname.endsWith(".svg") || pathname.endsWith(".woff") || pathname.endsWith(".woff2"))) {
         const ext = pathname.endsWith(".css") ? "css" : pathname.endsWith(".svg") ? "svg+xml" : pathname.endsWith(".woff") ? "font/woff" : pathname.endsWith(".woff2") ? "font/woff2" : "javascript";
-        const isText = ext === "css" || ext === "javascript" || ext === "svg+xml";
-        try {
-          const filePath = resolve(FRONTEND_SRC_DIR, pathname.slice(1));
+                const isText = ext === "css" || ext === "javascript" || ext === "svg+xml";
+                try {
+                  const filePath = resolveStaticAssetPath(FRONTEND_SRC_DIR, pathname);
           if (isText) {
             const content = readFileSync(filePath, "utf-8");
             res.writeHead(200, { "Content-Type": `text/${ext}; charset=utf-8` });
@@ -694,7 +768,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
 function getDashboardHTML(ctx: ServerContext): string {
   if (ctx.paths.HAS_BUILT_FRONTEND) {
-    return readFileSync(resolve(ctx.paths.FRONTEND_DIR, "index.html"), "utf-8");
+    return readFileSync(resolve(ctx.paths.FRONTEND_DIR, FRONTEND_ENTRY_FILE), "utf-8");
   }
   return readFileSync(
     resolve(dirname(fileURLToPath(import.meta.url)), "..", "frontend", "dashboard.html"),

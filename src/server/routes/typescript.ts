@@ -14,15 +14,15 @@
  *   POST /api/ts/apply-code-action   { changes: FileCodeEdits[] }
  *   POST /api/ts/organize-imports    { file }
  */
-import type { RouteHandler } from "./types";
-import { parseBody } from "./parse-body";
+import type { RouteHandler } from "./types.js";
+import { parseBody } from "./parse-body.js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import { authorizeRoutePath, writeServerPermissionError } from "../permission-service";
-import { PathGuardError, writePathGuardError } from "./path-guard";
+import { authorizeRoutePath, writeServerPermissionError } from "../permission-service.js";
+import { PathGuardError, writePathGuardError } from "./path-guard.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
-async function getTsServer(ctx: import("./types").ServerContext): Promise<import("../ts-server").TsserverManager> {
+async function getTsServer(ctx: import("./types.js").ServerContext): Promise<import("../ts-server.js").TsserverManager> {
   const tsServer = ctx.tsServer;
   if (!tsServer) throw new Error("TSServer not available");
   if (!tsServer.isRunning()) {
@@ -40,15 +40,20 @@ async function getTsServer(ctx: import("./types").ServerContext): Promise<import
 }
 
 async function authorizeTsFile(
-  ctx: import("./types").ServerContext,
+  ctx: import("./types.js").ServerContext,
   file: unknown,
   operation: "read" | "write",
   source: string,
-): Promise<string> {
+  projectRoot?: unknown,
+): Promise<{ path: string; root: string }> {
   if (typeof file !== "string" || !file.trim()) {
     throw new PathGuardError("Missing 'file'", 400, "missing_file");
   }
-  return (await authorizeRoutePath(ctx, ctx.paths.APP_ROOT, file, operation, source)).path;
+  const root = typeof projectRoot === "string" && projectRoot.trim()
+    ? projectRoot
+    : (ctx.runtime?.currentWorkspace || ctx.paths.APP_ROOT);
+  const guarded = await authorizeRoutePath(ctx, root, file, operation, source);
+  return { path: guarded.path, root: guarded.root };
 }
 
 export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
@@ -61,12 +66,12 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
     try {
       const u = new URL(url, `http://${req.headers.host || "localhost"}`);
       const file = u.searchParams.get("file") || "";
-      const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.diagnostics");
+      const authorized = await authorizeTsFile(ctx, file, "read", "ts.diagnostics", u.searchParams.get("projectRoot"));
       const ts = await getTsServer(ctx);
 
       const [semantic, syntactic] = await Promise.all([
-        ts.sendRequest("semanticDiagnosticsSync", { file: authorizedFile }).catch(() => []),
-        ts.sendRequest("syntacticDiagnosticsSync", { file: authorizedFile }).catch(() => []),
+        ts.sendRequest("semanticDiagnosticsSync", { file: authorized.path }).catch(() => []),
+        ts.sendRequest("syntacticDiagnosticsSync", { file: authorized.path }).catch(() => []),
       ]);
       const all = [...(semantic || []), ...(syntactic || [])];
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
@@ -88,13 +93,13 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
 
     switch (true) {
       case url === "/api/ts/open": {
-        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.open");
+        const authorized = await authorizeTsFile(ctx, file, "read", "ts.open", body.projectRoot);
         const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("open", {
-          file: authorizedFile,
+          file: authorized.path,
           fileContent: body.content || "",
           scriptKindName: body.scriptKindName || "TS",
-          projectRootPath: ctx.paths.APP_ROOT,
+          projectRootPath: authorized.root,
         });
         res.writeHead(200, { ...cors });
         res.end(JSON.stringify({ ok: true }));
@@ -102,13 +107,13 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/change": {
-        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.change");
+        const authorized = await authorizeTsFile(ctx, file, "read", "ts.change", body.projectRoot);
         const ts = await getTsServer(ctx);
         const lines = (body.content || "").split("\n");
         const endLine = lines.length;
         const endOffset = (lines[lines.length - 1] || "").length + 1;
         await ts.sendRequest("change", {
-          file: authorizedFile,
+          file: authorized.path,
           line: 1,
           offset: 1,
           endLine,
@@ -121,19 +126,19 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/close": {
-        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.close");
+        const authorized = await authorizeTsFile(ctx, file, "read", "ts.close", body.projectRoot);
         const ts = await getTsServer(ctx);
-        await ts.sendRequest("close", { file: authorizedFile });
+        await ts.sendRequest("close", { file: authorized.path });
         res.writeHead(200, { ...cors });
         res.end(JSON.stringify({ ok: true }));
         return true;
       }
 
       case url === "/api/ts/completions": {
-        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.completions");
+        const authorized = await authorizeTsFile(ctx, file, "read", "ts.completions", body.projectRoot);
         const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("completionInfo", {
-          file: authorizedFile,
+          file: authorized.path,
           line: body.line,
           offset: body.offset,
           triggerKind: body.triggerKind || 0,
@@ -144,10 +149,10 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/completionDetails": {
-        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.completion-details");
+        const authorized = await authorizeTsFile(ctx, file, "read", "ts.completion-details", body.projectRoot);
         const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("completionEntryDetails", {
-          file: authorizedFile,
+          file: authorized.path,
           line: body.line,
           offset: body.offset,
           entryNames: body.names || [],
@@ -158,10 +163,10 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/quickinfo": {
-        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.quickinfo");
+        const authorized = await authorizeTsFile(ctx, file, "read", "ts.quickinfo", body.projectRoot);
         const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("quickinfo", {
-          file: authorizedFile,
+          file: authorized.path,
           line: body.line,
           offset: body.offset,
         });
@@ -171,10 +176,10 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/definition": {
-        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.definition");
+        const authorized = await authorizeTsFile(ctx, file, "read", "ts.definition", body.projectRoot);
         const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("definitionAndBoundSpan", {
-          file: authorizedFile,
+          file: authorized.path,
           line: body.line,
           offset: body.offset,
         });
@@ -184,10 +189,10 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/references": {
-        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.references");
+        const authorized = await authorizeTsFile(ctx, file, "read", "ts.references", body.projectRoot);
         const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("references", {
-          file: authorizedFile,
+          file: authorized.path,
           line: body.line,
           offset: body.offset,
         });
@@ -199,7 +204,7 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       // ─── Code Actions ──────────────────────────────────
 
       case url === "/api/ts/code-actions": {
-        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.code-actions");
+        const authorized = await authorizeTsFile(ctx, file, "read", "ts.code-actions", body.projectRoot);
         const ts = await getTsServer(ctx);
         const errorCodes: number[] = body.errorCodes || [];
         const startLine = body.line;
@@ -209,7 +214,7 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
 
         if (errorCodes.length === 0) {
           const refactors = await ts.sendRequest("getApplicableRefactors", {
-            file: authorizedFile,
+            file: authorized.path,
             startLine,
             startOffset,
             endLine,
@@ -225,7 +230,7 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
               if (action?.notApplicableReason || action?.isInteractive) continue;
               try {
                 const edits = await ts.sendRequest("getEditsForRefactor", {
-                  file: authorizedFile,
+                  file: authorized.path,
                   startLine,
                   startOffset,
                   endLine,
@@ -258,7 +263,7 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
         }
 
         const fixes = await ts.sendRequest("getCodeFixes", {
-          file: authorizedFile,
+          file: authorized.path,
           startLine,
           startOffset,
           endLine,
@@ -287,7 +292,7 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
         const errors: string[] = [];
 
         for (const edit of changes) {
-          const absPath = await authorizeTsFile(ctx, edit.fileName, "write", "ts.apply-code-action");
+          const absPath = (await authorizeTsFile(ctx, edit.fileName, "write", "ts.apply-code-action", body.projectRoot)).path;
           if (!existsSync(absPath)) {
             errors.push(`File not found: ${edit.fileName}`);
             continue;
@@ -350,10 +355,10 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
 
       case url === "/api/ts/format": {
         const { file, tabSize, useTabs } = body;
-        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.format");
+        const authorized = await authorizeTsFile(ctx, file, "read", "ts.format", body.projectRoot);
         const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("getFormattingEditsForDocument", {
-          file: authorizedFile,
+          file: authorized.path,
           options: {
             tabSize: tabSize ?? 2,
             indentSize: tabSize ?? 2,
@@ -368,10 +373,10 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       }
 
       case url === "/api/ts/organize-imports": {
-        const authorizedFile = await authorizeTsFile(ctx, file, "read", "ts.organize-imports.source");
+        const authorized = await authorizeTsFile(ctx, file, "read", "ts.organize-imports.source", body.projectRoot);
         const ts = await getTsServer(ctx);
         const result = await ts.sendRequest("organizeImports", {
-          file: authorizedFile,
+          file: authorized.path,
           scope: "",
           host: ctx.paths.APP_ROOT,
         });
@@ -381,7 +386,7 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
           const appliedFiles: string[] = [];
           const errors: string[] = [];
           for (const edit of result as any[]) {
-            const absPath = await authorizeTsFile(ctx, edit.fileName, "write", "ts.organize-imports");
+            const absPath = (await authorizeTsFile(ctx, edit.fileName, "write", "ts.organize-imports", body.projectRoot)).path;
             if (!existsSync(absPath)) {
               errors.push(`File not found: ${edit.fileName}`);
               continue;

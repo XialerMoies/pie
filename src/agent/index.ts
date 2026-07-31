@@ -8,7 +8,7 @@
  *
  * 原则：只封装，不 fork。PI 的 agent-loop 不改。
  */
-import { AgentRuntime, type RuntimeConfig } from "./runtime"
+import { AgentRuntime, type RuntimeConfig } from "./runtime.js"
 
 export type { AgentRuntime, RuntimeConfig }
 

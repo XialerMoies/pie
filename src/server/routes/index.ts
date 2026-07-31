@@ -2,17 +2,17 @@
  * Route registry — compose all domain route handlers
  */
 import type { IncomingMessage, ServerResponse } from "http";
-import type { RouteHandler, ServerContext } from "./types";
-import { handleChat } from "./chat";
-import { handleDashboard } from "./dashboard";
-import { handleSessions } from "./sessions";
-import { handleExplorer } from "./explorer";
-import { handleSettings } from "./settings";
-import { handleSearch } from "./search";
-import { handleGit } from "./git";
-import { handleTypeScript } from "./typescript";
-import { handleUiState } from "./ui-state";
-import { handlePermissions } from "./permissions";
+import type { RouteHandler, ServerContext } from "./types.js";
+import { handleChat } from "./chat.js";
+import { handleDashboard } from "./dashboard.js";
+import { handleSessions } from "./sessions.js";
+import { handleExplorer } from "./explorer.js";
+import { handleSettings } from "./settings.js";
+import { handleSearch } from "./search.js";
+import { handleGit } from "./git.js";
+import { handleTypeScript } from "./typescript.js";
+import { handleUiState } from "./ui-state.js";
+import { handlePermissions } from "./permissions.js";
 
 const handlers: RouteHandler[] = [
   handleChat,

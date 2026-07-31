@@ -3,7 +3,7 @@
  */
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "fs";
 import { resolve, relative, sep } from "path";
-import { parseSessionMessages } from "./sessions";
+import { parseSessionMessages } from "./sessions.js";
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -327,94 +327,133 @@ export function searchConversations(
   maxSessions = 50,
   maxMatchesPerSession = 20,
 ): ConvResponse {
-  const query = cs ? q : q.toLowerCase();
   const byProjectDir = resolve(sessionsDir, "by-project");
   if (!existsSync(byProjectDir)) return { results: [], total: 0, truncated: false };
 
-  const results: ConvResult[] = [];
-  let truncated = false;
-
+  const files: string[] = [];
   try {
     const projects = readdirSync(byProjectDir);
     for (const project of projects) {
-      if (results.length >= maxSessions) { truncated = true; break; }
       const projectDir = resolve(byProjectDir, project);
       try {
         const entries = readdirSync(projectDir);
         for (const entry of entries) {
-          if (results.length >= maxSessions) { truncated = true; break; }
-          if (!entry.endsWith(".jsonl")) continue;
-          const filePath = resolve(projectDir, entry);
-          try {
-            const content = readFileSync(filePath, "utf-8");
-            const lines = content.split("\n");
-            let sessionId = entry.replace(/\.jsonl$/, "");
-            let sessionName = "";
-            let workspace = project;
-            const matches: ConvMatch[] = [];
-            let updatedAt = "";
-
-            for (let i = 0; i < lines.length && matches.length < maxMatchesPerSession; i++) {
-              const line = lines[i].trim();
-              if (!line) continue;
-              let entryJson: any;
-              try { entryJson = JSON.parse(line); } catch { continue; }
-              if (entryJson.type === "session") {
-                if (entryJson.id) sessionId = entryJson.id;
-                if (entryJson.workspace) workspace = entryJson.workspace;
-                if (entryJson.timestamp && !updatedAt) updatedAt = entryJson.timestamp;
-                continue;
-              }
-              if (entryJson.type === "session_info" && entryJson.name) {
-                sessionName = entryJson.name;
-                const nameMatch = cs
-                  ? sessionName.includes(query)
-                  : sessionName.toLowerCase().includes(query);
-                if (nameMatch) {
-                  matches.push({ line: i + 1, role: "session_info", text: sessionName, matchPos: [{ start: 0, end: sessionName.length }] });
-                }
-                if (entryJson.timestamp && !updatedAt) updatedAt = entryJson.timestamp;
-                continue;
-              }
-            }
-
-            const visibleMessages = parseSessionMessages(content);
-            for (let msgIndex = 0; msgIndex < visibleMessages.length && matches.length < maxMatchesPerSession; msgIndex++) {
-              const msg = visibleMessages[msgIndex];
-              const text = msg.content || "";
-              const positions = findAllMatchPositions(text, q, cs);
-              for (let matchOrdinal = 0; matchOrdinal < positions.length && matches.length < maxMatchesPerSession; matchOrdinal++) {
-                const snippet = makeConvSnippet(text, positions[matchOrdinal]);
-                matches.push({
-                  line: msgIndex + 1,
-                  role: msg.role || "unknown",
-                  text: snippet.text,
-                  matchPos: snippet.matchPos,
-                  msgIndex,
-                  matchOrdinal,
-                });
-              }
-            }
-
-            if (!updatedAt) {
-              try { const st = statSync(filePath); updatedAt = st.mtime.toISOString(); } catch {}
-            }
-
-            if (matches.length > 0) {
-              results.push({
-                sessionId,
-                sessionName: sessionName || sessionId.slice(0, 8),
-                workspace,
-                file: `${project}/${entry}`,
-                updatedAt: updatedAt || undefined,
-                matches,
-              });
-            }
-          } catch {}
+          if (entry.endsWith(".jsonl")) files.push(resolve(projectDir, entry));
         }
       } catch {}
     }
   } catch {}
+
+  return searchConversationFiles(q, sessionsDir, files, cs, maxSessions, maxMatchesPerSession);
+}
+
+export function searchConversationFiles(
+  q: string,
+  sessionsDir: string,
+  files: readonly string[],
+  cs: boolean,
+  maxSessions = 50,
+  maxMatchesPerSession = 20,
+): ConvResponse {
+  const query = cs ? q : q.toLowerCase();
+  const byProjectDir = resolve(sessionsDir, "by-project");
+  const results: ConvResult[] = [];
+  let truncated = false;
+
+  for (const filePath of files) {
+    if (results.length >= maxSessions) {
+      truncated = true;
+      break;
+    }
+    if (!filePath.endsWith(".jsonl")) continue;
+
+    const relFile = relative(byProjectDir, filePath).replace(/\\/g, "/");
+    const parts = relFile.split("/");
+    const project = parts.length > 1 ? parts[0] : "";
+    const entry = parts.length > 1 ? parts.slice(1).join("/") : relFile;
+
+    try {
+      const content = readFileSync(filePath, "utf-8");
+      const lines = content.split("\n");
+      let sessionId = entry.replace(/\.jsonl$/, "");
+      let sessionName = "";
+      let workspace = project;
+      const matches: ConvMatch[] = [];
+      let updatedAt = "";
+
+      for (let i = 0; i < lines.length && matches.length < maxMatchesPerSession; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+
+        let entryJson: any;
+        try {
+          entryJson = JSON.parse(line);
+        } catch {
+          continue;
+        }
+
+        if (entryJson.type === "session") {
+          if (entryJson.id) sessionId = entryJson.id;
+          if (entryJson.workspace) workspace = entryJson.workspace;
+          if (entryJson.timestamp && !updatedAt) updatedAt = entryJson.timestamp;
+          continue;
+        }
+
+        if (entryJson.type === "session_info" && entryJson.name) {
+          sessionName = entryJson.name;
+          const nameMatch = cs
+            ? sessionName.includes(query)
+            : sessionName.toLowerCase().includes(query);
+          if (nameMatch) {
+            matches.push({
+              line: i + 1,
+              role: "session_info",
+              text: sessionName,
+              matchPos: [{ start: 0, end: sessionName.length }],
+            });
+          }
+          if (entryJson.timestamp && !updatedAt) updatedAt = entryJson.timestamp;
+          continue;
+        }
+      }
+
+      const visibleMessages = parseSessionMessages(content);
+      for (let msgIndex = 0; msgIndex < visibleMessages.length && matches.length < maxMatchesPerSession; msgIndex++) {
+        const msg = visibleMessages[msgIndex];
+        const text = msg.content || "";
+        const positions = findAllMatchPositions(text, q, cs);
+        for (let matchOrdinal = 0; matchOrdinal < positions.length && matches.length < maxMatchesPerSession; matchOrdinal++) {
+          const snippet = makeConvSnippet(text, positions[matchOrdinal]);
+          matches.push({
+            line: msgIndex + 1,
+            role: msg.role || "unknown",
+            text: snippet.text,
+            matchPos: snippet.matchPos,
+            msgIndex,
+            matchOrdinal,
+          });
+        }
+      }
+
+      if (!updatedAt) {
+        try {
+          const st = statSync(filePath);
+          updatedAt = st.mtime.toISOString();
+        } catch {}
+      }
+
+      if (matches.length > 0) {
+        results.push({
+          sessionId,
+          sessionName: sessionName || sessionId.slice(0, 8),
+          workspace,
+          file: project ? `${project}/${entry}` : entry,
+          updatedAt: updatedAt || undefined,
+          matches,
+        });
+      }
+    } catch {}
+  }
 
   const total = results.reduce((s, r) => s + r.matches.length, 0);
   return { results, total, truncated };

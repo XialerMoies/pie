@@ -7,11 +7,12 @@
  * GET /api/ui-state?workspace=... → 返回该 workspace 的状态
  * PUT /api/ui-state              → 保存当前 workspace 的状态
  */
-import type { RouteHandler } from "./types";
+import type { RouteHandler } from "./types.js";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
-import { writePathGuardError } from "./path-guard";
-import { authorizeRoutePath, writeServerPermissionError } from "../permission-service";
+import { writePathGuardError } from "./path-guard.js";
+import { authorizeRoutePath, writeServerPermissionError } from "../permission-service.js";
+import { authorizeWorkspacePath } from "./workspace-authorization.js";
 
 const FILE_NAME = "ui-state.json";
 
@@ -31,6 +32,7 @@ export interface WorkspaceUiState {
 }
 
 interface UiStateStore {
+  activeWorkspace?: string;
   workspaces: Record<string, WorkspaceUiState>;
 }
 
@@ -38,15 +40,25 @@ function stateFile(piConfigDir: string): string {
   return resolve(piConfigDir, FILE_NAME);
 }
 
-function readStore(piConfigDir: string): UiStateStore {
+function readStoreFile(filePath: string): UiStateStore {
   try {
-    const fp = stateFile(piConfigDir);
-    if (!existsSync(fp)) return { workspaces: {} };
-    const data = JSON.parse(readFileSync(fp, "utf-8"));
-    return { workspaces: data.workspaces || {} };
+    if (!existsSync(filePath)) return { workspaces: {} };
+    const data = JSON.parse(readFileSync(filePath, "utf-8"));
+    return {
+      activeWorkspace: typeof data.activeWorkspace === "string" ? data.activeWorkspace : undefined,
+      workspaces: data.workspaces || {},
+    };
   } catch {
     return { workspaces: {} };
   }
+}
+
+async function readAuthorizedStore(
+  ctx: Parameters<RouteHandler>[2],
+  piConfigDir: string,
+): Promise<{ filePath: string; store: UiStateStore }> {
+  const filePath = (await authorizeRoutePath(ctx, piConfigDir, FILE_NAME, "read", "ui-state.read")).path;
+  return { filePath, store: readStoreFile(filePath) };
 }
 
 function writeStoreFile(filePath: string, store: UiStateStore): void {
@@ -61,12 +73,19 @@ export const handleUiState: RouteHandler = async (req, res, ctx) => {
   const piConfigDir = ctx.paths.PI_CONFIG_DIR;
 
   if (url.startsWith("/api/ui-state") && method === "GET") {
-    const params = new URL(url, "http://localhost").searchParams;
-    const workspace = params.get("workspace") || "_default";
-    const store = readStore(piConfigDir);
-    const state = store.workspaces[workspace] || { schemaVersion: 2, workspacePath: workspace, activeView: { type: "chat" }, tabs: { sessions: [], files: [], chatOpen: true, labels: {} }, panel: { active: "explorer", closed: false, width: 260 }, recent: { sessions: {} } };
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(state));
+    try {
+      const params = new URL(url, "http://localhost").searchParams;
+      const workspace = params.get("workspace") || "_default";
+      const { store } = await readAuthorizedStore(ctx, piConfigDir);
+      const state = store.workspaces[workspace] || { schemaVersion: 2, workspacePath: workspace, activeView: { type: "chat" }, tabs: { sessions: [], files: [], chatOpen: true, labels: {} }, panel: { active: "explorer", closed: false, width: 260 }, recent: { sessions: {} } };
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(state));
+    } catch (err) {
+      if (writeServerPermissionError(res, {}, err)) return true;
+      if (writePathGuardError(res, {}, err)) return true;
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: (err as Error).message }));
+    }
     return true;
   }
 
@@ -75,9 +94,12 @@ export const handleUiState: RouteHandler = async (req, res, ctx) => {
     for await (const chunk of req) body += chunk;
     try {
       const parsed = JSON.parse(body);
-      const workspace = parsed.workspacePath || "_default";
-      const store = readStore(piConfigDir);
+      const workspace = parsed.workspacePath
+        ? await authorizeWorkspacePath(ctx, parsed.workspacePath, "ui-state.save.workspace", { required: true })
+        : "_default";
+      const { store } = await readAuthorizedStore(ctx, piConfigDir);
       store.workspaces[workspace] = parsed;
+      store.activeWorkspace = workspace;
       const filePath = (await authorizeRoutePath(ctx, piConfigDir, FILE_NAME, "write", "ui-state.save")).path;
       writeStoreFile(filePath, store);
       res.writeHead(200, { "Content-Type": "application/json" });

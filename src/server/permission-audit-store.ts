@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { dirname } from "path";
-import type { PermissionAuditEntry } from "./permission-service";
+import type { PermissionAuditEntry } from "./permission-service.js";
 
 export interface PermissionAuditStore {
   load(limit: number): PermissionAuditEntry[];
@@ -55,12 +55,17 @@ function isPermissionAuditEntry(value: unknown): value is PermissionAuditEntry {
     optionalString(entry.path) &&
     optionalString(entry.relativePath) &&
     optionalString(entry.reason) &&
-    optionalString(entry.code)
+    optionalString(entry.code) &&
+    optionalString(entry.toolName) &&
+    optionalToolOperations(entry.toolOperations) &&
+    optionalString(entry.riskLevel) &&
+    optionalBoolean(entry.workspaceBounded) &&
+    optionalBoolean(entry.permissionRequired)
   );
 }
 
 function isOperation(value: unknown): boolean {
-  return value === "read" || value === "write" || value === "create" || value === "remove";
+  return value === "read" || value === "write" || value === "create" || value === "remove" || value === "tool";
 }
 
 function isDecision(value: unknown): boolean {
@@ -69,4 +74,20 @@ function isDecision(value: unknown): boolean {
 
 function optionalString(value: unknown): boolean {
   return value === undefined || typeof value === "string";
+}
+
+function optionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === "boolean";
+}
+
+function optionalToolOperations(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value)) return false;
+  return value.every((item) => (
+    item === "read" ||
+    item === "write" ||
+    item === "create" ||
+    item === "remove" ||
+    item === "execute"
+  ));
 }

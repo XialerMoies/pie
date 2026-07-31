@@ -2,10 +2,10 @@
  * Shared types for route handlers
  */
 import type { IncomingMessage, ServerResponse } from "http";
-import type { TsserverManager } from "../ts-server";
-import type { AgentRuntime } from "../../agent/index";
-import type { DesktopSecurityConfig } from "../security";
-import type { ServerPermissionService } from "../permission-service";
+import type { TsserverManager } from "../ts-server.js";
+import type { AgentRuntime } from "../../agent/index.js";
+import type { DesktopSecurityConfig } from "../security.js";
+import type { ServerPermissionService } from "../permission-service.js";
 
 // ─── Trace Event 类型 ────────────────────────────────────
 

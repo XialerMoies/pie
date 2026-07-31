@@ -1,14 +1,14 @@
 import type { ServerResponse } from "http";
-import type { PermissionRule } from "../../agent/types";
+import type { PermissionRule } from "../../agent/types.js";
 import {
   ServerPermissionError,
   type ServerPermissionService,
   writeServerPermissionError,
   type PermissionRuleListName,
-} from "../permission-service";
-import { resolvePermissionConfirmation } from "../permission-confirmation";
-import { parseBody } from "./parse-body";
-import type { RouteHandler } from "./types";
+} from "../permission-service.js";
+import { resolvePermissionConfirmation } from "../permission-confirmation.js";
+import { parseBody } from "./parse-body.js";
+import type { RouteHandler } from "./types.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 const RULE_LISTS = new Set<PermissionRuleListName>(["allow", "deny", "ask"]);

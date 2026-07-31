@@ -11,7 +11,7 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
-import type { AgentTool, ToolParameterSchema } from "../types"
+import type { AgentTool, ToolParameterSchema } from "../types.js"
 
 // ─── 命名工具 ─────────────────────────────────────
 

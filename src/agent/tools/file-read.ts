@@ -76,4 +76,8 @@ export const fileReadTool: AgentTool = {
   isReadOnly: true,
   isDestructive: false,
   isConcurrencySafe: true,
+  operations: ["read"],
+  riskLevel: "low",
+  needsPermission: false,
+  workspaceBounded: true,
 }

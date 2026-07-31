@@ -1,5 +1,6 @@
 import path from "path"
-import type { PermissionRule, PermissionSuggestion, PermissionToolName, SessionPermissionState } from "./types"
+import type { PermissionRule, PermissionSuggestion, PermissionToolName, SessionPermissionState } from "./types.js"
+import { isSensitiveExternalPath } from "./sensitive-paths.js"
 
 export type PathPermissionOperation = "read" | "write" | "create" | "remove"
 
@@ -132,6 +133,19 @@ export function evaluatePathPermission(
 
   const allowRule = findMatchingPathPermissionRule(resolvedPath, operation, policy.alwaysAllowRules?.session)
   if (allowRule) return { status: "allow", matchedRule: allowRule }
+
+  if (operation === "read") {
+    if (isSensitiveExternalPath(resolvedPath, workspaceRoot)) {
+      return {
+        status: "ask",
+        operation,
+        path: resolvedPath,
+        reason: "Read path points to sensitive data outside the workspace",
+        suggestions: createPathPermissionSuggestions(path.dirname(resolvedPath), operation),
+      }
+    }
+    return { status: "allow" }
+  }
 
   return {
     status: "ask",

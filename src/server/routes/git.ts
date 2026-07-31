@@ -3,16 +3,16 @@
  *
  * 核心解析逻辑在 git-core.ts，此处仅 HTTP 路由分发。
  */
-import type { RouteHandler } from "./types";
+import type { RouteHandler } from "./types.js";
 import { execFileSync } from "child_process";
-import { parseBody } from "./parse-body";
-import { findGitRoot, parsePorcelain, parseLog } from "./git-core";
-import { writePathGuardError } from "./path-guard";
-import { authorizeRoutePath, writeServerPermissionError } from "../permission-service";
+import { parseBody } from "./parse-body.js";
+import { findGitRoot, parsePorcelain, parseLog } from "./git-core.js";
+import { writePathGuardError } from "./path-guard.js";
+import { authorizeRoutePath, writeServerPermissionError } from "../permission-service.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
-export { findGitRoot } from "./git-core";
+export { findGitRoot } from "./git-core.js";
 
 function git(args: string[], cwd: string, timeout = 10000): string {
   return execFileSync("git", args, {

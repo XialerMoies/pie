@@ -10,6 +10,7 @@ import {
   pathPermissionToolForOperation,
   pathRuleContentForDirectory as sharedPathRuleContentForDirectory,
 } from "../../permissions.js"
+import { isSensitiveExternalPath } from "../../sensitive-paths.js"
 import type { AdditionalWorkingDirectory, PathPermissionToolName, PermissionRule, PermissionSuggestion } from "../../types.js"
 
 type PathOperation = "read" | "write" | "create" | "remove"
@@ -511,49 +512,6 @@ function isDangerousRemovalPath(resolvedPath: string, workspaceRoot: string): bo
   return false
 }
 
-function windowsSystemRoot(): string | undefined {
-  if (process.platform !== "win32") return undefined
-  return process.env.SystemRoot
-    || process.env.WINDIR
-    || path.join(path.parse(os.homedir()).root || "C:\\", "Windows")
-}
-
-function isSensitiveExternalPath(resolvedPath: string, workspaceRoot: string): boolean {
-  if (isInsidePath(resolvedPath, workspaceRoot)) return false
-
-  const home = os.homedir()
-  const sensitiveHomeDirs = [
-    ".ssh",
-    ".aws",
-    ".azure",
-    ".gnupg",
-    ".kube",
-    ".docker",
-  ].map((entry) => path.join(home, entry))
-
-  if (sensitiveHomeDirs.some((directory) => isInsidePath(resolvedPath, directory))) return true
-
-  const windowsRoot = windowsSystemRoot()
-  if (windowsRoot) {
-    const sensitiveWindowsDirs = [
-      path.join(windowsRoot, "System32", "drivers", "etc"),
-      path.join(windowsRoot, "System32", "config"),
-    ]
-    if (sensitiveWindowsDirs.some((directory) => isInsidePath(resolvedPath, directory))) return true
-  }
-
-  const base = path.basename(resolvedPath).toLowerCase()
-  return [
-    ".env",
-    ".env.local",
-    ".npmrc",
-    ".pypirc",
-    ".netrc",
-    "id_rsa",
-    "id_ed25519",
-  ].includes(base)
-}
-
 function validatePathToken(token: string | undefined, operation: PathOperation, cwd: string, scope: PathValidationScope, source?: string): PathValidationResult {
   const workspaceRoot = scope.workspaceRoot
   const label = operationLabel(operation)
@@ -578,9 +536,6 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
     const base = globBase(clean)
     const resolvedBase = resolvePathToken(base, cwd)
     if (!isInsidePath(resolvedBase, workspaceRoot)) {
-      if (isSensitiveExternalPath(resolvedBase, workspaceRoot)) {
-        return fail(`${label}路径指向敏感路径: ${token}`, true, { operation, blockedPath: resolvedBase })
-      }
       if (matchingPathRule(resolvedBase, operation, scope.alwaysDenyRules?.session)) {
         return fail(`${label}路径被本会话规则拒绝: ${token}`, true, { operation, blockedPath: resolvedBase })
       }
@@ -595,12 +550,15 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
       if (isInsideAnyPath(resolvedBase, scope.allowedWorkingRoots) || matchingPathRule(resolvedBase, operation, scope.alwaysAllowRules?.session)) {
         return { allowed: true }
       }
-      const directory = permissionDirectoryForPath(resolvedBase, operation, true)
-      return fail(`${label}路径不在 workspace/授权目录内: ${token}`, false, {
-        operation,
-        blockedPath: resolvedBase,
-        suggestions: externalPathSuggestions(directory, operation),
-      })
+      if (isSensitiveExternalPath(resolvedBase, workspaceRoot)) {
+        const directory = permissionDirectoryForPath(resolvedBase, operation, true)
+        return fail(`${label}路径指向敏感路径: ${token}`, false, {
+          operation,
+          blockedPath: resolvedBase,
+          suggestions: externalPathSuggestions(directory, operation),
+        })
+      }
+      return { allowed: true }
     }
     if (!isInsidePath(resolvedBase, workspaceRoot)) return fail(`${label}路径不在 workspace 内: ${token}`, true)
     return { allowed: true }
@@ -627,9 +585,6 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
     if (operation === "remove" && isDangerousRemovalPath(resolved, workspaceRoot)) {
       return fail(`删除路径指向高风险目录: ${token}`, true)
     }
-    if (isSensitiveExternalPath(resolved, workspaceRoot)) {
-      return fail(`${label}路径指向敏感路径: ${token}`, true, { operation, blockedPath: resolved })
-    }
     if (matchingPathRule(resolved, operation, scope.alwaysDenyRules?.session)) {
       return fail(`${label}路径被本会话规则拒绝: ${token}`, true, { operation, blockedPath: resolved })
     }
@@ -643,6 +598,16 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
     }
     if (isInsideAnyPath(resolved, scope.allowedWorkingRoots)) return { allowed: true }
     if (matchingPathRule(resolved, operation, scope.alwaysAllowRules?.session)) return { allowed: true }
+
+    if (isSensitiveExternalPath(resolved, workspaceRoot)) {
+      const directory = permissionDirectoryForPath(resolved, operation)
+      return fail(`${label}路径指向敏感路径: ${token}`, false, {
+        operation,
+        blockedPath: resolved,
+        suggestions: externalPathSuggestions(directory, operation),
+      })
+    }
+    if (operation === "read") return { allowed: true }
 
     const directory = permissionDirectoryForPath(resolved, operation)
     return fail(`${label}路径不在 workspace/授权目录内: ${token}`, false, {
@@ -1305,7 +1270,7 @@ export function validateCommandPaths(command: string, options: PathValidationOpt
 
   if (!isInsideAnyPath(cwd, scope.allowedWorkingRoots)) {
     if (isSensitiveExternalPath(cwd, workspaceRoot)) {
-      return fail(`工作目录指向敏感路径: ${cwd}`, true, { operation: "read", blockedPath: cwd })
+      return fail(`工作目录指向敏感路径: ${cwd}`, false, { operation: "read", blockedPath: cwd })
     }
     return fail(`工作目录不在 workspace/授权目录内: ${cwd}`, false, {
       operation: "read",

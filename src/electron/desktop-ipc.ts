@@ -9,6 +9,7 @@ export const DESKTOP_IPC_SEND_CHANNELS = [
 ] as const;
 
 export const DESKTOP_IPC_INVOKE_CHANNELS = [
+  "desktop-session-token",
   "dialog-open-file",
   "dialog-open-folder",
   "open-folder-dialog",
@@ -54,6 +55,7 @@ export interface DesktopIpcHandlerDeps {
   showItemInFolder(filePath: string): void;
   trashItem(filePath: string): Promise<void>;
   spawnTerminal(): Promise<boolean> | boolean;
+  getDesktopSessionToken(event: unknown): string;
   trustedRoots: TrustedDesktopRoots;
 }
 
@@ -66,10 +68,16 @@ export class DesktopIpcValidationError extends Error {
 
 export class TrustedDesktopRoots {
   private readonly trustedFileRoots = new Set<string>();
+  private readonly trustedExactFiles = new Set<string>();
 
   addRoot(root: string): void {
     if (!root || typeof root !== "string") return;
     this.trustedFileRoots.add(realpathOrResolve(root));
+  }
+
+  addFile(filePath: string): void {
+    if (!filePath || typeof filePath !== "string") return;
+    this.trustedExactFiles.add(realpathOrResolve(filePath));
   }
 
   addPersistedWorkspaceRoots(uiStateFile: string): number {
@@ -103,6 +111,9 @@ export class TrustedDesktopRoots {
     }
 
     const target = fs.realpathSync.native(filePath);
+    for (const file of this.trustedExactFiles) {
+      if (isSamePath(file, target)) return target;
+    }
     for (const root of this.trustedFileRoots) {
       if (isPathInsideRoot(root, target)) return target;
     }
@@ -115,6 +126,11 @@ export class TrustedDesktopRoots {
 }
 
 export function registerDesktopIpcHandlers(deps: DesktopIpcHandlerDeps): void {
+  deps.ipcMain.handle("desktop-session-token", (event, ...args) => {
+    assertNoArgs("desktop-session-token", args);
+    return deps.getDesktopSessionToken(event);
+  });
+
   deps.ipcMain.on("window-minimize", (_event, ...args) => {
     assertNoArgs("window-minimize", args);
     deps.getMainWindow()?.minimize();
@@ -142,7 +158,7 @@ export function registerDesktopIpcHandlers(deps: DesktopIpcHandlerDeps): void {
     assertNoArgs("dialog-open-file", args);
     const result = await deps.showOpenDialog({ properties: ["openFile"] });
     const selected = result.canceled ? null : result.filePaths[0] || null;
-    if (selected) deps.trustedRoots.addRoot(path.dirname(selected));
+    if (selected) deps.trustedRoots.addFile(selected);
     return selected;
   });
 
@@ -205,4 +221,8 @@ function isPathInsideRoot(root: string, target: string): boolean {
   const child = normalizeForCompare(target);
   const relative = path.relative(parent, child);
   return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isSamePath(left: string, right: string): boolean {
+  return normalizeForCompare(left) === normalizeForCompare(right);
 }

@@ -65,6 +65,11 @@ export const fileWriteTool: AgentTool = {
   },
   isReadOnly: false,
   isDestructive: true,
+  isConcurrencySafe: false,
+  operations: ["create", "write"],
+  riskLevel: "high",
+  needsPermission: false,
+  workspaceBounded: true,
   execute: async ({ file_path, content }, ctx) => {
     const fp = String(file_path ?? "");
     const cnt = String(content ?? "");

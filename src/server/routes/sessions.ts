@@ -1,17 +1,18 @@
 /**
  * Session routes — CRUD for conversation sessions
  */
-import type { RouteHandler, ServerContext } from "./types";
+import type { RouteHandler, ServerContext } from "./types.js";
 import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync, statSync, mkdirSync, renameSync } from "fs";
 import { resolve, basename, dirname } from "path";
 import { randomUUID } from "crypto";
-import { parseBody } from "./parse-body";
-import { wsKey, wsDir } from "./session-dir";
-import { isPathGuardError, writePathGuardError } from "./path-guard";
-import { authorizeRoutePath, isServerPermissionError, writeServerPermissionError } from "../permission-service";
+import { parseBody } from "./parse-body.js";
+import { wsKey, wsDir } from "./session-dir.js";
+import { isPathGuardError, writePathGuardError } from "./path-guard.js";
+import { authorizeRoutePath, isServerPermissionError, writeServerPermissionError } from "../permission-service.js";
+import { authorizeWorkspacePath } from "./workspace-authorization.js";
 
 // Re-export for backward compat (tests use mod.wsKey / mod.wsDir)
-export { wsKey, wsDir } from "./session-dir";
+export { wsKey, wsDir } from "./session-dir.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
@@ -19,12 +20,13 @@ const cors = { "Access-Control-Allow-Origin": "*" };
 async function migrateOldSessions(ctx: ServerContext): Promise<void> {
   const baseDir = ctx.paths.SESSIONS_DIR;
   if (!existsSync(baseDir)) return;
-  const entries = readdirSync(baseDir, { withFileTypes: true });
+  const authorizedBaseDir = await authorizeSessionPath(ctx, baseDir, "read", "sessions.auto-migrate.root");
+  const entries = readdirSync(authorizedBaseDir, { withFileTypes: true });
   let moved = 0;
   for (const e of entries) {
     if (e.name === "by-project") continue;
     if (!e.name.endsWith(".jsonl")) continue;
-    const fp = resolve(baseDir, e.name);
+    const fp = resolve(authorizedBaseDir, e.name);
     try {
       const sourceFile = await authorizeSessionPath(ctx, fp, "read", "sessions.auto-migrate.source");
       const content = readFileSync(sourceFile, "utf-8");
@@ -44,12 +46,13 @@ async function migrateOldSessions(ctx: ServerContext): Promise<void> {
 }
 
 /** 扫描所有项目的session目录 */
-function findAllProjectDirs(baseDir: string): string[] {
+async function findAuthorizedProjectDirs(ctx: ServerContext, baseDir: string, source: string): Promise<string[]> {
   const projectsDir = resolve(baseDir, "by-project");
   if (!existsSync(projectsDir)) return [];
-  return readdirSync(projectsDir, { withFileTypes: true })
+  const authorizedProjectsDir = await authorizeSessionPath(ctx, projectsDir, "read", source);
+  return readdirSync(authorizedProjectsDir, { withFileTypes: true })
     .filter(d => d.isDirectory())
-    .map(d => resolve(projectsDir, d.name));
+    .map(d => resolve(authorizedProjectsDir, d.name));
 }
 
 /** 从历史消息中剥离已知的指令前缀（与前端 chat-mode.ts 保持一致） */
@@ -127,7 +130,7 @@ export function findSessionFileById(baseDir: string, id: string): string | null 
   return null;
 }
 
-async function findAuthorizedSessionFileById(ctx: ServerContext, id: string, source: string): Promise<string | null> {
+export async function findAuthorizedSessionFileById(ctx: ServerContext, id: string, source: string): Promise<string | null> {
   if (typeof id !== "string" || !id.trim()) return null;
   return findAuthorizedSessionFileInDir(ctx, ctx.paths.SESSIONS_DIR, id, source);
 }
@@ -496,13 +499,13 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
   // List sessions — filtered by workspace, with "other projects" section
   if ((url === "/api/sessions" || url?.startsWith("/api/sessions?")) && method === "GET") {
     try {
-      // Migrate old flat sessions -> by-project/
-      await migrateOldSessions(ctx);
-
       const u = new URL(url, `http://${req.headers.host || "localhost"}`);
-      const currentWs = u.searchParams.get("workspace") || "";
+      const currentWs = await authorizeWorkspacePath(ctx, u.searchParams.get("workspace"), "sessions.list.workspace");
       const includeOther = u.searchParams.get("other") === "1";
       const curId = (session as any).sessionManager?.getSessionId?.() ?? "";
+
+      // Migrate old flat sessions -> by-project/
+      await migrateOldSessions(ctx);
 
       // Current workspace sessions dir
       const curSessionsDir = wsDir(p.SESSIONS_DIR, currentWs);
@@ -546,7 +549,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       // Other projects
       let other: { project: string; path: string; sessions: Record<string, unknown>[] }[] = [];
       if (includeOther) {
-        const allDirs = findAllProjectDirs(p.SESSIONS_DIR);
+        const allDirs = await findAuthorizedProjectDirs(ctx, p.SESSIONS_DIR, "sessions.list.projects");
         const curKey = wsKey(currentWs);
         for (const dir of allDirs) {
           const projName = basename(dir);
@@ -575,10 +578,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/sessions/new" && method === "POST") {
     try {
       const body = await parseBody(req).catch(() => ({}));
-      const workspace = body.workspace || "";
-      if (workspace) {
-        await authorizeRoutePath(ctx, workspace, "", "read", "sessions.new.workspace");
-      }
+      const workspace = await authorizeWorkspacePath(ctx, body.workspace, "sessions.new.workspace");
       const targetWorkspace = workspace || runtime.currentWorkspace || "";
       if (existsSync(p.SESSIONS_DIR)) {
         await authorizeSessionPath(ctx, wsDir(p.SESSIONS_DIR, targetWorkspace), "create", "sessions.new.destination");
@@ -603,7 +603,8 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/sessions/migrate" && method === "POST") {
     try {
       const body = await parseBody(req);
-      const { id, workspace } = body;
+      const { id } = body;
+      const workspace = await authorizeWorkspacePath(ctx, body.workspace, "sessions.migrate.workspace");
       const sFile = await findAuthorizedSessionFileById(ctx, id, "sessions.migrate.lookup");
       if (!sFile) { res.writeHead(404, { ...cors }); res.end(JSON.stringify({ error: "not found" })); return true; }
       const sourceFile = await authorizeSessionPath(ctx, sFile, "read", "sessions.migrate.source");
@@ -666,7 +667,8 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
   // Branch session — 复制现有历史为新 JSONL，换新 id 后立即激活
   if (url === "/api/sessions/branch" && method === "POST") {
     try {
-      const { id, workspace, name } = await parseBody(req);
+      const { id, workspace: requestedWorkspace, name } = await parseBody(req);
+      const workspace = await authorizeWorkspacePath(ctx, requestedWorkspace, "sessions.branch.workspace");
       const sourceFile = await findAuthorizedSessionFileById(ctx, id, "sessions.branch.lookup");
       if (!sourceFile) {
         res.writeHead(404, { ...cors });
@@ -717,7 +719,8 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/sessions/activate" && method === "POST") {
     try {
       const body = await parseBody(req);
-      const { id, workspace } = body;
+      const { id } = body;
+      const workspace = await authorizeWorkspacePath(ctx, body.workspace, "sessions.activate.workspace");
       const sessionFile = await findAuthorizedSessionFileById(ctx, id, "sessions.activate.lookup");
       if (!sessionFile) {
         const activeSession = runtime.getActiveSession?.();

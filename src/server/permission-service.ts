@@ -1,3 +1,6 @@
+import { existsSync, realpathSync, statSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
   CommandConfirmationResponse,
   PermissionRule,
@@ -7,23 +10,25 @@ import type {
   SessionPermissionState,
   ToolAuthorizationRequest,
   ToolAuthorizationResult,
+  ToolOperation,
   ToolRiskLevel,
-} from "../agent/types";
+} from "../agent/types.js";
 import {
   applySessionPermissionSuggestions,
+  createPathPermissionSuggestions,
   createToolPermissionSuggestions,
   evaluatePathPermission,
   findMatchingToolPermissionRule,
   normalizePermissionPath,
   type PathPermissionDecision,
   type PathPermissionOperation,
-} from "../agent/permissions";
+} from "../agent/permissions.js";
 import {
   guardPathWithinRoot,
   PathGuardError,
   type GuardedPath,
-} from "./routes/path-guard";
-import type { PermissionAuditStore } from "./permission-audit-store";
+} from "./routes/path-guard.js";
+import type { PermissionAuditStore } from "./permission-audit-store.js";
 
 export interface PermissionAuditEntry {
   id: number;
@@ -37,7 +42,10 @@ export interface PermissionAuditEntry {
   reason?: string;
   code?: string;
   toolName?: string;
+  toolOperations?: readonly ToolOperation[];
   riskLevel?: ToolRiskLevel;
+  workspaceBounded?: boolean;
+  permissionRequired?: boolean;
 }
 
 export type PermissionAuditOperation = PathPermissionOperation | "tool";
@@ -51,7 +59,10 @@ export interface ServerPermissionConfirmationRequest {
   reason: string;
   permissionSuggestions: PermissionSuggestion[];
   toolName?: string;
+  toolOperations?: readonly ToolOperation[];
   riskLevel?: ToolRiskLevel;
+  workspaceBounded?: boolean;
+  permissionRequired?: boolean;
 }
 
 export type ServerPermissionConfirmCallback = (
@@ -65,6 +76,10 @@ export interface ServerPermissionServiceOptions {
   confirmPermission?: ServerPermissionConfirmCallback;
   auditStore?: PermissionAuditStore;
   maxAuditEntries?: number;
+}
+
+export interface ServerPathAuthorizationOptions {
+  suggestedDirectory?: string;
 }
 
 export type PermissionRuleListName = "allow" | "deny" | "ask";
@@ -108,17 +123,29 @@ export class ServerPermissionService {
     this.loadPersistedAudit();
   }
 
-  async authorizePath(root: string, target: string, operation: PathPermissionOperation, source: string): Promise<GuardedPath> {
+  async authorizePath(
+    root: string,
+    target: string,
+    operation: PathPermissionOperation,
+    source: string,
+    options: ServerPathAuthorizationOptions = {},
+  ): Promise<GuardedPath> {
     try {
       const guarded = guardPathWithinRoot(root, target, operation);
       const permissionRoot = this.workspaceRootProvider?.() || guarded.root;
-      const decision = evaluatePathPermission(guarded.path, operation, {
+      const evaluatedDecision = evaluatePathPermission(guarded.path, operation, {
         workspaceRoot: permissionRoot,
         allowedWorkingRoots: this.allowedRoots(permissionRoot, guarded.root),
         alwaysAllowRules: this.sessionPermissionState?.alwaysAllowRules,
         alwaysDenyRules: this.sessionPermissionState?.alwaysDenyRules,
         alwaysAskRules: this.sessionPermissionState?.alwaysAskRules,
       });
+      const decision = evaluatedDecision.status === "ask" && options.suggestedDirectory
+        ? {
+            ...evaluatedDecision,
+            suggestions: createPathPermissionSuggestions(options.suggestedDirectory, operation),
+          }
+        : evaluatedDecision;
 
       this.record({
         source,
@@ -153,16 +180,124 @@ export class ServerPermissionService {
     }
   }
 
+  /**
+   * 授权"进入工作区"本身。工作区根目录建立新边界，不是边界内的待授权路径，
+   * 因此不走外部路径 ask 流程——只验证是真实目录 + 拒绝敏感系统根。
+   * 用户显式选择的目录 / 恢复的上次工作区由此直接放行，而不是弹确认。
+   */
+  async authorizeWorkspaceRoot(workspace: string, source: string): Promise<string> {
+    const resolved = path.resolve(String(workspace ?? "").trim());
+    if (!resolved) {
+      throw new ServerPermissionError("Missing workspace", 400, "missing_workspace");
+    }
+    if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+      throw new ServerPermissionError("Workspace is not a directory", 400, "workspace_not_directory");
+    }
+
+    if (isSensitiveWorkspaceRoot(resolved)) {
+      this.record({
+        source,
+        operation: "read",
+        root: resolved,
+        path: resolved,
+        decision: "deny",
+        reason: "Workspace is a sensitive system directory",
+        code: "sensitive_workspace_root",
+      });
+      throw new ServerPermissionError("Workspace path is a sensitive system directory", 403, "sensitive_workspace_root");
+    }
+
+    // 尊重显式 deny 规则：用户明确拒绝过的目录不能作为工作区进入
+    const denyDecision = evaluatePathPermission(resolved, "read", {
+      workspaceRoot: resolved,
+      allowedWorkingRoots: [],
+      alwaysDenyRules: this.sessionPermissionState?.alwaysDenyRules,
+    });
+    if (denyDecision.status === "deny") {
+      this.record({
+        source,
+        operation: "read",
+        root: resolved,
+        path: resolved,
+        decision: "deny",
+        reason: denyDecision.reason,
+        code: "permission_denied",
+      });
+      throw new ServerPermissionError(denyDecision.reason, 403, "permission_denied");
+    }
+
+    const real = realpathSync(resolved);
+    this.record({
+      source,
+      operation: "read",
+      root: real,
+      path: real,
+      decision: "allow",
+      reason: "User workspace root",
+    });
+    return real;
+  }
+
+  authorizePathSync(root: string, target: string, operation: PathPermissionOperation, source: string): GuardedPath {
+    try {
+      const guarded = guardPathWithinRoot(root, target, operation);
+      const permissionRoot = this.workspaceRootProvider?.() || guarded.root;
+      const decision = evaluatePathPermission(guarded.path, operation, {
+        workspaceRoot: permissionRoot,
+        allowedWorkingRoots: this.allowedRoots(permissionRoot, guarded.root),
+        alwaysAllowRules: this.sessionPermissionState?.alwaysAllowRules,
+        alwaysDenyRules: this.sessionPermissionState?.alwaysDenyRules,
+        alwaysAskRules: this.sessionPermissionState?.alwaysAskRules,
+      });
+
+      this.record({
+        source,
+        operation,
+        root: guarded.root,
+        path: guarded.path,
+        relativePath: guarded.relativePath,
+        decision: decision.status,
+        reason: decision.status === "allow" ? undefined : decision.reason,
+      });
+
+      if (decision.status === "deny") {
+        throw new ServerPermissionError(decision.reason, 403, "permission_denied");
+      }
+      if (decision.status === "ask") {
+        throw new ServerPermissionError(decision.reason, 403, "permission_confirmation_required");
+      }
+      return guarded;
+    } catch (error) {
+      if (error instanceof PathGuardError) {
+        this.record({
+          source,
+          operation,
+          root,
+          decision: "deny",
+          reason: error.message,
+          code: error.code,
+        });
+      }
+      throw error;
+    }
+  }
+
   async authorizeTool(request: ToolAuthorizationRequest): Promise<ToolAuthorizationResult> {
     const root = this.workspaceRootProvider?.() || "";
-    const reason = `External tool "${request.toolName}" requires confirmation before execution`;
+    const permissionRequired = request.permissionRequired !== false;
+    const reason = permissionRequired
+      ? `External tool "${request.toolName}" requires confirmation before execution`
+      : `Tool "${request.toolName}" is tracked by the permission service`;
     const suggestions = createToolPermissionSuggestions(request.toolName);
     const baseEntry = {
       source: request.source,
       operation: "tool" as const,
       root,
       toolName: request.toolName,
+      toolOperations: request.operations,
       riskLevel: request.riskLevel,
+      workspaceBounded: request.workspaceBounded,
+      permissionRequired,
     };
     const state = this.sessionPermissionState;
 
@@ -184,6 +319,15 @@ export class ServerPermissionService {
         ...baseEntry,
         decision: "allow",
         reason: "Allowed by session tool rule",
+      });
+      return { allow: true };
+    }
+
+    if (!permissionRequired && !askRule) {
+      this.record({
+        ...baseEntry,
+        decision: "allow",
+        reason,
       });
       return { allow: true };
     }
@@ -213,7 +357,10 @@ export class ServerPermissionService {
         reason: askRule ? "Tool execution requires confirmation by session rule" : reason,
         permissionSuggestions: suggestions,
         toolName: request.toolName,
+        toolOperations: request.operations,
         riskLevel: request.riskLevel,
+        workspaceBounded: request.workspaceBounded,
+        permissionRequired,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -312,6 +459,19 @@ export class ServerPermissionService {
   }
 
   private record(entry: Omit<PermissionAuditEntry, "id" | "timestamp">): void {
+    const confirmedByUser = entry.reason?.startsWith("Confirmed by user") === true;
+    if (entry.operation === "read" && entry.decision === "allow" && !confirmedByUser) {
+      return;
+    }
+    if (
+      entry.operation === "tool" &&
+      entry.decision === "allow" &&
+      !confirmedByUser &&
+      entry.permissionRequired === false &&
+      entry.riskLevel !== "high"
+    ) {
+      return;
+    }
     const nextEntry: PermissionAuditEntry = {
       id: ++this.auditSeq,
       timestamp: new Date().toISOString(),
@@ -465,6 +625,30 @@ export async function authorizeRoutePath(
 
 const PERMISSION_TOOL_NAMES = new Set<PermissionToolName>(["Read", "Write", "Create", "Remove", "Command", "Tool"]);
 const PERMISSION_RULE_MATCHES = new Set<PermissionRuleMatch>(["exact", "prefix", "wildcard"]);
+
+function isSensitiveWorkspaceRoot(workspace: string): boolean {
+  // 归一化：小写 + 正斜杠 + 去尾斜杠；c:\windows → c:/windows
+  const normalized = normalizePermissionPath(workspace).replace(/\\/g, "/").replace(/\/+$/, "");
+  // 去掉盘符前缀：c:/windows → /windows，统一按 POSIX 段比较
+  const afterDrive = normalized.replace(/^[a-z]:/, "");
+
+  // Windows 盘符根：c: / c:\（去尾斜杠后为 c:）
+  if (/^[a-z]:$/.test(normalized)) return true;
+
+  // 系统根（同时覆盖 POSIX 与 afterDrive 化的 Windows 目录）
+  const systemRoots = [
+    "/", "/etc", "/usr", "/bin", "/boot", "/dev", "/var", "/sbin", "/lib", "/opt", "/sys", "/proc", "/root",
+    "/windows", "/windows/system32", "/windows/syswow64", "/program files", "/program files (x86)",
+    "/programdata", "/users/default",
+  ];
+  if (systemRoots.some((dir) => afterDrive === dir || afterDrive.startsWith(dir + "/"))) return true;
+
+  // home 目录本身（拒绝把 home 当 workspace 根）
+  const home = normalizePermissionPath(os.homedir()).replace(/\\/g, "/").replace(/\/+$/, "");
+  if (normalized === home) return true;
+
+  return false;
+}
 
 function rulesForList(state: SessionPermissionState, list: PermissionRuleListName): PermissionRule[] {
   if (list === "allow") return state.alwaysAllowRules.session;

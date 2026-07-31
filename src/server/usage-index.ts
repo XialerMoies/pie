@@ -215,6 +215,13 @@ function deriveReplySummary(lines: string[]): string {
 export function fullScan(sessionsDir: string): UsageIndex {
   let files: string[];
   try { files = findAllJsonl(sessionsDir); } catch { files = []; }
+  return fullScanFiles(sessionsDir, files);
+}
+
+/**
+ * 全量扫描已授权的 session 文件列表，返回新索引。
+ */
+export function fullScanFiles(sessionsDir: string, files: readonly string[]): UsageIndex {
   const sessions: Record<string, SessionUsage> = {};
 
   for (const filePath of files) {
@@ -240,6 +247,13 @@ export function fullScan(sessionsDir: string): UsageIndex {
 export function incrementalScan(sessionsDir: string, index: UsageIndex): UsageIndex {
   let files: string[];
   try { files = findAllJsonl(sessionsDir); } catch { files = []; }
+  return incrementalScanFiles(sessionsDir, files, index);
+}
+
+/**
+ * 只处理已授权文件列表中 mtime 发生变化的文件；同时清理已删除的 session。
+ */
+export function incrementalScanFiles(sessionsDir: string, files: readonly string[], index: UsageIndex): UsageIndex {
   const sessions = { ...index.sessions };
   let changed = false;
 

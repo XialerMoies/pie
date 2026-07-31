@@ -110,6 +110,10 @@ export const webFetchTool: AgentTool = {
   },
   isReadOnly: true,
   isConcurrencySafe: true,
+  operations: ["execute"],
+  riskLevel: "medium",
+  needsPermission: false,
+  workspaceBounded: false,
   execute: async (args) => {
     const url = String(args.url ?? "").trim()
     if (!url) return "请输入 URL"

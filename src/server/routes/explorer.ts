@@ -1,12 +1,12 @@
 /**
  * Explorer routes — file system browsing and operations
  */
-import type { RouteHandler } from "./types";
+import type { RouteHandler } from "./types.js";
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, renameSync, rmSync, mkdirSync, createReadStream } from "fs";
 import { resolve, dirname } from "path";
-import { parseBody } from "./parse-body";
-import { writePathGuardError } from "./path-guard";
-import { authorizeRoutePath, writeServerPermissionError } from "../permission-service";
+import { parseBody } from "./parse-body.js";
+import { writePathGuardError } from "./path-guard.js";
+import { authorizeRoutePath, writeServerPermissionError } from "../permission-service.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 

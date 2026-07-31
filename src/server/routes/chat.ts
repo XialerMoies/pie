@@ -2,9 +2,12 @@
  * Chat routes — POST /api/chat, GET /api/chat/stream (SSE)
  */
 import type { ServerResponse } from "http";
-import type { ChatStreamState, RouteHandler } from "./types";
-import { processAttachments, buildContextBlock } from "./attach";
-import type { CommandConfirmationRequest, CommandConfirmationResult } from "../../agent/types";
+import type { ChatStreamState, RouteHandler } from "./types.js";
+import { processAttachments, buildContextBlock } from "./attach.js";
+import type { CommandConfirmationRequest, CommandConfirmationResult } from "../../agent/types.js";
+import { writeServerPermissionError } from "../permission-service.js";
+import { writePathGuardError } from "./path-guard.js";
+import { authorizeWorkspacePath, switchAuthorizedWorkspace } from "./workspace-authorization.js";
 
 const COMMAND_CONFIRM_TIMEOUT_MS = 120_000;
 
@@ -106,18 +109,16 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
     req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
     req.on("end", async () => {
       try {
-        const { workspace } = JSON.parse(body);
-        if (workspace && runtime.currentWorkspace !== workspace) {
-          console.log(`📂 Switching workspace: "${runtime.currentWorkspace}" → "${workspace}"`);
-          await runtime.switchWorkspace(workspace);
-          console.log(`✅ Workspace switched`);
-        }
+        const { workspace: requestedWorkspace } = JSON.parse(body);
+        const result = await switchAuthorizedWorkspace(ctx, requestedWorkspace);
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
-        res.end(JSON.stringify({ ok: true }));
+        res.end(JSON.stringify({ ok: true, workspace: result.workspace, switched: result.switched }));
       } catch (err: unknown) { const msg = err instanceof Error ? (err as Error).message : String(err);
         console.log(`❌ Workspace switch error: ${msg}`);
+        if (writeServerPermissionError(res, cors, err)) return;
+        if (writePathGuardError(res, cors, err)) return;
         res.writeHead(400, { ...cors });
-        res.end(JSON.stringify({ error: (err as Error).message }));
+        res.end(JSON.stringify({ error: msg }));
       }
     });
     return true;
@@ -130,7 +131,8 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
     req.on("end", async () => {
       try {
         const parsed = JSON.parse(body);
-        const { message, workspace, attachments } = parsed;
+        const { message, workspace: requestedWorkspace, attachments } = parsed;
+        const workspace = await authorizeWorkspacePath(ctx, requestedWorkspace, "chat.workspace");
         console.log(`[chat] POST message="${message?.slice(0, 60)}${(message?.length || 0) > 60 ? "…" : ""}" ws="${workspace || "?"}" atts=${attachments?.length || 0}`);
         chatStream.textBuffer = "";
         chatStream.thinkingBuffer = "";
@@ -177,6 +179,8 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true }));
       } catch (err: unknown) {
+        if (writeServerPermissionError(res, cors, err)) return;
+        if (writePathGuardError(res, cors, err)) return;
         res.writeHead(400, { ...cors });
         res.end(JSON.stringify({ error: (err as Error).message }));
       }
@@ -189,7 +193,7 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
     console.log(`🧹 /api/clear`);
     (async () => {
       try {
-        const { invalidateAllSections } = await import("../../agent/prompts")
+        const { invalidateAllSections } = await import("../../agent/prompts.js")
         invalidateAllSections()
         await runtime.refreshSystemPrompt()
         res.writeHead(200, { "Content-Type": "application/json", ...cors });

@@ -12,7 +12,7 @@
 
 import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import type { McpServerConfig, McpConfigFile, McpConfigSource } from "./types"
+import type { McpServerConfig, McpConfigFile, McpConfigSource } from "./types.js"
 
 // ─── 校验 ──────────────────────────────────────────
 
@@ -159,10 +159,16 @@ export function defaultGlobalConfigPath(): string {
 /**
  * 获取候选配置文件路径列表（按优先级从高到低）
  */
+export interface McpConfigCandidate {
+  path: string
+  priority: number
+  label: string
+}
+
 export function getCandidatePaths(
   projectRoot: string,
   globalConfigDir?: string,
-): { path: string; priority: number; label: string }[] {
+): McpConfigCandidate[] {
   return [
     {
       path: resolve(projectRoot, ".mcp.json"),
@@ -204,7 +210,10 @@ export interface McpLoadResult {
 export function loadMcpConfig(options: McpDiscoveryOptions): McpLoadResult {
   const { projectRoot, globalConfigDir } = options
   const candidates = getCandidatePaths(projectRoot, globalConfigDir)
+  return loadMcpConfigFromCandidates(candidates)
+}
 
+export function loadMcpConfigFromCandidates(candidates: readonly McpConfigCandidate[]): McpLoadResult {
   const result: McpLoadResult = {
     servers: [],
     errors: [],

@@ -8,11 +8,11 @@ import { readdirSync, existsSync } from "fs"
 import { resolve } from "path"
 import type { AgentSession } from "@xiamol/pi-coding-agent"
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from "@xiamol/pi-coding-agent"
-import { resolveSystemPrompt } from "./prompts"
-import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools"
-import type { SessionPermissionState, ToolContext } from "./types"
-import { applySessionPermissionSuggestions, resetSessionPermissionState } from "./permissions"
-import { wsDir } from "../server/routes/session-dir"
+import { resolveSystemPrompt } from "./prompts.js"
+import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools/index.js"
+import type { SessionPermissionState, ToolContext } from "./types.js"
+import { applySessionPermissionSuggestions, resetSessionPermissionState } from "./permissions.js"
+import { wsDir } from "../server/routes/session-dir.js"
 
 const _pendingOpens = new Map<string, Promise<void>>()
 
@@ -192,7 +192,7 @@ export class AgentRuntime {
 
   /** 强制刷新 system prompt（从 sections 重新 resolve 并注入 session） */
   async refreshSystemPrompt(): Promise<void> {
-    const { resolveSystemPrompt } = await import("./prompts")
+    const { resolveSystemPrompt } = await import("./prompts.js")
     const newPrompt = resolveSystemPrompt()
     try {
       // 更新 resource loader 的 append prompt

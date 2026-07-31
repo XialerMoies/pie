@@ -235,6 +235,11 @@ export const strReplaceEditorTool: AgentTool = {
   },
   isReadOnly: false,
   isDestructive: true,
+  isConcurrencySafe: false,
+  operations: ["read", "create", "write"],
+  riskLevel: "high",
+  needsPermission: false,
+  workspaceBounded: true,
   execute: async ({ file_path, old_string, new_string, replace_all, edits }, ctx) => {
     const fp = String(file_path ?? "");
     if (!fp) return "file_path 不能为空。";

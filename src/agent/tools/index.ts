@@ -8,7 +8,7 @@
  * PI SDK 需要的 ToolDefinition[] 格式，传给 createAgentSession()。
  */
 
-import { ToolRegistry, authorizeToolExecution, type AgentTool, type ToolContext, type ToolTraceEmitter } from "../types"
+import { ToolRegistry, authorizeToolExecution, type AgentTool, type ToolContext, type ToolTraceEmitter } from "../types.js"
 import { gitStatusTool } from "./git-status.js"
 import { searchTool } from "./search.js"
 import { fileReadTool } from "./file-read.js"
@@ -151,7 +151,7 @@ export async function disconnectMcp(): Promise<void> {
   _mcpConnecting = false
   // _mcpGen bumped inside MCPClientService.bumpGeneration()
   try {
-    const { disconnectAll, bumpGeneration } = await import("../mcp/MCPClientService")
+    const { disconnectAll, bumpGeneration } = await import("../mcp/MCPClientService.js")
     bumpGeneration()
     await disconnectAll()
   } catch {}
@@ -180,7 +180,7 @@ export async function reconnectMcp(workspace: string, emitTrace?: ToolTraceEmitt
 async function _connectMcpInBackground(workspace: string, emitTrace?: ToolTraceEmitter, extraCtx?: ExtraCtx): Promise<void> {
   if (_mcpConnecting) return
   _mcpConnecting = true
-  const { connectAll, currentGeneration } = await import("../mcp/MCPClientService")
+  const { connectAll, currentGeneration } = await import("../mcp/MCPClientService.js")
   const gen = currentGeneration()
   try {
     const mcpTools = await connectAll(workspace ?? "", emitTrace)

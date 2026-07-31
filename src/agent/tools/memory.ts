@@ -68,6 +68,10 @@ export const readMemoryTool: AgentTool = {
   },
   isReadOnly: true,
   isConcurrencySafe: true,
+  operations: ["read"],
+  riskLevel: "low",
+  needsPermission: false,
+  workspaceBounded: false,
   execute: async ({ name }, ctx) => {
     const n = String(name ?? "");
     if (!validMemoryName(n)) return `无效的记忆名称"${n}"。名称只允许字母、数字、点、下划线、短横线，最长 64 字符。`;
@@ -101,6 +105,11 @@ export const writeMemoryTool: AgentTool = {
   },
   isReadOnly: false,
   isDestructive: false,
+  isConcurrencySafe: false,
+  operations: ["read", "create", "write"],
+  riskLevel: "medium",
+  needsPermission: false,
+  workspaceBounded: false,
   execute: async ({ name, content }, ctx) => {
     const n = String(name ?? "");
     if (!validMemoryName(n)) return `无效的记忆名称"${n}"。名称只允许字母、数字、点、下划线、短横线，最长 64 字符。`;

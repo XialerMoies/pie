@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { resolve, dirname } from "node:path"
 import { createHash } from "node:crypto"
-import type { McpServerConfig, TrustRecord, TrustStoreFile } from "./types"
+import type { McpServerConfig, TrustRecord, TrustStoreFile } from "./types.js"
 
 // ─── Hash ──────────────────────────────────────────
 

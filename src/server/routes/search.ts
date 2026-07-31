@@ -3,13 +3,54 @@
  *
  * 核心逻辑在 search-core.ts，此处仅 HTTP 路由分发。
  */
-import type { RouteHandler } from "./types";
-import { parseBody } from "./parse-body";
-import { doSearch, doReplace, searchConversations } from "./search-core";
-import { writePathGuardError } from "./path-guard";
-import { authorizeRoutePath, writeServerPermissionError } from "../permission-service";
+import type { RouteHandler } from "./types.js";
+import { existsSync, readdirSync } from "fs";
+import { resolve } from "path";
+import { parseBody } from "./parse-body.js";
+import { doSearch, doReplace, searchConversationFiles } from "./search-core.js";
+import { writePathGuardError } from "./path-guard.js";
+import { authorizeRoutePath, writeServerPermissionError } from "../permission-service.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
+
+async function findAuthorizedConversationFiles(ctx: Parameters<RouteHandler>[2]): Promise<string[]> {
+  const sessionsDir = ctx.paths.SESSIONS_DIR;
+  const byProjectDir = resolve(sessionsDir, "by-project");
+  if (!existsSync(byProjectDir)) return [];
+
+  const authorizedByProjectDir = (await authorizeRoutePath(
+    ctx,
+    sessionsDir,
+    byProjectDir,
+    "read",
+    "search.conversations.root",
+  )).path;
+
+  const files: string[] = [];
+  for (const project of readdirSync(authorizedByProjectDir, { withFileTypes: true })) {
+    if (!project.isDirectory()) continue;
+    const projectDir = (await authorizeRoutePath(
+      ctx,
+      sessionsDir,
+      resolve(authorizedByProjectDir, project.name),
+      "read",
+      "search.conversations.project",
+    )).path;
+
+    for (const entry of readdirSync(projectDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+      files.push((await authorizeRoutePath(
+        ctx,
+        sessionsDir,
+        resolve(projectDir, entry.name),
+        "read",
+        "search.conversations.file",
+      )).path);
+    }
+  }
+
+  return files;
+}
 
 export const handleSearch: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
@@ -100,10 +141,13 @@ export const handleSearch: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ error: "Missing 'query'" }));
         return true;
       }
-      const data = searchConversations(query, p.SESSIONS_DIR, caseSensitive || false);
+      const files = await findAuthorizedConversationFiles(ctx);
+      const data = searchConversationFiles(query, p.SESSIONS_DIR, files, caseSensitive || false);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify(data));
     } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
       res.writeHead(400, { ...cors });
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
