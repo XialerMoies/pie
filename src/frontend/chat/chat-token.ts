@@ -495,7 +495,7 @@ async function doCompact(): Promise<void> {
         const data2 = await r2.json();
         if (data2.ok && Array.isArray(data2.messages)) {
           App.Chat?.resetMsgKeys?.();
-          window.__state.M = data2.messages.map((m: any) => ({
+          App.ChatState.replaceMessages(data2.messages.map((m: any) => ({
             role: m.role,
             content: m.content,
             thinking: m.thinking || '',
@@ -504,7 +504,7 @@ async function doCompact(): Promise<void> {
             turnId: m.turnId || undefined,
             blocks: m.blocks || undefined,
             error: m.error || undefined,
-          }));
+          })));
           const msgsEl = document.getElementById('ms') as HTMLElement | null;
           if (msgsEl) {
             msgsEl.innerHTML = window.msgs ? window.msgs() : '';

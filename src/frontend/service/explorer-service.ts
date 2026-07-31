@@ -23,7 +23,7 @@ export class ExplorerService {
 
   static setFilterEnabled(v: boolean): void {
     this._filterEnabled = v;
-    localStorage.setItem('explorer-filter', v ? '1' : '0');
+    App.Preferences.setBoolean('explorer-filter', v);
   }
   static getFilterEnabled(): boolean { return this._filterEnabled; }
 
@@ -220,8 +220,8 @@ function setExplorerStatus(text: string, kind: 'loading' | 'ready' | 'error' = '
   void kind;
 }
 
-// 从 localStorage 恢复筛选状态
-try { const v = localStorage.getItem('explorer-filter'); if (v === '0') ExplorerService._filterEnabled = false; } catch {}
+// 从统一偏好 facade 恢复筛选状态
+if (!App.Preferences.getBoolean('explorer-filter', true)) ExplorerService._filterEnabled = false;
 
 // 暴露到全局（供 inline onclick 使用）
 (window as any).ExplorerService = ExplorerService;

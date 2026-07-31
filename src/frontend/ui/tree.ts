@@ -66,7 +66,7 @@ export class Tree {
     if (!this._loadQueued) {
       this._loadQueued = true;
       try {
-        const raw = localStorage.getItem(this._stateKey);
+        const raw = App.Preferences.get(this._stateKey);
         if (!raw) { this._loadQueued = false; this.render(); return; }
         const s = JSON.parse(raw);
         const toExpand: string[] = s.expanded || [];
@@ -252,10 +252,10 @@ export class Tree {
 
   private _saveState(): void {
     try {
-      localStorage.setItem(this._stateKey, JSON.stringify({
+      App.Preferences.setJson(this._stateKey, {
         expanded: Array.from(this._expanded),
         selected: this._selected,
-      }));
+      });
     } catch {}
   }
 

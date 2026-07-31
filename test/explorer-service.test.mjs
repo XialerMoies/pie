@@ -21,6 +21,13 @@ global.App = {
     getWorkspacePath: () => workspacePath,
     setWorkspacePath: (path) => { workspacePath = path; },
   },
+  Preferences: {
+    getBoolean: (key, fallback = false) => {
+      const value = store[key];
+      return value == null ? fallback : value === true || value === "true";
+    },
+    setBoolean: (key, value) => { store[key] = Boolean(value); },
+  },
 };
 global.window = global;
 global.AbortController = class {

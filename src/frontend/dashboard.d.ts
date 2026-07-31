@@ -158,6 +158,30 @@ interface AppChat {
   copyLastError(): Promise<void>;
   refreshWorkspaceState(): void;
   scheduleMessagesRender(scroll?: boolean): void;
+  isBusy(): boolean;
+}
+interface AppChatState {
+  getMessages(): Message[];
+  replaceMessages(messages: Message[]): void;
+  appendMessage(message: Message): void;
+  clearMessages(): void;
+  isBusy(): boolean;
+  setBusy(busy: boolean): void;
+  getDashboard(): DashboardData | null;
+  setDashboard(data: DashboardData | null): void;
+  reset(): void;
+}
+interface ChatStreamHandlers {
+  onMessage?: (event: MessageEvent) => void;
+  onError?: (event: Event) => void;
+  onOpen?: (event: Event) => void;
+}
+interface AppChatStream {
+  open(handlers?: ChatStreamHandlers): number;
+  setHandlers(generation: number, handlers: ChatStreamHandlers): boolean;
+  close(): void;
+  isCurrent(generation: number): boolean;
+  isOpen(): boolean;
 }
 interface AppFile {
   toggleFileMenu(ev: MouseEvent, trigger?: HTMLElement): void;
@@ -231,6 +255,13 @@ interface TabStoreAPI {
 }
 
 interface AppTabs {
+  getState(): TabsState;
+  getTabs(): AppTab[];
+  getActiveTab(): AppTab | null;
+  getTab(id: string): AppTab | undefined;
+  getFileTabIds(): string[];
+  getActiveFileTabId(): string | null;
+  clearActiveTab(): void;
   activate(id: string, options?: SessionActivationOptions): void;
   close(id: string): void;
   contextMenu(e: MouseEvent, id: string): void;
@@ -276,10 +307,13 @@ interface AppStateFacade {
 }
 
 interface AppNamespace {
+  Preferences: AppPreferences;
   Constants: AppConstants;
   State: AppStateFacade;
   UI: AppUI;
   Chat: AppChat;
+  ChatState: AppChatState;
+  ChatStream: AppChatStream;
   File: AppFile;
   Session: AppSession;
   Settings: AppSettings;

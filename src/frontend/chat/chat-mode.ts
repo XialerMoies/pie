@@ -58,8 +58,8 @@ async function syncThinkingLevel(): Promise<void> {
 
 function loadModeState(): void {
   try {
-    _currentMode = localStorage.getItem('chat-mode') || 'auto';
-    const effort = localStorage.getItem('chat-effort') || 'medium';
+    _currentMode = App.Preferences.get('chat-mode', 'auto');
+    const effort = App.Preferences.get('chat-effort', 'medium');
     if (EFFORT_LABELS[effort]) _currentEffort = effort;
     if (!MODE_LABELS[_currentMode]) _currentMode = 'auto';
   } catch { _currentMode = 'auto'; }
@@ -70,14 +70,14 @@ function loadModeState(): void {
 
 function setMode(mode: string): void {
   _currentMode = mode;
-  try { localStorage.setItem('chat-mode', mode); } catch {}
+  App.Preferences.set('chat-mode', mode);
   updateModeButton();
 }
 
 /** 调用服务端 setThinkingLevel，替代 localStorage + 提示词前缀 */
 async function setEffort(effort: string): Promise<void> {
   _currentEffort = effort;
-  try { localStorage.setItem('chat-effort', effort); } catch {}
+  App.Preferences.set('chat-effort', effort);
   if (!_supportsThinking) return;
   try {
     const r = await fetch('/api/thinking-level', {

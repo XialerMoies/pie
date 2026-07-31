@@ -358,11 +358,11 @@ export function monacoCreateEditor(container: HTMLElement): void {
   const initUri = monaco.Uri.parse("file:///untitled.ts");
   const initModel = monaco.editor.createModel("", "plaintext", initUri);
 
-  // 从 localStorage 加载用户设置
-  const editorFontSize = parseInt(localStorage.getItem('editor-font-size') || '13', 10);
-  const editorTabSize = parseInt(localStorage.getItem('editor-tab-size') || '2', 10);
-  const editorUseTabs = localStorage.getItem('editor-use-tabs') === '1';
-  const editorTheme = localStorage.getItem('editor-theme') || 'vs-dark';
+  // 从统一偏好 facade 加载用户设置
+  const editorFontSize = App.Preferences.getNumber('editor-font-size', 13, 10, 24);
+  const editorTabSize = App.Preferences.getNumber('editor-tab-size', 2, 1, 16);
+  const editorUseTabs = App.Preferences.getBoolean('editor-use-tabs');
+  const editorTheme = App.Preferences.get('editor-theme', 'vs-dark');
 
   const isLight = editorTheme === 'vs';
   document.documentElement.classList.toggle('theme-light', isLight);
@@ -540,8 +540,8 @@ export function monacoCreateEditor(container: HTMLElement): void {
           body: JSON.stringify({
             file,
             projectRoot: tsserverRoot(),
-            tabSize: parseInt(localStorage.getItem("editor-tab-size") || "2", 10),
-            useTabs: localStorage.getItem("editor-use-tabs") === "1",
+            tabSize: App.Preferences.getNumber('editor-tab-size', 2, 1, 16),
+            useTabs: App.Preferences.getBoolean('editor-use-tabs'),
           }),
         });
         const data = await r.json();
@@ -610,10 +610,10 @@ export function monacoSetLanguage(id: string): void {
 /** 从设置页更新编辑器配置 */
 export function updateEditorSettings(): void {
   if (!editor) return;
-  const fontSize = parseInt(localStorage.getItem('editor-font-size') || '13', 10);
-  const tabSize = parseInt(localStorage.getItem('editor-tab-size') || '2', 10);
-  const useTabs = localStorage.getItem('editor-use-tabs') === '1';
-  const theme = localStorage.getItem('editor-theme') || 'vs-dark';
+  const fontSize = App.Preferences.getNumber('editor-font-size', 13, 10, 24);
+  const tabSize = App.Preferences.getNumber('editor-tab-size', 2, 1, 16);
+  const useTabs = App.Preferences.getBoolean('editor-use-tabs');
+  const theme = App.Preferences.get('editor-theme', 'vs-dark');
   editor.updateOptions({ fontSize, tabSize, indentSize: tabSize, useTabStops: useTabs });
   const isLight = theme === 'vs';
   document.documentElement.classList.toggle('theme-light', isLight);

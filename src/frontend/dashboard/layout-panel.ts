@@ -97,7 +97,7 @@ function renderPanel(name: string, pc?: HTMLElement | null): void {
 }
 
 function sinfoHTML(): string {
-  const stD = (window as any).__state.D;
+  const stD = App.ChatState.getDashboard();
   if (!stD) return '<div class="sg" style="padding:12px;font-size:.7rem;color:var(--tm)">加载中...</div>';
   const ts = (stD.tools || ['read','write','edit','bash']).slice(0, 18);
   const act = (stD.activeTools || stD.tools || []).length;

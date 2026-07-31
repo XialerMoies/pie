@@ -125,7 +125,7 @@ function switchSettingsModal(tab: string): void {
       const allProvs = ['anthropic', 'deepseek', 'openai', 'openrouter', 'google'];
       const configured = allProvs.filter(p => cfg[p] && cfg[p].hasKey);
       const unconfigured = allProvs.filter(p => !configured.includes(p));
-      const savedOrder = localStorage.getItem('providers_order');
+      const savedOrder = App.Preferences.get('providers_order');
       let order: string[] = configured.concat(unconfigured);
       if (savedOrder) {
         try {
@@ -139,10 +139,10 @@ function switchSettingsModal(tab: string): void {
       if (order.length > 0) selectProvider(order[0]);
     }).catch(() => { const l = $('msl-list'); if (l) l.innerHTML = '<p style="color:var(--rs);font-size:.72rem">加载失败</p>'; toast('加载厂商列表失败', 'error'); });
   } else if (tab === 'general') {
-    const fontSize = localStorage.getItem('editor-font-size') || '13';
-    const tabSize = localStorage.getItem('editor-tab-size') || '2';
-    const useTabs = localStorage.getItem('editor-use-tabs') === '1';
-    const theme = localStorage.getItem('editor-theme') || 'vs-dark';
+    const fontSize = String(App.Preferences.getNumber('editor-font-size', 13, 10, 24));
+    const tabSize = String(App.Preferences.getNumber('editor-tab-size', 2, 1, 16));
+    const useTabs = App.Preferences.getBoolean('editor-use-tabs');
+    const theme = App.Preferences.get('editor-theme', 'vs-dark');
     sc.innerHTML = `
       <h3 class="s-title">通用设置</h3>
       <p class="s-desc">应用与编辑器偏好设置，即时生效。</p>
@@ -153,7 +153,7 @@ function switchSettingsModal(tab: string): void {
           <div class="gs-row" style="border:none">
             <span class="gs-label">自动保存</span>
             <div class="gs-control">
-              <label class="gs-toggle"><input type="checkbox" id="gs-autosave"${localStorage.getItem('auto-save')==='1'?' checked':''}><span class="gs-toggle-slider"></span></label>
+      <label class="gs-toggle"><input type="checkbox" id="gs-autosave"${App.Preferences.getBoolean('auto-save') ? ' checked' : ''}><span class="gs-toggle-slider"></span></label>
             </div>
           </div>
         </div>
@@ -270,7 +270,7 @@ function loadProviderModels(prov: string): void {
     if (models.length === 0) { container.innerHTML = '<p style="color:var(--tm);font-size:.72rem">无可用模型</p>'; return; }
     let html = '<div class="rp-models-title">可用模型</div>';
     models.forEach(m => {
-      const stD = window.__state.D;
+      const stD = (window as any).App?.ChatState?.getDashboard?.() || null;
       const active = (m.provider === stD?.modelProvider && m.id === stD?.modelId);
       html += `<div class="rp-model-item${active?' on':''}" data-model-provider="${E(m.provider)}" data-model-id="${E(m.id)}">${E(m.id)}</div>`;
     });
@@ -299,8 +299,7 @@ function selectModel(provider: string, modelId: string): void {
 function toggleAutoSaveSetting(): void {
   const el = document.getElementById('gs-autosave') as HTMLInputElement | null;
   if (el) {
-    if (el.checked) localStorage.setItem('auto-save', '1');
-    else localStorage.removeItem('auto-save');
+    App.Preferences.setBoolean('auto-save', el.checked);
     toast('自动保存: ' + (el.checked ? '开' : '关'));
   }
 }
@@ -311,7 +310,7 @@ function changeFontSize(delta: number): void {
   let size = parseInt(el.textContent || '13', 10);
   size = Math.max(10, Math.min(24, size + delta));
   el.textContent = String(size);
-  localStorage.setItem('editor-font-size', String(size));
+  App.Preferences.set('editor-font-size', String(size));
   applyEditorSettings();
 }
 
@@ -319,9 +318,9 @@ function applyGeneralSetting(): void {
   const typeEl = $('gs-indent-type') as HTMLSelectElement | null;
   const sizeEl = $('gs-tab-size') as HTMLSelectElement | null;
   const themeEl = $('gs-theme') as HTMLSelectElement | null;
-  if (typeEl) localStorage.setItem('editor-use-tabs', typeEl.value);
-  if (sizeEl) localStorage.setItem('editor-tab-size', sizeEl.value);
-  if (themeEl) localStorage.setItem('editor-theme', themeEl.value);
+  if (typeEl) App.Preferences.set('editor-use-tabs', typeEl.value);
+  if (sizeEl) App.Preferences.set('editor-tab-size', sizeEl.value);
+  if (themeEl) App.Preferences.set('editor-theme', themeEl.value);
   applyEditorSettings();
 }
 
@@ -355,7 +354,7 @@ function provDrop(ev: DragEvent, idx: number): void {
   const item = order.splice(_dragIdx, 1)[0];
   order.splice(idx, 0, item);
   window._provOrder = order;
-  localStorage.setItem('providers_order', JSON.stringify(order));
+  App.Preferences.setJson('providers_order', order);
   const list = $('msl-list');
   if (!list) return;
   list.innerHTML = providerListHTML(order);

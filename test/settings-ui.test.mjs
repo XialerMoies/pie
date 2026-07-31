@@ -26,11 +26,14 @@ global.toast = () => {};
 global.getD = () => {};
 win.__state = { D: null };
 win.App = { Settings: {} };
+global.App = win.App;
 
 let fetchImpl = async () => ({ ok: true, json: async () => ({}) });
 global.fetch = (...args) => fetchImpl(...args);
 
 before(async () => {
+  await import(`../src/frontend/services/chat-runtime-store.ts?settings-ui=${Date.now()}`);
+  await import(`../src/frontend/services/preferences.ts?settings-ui=${Date.now()}`);
   await import("../src/frontend/dashboard/dashboard-settings.ts");
 });
 
@@ -109,6 +112,17 @@ describe("settings DOM boundary", () => {
 
     assert.deepStrictEqual(switchRequest, { provider: "openai", modelId: hostileModel });
     assert.strictEqual(global.__settingsInjected, undefined);
+  });
+
+  it("does not render persisted numeric preferences as HTML", async () => {
+    storage.set("editor-font-size", '<img id="settings-preference-injection">');
+
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+    document.querySelector('.ms-item[data-st="general"]')?.click();
+
+    assert.strictEqual(document.getElementById("gs-fontsize")?.textContent, "13");
+    assert.strictEqual(document.getElementById("settings-preference-injection"), null);
   });
 
   it("routes general settings and close controls through modal event delegation", async () => {

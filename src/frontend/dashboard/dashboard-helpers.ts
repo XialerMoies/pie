@@ -47,6 +47,47 @@ Object.defineProperty(window.__state, '_fileTabs', {
 //   App.Settings  — settings modal, API keys, model list
 // ═══════════════════════════════════════════════════════════════════
 
+function legacyTabsState(): TabsState {
+  const state = (window as any).__state;
+  const items: AppTab[] = [];
+  for (const file of state?._fileTabs || []) {
+    items.push({ id: file.id, kind: 'file', title: file.label, order: items.length, path: file.id });
+  }
+
+  let sessionIds: string[] = [];
+  if (typeof (window as any).readSessionTabIds === 'function') {
+    sessionIds = (window as any).readSessionTabIds();
+  }
+  if (!sessionIds.length) sessionIds = state?._sessionTabs || [];
+  const getLabel = (window as any).sessionTabLabel || ((id: string) => id.startsWith('draft:') ? '新会话' : '新会话');
+  for (const id of sessionIds) {
+    const isDraft = id.startsWith('draft:');
+    items.push({
+      id,
+      kind: isDraft ? 'chat' : 'session',
+      title: getLabel(id),
+      order: items.length,
+      ...(isDraft ? { draftId: id } : { sessionId: id }),
+    });
+  }
+
+  return {
+    items,
+    activeId: state?._activeFileTab ?? state?._activeSessionTabId ?? null,
+  };
+}
+
+function currentTabsState(): TabsState {
+  const state = (window as any).__tabs?.getState?.();
+  if (state && Array.isArray(state.items)) {
+    return {
+      items: state.items.map((tab: AppTab) => ({ ...tab })),
+      activeId: state.activeId ?? null,
+    };
+  }
+  return legacyTabsState();
+}
+
 (window as any).App = {
   Constants: { WS_KEY: 'workspace_path' } as Record<string, string>,
   UI: {} as Record<string, Function>,
@@ -55,6 +96,25 @@ Object.defineProperty(window.__state, '_fileTabs', {
   Session: {} as Record<string, Function>,
   Settings: {} as Record<string, Function>,
   Tabs: {
+    getState(): TabsState { return currentTabsState(); },
+    getTabs(): AppTab[] { return currentTabsState().items; },
+    getActiveTab(): AppTab | null {
+      const state = currentTabsState();
+      return state.items.find(tab => tab.id === state.activeId) || null;
+    },
+    getTab(id: string): AppTab | undefined {
+      return currentTabsState().items.find(tab => tab.id === id);
+    },
+    getFileTabIds(): string[] {
+      return currentTabsState().items.filter(tab => tab.kind === 'file').map(tab => tab.id);
+    },
+    getActiveFileTabId(): string | null {
+      const tab = this.getActiveTab();
+      return tab?.kind === 'file' ? tab.id : null;
+    },
+    clearActiveTab(): void {
+      (window as any).__tabs?.activateTab?.(null);
+    },
     activate(id: string, options?: SessionActivationOptions) {
       const tabs = (window as any).__tabs;
       const tab = tabs?.getTab?.(id);
@@ -212,10 +272,10 @@ async function getD(): Promise<void> {
   try {
     await bootstrapApi();
     const r = await fetch('/api/dashboard', { credentials: 'include' });
-    window.__state.D = await r.json();
+    App.ChatState.setDashboard(await r.json());
     // Sync model name to input bar
     const fn = (window as any).App?.Chat?.updateModelName;
-    if (fn) fn(); else { const mn = $('fi-model-name'); if (mn && window.__state.D?.modelId) mn.textContent = window.__state.D.modelId; }
+    if (fn) fn(); else { const mn = $('fi-model-name'); if (mn && App.ChatState.getDashboard()?.modelId) mn.textContent = App.ChatState.getDashboard()!.modelId; }
   } catch { /* ignore */ }
 }
 

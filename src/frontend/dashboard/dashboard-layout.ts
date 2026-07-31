@@ -5,20 +5,14 @@ function isChatTabOpen(): boolean {
   return App.State.getSnapshot().tabs.chatOpen !== false;
 }
 
-function hasOpenSessionTabs(): boolean {
-  return ((window as any).__tabs?.getSessionTabIds?.() || []).length > 0;
-}
-
 function closeChatTab(): void {
   // 关闭当前 chat tab（只关激活的那个，不多关草稿）
-  const tabs = (window as any).__tabs;
-  if (tabs) {
-    const active = tabs.getActiveTab();
-    if (active && active.kind === 'chat') tabs.closeTab(active.id);
-  }
+  const active = App.Tabs.getActiveTab?.();
+  if (active?.kind === 'chat') App.Tabs.close(active.id);
   App.State.setChatOpen(false);
-  if (window.__state._activeFileTab === null && window.__state._fileTabs.length > 0) {
-    (window as any).App?.Tabs?.activate(window.__state._fileTabs[0].id);
+  const fileTabIds = App.Tabs.getFileTabIds?.() || [];
+  if (App.Tabs.getActiveFileTabId?.() === null && fileTabIds.length > 0) {
+    App.Tabs.activate(fileTabIds[0]);
     return;
   }
   renderTabs();
@@ -85,6 +79,7 @@ function buildSidePanel(): string {
 }
 
 function buildMainArea(): string {
+  const chatBusy = App.Chat?.isBusy?.() === true;
   return `<div class="main">
     <div class="main-tabs" id="main-tabs"></div>
     <div class="mc">
@@ -113,14 +108,14 @@ function buildMainArea(): string {
             <div class="fi-slash-item" data-cmd="/clear"><span class="cmd">/clear</span> <span class="desc">清除缓存</span></div>
           </div>
           <div class="fi-attach-bar" id="fi-attach-bar" style="display:none"></div>
-          <textarea id="ci" rows="1" placeholder="输入消息...（输入 / 使用快捷命令）" ${window.__state.IL?'disabled':''}></textarea>
+          <textarea id="ci" rows="1" placeholder="输入消息...（输入 / 使用快捷命令）" ${chatBusy ? 'disabled' : ''}></textarea>
           <div class="fi-divider"></div>
           <div class="fi-actions-bar">
             <button class="fi-abtn fi-model" id="fi-model-btn" title="切换模型"><span id="fi-model-name">claude-sonnet</span> <span class="fi-arrow">▾</span></button>
             <button class="fi-abtn fi-mode" id="fi-mode-btn" title="切换模式"><span id="fi-mode-name">自动</span> <span class="fi-arrow">▾</span></button>
             <button class="fi-abtn fi-file" id="fi-file-btn" title="添加本机文件">${window.S('iplus', 14)}</button>
             <span class="fi-spacer"></span>
-            <button id="cs" class="fi-send-btn" title="${window.__state.IL?'中止':'发送消息'}">${window.S('iup', 16)}</button>
+            <button id="cs" class="fi-send-btn" title="${chatBusy ? '中止' : '发送消息'}">${window.S('iup', 16)}</button>
           </div>
         </div>
       </div>
@@ -187,43 +182,15 @@ function bindLayoutActions(container: HTMLElement): void {
 function renderTabs(): void {
   const el = $('main-tabs');
   if (!el) return;
-  const tabs = (window as any).__tabs;
-  const state = tabs?.getState?.();
-  const hasTabStore = state !== undefined && state !== null;
+  const state = App.Tabs.getState();
 
-  // 统一路径：从 TabStore 读取
-  let items: AppTab[] = [];
-  let activeId: string | null = null;
-  if (hasTabStore && state!.items !== undefined) {
-    items = state!.items;
-    activeId = state!.activeId;
-    // TabStore 中 session/chat tab 的 title 为 '新会话'（openTab 时写入），
-    // 从 sessionTabLabel() 实时解析真实名称
-    if (typeof (window as any).sessionTabLabel === 'function') {
-      items = items.map(t => t.kind !== 'file' ? { ...t, title: (window as any).sessionTabLabel(t.id) } : t);
-    }
-  } else if (!hasTabStore) {
-    // 回退：从旧字段构建（兼容测试/未迁移场景）
-    const st = (window as any).__state;
-    const fileTabs = st?._fileTabs ?? [];
-    for (const ft of fileTabs) {
-      items.push({ id: ft.id, kind: 'file', title: ft.label, order: items.length, path: ft.id } as AppTab);
-    }
-    // 从 readSessionTabIds（暴露在 window）读，兼容旧 localStorage 持久化
-    let sessionIds: string[] = [];
-    if (typeof (window as any).readSessionTabIds === 'function') {
-      sessionIds = (window as any).readSessionTabIds();
-    }
-    if (!sessionIds.length) sessionIds = st?._sessionTabs ?? [];
-    const getLabel = (window as any).sessionTabLabel || ((s: string) => s.startsWith('draft:') ? '新会话' : '新会话');
-    for (const sid of sessionIds) {
-      const isDraft = sid.startsWith('draft:');
-      items.push({
-        id: sid, kind: isDraft ? 'chat' : 'session', title: getLabel(sid), order: items.length,
-        ...(isDraft ? { draftId: sid } : { sessionId: sid }),
-      } as AppTab);
-    }
-    activeId = st?._activeSessionTabId ?? null;
+  // App.Tabs facade owns the TabStore/legacy compatibility decision.
+  let items: AppTab[] = state.items;
+  const activeId = state.activeId;
+  // TabStore 中 session/chat tab 的 title 为 '新会话'（openTab 时写入），
+  // 从 sessionTabLabel() 实时解析真实名称
+  if (typeof (window as any).sessionTabLabel === 'function') {
+    items = items.map(t => t.kind !== 'file' ? { ...t, title: (window as any).sessionTabLabel(t.id) } : t);
   }
 
   let scroll = '';
@@ -402,12 +369,11 @@ function restoreActiveTab(): void {
       return;
     }
     if (activeView?.type === 'file' && activeView.id) {
-      const exists = window.__state._fileTabs.some(t => t.id === activeView.id);
+      const exists = App.Tabs.getTab?.(activeView.id)?.kind === 'file';
       if (exists) { App?.Tabs?.activate(activeView.id); return; }
     }
-    const ts = (window as any).__tabs;
-    if (ts) ts.activateTab(null);
-  } catch { const ts = (window as any).__tabs; if (ts) ts.activateTab(null); }
+    App.Tabs.clearActiveTab?.();
+  } catch {}
 }
 
 // 页面加载完成后恢复面板宽度
@@ -499,14 +465,12 @@ function _pbBindClicks(container: HTMLElement): void {
 }
 
 async function _pbNavigateToProblem(filePath: string, line: number, col: number): Promise<void> {
-  const tabs = (window as any).__tabs;
-  const tab = tabs?.getTab?.(filePath);
-  if (tab) { const AT = (window as any).App?.Tabs; if (AT) AT.activate(filePath); }
+  const tab = App.Tabs.getTab?.(filePath);
+  if (tab) App.Tabs.activate(filePath);
   else {
     const fn = (window as any).openFileTab as ((id: string, content: string, lang?: string) => void) | undefined;
     if (fn) {
-      const key = (window as any).App?.Constants?.WS_KEY;
-      const root = key ? (window as any).localStorage?.getItem?.(key) || "" : "";
+      const root = App.State.getWorkspacePath();
       fetch(`/api/file/read?root=${encodeURIComponent(root)}&path=${encodeURIComponent(filePath)}`)
         .then(r => r.json())
         .then((d: any) => { fn!(filePath, d?.content || '', '.' + (filePath.split('.').pop() || '').toLowerCase()); })
