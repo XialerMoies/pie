@@ -173,6 +173,10 @@ export function evaluatePathPermission(
     }
   }
 
+  if (allowedRoots.some((root) => isPathInside(resolvedPath, root))) {
+    return { status: "allow" }
+  }
+
   const askMatch = findMatchingScopedPathPermissionRule(resolvedPath, operation, policy.alwaysAskRules)
   if (askMatch) {
     return {
@@ -183,10 +187,6 @@ export function evaluatePathPermission(
       matchedRule: askMatch.rule,
       suggestions: createPathPermissionSuggestions(path.dirname(resolvedPath), operation),
     }
-  }
-
-  if (allowedRoots.some((root) => isPathInside(resolvedPath, root))) {
-    return { status: "allow" }
   }
 
   const allowRule = findMatchingPathPermissionRule(

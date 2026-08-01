@@ -9,7 +9,7 @@
  */
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 
 // ── 模拟 fetch ────────────────────────────────────────────
@@ -82,7 +82,7 @@ describe("builtin tool governance metadata", () => {
     ["write_agent_md", { operations: ["create", "write"], riskLevel: "medium", needsPermission: false, workspaceBounded: true }],
     ["read_memory", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: false }],
     ["write_memory", { operations: ["read", "create", "write"], riskLevel: "medium", needsPermission: false, workspaceBounded: false }],
-    ["str_replace_editor", { operations: ["read", "create", "write"], riskLevel: "high", needsPermission: false, workspaceBounded: true }],
+    ["str_replace_editor", { operations: ["read", "write"], riskLevel: "high", needsPermission: false, workspaceBounded: true }],
     ["file_write", { operations: ["create", "write"], riskLevel: "high", needsPermission: false, workspaceBounded: true }],
   ]);
 
@@ -547,28 +547,25 @@ describe("str_replace_editor tool", () => {
     assert.strictEqual(content, "aaa 222 ccc");
   });
 
-  it("old_string: '' 创建新文件", async () => {
+  it("old_string: '' rejects creation and points callers to file_write", async () => {
     const r = await strReplaceEditorTool.execute(
       { file_path: "newfile.txt", old_string: "", new_string: "hello" },
       workspaceCtx(),
     );
-    assert.ok(toolText(r).includes("已创建"));
-    const content = readFileSync(resolve(dir, "newfile.txt"), "utf-8");
-    assert.strictEqual(content, "hello");
+    assert.ok(toolText(r).includes("file_write"));
+    assert.strictEqual(existsSync(resolve(dir, "newfile.txt")), false);
   });
 
-  it("new-file edits go through create path authorization", async () => {
+  it("does not request create authorization for a rejected new-file edit", async () => {
     const calls = [];
     const r = await strReplaceEditorTool.execute(
       { file_path: "guarded-new.txt", old_string: "", new_string: "hello" },
       authorizedWorkspaceCtx(calls),
     );
 
-    assert.ok(toolText(r).length > 0);
-    assert.deepStrictEqual(calls.map((call) => [call.operation, call.source]), [
-      ["create", "agent.str_replace.create"],
-    ]);
-    assert.strictEqual(readFileSync(resolve(dir, "guarded-new.txt"), "utf-8"), "hello");
+    assert.ok(toolText(r).includes("file_write"));
+    assert.deepStrictEqual(calls, []);
+    assert.strictEqual(existsSync(resolve(dir, "guarded-new.txt")), false);
   });
 
   it("反转义 <fnr> → <function_results>", async () => {

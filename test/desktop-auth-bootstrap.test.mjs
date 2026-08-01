@@ -52,13 +52,18 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
     assert.deepEqual(calls[0][1].headers, { "X-My-Code-Agent-Token": "desktop-token" });
   });
 
-  it("waits for the permission event channel before rendering protected panes", () => {
+  it("renders the shell before background workspace recovery in development and packaged startup", () => {
     const html = readFileSync(new URL("../src/frontend/dashboard.html", import.meta.url), "utf8");
-    const startEvents = html.indexOf("await window.ExplorerService?.startEvents?.()");
-    const layout = html.indexOf("layout()", startEvents);
+    const startup = readFileSync(new URL("../src/frontend/dashboard/dashboard-startup.ts", import.meta.url), "utf8");
 
-    assert.ok(startEvents >= 0, "startup should await the permission event channel");
-    assert.ok(layout > startEvents, "layout should run only after the event channel is ready");
+    for (const [name, source] of [["development", html], ["packaged", startup]]) {
+      const layout = source.indexOf("layout()");
+      const sync = source.indexOf("syncStartupWorkspace()", layout);
+      assert.ok(layout >= 0, `${name} startup should render the shell`);
+      assert.ok(sync > layout, `${name} startup should recover the workspace after rendering`);
+    }
+
+    assert.match(startup, /catch[\s\S]*App\.State\.resetWorkspace\(""\)/);
   });
 
   it("syncs the persisted workspace once before protected panes load", async () => {

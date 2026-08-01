@@ -4,14 +4,12 @@
  * 替换 PI 内置的整文件 Edit/Write，只修改匹配的文本块。
  * 参考 Claude Code FileEditTool 设计。
  *
- * 三种模式：
+ * 两种模式：
  *   1. old_string + new_string → 单次替换（已有文件）
- *   2. old_string: "" + new_string → 创建新文件
- *   3. edits: [{old_string, new_string}] → 批量替换
+ *   2. edits: [{old_string, new_string}] → 批量替换
  */
-import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from "fs";
-import { dirname } from "path";
-import { defineAgentTool, structuredToolResult, type AgentTool } from "../types.js";
+import { readFileSync, writeFileSync, existsSync, statSync } from "fs";
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool } from "../types.js";
 import { authorizeToolPath, guardToolPath } from "./path-authorization.js";
 
 const MAX_FILE_SIZE = 1024 * 1024; // 1 MB
@@ -110,7 +108,7 @@ function applyEdits(content: string, edits: EditOp[]): EditApplyResult {
   if (edits.length === 1) {
     const e = edits[0];
     if (e.old_string === "") {
-      throw new Error('批量 edits 中 old_string 不能为空；创建新文件请使用单次模式的 old_string: ""。');
+      throw new Error('批量 edits 中 old_string 不能为空；创建新文件请使用 file_write。');
     }
     if (e.old_string === e.new_string) return { content, applied: 0 };
     const count = content.split(e.old_string).length - 1;
@@ -131,7 +129,7 @@ function applyEdits(content: string, edits: EditOp[]): EditApplyResult {
 
   for (const e of edits) {
     if (e.old_string === "") {
-      throw new Error('批量 edits 中 old_string 不能为空；创建新文件请使用单次模式的 old_string: ""。');
+      throw new Error('批量 edits 中 old_string 不能为空；创建新文件请使用 file_write。');
     }
     if (e.old_string === e.new_string) continue;
 
@@ -182,16 +180,16 @@ function applyEdits(content: string, edits: EditOp[]): EditApplyResult {
 export const strReplaceEditorTool: AgentTool = defineAgentTool({
   name: "str_replace_editor",
   description:
-    "精确文件编辑工具。三种模式：\n" +
+    "精确文件编辑工具。仅编辑已有文件，两种模式：\n" +
     "1. file_path + old_string + new_string → 在已有文件中精确替换\n" +
-    "2. file_path + old_string: \"\" + new_string → 创建新文件（含父目录）\n" +
-    "3. file_path + edits: [{old_string, new_string, replace_all?}] → 批量替换\n\n" +
+    "2. file_path + edits: [{old_string, new_string, replace_all?}] → 批量替换\n\n" +
+    "创建新文件请使用 file_write。\n" +
     "old_string 匹配会自动处理弯引号 → 直引号归一，以及 HTML 转义反转义。",
   parameters: {
     type: "object",
     properties: {
       file_path: { type: "string", description: "文件路径（相对 workspace 或绝对路径）" },
-      old_string: { type: "string", description: "要替换的文本。设为空串 \"\" 时创建新文件" },
+      old_string: { type: "string", description: "要替换的非空文本" },
       new_string: { type: "string", description: "替换后的文本" },
       replace_all: { type: "boolean", description: "替换所有匹配（默认 false）" },
       edits: {
@@ -213,7 +211,7 @@ export const strReplaceEditorTool: AgentTool = defineAgentTool({
   isReadOnly: false,
   isDestructive: true,
   isConcurrencySafe: false,
-  operations: ["read", "create", "write"],
+  operations: ["read", "write"],
   riskLevel: "high",
   needsPermission: false,
   workspaceBounded: true,
@@ -227,20 +225,9 @@ export const strReplaceEditorTool: AgentTool = defineAgentTool({
     let absPath: string;
     try { absPath = guardToolPath(root, fp); } catch (e: any) { return e.message; }
 
-    // ── 模式 A：创建新文件（old_string === ""）────────────
+    // 空 old_string 曾表示创建文件；该职责现在只属于 file_write。
     if (old_string === "" && new_string !== undefined && new_string !== null) {
-      if (existsSync(absPath)) return `文件已存在：${fp}。编辑已有文件请提供 old_string。`;
-      try { absPath = await authorizeToolPath(ctx, root, absPath, "create", "agent.str_replace.create"); } catch (e: any) { return e.message; }
-      mkdirSync(dirname(absPath), { recursive: true });
-      writeFileSync(absPath, String(new_string), "utf-8");
-      const lines = String(new_string).split("\n").length;
-      return structuredToolResult(`已创建 ${fp}（${lines} 行）。创建新文件请用 file_write 工具。`, {
-        path: fp,
-        operation: "create",
-        applied: 1,
-        totalLines: lines,
-        changed: true,
-      });
+      return structuredToolError("str_replace_editor 只编辑已有文件；创建新文件请使用 file_write。", "unsupported_create_mode", { path: fp });
     }
 
     // ── 模式 B：批量 edits ──────────────────────────────
@@ -250,7 +237,7 @@ export const strReplaceEditorTool: AgentTool = defineAgentTool({
     const oldStr = useEdits ? "" : String(old_string ?? "");
     const newStr = useEdits ? "" : String(new_string ?? "");
 
-    if (!useEdits && !oldStr) return "old_string 不能为空（编辑已有文件）或设为 \"\"（创建新文件）。";
+    if (!useEdits && !oldStr) return structuredToolError("old_string 不能为空；创建新文件请使用 file_write。", "invalid_old_string", { path: fp });
     if (!useEdits && oldStr === newStr) return "old_string 和 new_string 相同，无需修改。";
 
     // 文件存在性

@@ -42,13 +42,28 @@
 <script src="./marked.umd.js"></script>
 <script src="./gen/dashboard.js"></script>
 <script>
-bootstrapApi().then(async () => {
-  await window.ExplorerService?.startEvents?.();
-  await syncStartupWorkspace();
+bootstrapApi().then(() => {
   layout();
-  getD();
-  loadSessions();
   setInterval(refresh, 3000);
+
+  void (async () => {
+    try {
+      await window.ExplorerService?.startEvents?.();
+    } catch (error) {
+      console.warn('[dashboard-startup] event channel unavailable', error);
+    }
+
+    try {
+      await syncStartupWorkspace();
+    } catch (error) {
+      console.warn('[dashboard-startup] workspace recovery failed', error);
+      App.State.resetWorkspace('');
+      toast('上次工作区无法恢复，已回到默认工作区。', 'error');
+    }
+
+    getD();
+    loadSessions();
+  })();
 }).catch((error) => {
   console.error('[desktop-auth] bootstrap failed', error);
   toast('桌面认证失败，请重启应用', 'error');

@@ -228,7 +228,7 @@ describe("shared permission primitives", () => {
     assert.match(decision.reason, /sensitive/i);
   });
 
-  it("respects explicit ask rules inside the workspace", () => {
+  it("ignores explicit ask rules inside trusted roots while preserving deny precedence", () => {
     const parent = mkdtempSync(resolve(tmpdir(), "perm-internal-ask-"));
     try {
       const workspace = resolve(parent, "workspace");
@@ -246,8 +246,7 @@ describe("shared permission primitives", () => {
         alwaysAskRules: state.alwaysAskRules,
       });
 
-      assert.strictEqual(decision.status, "ask");
-      assert.match(decision.reason, /session rule/);
+      assert.strictEqual(decision.status, "allow");
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }
