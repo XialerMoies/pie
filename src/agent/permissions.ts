@@ -1,5 +1,5 @@
 import path from "path"
-import type { PermissionRule, PermissionSuggestion, PermissionToolName, SessionPermissionState } from "./types.js"
+import type { PermissionRule, PermissionRuleScope, PermissionSuggestion, PermissionToolName, SessionPermissionState } from "./types.js"
 import { isSensitiveExternalPath } from "./sensitive-paths.js"
 
 export type PathPermissionOperation = "read" | "write" | "create" | "remove"
@@ -95,6 +95,24 @@ export function findMatchingToolPermissionRule(
   return rules.find((rule) => toolRuleMatches(toolName, rule))
 }
 
+export function permissionRulesForScopes(
+  rules: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>> | undefined,
+): PermissionRule[] {
+  return [...(rules?.session || []), ...(rules?.workspace || [])]
+}
+
+function findMatchingScopedPathPermissionRule(
+  resolvedPath: string,
+  operation: PathPermissionOperation,
+  rules: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>> | undefined,
+): { rule: PermissionRule; scope: PermissionRuleScope } | undefined {
+  for (const scope of ["session", "workspace"] as const) {
+    const rule = findMatchingPathPermissionRule(resolvedPath, operation, rules?.[scope])
+    if (rule) return { rule, scope }
+  }
+  return undefined
+}
+
 export function evaluatePathPermission(
   targetPath: string,
   operation: PathPermissionOperation,
@@ -104,25 +122,25 @@ export function evaluatePathPermission(
   const workspaceRoot = path.resolve(policy.workspaceRoot)
   const allowedRoots = [workspaceRoot, ...(policy.allowedWorkingRoots || [])].map((root) => path.resolve(root))
 
-  const denyRule = findMatchingPathPermissionRule(resolvedPath, operation, policy.alwaysDenyRules?.session)
-  if (denyRule) {
+  const denyMatch = findMatchingScopedPathPermissionRule(resolvedPath, operation, policy.alwaysDenyRules)
+  if (denyMatch) {
     return {
       status: "deny",
       operation,
       path: resolvedPath,
-      reason: `${pathPermissionToolForOperation(operation)} path is denied by session rule`,
-      matchedRule: denyRule,
+      reason: `${pathPermissionToolForOperation(operation)} path is denied by ${denyMatch.scope} rule`,
+      matchedRule: denyMatch.rule,
     }
   }
 
-  const askRule = findMatchingPathPermissionRule(resolvedPath, operation, policy.alwaysAskRules?.session)
-  if (askRule) {
+  const askMatch = findMatchingScopedPathPermissionRule(resolvedPath, operation, policy.alwaysAskRules)
+  if (askMatch) {
     return {
       status: "ask",
       operation,
       path: resolvedPath,
-      reason: `${pathPermissionToolForOperation(operation)} path requires confirmation by session rule`,
-      matchedRule: askRule,
+      reason: `${pathPermissionToolForOperation(operation)} path requires confirmation by ${askMatch.scope} rule`,
+      matchedRule: askMatch.rule,
       suggestions: createPathPermissionSuggestions(path.dirname(resolvedPath), operation),
     }
   }
@@ -131,7 +149,11 @@ export function evaluatePathPermission(
     return { status: "allow" }
   }
 
-  const allowRule = findMatchingPathPermissionRule(resolvedPath, operation, policy.alwaysAllowRules?.session)
+  const allowRule = findMatchingPathPermissionRule(
+    resolvedPath,
+    operation,
+    permissionRulesForScopes(policy.alwaysAllowRules),
+  )
   if (allowRule) return { status: "allow", matchedRule: allowRule }
 
   if (operation === "read") {
@@ -278,9 +300,9 @@ function addAllowRule(state: SessionPermissionState, rule: PermissionRule): void
 export function createSessionPermissionState(): SessionPermissionState {
   return {
     additionalWorkingDirectories: new Map(),
-    alwaysAllowRules: { session: [] },
-    alwaysDenyRules: { session: [] },
-    alwaysAskRules: { session: [] },
+    alwaysAllowRules: { session: [], workspace: [] },
+    alwaysDenyRules: { session: [], workspace: [] },
+    alwaysAskRules: { session: [], workspace: [] },
   }
 }
 

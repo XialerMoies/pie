@@ -5,6 +5,7 @@ import type {
   CommandConfirmationResponse,
   PermissionRule,
   PermissionRuleMatch,
+  PermissionRuleScope,
   PermissionSuggestion,
   PermissionToolName,
   SessionPermissionState,
@@ -21,6 +22,7 @@ import {
   evaluatePathPermission,
   findMatchingToolPermissionRule,
   normalizePermissionPath,
+  permissionRulesForScopes,
   type PathPermissionDecision,
   type PathPermissionOperation,
 } from "../agent/permissions.js";
@@ -30,6 +32,11 @@ import {
   type GuardedPath,
 } from "./routes/path-guard.js";
 import type { PermissionAuditStore } from "./permission-audit-store.js";
+import {
+  emptyWorkspacePermissionRuleSet,
+  type WorkspacePermissionRuleSet,
+  type WorkspacePermissionRuleStore,
+} from "./permission-rule-store.js";
 import type { RootRegistry } from "./root-registry.js";
 
 export interface PermissionAuditEntry {
@@ -80,6 +87,7 @@ export interface ServerPermissionServiceOptions {
   rootRegistry?: RootRegistry;
   confirmPermission?: ServerPermissionConfirmCallback;
   auditStore?: PermissionAuditStore;
+  permissionRuleStore?: WorkspacePermissionRuleStore;
   maxAuditEntries?: number;
 }
 
@@ -89,11 +97,16 @@ export interface ServerPathAuthorizationOptions {
 
 export type PermissionRuleListName = "allow" | "deny" | "ask";
 
+export interface ScopedPermissionRule extends PermissionRule {
+  scope: PermissionRuleScope;
+  index: number;
+}
+
 export interface PermissionRulesSnapshot {
   additionalWorkingDirectories: Array<{ path: string; source: string }>;
-  alwaysAllowRules: PermissionRule[];
-  alwaysDenyRules: PermissionRule[];
-  alwaysAskRules: PermissionRule[];
+  alwaysAllowRules: ScopedPermissionRule[];
+  alwaysDenyRules: ScopedPermissionRule[];
+  alwaysAskRules: ScopedPermissionRule[];
 }
 
 export class ServerPermissionError extends Error {
@@ -115,7 +128,10 @@ export class ServerPermissionService {
   private readonly rootRegistry?: RootRegistry;
   private readonly confirmPermission?: ServerPermissionConfirmCallback;
   private readonly auditStore?: PermissionAuditStore;
+  private readonly permissionRuleStore?: WorkspacePermissionRuleStore;
   private readonly maxAuditEntries: number;
+  private activeWorkspaceRuleKey = "";
+  private activeWorkspaceRulePath = "";
   private auditSeq = 0;
   private audit: PermissionAuditEntry[] = [];
 
@@ -126,6 +142,7 @@ export class ServerPermissionService {
     this.rootRegistry = options.rootRegistry;
     this.confirmPermission = options.confirmPermission;
     this.auditStore = options.auditStore;
+    this.permissionRuleStore = options.permissionRuleStore;
     this.maxAuditEntries = options.maxAuditEntries ?? 500;
     this.loadPersistedAudit();
   }
@@ -138,6 +155,7 @@ export class ServerPermissionService {
     options: ServerPathAuthorizationOptions = {},
   ): Promise<GuardedPath> {
     try {
+      this.syncWorkspaceRules();
       const authorizedRoot = this.authorizedRoot(root);
       const guarded = guardPathWithinRoot(authorizedRoot, target, operation);
       const permissionRoot = this.workspaceRootProvider?.() || guarded.root;
@@ -194,6 +212,7 @@ export class ServerPermissionService {
    * 用户显式选择的目录 / 恢复的上次工作区由此直接放行，而不是弹确认。
    */
   async authorizeWorkspaceRoot(workspace: string, source: string): Promise<string> {
+    this.syncWorkspaceRules();
     const resolved = path.resolve(String(workspace ?? "").trim());
     if (!resolved) {
       throw new ServerPermissionError("Missing workspace", 400, "missing_workspace");
@@ -249,6 +268,7 @@ export class ServerPermissionService {
 
   authorizePathSync(root: string, target: string, operation: PathPermissionOperation, source: string): GuardedPath {
     try {
+      this.syncWorkspaceRules();
       const authorizedRoot = this.authorizedRoot(root);
       const guarded = guardPathWithinRoot(authorizedRoot, target, operation);
       const permissionRoot = this.workspaceRootProvider?.() || guarded.root;
@@ -293,6 +313,7 @@ export class ServerPermissionService {
   }
 
   async authorizeTool(request: ToolAuthorizationRequest): Promise<ToolAuthorizationResult> {
+    this.syncWorkspaceRules();
     const root = this.workspaceRootProvider?.() || "";
     const permissionRequired = request.permissionRequired !== false;
     const reason = permissionRequired
@@ -312,15 +333,15 @@ export class ServerPermissionService {
     };
     const state = this.sessionPermissionState;
 
-    const denyRule = findMatchingToolPermissionRule(request.toolName, state?.alwaysDenyRules.session);
-    if (denyRule) {
+    const denyMatch = findScopedToolRule(request.toolName, state?.alwaysDenyRules);
+    if (denyMatch) {
       this.record({
         ...baseEntry,
         decision: "deny",
-        reason: "Tool execution is denied by session rule",
+        reason: `Tool execution is denied by ${denyMatch.scope} rule`,
         code: "permission_denied",
       });
-      return { allow: false, reason: "Tool execution is denied by session rule" };
+      return { allow: false, reason: `Tool execution is denied by ${denyMatch.scope} rule` };
     }
 
     if (request.authorizationMode === "specialized") {
@@ -330,18 +351,18 @@ export class ServerPermissionService {
       };
     }
 
-    const askRule = findMatchingToolPermissionRule(request.toolName, state?.alwaysAskRules.session);
-    const allowRule = findMatchingToolPermissionRule(request.toolName, state?.alwaysAllowRules.session);
-    if (allowRule && !askRule) {
+    const askMatch = findScopedToolRule(request.toolName, state?.alwaysAskRules);
+    const allowMatch = findScopedToolRule(request.toolName, state?.alwaysAllowRules);
+    if (allowMatch && !askMatch) {
       this.record({
         ...baseEntry,
         decision: "allow",
-        reason: "Allowed by session tool rule",
+        reason: `Allowed by ${allowMatch.scope} tool rule`,
       });
       return { allow: true };
     }
 
-    if (!permissionRequired && !askRule) {
+    if (!permissionRequired && !askMatch) {
       this.record({
         ...baseEntry,
         decision: "allow",
@@ -353,7 +374,7 @@ export class ServerPermissionService {
     this.record({
       ...baseEntry,
       decision: "ask",
-      reason: askRule ? "Tool execution requires confirmation by session rule" : reason,
+      reason: askMatch ? `Tool execution requires confirmation by ${askMatch.scope} rule` : reason,
     });
 
     if (!this.confirmPermission) {
@@ -372,7 +393,7 @@ export class ServerPermissionService {
         source: request.source,
         operation: "tool",
         root,
-        reason: askRule ? "Tool execution requires confirmation by session rule" : reason,
+        reason: askMatch ? `Tool execution requires confirmation by ${askMatch.scope} rule` : reason,
         permissionSuggestions: suggestions,
         toolName: request.toolName,
         toolOperations: request.operations,
@@ -403,8 +424,8 @@ export class ServerPermissionService {
       return { allow: false, reason: "Tool permission confirmation denied or timed out" };
     }
 
-    if (confirmed.scope === "session" && state) {
-      applySessionPermissionSuggestions(state, suggestions);
+    if (confirmed.scope === "session" || confirmed.scope === "workspace") {
+      this.applyPermissionSuggestions(suggestions, confirmed.scope);
     }
 
     this.record({
@@ -412,7 +433,9 @@ export class ServerPermissionService {
       decision: "allow",
       reason: confirmed.scope === "session"
         ? "Confirmed by user for this session"
-        : "Confirmed by user once",
+        : confirmed.scope === "workspace"
+          ? "Confirmed by user for this workspace"
+          : "Confirmed by user once",
     });
     return { allow: true };
   }
@@ -432,49 +455,137 @@ export class ServerPermissionService {
   }
 
   getRulesSnapshot(): PermissionRulesSnapshot {
+    this.syncWorkspaceRules();
     const state = this.requireSessionPermissionState();
     return {
       additionalWorkingDirectories: [...state.additionalWorkingDirectories.values()],
-      alwaysAllowRules: [...state.alwaysAllowRules.session],
-      alwaysDenyRules: [...state.alwaysDenyRules.session],
-      alwaysAskRules: [...state.alwaysAskRules.session],
+      alwaysAllowRules: scopedRuleViews(state.alwaysAllowRules),
+      alwaysDenyRules: scopedRuleViews(state.alwaysDenyRules),
+      alwaysAskRules: scopedRuleViews(state.alwaysAskRules),
     };
   }
 
+  applyPermissionSuggestions(
+    suggestions: readonly PermissionSuggestion[],
+    scope: PermissionRuleScope,
+  ): PermissionRule[] {
+    this.syncWorkspaceRules();
+    const state = this.requireSessionPermissionState();
+    if (scope === "session") {
+      applySessionPermissionSuggestions(state, suggestions);
+      return suggestions.flatMap((suggestion) => (
+        suggestion.type === "addWorkingDirectory" ? [] : [{ ...suggestion.rule }]
+      ));
+    }
+
+    const rules = suggestions.flatMap((suggestion) => (
+      suggestion.type === "addReadRule" || suggestion.type === "addPathRule" || suggestion.type === "addToolRule"
+        ? [normalizePermissionRule(suggestion.rule)]
+        : []
+    ));
+    if (rules.length === 0) return [];
+    this.mutateWorkspaceRules((candidate) => {
+      for (const rule of rules) addUniqueRule(candidate.alwaysAllowRules, rule);
+    });
+    return rules;
+  }
+
   addSessionRule(list: PermissionRuleListName, rule: PermissionRule): { added: boolean; rule: PermissionRule } {
+    return this.addRule(list, rule, "session");
+  }
+
+  addRule(list: PermissionRuleListName, rule: PermissionRule, scope: PermissionRuleScope = "session"): { added: boolean; rule: PermissionRule } {
+    this.syncWorkspaceRules();
     const state = this.requireSessionPermissionState();
     const normalized = normalizePermissionRule(rule);
-    const rules = rulesForList(state, list);
+    const rules = rulesForList(state, list, scope);
     const exists = rules.some((existing) => (
       existing.toolName === normalized.toolName &&
       existing.ruleContent === normalized.ruleContent &&
       (existing.match ?? "prefix") === (normalized.match ?? "prefix")
     ));
-    if (!exists) rules.push(normalized);
+    if (!exists) {
+      if (scope === "workspace") {
+        this.mutateWorkspaceRules((candidate) => rulesForRuleSet(candidate, list).push(normalized));
+      } else {
+        rules.push(normalized);
+      }
+    }
     return { added: !exists, rule: normalized };
   }
 
   removeSessionRule(list: PermissionRuleListName, index: number): PermissionRule | undefined {
+    return this.removeRule(list, index, "session");
+  }
+
+  removeRule(list: PermissionRuleListName, index: number, scope: PermissionRuleScope = "session"): PermissionRule | undefined {
+    this.syncWorkspaceRules();
     const state = this.requireSessionPermissionState();
-    const rules = rulesForList(state, list);
+    const rules = rulesForList(state, list, scope);
     if (!Number.isInteger(index) || index < 0 || index >= rules.length) return undefined;
-    return rules.splice(index, 1)[0];
+    const removed = rules[index];
+    if (scope === "workspace") {
+      this.mutateWorkspaceRules((candidate) => { rulesForRuleSet(candidate, list).splice(index, 1); });
+    } else {
+      rules.splice(index, 1);
+    }
+    return removed;
   }
 
   clearSessionRules(list?: PermissionRuleListName | "all"): number {
+    return this.clearRules(list, "session");
+  }
+
+  clearRules(list: PermissionRuleListName | "all" = "all", scope: PermissionRuleScope = "session"): number {
+    this.syncWorkspaceRules();
     const state = this.requireSessionPermissionState();
     let removed = 0;
     const lists: PermissionRuleListName[] = list && list !== "all" ? [list] : ["allow", "deny", "ask"];
     for (const item of lists) {
-      const rules = rulesForList(state, item);
+      const rules = rulesForList(state, item, scope);
       removed += rules.length;
-      rules.length = 0;
     }
-    if (!list || list === "all") {
+    if (scope === "workspace") {
+      this.mutateWorkspaceRules((candidate) => {
+        for (const item of lists) rulesForRuleSet(candidate, item).length = 0;
+      });
+    } else {
+      for (const item of lists) rulesForList(state, item, scope).length = 0;
+    }
+    if (scope === "session" && (!list || list === "all")) {
       removed += state.additionalWorkingDirectories.size;
       state.additionalWorkingDirectories.clear();
     }
     return removed;
+  }
+
+  private syncWorkspaceRules(): void {
+    if (!this.sessionPermissionState || !this.permissionRuleStore) return;
+    const workspacePath = this.workspaceRootProvider?.();
+    if (!workspacePath) return;
+    const key = normalizePermissionPath(workspacePath);
+    if (key === this.activeWorkspaceRuleKey) return;
+
+    let loaded = emptyWorkspacePermissionRuleSet();
+    try {
+      loaded = this.permissionRuleStore.load(workspacePath);
+    } catch {
+      loaded = emptyWorkspacePermissionRuleSet();
+    }
+    replaceWorkspaceRules(this.sessionPermissionState, loaded);
+    this.activeWorkspaceRuleKey = key;
+    this.activeWorkspaceRulePath = workspacePath;
+  }
+
+  private mutateWorkspaceRules(mutator: (candidate: WorkspacePermissionRuleSet) => void): void {
+    const state = this.requireSessionPermissionState();
+    if (!this.permissionRuleStore || !this.activeWorkspaceRulePath) {
+      throw new ServerPermissionError("Workspace permission rule store is not available", 503, "permission_rule_store_unavailable");
+    }
+    const candidate = workspaceRuleSetFromState(state);
+    mutator(candidate);
+    this.permissionRuleStore.save(this.activeWorkspaceRulePath, candidate);
+    replaceWorkspaceRules(state, candidate);
   }
 
   private record(entry: Omit<PermissionAuditEntry, "id" | "timestamp">): void {
@@ -608,8 +719,8 @@ export class ServerPermissionService {
       throw new ServerPermissionError("Permission confirmation denied or timed out", 403, "permission_denied");
     }
 
-    if (confirmed.scope === "session" && this.sessionPermissionState) {
-      applySessionPermissionSuggestions(this.sessionPermissionState, decision.suggestions);
+    if (confirmed.scope === "session" || confirmed.scope === "workspace") {
+      this.applyPermissionSuggestions(decision.suggestions, confirmed.scope);
     }
 
     this.record({
@@ -619,7 +730,11 @@ export class ServerPermissionService {
       path: decision.path,
       relativePath: guarded.relativePath,
       decision: "allow",
-      reason: confirmed.scope === "session" ? "Confirmed by user for this session" : "Confirmed by user once",
+      reason: confirmed.scope === "session"
+        ? "Confirmed by user for this session"
+        : confirmed.scope === "workspace"
+          ? "Confirmed by user for this workspace"
+          : "Confirmed by user once",
     });
   }
 }
@@ -679,10 +794,53 @@ function isSensitiveWorkspaceRoot(workspace: string): boolean {
   return false;
 }
 
-function rulesForList(state: SessionPermissionState, list: PermissionRuleListName): PermissionRule[] {
-  if (list === "allow") return state.alwaysAllowRules.session;
-  if (list === "deny") return state.alwaysDenyRules.session;
-  return state.alwaysAskRules.session;
+function rulesForList(
+  state: SessionPermissionState,
+  list: PermissionRuleListName,
+  scope: PermissionRuleScope = "session",
+): PermissionRule[] {
+  if (list === "allow") return state.alwaysAllowRules[scope];
+  if (list === "deny") return state.alwaysDenyRules[scope];
+  return state.alwaysAskRules[scope];
+}
+
+function rulesForRuleSet(rules: WorkspacePermissionRuleSet, list: PermissionRuleListName): PermissionRule[] {
+  if (list === "allow") return rules.alwaysAllowRules;
+  if (list === "deny") return rules.alwaysDenyRules;
+  return rules.alwaysAskRules;
+}
+
+function scopedRuleViews(
+  rules: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>>,
+): ScopedPermissionRule[] {
+  return (["session", "workspace"] as const).flatMap((scope) => (
+    (rules[scope] || []).map((rule, index) => ({ ...rule, scope, index }))
+  ));
+}
+
+function findScopedToolRule(
+  toolName: string,
+  rules: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>> | undefined,
+): { rule: PermissionRule; scope: PermissionRuleScope } | undefined {
+  for (const scope of ["session", "workspace"] as const) {
+    const rule = findMatchingToolPermissionRule(toolName, rules?.[scope]);
+    if (rule) return { rule, scope };
+  }
+  return undefined;
+}
+
+function workspaceRuleSetFromState(state: SessionPermissionState): WorkspacePermissionRuleSet {
+  return {
+    alwaysAllowRules: permissionRulesForScopes({ workspace: state.alwaysAllowRules.workspace }),
+    alwaysDenyRules: permissionRulesForScopes({ workspace: state.alwaysDenyRules.workspace }),
+    alwaysAskRules: permissionRulesForScopes({ workspace: state.alwaysAskRules.workspace }),
+  };
+}
+
+function replaceWorkspaceRules(state: SessionPermissionState, rules: WorkspacePermissionRuleSet): void {
+  state.alwaysAllowRules.workspace.splice(0, state.alwaysAllowRules.workspace.length, ...rules.alwaysAllowRules.map((rule) => ({ ...rule })));
+  state.alwaysDenyRules.workspace.splice(0, state.alwaysDenyRules.workspace.length, ...rules.alwaysDenyRules.map((rule) => ({ ...rule })));
+  state.alwaysAskRules.workspace.splice(0, state.alwaysAskRules.workspace.length, ...rules.alwaysAskRules.map((rule) => ({ ...rule })));
 }
 
 function normalizePermissionRule(rule: PermissionRule): PermissionRule {
@@ -701,4 +859,14 @@ function normalizePermissionRule(rule: PermissionRule): PermissionRule {
   }
 
   return match === undefined ? { toolName, ruleContent } : { toolName, ruleContent, match };
+}
+
+function addUniqueRule(rules: PermissionRule[], rule: PermissionRule): boolean {
+  const exists = rules.some((existing) => (
+    existing.toolName === rule.toolName &&
+    existing.ruleContent === rule.ruleContent &&
+    (existing.match ?? "prefix") === (rule.match ?? "prefix")
+  ));
+  if (!exists) rules.push({ ...rule });
+  return !exists;
 }

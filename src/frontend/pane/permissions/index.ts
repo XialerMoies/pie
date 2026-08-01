@@ -3,6 +3,7 @@
 type PermissionDecision = "allow" | "ask" | "deny";
 type PermissionOperation = "read" | "write" | "create" | "remove" | "tool";
 type PermissionRuleList = "allow" | "deny" | "ask";
+type PermissionRuleScope = "session" | "workspace";
 
 interface PermissionAuditEntry {
   id: number;
@@ -26,6 +27,8 @@ interface PermissionRuleView {
   toolName: string;
   ruleContent: string;
   match?: "exact" | "prefix" | "wildcard";
+  scope: PermissionRuleScope;
+  index: number;
 }
 
 interface PermissionRulesSnapshot {
@@ -37,6 +40,7 @@ interface PermissionRulesSnapshot {
 
 const PERMISSION_PANEL_ID = "permissions-panel-root";
 let _permissionsTab: "audit" | "rules" = "audit";
+let _permissionRuleScope: PermissionRuleScope = "session";
 let _permissionsAudit: PermissionAuditEntry[] = [];
 let _permissionsRules: PermissionRulesSnapshot | null = null;
 
@@ -183,9 +187,15 @@ function renderPermissionRules(): string {
   const rules = _permissionsRules;
   if (!rules) return `<div class="perm-empty">加载中...</div>`;
   const totalRules = rules.alwaysAllowRules.length + rules.alwaysDenyRules.length + rules.alwaysAskRules.length;
+  const sessionRules = countRulesByScope(rules, "session");
+  const workspaceRules = countRulesByScope(rules, "workspace");
   return `
     <div class="perm-rule-toolbar">
-      <span class="perm-rule-count">Session ${totalRules}</span>
+      <span class="perm-rule-count">会话 ${sessionRules} · 项目 ${workspaceRules} · 共 ${totalRules}</span>
+      <select id="perm-add-scope" class="perm-input" aria-label="规则范围">
+        <option value="session"${_permissionRuleScope === "session" ? " selected" : ""}>会话</option>
+        <option value="workspace"${_permissionRuleScope === "workspace" ? " selected" : ""}>项目</option>
+      </select>
       <button class="perm-mini-btn danger" id="perm-clear-all" type="button">清空</button>
     </div>
     ${renderRuleSection("allow", "Allow", rules.alwaysAllowRules)}
@@ -196,6 +206,16 @@ function renderPermissionRules(): string {
   `;
 }
 
+function countRulesByScope(rules: PermissionRulesSnapshot, scope: PermissionRuleScope): number {
+  return rules.alwaysAllowRules.filter((rule) => (rule.scope || "session") === scope).length
+    + rules.alwaysDenyRules.filter((rule) => (rule.scope || "session") === scope).length
+    + rules.alwaysAskRules.filter((rule) => (rule.scope || "session") === scope).length;
+}
+
+function permissionScopeLabel(scope: PermissionRuleScope): string {
+  return scope === "workspace" ? "项目" : "会话";
+}
+
 function renderRuleSection(list: PermissionRuleList, label: string, rules: PermissionRuleView[]): string {
   const body = rules.length
     ? rules.map((rule, index) => `
@@ -203,9 +223,10 @@ function renderRuleSection(list: PermissionRuleList, label: string, rules: Permi
           <div class="perm-rule-meta">
             <span class="perm-rule-tool">${E(rule.toolName)}</span>
             <span class="perm-rule-match">${E(rule.match || "prefix")}</span>
+            <span class="perm-rule-match">${permissionScopeLabel(rule.scope || "session")}</span>
           </div>
           <div class="perm-rule-content" title="${E(rule.ruleContent)}">${E(rule.ruleContent)}</div>
-          <button class="perm-icon-btn danger" data-rule-remove="${list}:${index}" title="撤销" type="button">${S("itrash", 13)}</button>
+          <button class="perm-icon-btn danger" data-rule-remove="${list}:${rule.scope || "session"}:${Number.isInteger(rule.index) ? rule.index : index}" title="撤销" type="button">${S("itrash", 13)}</button>
         </div>
       `).join("")
     : `<div class="perm-empty small">无 ${label} 规则</div>`;
@@ -258,47 +279,55 @@ function renderRuleAddForm(): string {
 }
 
 function bindPermissionsContent(container: HTMLElement): void {
+  container.querySelector("#perm-add-scope")?.addEventListener("change", (event) => {
+    _permissionRuleScope = (event.currentTarget as HTMLSelectElement).value === "workspace" ? "workspace" : "session";
+  });
   container.querySelectorAll("[data-rule-remove]").forEach((button) => {
     button.addEventListener("click", async () => {
       const raw = (button as HTMLElement).dataset.ruleRemove || "";
-      const [list, indexText] = raw.split(":");
-      await removePermissionRule(list as PermissionRuleList, Number(indexText));
+      const [list, scope, indexText] = raw.split(":");
+      await removePermissionRule(list as PermissionRuleList, scope as PermissionRuleScope, Number(indexText));
     });
   });
   container.querySelector("#perm-clear-all")?.addEventListener("click", async () => {
-    if (!await confirmAsync("清空本会话权限规则？")) return;
-    await clearPermissionRules();
+    const scope = (container.querySelector("#perm-add-scope") as HTMLSelectElement | null)?.value === "workspace"
+      ? "workspace"
+      : "session";
+    _permissionRuleScope = scope;
+    const label = permissionScopeLabel(scope);
+    if (!await confirmAsync(`清空本${label}权限规则？`)) return;
+    await clearPermissionRules(scope);
   });
   container.querySelector("#perm-add-rule")?.addEventListener("click", async () => {
     await addPermissionRule(container);
   });
 }
 
-async function removePermissionRule(list: PermissionRuleList, index: number): Promise<void> {
+async function removePermissionRule(list: PermissionRuleList, scope: PermissionRuleScope, index: number): Promise<void> {
   try {
-    const res = await fetch(`/api/permissions/rules?list=${encodeURIComponent(list)}&index=${index}`, { method: "DELETE" });
+    const res = await fetch(`/api/permissions/rules?list=${encodeURIComponent(list)}&scope=${encodeURIComponent(scope)}&index=${index}`, { method: "DELETE" });
     const body = await res.json();
     if (!res.ok || !body.ok) throw new Error(body.error || `HTTP ${res.status}`);
     _permissionsRules = body.rules;
     syncPermissionsPanel();
-    toast("权限规则已撤销", "success");
+    toast(`${permissionScopeLabel(scope)}权限规则已撤销`, "success");
   } catch (err) {
     toast(`撤销失败: ${(err as Error).message}`, "error");
   }
 }
 
-async function clearPermissionRules(): Promise<void> {
+async function clearPermissionRules(scope: PermissionRuleScope): Promise<void> {
   try {
     const res = await fetch("/api/permissions/rules/clear", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ list: "all" }),
+      body: JSON.stringify({ list: "all", scope }),
     });
     const body = await res.json();
     if (!res.ok || !body.ok) throw new Error(body.error || `HTTP ${res.status}`);
     _permissionsRules = body.rules;
     syncPermissionsPanel();
-    toast("本会话权限规则已清空", "success");
+    toast(`本${permissionScopeLabel(scope)}权限规则已清空`, "success");
   } catch (err) {
     toast(`清空失败: ${(err as Error).message}`, "error");
   }
@@ -306,6 +335,9 @@ async function clearPermissionRules(): Promise<void> {
 
 async function addPermissionRule(container: HTMLElement): Promise<void> {
   const list = (container.querySelector("#perm-add-list") as HTMLSelectElement | null)?.value || "allow";
+  const scope = (container.querySelector("#perm-add-scope") as HTMLSelectElement | null)?.value === "workspace"
+    ? "workspace"
+    : "session";
   const toolName = (container.querySelector("#perm-add-tool") as HTMLSelectElement | null)?.value || "Read";
   const match = (container.querySelector("#perm-add-match") as HTMLSelectElement | null)?.value || "exact";
   const input = container.querySelector("#perm-add-content") as HTMLInputElement | null;
@@ -319,14 +351,15 @@ async function addPermissionRule(container: HTMLElement): Promise<void> {
     const res = await fetch("/api/permissions/rules", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ list, rule: { toolName, ruleContent, match } }),
+      body: JSON.stringify({ list, scope, rule: { toolName, ruleContent, match } }),
     });
     const body = await res.json();
     if (!res.ok || !body.ok) throw new Error(body.error || `HTTP ${res.status}`);
     if (input) input.value = "";
     _permissionsRules = body.rules;
     syncPermissionsPanel();
-    toast(body.added ? "权限规则已添加" : "规则已存在", body.added ? "success" : "info");
+    const scopeLabel = permissionScopeLabel(scope);
+    toast(body.added ? `${scopeLabel}权限规则已添加` : `${scopeLabel}规则已存在`, body.added ? "success" : "info");
   } catch (err) {
     toast(`添加失败: ${(err as Error).message}`, "error");
   }

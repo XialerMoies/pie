@@ -863,6 +863,7 @@ body{background:var(--bg);height:100vh}
 .perm-time{margin-top:4px;color:var(--tm);font-size:.56rem;font-family:var(--fm)}
 .perm-rule-toolbar{display:flex;align-items:center;gap:6px;padding:0 4px 6px}
 .perm-rule-count{flex:1;color:var(--tm);font-size:.62rem;font-family:var(--fm)}
+.perm-rule-toolbar .perm-input{width:68px;flex:0 0 68px;padding:3px 5px}
 .perm-mini-btn,.perm-primary-btn{border:none;border-radius:5px;font-family:var(--fb);cursor:pointer;transition:all .1s;white-space:nowrap}
 .perm-mini-btn{font-size:.62rem;padding:3px 8px;background:var(--bd);color:var(--ts)}
 .perm-mini-btn:hover{background:var(--bl);color:var(--tx)}

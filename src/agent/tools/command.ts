@@ -11,7 +11,7 @@
  *
  * 适用场景：单用户桌面开发环境，非企业级多用户权限治理。
  */
-import { defineAgentTool, type AgentTool, type CommandConfirmationRequest, type CommandConfirmationResponse, type PermissionSuggestion, type ToolContext } from "../types.js"
+import { defineAgentTool, type AgentTool, type CommandConfirmationRequest, type CommandConfirmationResponse, type CommandConfirmationScope, type PermissionSuggestion, type ToolContext } from "../types.js"
 import { spawn } from "child_process"
 import { existsSync } from "fs"
 import { dirname } from "path"
@@ -943,7 +943,7 @@ type ConfirmationOutcome = "allowed" | "rejected" | "unavailable" | "failed"
 
 interface ConfirmationState {
   outcome?: ConfirmationOutcome
-  scope?: "once" | "session"
+  scope?: CommandConfirmationScope
   applyPermissionSuggestions?: boolean
   appliedPermissionRules?: string[]
 }
@@ -958,6 +958,14 @@ function confirmationOutcomeText(state: ConfirmationState): string {
       return rules
         ? `✅ 用户已允许命令执行（本会话）。${rules}`
         : "✅ 用户已允许命令执行（本会话）。"
+    }
+    if (state.scope === "workspace") {
+      const rules = state.appliedPermissionRules?.length
+        ? `已应用本项目授权规则: ${state.appliedPermissionRules.join("; ")}`
+        : ""
+      return rules
+        ? `✅ 用户已允许命令执行（本项目）。${rules}`
+        : "✅ 用户已允许命令执行（本项目）。"
     }
     return "✅ 用户已允许命令执行。"
   }
@@ -976,7 +984,7 @@ function cancelledWithConfirmationOutcome(result: string, state: ConfirmationSta
   return withConfirmationOutcome(result, state)
 }
 
-function normalizeConfirmationResponse(result: CommandConfirmationResponse): { allowed: boolean; scope?: "once" | "session"; applyPermissionSuggestions: boolean } {
+function normalizeConfirmationResponse(result: CommandConfirmationResponse): { allowed: boolean; scope?: CommandConfirmationScope; applyPermissionSuggestions: boolean } {
   if (typeof result === "boolean") {
     return result
       ? { allowed: true, scope: "session", applyPermissionSuggestions: true }
@@ -984,11 +992,11 @@ function normalizeConfirmationResponse(result: CommandConfirmationResponse): { a
   }
   if (!result) return { allowed: false, applyPermissionSuggestions: false }
   const allowed = result.allow === true
-  const scope = result.scope === "session" ? "session" : "once"
+  const scope = result.scope === "session" || result.scope === "workspace" ? result.scope : "once"
   return {
     allowed,
     scope: allowed ? scope : undefined,
-    applyPermissionSuggestions: allowed && scope === "session",
+    applyPermissionSuggestions: allowed && (scope === "session" || scope === "workspace"),
   }
 }
 
@@ -1028,11 +1036,11 @@ function permissionSuggestionText(pathResult: CommandPathValidationResult): stri
   if (pathResult.allowed || !pathResult.suggestions?.length) return ""
   const rendered = pathResult.suggestions.map((suggestion) => {
     if (suggestion.type === "addWorkingDirectory") {
-      return `本会话加入工作目录: ${suggestion.directory}`
+      return `加入工作目录: ${suggestion.directory}`
     }
-    return `本会话加入规则: ${suggestion.rule.ruleContent}`
+    return `加入规则: ${suggestion.rule.ruleContent}`
   })
-  return `\n选择“本会话允许”后将应用: ${rendered.join("; ")}`
+  return `\n选择会话或项目授权后将应用: ${rendered.join("; ")}`
 }
 
 function pathConfirmationReason(pathResult: CommandPathValidationResult): string {
@@ -1045,9 +1053,13 @@ function appliedPermissionRuleLabel(suggestion: PermissionSuggestion): string {
   return suggestion.rule.ruleContent
 }
 
-function applyPathPermissionSuggestions(pathResult: CommandPathValidationResult, ctx?: ToolContext): string[] {
+function applyPathPermissionSuggestions(
+  pathResult: CommandPathValidationResult,
+  ctx: ToolContext | undefined,
+  scope: "session" | "workspace",
+): string[] {
   if (pathResult.allowed || !pathResult.suggestions?.length || !ctx?.applyPermissionSuggestions) return []
-  ctx.applyPermissionSuggestions(pathResult.suggestions)
+  ctx.applyPermissionSuggestions(pathResult.suggestions, scope)
   return pathResult.suggestions.map(appliedPermissionRuleLabel)
 }
 
@@ -1057,8 +1069,8 @@ function commandConfirmationRequest(pathResult: CommandPathValidationResult): Co
 }
 
 function maybeApplyPathPermissionSuggestions(pathResult: CommandPathValidationResult, ctx: ToolContext | undefined, state: ConfirmationState): void {
-  if (!state.applyPermissionSuggestions) return
-  state.appliedPermissionRules = applyPathPermissionSuggestions(pathResult, ctx)
+  if (!state.applyPermissionSuggestions || (state.scope !== "session" && state.scope !== "workspace")) return
+  state.appliedPermissionRules = applyPathPermissionSuggestions(pathResult, ctx, state.scope)
 }
 
 async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: ToolContext, shellDialect = shellDialectForCommand(cmd, ctx)): Promise<string> {

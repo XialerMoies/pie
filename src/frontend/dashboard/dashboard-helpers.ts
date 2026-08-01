@@ -278,7 +278,7 @@ function confirmAsync(msg: string): Promise<boolean> {
   });
 }
 
-type CommandConfirmChoice = 'once' | 'session' | 'deny';
+type CommandConfirmChoice = 'once' | 'session' | 'workspace' | 'deny';
 let _activeCommandConfirmResolve: ((choice: CommandConfirmChoice) => void) | null = null;
 let _activeCommandConfirmHost: HTMLElement | null = null;
 
@@ -300,7 +300,15 @@ function commandSuggestionLabel(suggestion: any): string {
   return '';
 }
 
-function commandConfirmBoxHTML(input: { command: string; reason: string; permissionSuggestions?: any[] }, suggestionLabels: string[], inline = false): string {
+function hasReusablePermissionSuggestion(suggestions: any[]): boolean {
+  return suggestions.some((suggestion) => (
+    suggestion?.type === 'addPathRule' ||
+    suggestion?.type === 'addReadRule' ||
+    suggestion?.type === 'addToolRule'
+  ));
+}
+
+function commandConfirmBoxHTML(input: { command: string; reason: string; permissionSuggestions?: any[] }, suggestionLabels: string[], allowWorkspace: boolean, inline = false): string {
   return `
       <div class="command-confirm-box${inline ? ' command-confirm-inline' : ''}" role="dialog" ${inline ? '' : 'aria-modal="true" '}aria-labelledby="command-confirm-title">
         <div class="command-confirm-head">
@@ -322,6 +330,7 @@ function commandConfirmBoxHTML(input: { command: string; reason: string; permiss
         <div class="command-confirm-actions">
           <button type="button" class="command-confirm-btn danger" data-choice="deny">拒绝</button>
           <button type="button" class="command-confirm-btn" data-choice="once">仅本次允许</button>
+          ${allowWorkspace ? '<button type="button" class="command-confirm-btn" data-choice="workspace">本项目允许</button>' : ''}
           <button type="button" class="command-confirm-btn primary" data-choice="session">本会话允许</button>
         </div>
       </div>`;
@@ -357,31 +366,34 @@ function confirmCommandAsync(input: { command: string; reason: string; permissio
   return new Promise((resolve) => {
     const suggestions = Array.isArray(input.permissionSuggestions) ? input.permissionSuggestions : [];
     const suggestionLabels = suggestions.map(commandSuggestionLabel).filter(Boolean);
+    const allowWorkspace = hasReusablePermissionSuggestion(suggestions);
     clearActiveCommandConfirm('deny');
     const inlineHost = commandConfirmInlineHost();
     if (inlineHost) {
       _activeCommandConfirmResolve = resolve;
       _activeCommandConfirmHost = inlineHost;
-      inlineHost.innerHTML = commandConfirmBoxHTML(input, suggestionLabels, true);
+      inlineHost.innerHTML = commandConfirmBoxHTML(input, suggestionLabels, allowWorkspace, true);
       inlineHost.classList.add('on');
       inlineHost.querySelectorAll<HTMLButtonElement>('[data-choice]').forEach((button) => {
         const choice = button.dataset.choice as CommandConfirmChoice;
         button.addEventListener('click', () => clearActiveCommandConfirm(choice));
       });
-      const defaultButton = inlineHost.querySelector<HTMLButtonElement>('[data-choice="once"]');
+      const defaultButton = inlineHost.querySelector<HTMLButtonElement>('[data-choice="session"]');
       setTimeout(() => defaultButton?.focus(), 0);
       return;
     }
 
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay command-confirm-overlay';
-    overlay.innerHTML = commandConfirmBoxHTML(input, suggestionLabels);
+    overlay.innerHTML = commandConfirmBoxHTML(input, suggestionLabels, allowWorkspace);
     document.body.appendChild(overlay);
     const close = (choice: CommandConfirmChoice) => { overlay.remove(); resolve(choice); };
     overlay.querySelectorAll<HTMLButtonElement>('[data-choice]').forEach((button) => {
       const choice = button.dataset.choice as CommandConfirmChoice;
       button.addEventListener('click', () => close(choice));
     });
+    const defaultButton = overlay.querySelector<HTMLButtonElement>('[data-choice="session"]');
+    setTimeout(() => defaultButton?.focus(), 0);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close('deny'); });
   });
 }
@@ -411,7 +423,7 @@ function permissionOperationLabel(operation?: string): string {
   return operation || '访问';
 }
 
-function permissionConfirmBoxHTML(input: PermissionConfirmInput, suggestionLabels: string[], inline = false): string {
+function permissionConfirmBoxHTML(input: PermissionConfirmInput, suggestionLabels: string[], allowWorkspace: boolean, inline = false): string {
   const details = [
     input.toolName ? `Tool: ${input.toolName}` : '',
     input.toolOperations?.length ? `Ops: ${input.toolOperations.join(', ')}` : '',
@@ -446,6 +458,7 @@ function permissionConfirmBoxHTML(input: PermissionConfirmInput, suggestionLabel
         <div class="command-confirm-actions">
           <button type="button" class="command-confirm-btn danger" data-choice="deny">拒绝</button>
           <button type="button" class="command-confirm-btn" data-choice="once">仅本次允许</button>
+          ${allowWorkspace ? '<button type="button" class="command-confirm-btn" data-choice="workspace">本项目允许</button>' : ''}
           <button type="button" class="command-confirm-btn primary" data-choice="session">本会话允许</button>
         </div>
       </div>`;
@@ -455,31 +468,34 @@ function confirmPermissionAsync(input: PermissionConfirmInput): Promise<CommandC
   return new Promise((resolve) => {
     const suggestions = Array.isArray(input.permissionSuggestions) ? input.permissionSuggestions : [];
     const suggestionLabels = suggestions.map(commandSuggestionLabel).filter(Boolean);
+    const allowWorkspace = hasReusablePermissionSuggestion(suggestions);
     clearActiveCommandConfirm('deny');
     const inlineHost = commandConfirmInlineHost();
     if (inlineHost) {
       _activeCommandConfirmResolve = resolve;
       _activeCommandConfirmHost = inlineHost;
-      inlineHost.innerHTML = permissionConfirmBoxHTML(input, suggestionLabels, true);
+      inlineHost.innerHTML = permissionConfirmBoxHTML(input, suggestionLabels, allowWorkspace, true);
       inlineHost.classList.add('on');
       inlineHost.querySelectorAll<HTMLButtonElement>('[data-choice]').forEach((button) => {
         const choice = button.dataset.choice as CommandConfirmChoice;
         button.addEventListener('click', () => clearActiveCommandConfirm(choice));
       });
-      const defaultButton = inlineHost.querySelector<HTMLButtonElement>('[data-choice="once"]');
+      const defaultButton = inlineHost.querySelector<HTMLButtonElement>('[data-choice="session"]');
       setTimeout(() => defaultButton?.focus(), 0);
       return;
     }
 
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay command-confirm-overlay';
-    overlay.innerHTML = permissionConfirmBoxHTML(input, suggestionLabels);
+    overlay.innerHTML = permissionConfirmBoxHTML(input, suggestionLabels, allowWorkspace);
     document.body.appendChild(overlay);
     const close = (choice: CommandConfirmChoice) => { overlay.remove(); resolve(choice); };
     overlay.querySelectorAll<HTMLButtonElement>('[data-choice]').forEach((button) => {
       const choice = button.dataset.choice as CommandConfirmChoice;
       button.addEventListener('click', () => close(choice));
     });
+    const defaultButton = overlay.querySelector<HTMLButtonElement>('[data-choice="session"]');
+    setTimeout(() => defaultButton?.focus(), 0);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close('deny'); });
   });
 }

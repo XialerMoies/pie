@@ -1,5 +1,5 @@
 import type { ServerResponse } from "http";
-import type { PermissionRule } from "../../agent/types.js";
+import type { PermissionRule, PermissionRuleScope } from "../../agent/types.js";
 import {
   ServerPermissionError,
   type ServerPermissionService,
@@ -26,7 +26,9 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
         return true;
       }
       const allow = body?.allow === true;
-      const scope = body?.scope === "once" ? "once" : "session";
+      const scope = body?.scope === "workspace"
+        ? "workspace"
+        : body?.scope === "once" ? "once" : "session";
       const settled = resolvePermissionConfirmation(id, allow ? { allow: true, scope } : { allow: false });
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: settled }));
@@ -63,7 +65,8 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
       const body = await parseBody(req);
       const list = normalizeRuleList(body?.list);
       const rule = normalizeRuleBody(body?.rule);
-      const result = service.addSessionRule(list, rule);
+      const scope = normalizeRuleScope(body?.scope);
+      const result = service.addRule(list, rule, scope);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({
         ok: true,
@@ -85,7 +88,8 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
       try { body = await parseBody(req); } catch {}
       const list = normalizeRuleList(body?.list ?? parsedUrl.searchParams.get("list"));
       const index = normalizeRuleIndex(body?.index ?? parsedUrl.searchParams.get("index"));
-      const removed = service.removeSessionRule(list, index);
+      const scope = normalizeRuleScope(body?.scope ?? parsedUrl.searchParams.get("scope"));
+      const removed = service.removeRule(list, index, scope);
       if (!removed) {
         res.writeHead(404, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({
@@ -114,7 +118,8 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
       const body = await parseBody(req);
       const rawList = body?.list;
       const list = rawList === undefined || rawList === "all" ? "all" : normalizeRuleList(rawList);
-      const removed = service.clearSessionRules(list);
+      const scope = normalizeRuleScope(body?.scope);
+      const removed = service.clearRules(list, scope);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({
         ok: true,
@@ -155,6 +160,12 @@ function normalizeRuleIndex(value: unknown): number {
   const index = typeof value === "number" ? value : parseInt(String(value || ""), 10);
   if (Number.isInteger(index) && index >= 0) return index;
   throw new Error("Invalid permission rule index");
+}
+
+function normalizeRuleScope(value: unknown): PermissionRuleScope {
+  if (value === undefined || value === null || value === "" || value === "session") return "session";
+  if (value === "workspace") return "workspace";
+  throw new Error("Invalid permission rule scope");
 }
 
 function normalizeRuleBody(value: unknown): PermissionRule {

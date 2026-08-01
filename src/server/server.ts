@@ -24,6 +24,7 @@ import { authorizeRoutePath, ServerPermissionService } from "./permission-servic
 import { authorizeWorkspacePath } from "./routes/workspace-authorization.js";
 import { cancelPermissionConfirmationsForResponse, createPermissionConfirmCallback } from "./permission-confirmation.js";
 import { FilePermissionAuditStore } from "./permission-audit-store.js";
+import { FileWorkspacePermissionRuleStore } from "./permission-rule-store.js";
 import { contentTypeForStaticAsset, resolveStaticAssetPath } from "./static-assets.js";
 import { RootRegistry } from "./root-registry.js";
 import { writeChatEvent } from "./chat-stream.js";
@@ -517,6 +518,7 @@ async function main() {
     rootRegistry,
     confirmPermission: createPermissionConfirmCallback(sseClients),
     auditStore: new FilePermissionAuditStore(resolve(PI_CONFIG_DIR, "permission-audit.json"), { maxEntries: 2000 }),
+    permissionRuleStore: new FileWorkspacePermissionRuleStore(resolve(PI_CONFIG_DIR, "permission-rules.json")),
   });
 
   runtime = await initAgent({
@@ -532,6 +534,7 @@ async function main() {
     sessionPermissionState,
     authorizePath: (root, target, operation, source) => permissionService.authorizePath(root, target, operation, source),
     authorizeTool: (request) => permissionService.authorizeTool(request),
+    applyPermissionSuggestions: (suggestions, scope) => permissionService.applyPermissionSuggestions(suggestions, scope),
   });
 
   for (const [root, source] of [

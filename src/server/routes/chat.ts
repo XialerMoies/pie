@@ -92,7 +92,9 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
           return;
         }
         const allow = parsed.allow === true;
-        const scope = parsed.scope === "once" ? "once" : "session";
+        const scope = parsed.scope === "workspace"
+          ? "workspace"
+          : parsed.scope === "once" ? "once" : "session";
         const settled = resolveCommandConfirmation(id, allow ? { allow: true, scope } : { allow: false });
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: settled }));

@@ -319,7 +319,9 @@ ExplorerService.startEvents = function (): Promise<void> {
               body: JSON.stringify({
                 id: d.id,
                 allow: choice !== 'deny',
-                scope: choice === 'session' ? 'session' : 'once',
+                scope: choice === 'workspace'
+                  ? 'workspace'
+                  : choice === 'session' ? 'session' : 'once',
               }),
             }).catch(() => undefined);
             void (window as any).refreshPermissionsPanel?.();

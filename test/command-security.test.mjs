@@ -2042,6 +2042,43 @@ describe("commandTool 权限模式", () => {
     }
   })
 
+  it("本项目允许应把外部路径规则按 workspace scope 交给共享权限服务", async () => {
+    const { root, workspace } = tempWorkspace()
+    const external = join(root, "external")
+    mkdirSync(external, { recursive: true })
+    const writeTarget = process.platform === "win32"
+      ? "..\\external\\workspace-out.txt"
+      : "../external/workspace-out.txt"
+    const applied = []
+
+    try {
+      const state = createSessionPermissionState()
+      const result = await commandTool.execute(
+        { command: `echo workspace-write > ${writeTarget}` },
+        {
+          cwd: workspace,
+          workspace,
+          sessionId: "",
+          permissionMode: "dontAsk",
+          additionalWorkingDirectories: state.additionalWorkingDirectories,
+          alwaysAllowRules: state.alwaysAllowRules,
+          alwaysDenyRules: state.alwaysDenyRules,
+          alwaysAskRules: state.alwaysAskRules,
+          applyPermissionSuggestions: (suggestions, scope) => applied.push({ suggestions, scope }),
+          confirmCommand: async () => ({ allow: true, scope: "workspace" }),
+        },
+      )
+
+      equal(applied.length, 1)
+      equal(applied[0].scope, "workspace")
+      ok(applied[0].suggestions.some((suggestion) => suggestion.type === "addPathRule"))
+      ok(result.includes("本项目"), result)
+      equal(existsSync(join(external, "workspace-out.txt")), true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it("session deny and ask path rules should apply during command execution", async () => {
     const { root, workspace } = tempWorkspace()
     const external = join(root, "external")

@@ -349,7 +349,7 @@ declare function confirmCommandAsync(input: {
   command: string;
   reason: string;
   permissionSuggestions?: any[];
-}): Promise<'once' | 'session' | 'deny'>;
+}): Promise<'once' | 'session' | 'workspace' | 'deny'>;
 declare function confirmPermissionAsync(input: {
   source?: string;
   operation?: string;
@@ -363,7 +363,7 @@ declare function confirmPermissionAsync(input: {
   relativePath?: string;
   reason?: string;
   permissionSuggestions?: any[];
-}): Promise<'once' | 'session' | 'deny'>;
+}): Promise<'once' | 'session' | 'workspace' | 'deny'>;
 declare function F(s: number): string;
 declare function sb(id: string): void;
 declare function toast(msg: string, type?: 'info' | 'error' | 'success'): void;

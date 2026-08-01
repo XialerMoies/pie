@@ -19,7 +19,8 @@
 
 export type ShellDialect = "cmd" | "posix-bash" | "powershell"
 
-export type CommandConfirmationScope = "once" | "session"
+export type PermissionRuleScope = "session" | "workspace"
+export type CommandConfirmationScope = "once" | PermissionRuleScope
 
 export interface CommandConfirmationResult {
   allow: boolean
@@ -32,7 +33,7 @@ export interface CommandConfirmationRequest {
 
 export type CommandConfirmationResponse = boolean | CommandConfirmationResult | undefined
 
-export type PermissionDestination = "session"
+export type PermissionDestination = PermissionRuleScope
 export type PermissionRuleMatch = "exact" | "prefix" | "wildcard"
 export type PathPermissionToolName = "Read" | "Write" | "Create" | "Remove"
 export type PermissionToolName = PathPermissionToolName | "Command" | "Tool"
@@ -76,9 +77,9 @@ export type PermissionSuggestion =
 
 export interface SessionPermissionState {
   additionalWorkingDirectories: Map<string, AdditionalWorkingDirectory>
-  alwaysAllowRules: Record<PermissionDestination, PermissionRule[]>
-  alwaysDenyRules: Record<PermissionDestination, PermissionRule[]>
-  alwaysAskRules: Record<PermissionDestination, PermissionRule[]>
+  alwaysAllowRules: Record<PermissionRuleScope, PermissionRule[]>
+  alwaysDenyRules: Record<PermissionRuleScope, PermissionRule[]>
+  alwaysAskRules: Record<PermissionRuleScope, PermissionRule[]>
 }
 
 export type ToolPathOperation = "read" | "write" | "create" | "remove"
@@ -143,7 +144,10 @@ export interface ToolContext {
   alwaysAllowRules?: SessionPermissionState["alwaysAllowRules"]
   alwaysDenyRules?: SessionPermissionState["alwaysDenyRules"]
   alwaysAskRules?: SessionPermissionState["alwaysAskRules"]
-  applyPermissionSuggestions?: (suggestions: PermissionSuggestion[]) => void
+  applyPermissionSuggestions?: (
+    suggestions: PermissionSuggestion[],
+    scope: PermissionRuleScope,
+  ) => void
   authorizePath?: ToolPathAuthorizer
   authorizeTool?: ToolAuthorizer
   desktopApiToken?: string

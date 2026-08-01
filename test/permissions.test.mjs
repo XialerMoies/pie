@@ -14,6 +14,7 @@ import {
   findMatchingToolPermissionRule,
   pathPermissionToolForOperation,
   pathRuleContentForDirectory,
+  resetSessionPermissionState,
   toolRuleContentForTool,
 } from "../src/agent/permissions.ts";
 
@@ -69,6 +70,63 @@ describe("shared permission primitives", () => {
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }
+  });
+
+  it("applies deny, ask, and allow precedence across session and workspace rule layers", () => {
+    const parent = mkdtempSync(resolve(tmpdir(), "perm-layered-"));
+    try {
+      const workspace = resolve(parent, "workspace");
+      const external = resolve(parent, "external");
+      mkdirSync(workspace);
+      mkdirSync(external);
+      const target = resolve(external, "result.txt");
+      const state = createSessionPermissionState();
+      const exact = { toolName: "Write", ruleContent: `Write(${target})`, match: "exact" };
+
+      state.alwaysAllowRules.session.push(exact);
+      state.alwaysAskRules.workspace.push(exact);
+      let decision = evaluatePathPermission(target, "write", {
+        workspaceRoot: workspace,
+        alwaysAllowRules: state.alwaysAllowRules,
+        alwaysAskRules: state.alwaysAskRules,
+        alwaysDenyRules: state.alwaysDenyRules,
+      });
+      assert.strictEqual(decision.status, "ask");
+
+      state.alwaysDenyRules.workspace.push(exact);
+      decision = evaluatePathPermission(target, "write", {
+        workspaceRoot: workspace,
+        alwaysAllowRules: state.alwaysAllowRules,
+        alwaysAskRules: state.alwaysAskRules,
+        alwaysDenyRules: state.alwaysDenyRules,
+      });
+      assert.strictEqual(decision.status, "deny");
+
+      state.alwaysDenyRules.workspace.length = 0;
+      state.alwaysAskRules.workspace.length = 0;
+      state.alwaysAllowRules.session.length = 0;
+      state.alwaysAllowRules.workspace.push(exact);
+      decision = evaluatePathPermission(target, "write", {
+        workspaceRoot: workspace,
+        alwaysAllowRules: state.alwaysAllowRules,
+      });
+      assert.strictEqual(decision.status, "allow");
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("resets session permission rules without clearing workspace rules", () => {
+    const state = createSessionPermissionState();
+    const sessionRule = { toolName: "Tool", ruleContent: "Tool(session-only)", match: "exact" };
+    const workspaceRule = { toolName: "Tool", ruleContent: "Tool(workspace-rule)", match: "exact" };
+    state.alwaysAllowRules.session.push(sessionRule);
+    state.alwaysAllowRules.workspace.push(workspaceRule);
+
+    resetSessionPermissionState(state);
+
+    assert.deepStrictEqual(state.alwaysAllowRules.session, []);
+    assert.deepStrictEqual(state.alwaysAllowRules.workspace, [workspaceRule]);
   });
 
   it("suggests session path rules for paths outside authorized roots", () => {

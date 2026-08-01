@@ -178,4 +178,36 @@ describe("Chat SSE", () => {
     const confirmed = await createCommandConfirmCallback(chatStream)("node --version", "需要确认");
     assert.deepStrictEqual(confirmed, { allow: false });
   });
+
+  it("command confirm preserves workspace scope from POST", async () => {
+    const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" };
+    const ctx = {
+      runtime: { session: { model: {} }, currentWorkspace: "", switchWorkspace: async () => {}, onEvent: () => () => {} },
+      paths: { APP_ROOT: ROOT },
+      chatStream,
+      sseClients: [],
+    };
+    const sseRes = makeResWithEvents();
+    await handleChat(makeReq("GET", "/api/chat/stream"), sseRes, ctx);
+    const confirmed = createCommandConfirmCallback(chatStream)("echo test", "需要确认", {
+      permissionSuggestions: [{
+        type: "addPathRule",
+        operation: "write",
+        directory: ROOT,
+        destination: "session",
+        rule: { toolName: "Write", ruleContent: `Write(${ROOT}\\**)`, match: "wildcard" },
+      }],
+    });
+    const line = sseRes._body.split("\n").find((part) => part.includes('"command_confirm"'));
+    const event = JSON.parse(line.slice("data: ".length));
+    const res = makeResWithEvents();
+
+    await handleChat(makeReq("POST", "/api/chat/command-confirm", {
+      id: event.id,
+      allow: true,
+      scope: "workspace",
+    }), res, ctx);
+
+    assert.deepStrictEqual(await confirmed, { allow: true, scope: "workspace" });
+  });
 });

@@ -347,7 +347,9 @@ function bind(): void {
               body: JSON.stringify({
                 id,
                 allow: choice !== 'deny',
-                scope: choice === 'session' ? 'session' : 'once',
+                scope: choice === 'workspace'
+                  ? 'workspace'
+                  : choice === 'session' ? 'session' : 'once',
               }),
             }).catch(() => undefined);
           })();

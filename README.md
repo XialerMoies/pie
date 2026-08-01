@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-1010%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-1025%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
   <img src="https://img.shields.io/badge/license-AGPLv3-6366F1?style=flat&labelColor=1a1a2e" alt="License">
   <img src="https://img.shields.io/badge/electron-39-F59E0B?style=flat&labelColor=1a1a2e" alt="Electron">
   <img src="https://img.shields.io/badge/typescript-5.9-3178C6?style=flat&labelColor=1a1a2e" alt="TypeScript">
@@ -130,16 +130,16 @@ npm run dist:portable
 ### 测试
 
 ```bash
-npm test            # 全量 1010 项测试（unit + routes + frontend）
+npm test            # 全量 1025 项测试（unit + routes + frontend）
 npm run test:build  # 构建验证 + smoke test
 npm run typecheck   # TypeScript 类型检查
 ```
 
 | 套件 | 数量 | 覆盖 |
 |------|------|------|
-| unit | 652 | Shell/权限安全、工具、状态存储、偏好 facade、MCP、搜索替换、Agent memory |
-| routes | 230 | API、PathGuard、root provenance、桌面认证、权限确认、session、SSE 重放、TS、附件与 trace |
-| frontend | 128 | 消息、会话、workspace、tabs、聊天/Explorer 流生命周期、权限中心、Explorer/Search/Git/MCP、DOM 事件所有权、桌面认证启动与 Monaco 生命周期 |
+| unit | 655 | Shell/权限安全、工具、状态存储、偏好 facade、MCP、搜索替换、Agent memory |
+| routes | 239 | API、PathGuard、root provenance、桌面认证、会话/项目权限、session、SSE 重放、TS、附件与 trace |
+| frontend | 131 | 消息、会话、workspace、tabs、聊天/Explorer 流生命周期、权限中心、Explorer/Search/Git/MCP、DOM 事件所有权、桌面认证启动与 Monaco 生命周期 |
 | CSS | 20+20 | 变量定义完整性扫描（dark + light 各 20 项） |
 
 ---
@@ -245,7 +245,7 @@ src/
 │   ├── services/        # TabStore / ProblemsStore / UiStateStore
 │   ├── pane/            # 5 面板（explorer / chat / search / git / mcp）
 │   └── ui/              # Tree 组件 + ContextMenu
-test/                    # 58 个测试文件，1010 项（含 CSS / build smoke / packaged E2E）
+test/                    # 58 个测试文件，1025 项（另含 CSS / build smoke / packaged E2E 门禁）
 scripts/                 # 编译/构建/清理脚本
 ```
 

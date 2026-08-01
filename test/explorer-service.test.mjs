@@ -235,7 +235,7 @@ describe("ExplorerService", () => {
         global.EventSource = createMockEventSource((source) => { eventSource = source; });
         global.confirmPermissionAsync = async (input) => {
           calls.push({ type: "confirm", input });
-          return "session";
+          return "workspace";
         };
         global.confirmAsync = async () => false;
         global.refreshPermissionsPanel = async () => {
@@ -278,7 +278,7 @@ describe("ExplorerService", () => {
         assert.deepStrictEqual(JSON.parse(post.options.body), {
           id: "perm-test",
           allow: true,
-          scope: "session",
+          scope: "workspace",
         });
         assert.ok(calls.some((call) => call.type === "refreshPermissionsPanel"));
       } finally {
