@@ -62,6 +62,12 @@ function ctx(overrides = {}) {
   return { toolCallId: "call-1", workspace: "/repo", ...overrides };
 }
 
+function toolText(result) {
+  assert.strictEqual(typeof result, "object");
+  assert.strictEqual(typeof result.text, "string");
+  return result.text;
+}
+
 describe("builtin tool governance metadata", () => {
   const expectedMetadata = new Map([
     ["git-status", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: true }],
@@ -94,6 +100,28 @@ describe("builtin tool governance metadata", () => {
       assert.strictEqual(typeof tool.needsPermission, "boolean", `${tool.name} should declare needsPermission`);
       assert.strictEqual(typeof tool.workspaceBounded, "boolean", `${tool.name} should declare workspaceBounded`);
     }
+  });
+
+  it("every registered builtin tool returns structured results", () => {
+    assert.strictEqual(toolRegistry.getAll().length, expectedMetadata.size);
+    for (const tool of toolRegistry.getAll()) {
+      assert.strictEqual(tool.resultFormat, "structured", `${tool.name} should return structured results`);
+    }
+  });
+
+  it("keeps native result data instead of reducing every result to display text", async () => {
+    mockBody = { content: "line1\nline2", size: 11, mtime: "2026-08-01T00:00:00.000Z" };
+    const file = await fileReadTool.execute({ path: "src/index.ts" }, ctx());
+    assert.deepStrictEqual(file.data.content, "line1\nline2");
+    assert.strictEqual(file.data.lineRange.start, 1);
+
+    mockBody = { items: [{ path: "src", isDir: true, size: 0 }] };
+    const explorer = await explorerListTool.execute({}, ctx());
+    assert.deepStrictEqual(explorer.data.items, mockBody.items);
+
+    mockBody = { results: [{ file: "src/index.ts", matches: [{ line: 1, column: 1, text: "needle" }] }], total: 1 };
+    const search = await searchTool.execute({ query: "needle" }, ctx());
+    assert.deepStrictEqual(search.data.results, mockBody.results);
   });
 
   it("tracks the expected operations and risk for registered builtin tools", () => {
@@ -173,20 +201,20 @@ describe("tool execution authorization gateway", () => {
 describe("file_read tool", () => {
   it("空路径返回友好提示", async () => {
     const r = await fileReadTool.execute({ path: "" }, ctx());
-    assert.ok(r.includes("不能为空"));
+    assert.ok(toolText(r).includes("不能为空"));
   });
 
   it("undefined path 返回友好提示", async () => {
     const r = await fileReadTool.execute({}, ctx());
-    assert.ok(r.includes("不能为空"));
+    assert.ok(toolText(r).includes("不能为空"));
   });
 
   it("Access denied 映射为无权限提示", async () => {
     mockStatus = 403;
     mockBody = { error: "Access denied" };
     const r = await fileReadTool.execute({ path: "../secret.txt" }, ctx());
-    assert.ok(r.includes("无权限"));
-    assert.ok(r.includes("../secret.txt"));
+    assert.ok(toolText(r).includes("无权限"));
+    assert.ok(toolText(r).includes("../secret.txt"));
   });
 
   it("路径含空格和特殊字符保持原样", async () => {
@@ -194,14 +222,14 @@ describe("file_read tool", () => {
     const r = await fileReadTool.execute({ path: "my file (1).ts" }, ctx());
     // URLSearchParams 编码：空格→+, 括号→%28%29
     assert.ok(lastRequest?.url.includes("path=my+file+%281%29.ts") || lastRequest?.url.includes("path=my%20file%20(1).ts"), "路径特殊字符经 URL 编码");
-    assert.ok(r.includes("ok"));
+    assert.ok(toolText(r).includes("ok"));
   });
 
   it("startLine 负值向下取整到 1", async () => {
     mockBody = { content: "line1\nline2\nline3", size: 15 };
     const r = await fileReadTool.execute({ path: "f.ts", startLine: -5 }, ctx());
     assert.ok(lastRequest?.url.includes("path=f.ts"));
-    assert.ok(r.includes("line1"));
+    assert.ok(toolText(r).includes("line1"));
   });
 });
 
@@ -217,7 +245,7 @@ describe("explorer_list tool", () => {
   it("空路径列出根目录", async () => {
     mockBody = { items: [{ path: "src", isDir: true }] };
     const r = await explorerListTool.execute({}, ctx());
-    assert.ok(r.includes("src"));
+    assert.ok(toolText(r).includes("src"));
     assert.ok(lastRequest?.url.includes("/api/explorer"));
   });
 
@@ -237,19 +265,19 @@ describe("explorer_list tool", () => {
     mockStatus = 500;
     mockBody = { error: "internal error" };
     const r = await explorerListTool.execute({}, ctx());
-    assert.ok(r.includes("列出目录失败"), "错误友好提示");
+    assert.ok(toolText(r).includes("列出目录失败"), "错误友好提示");
   });
 });
 
 describe("search tool", () => {
   it("空查询返回友好提示", async () => {
     const r = await searchTool.execute({ query: "" }, ctx());
-    assert.ok(r.includes("不能为空"));
+    assert.ok(toolText(r).includes("不能为空"));
   });
 
   it("undefined query 返回友好提示", async () => {
     const r = await searchTool.execute({}, ctx());
-    assert.ok(r.includes("不能为空"));
+    assert.ok(toolText(r).includes("不能为空"));
   });
 
   it("搜索模式默认 text", async () => {
@@ -275,9 +303,9 @@ describe("search tool", () => {
       ],
     };
     const r = await searchTool.execute({ query: "test" }, ctx());
-    assert.ok(r.includes("[代码"), "代码分组");
-    assert.ok(r.includes("[文档/配置"), "文档分组");
-    assert.ok(r.includes("[其他"), "其他分组");
+    assert.ok(toolText(r).includes("[代码"), "代码分组");
+    assert.ok(toolText(r).includes("[文档/配置"), "文档分组");
+    assert.ok(toolText(r).includes("[其他"), "其他分组");
   });
 });
 
@@ -312,7 +340,7 @@ describe("web-search tool", () => {
 
       const result = await webSearchTool.execute({ query: "codex" }, ctxForAuth);
 
-      assert.ok(result.includes("provider result"));
+      assert.ok(toolText(result).includes("provider result"));
       assert.deepStrictEqual(calls.map((call) => [call.operation, call.source]), [
         ["read", "agent.web_search.auth"],
       ]);
@@ -348,7 +376,7 @@ describe("web-search tool", () => {
         },
       });
 
-      assert.ok(result.includes("permission denied for web-search auth"));
+      assert.ok(toolText(result).includes("permission denied for web-search auth"));
       assert.strictEqual(lastRequest, null);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
@@ -359,14 +387,14 @@ describe("web-search tool", () => {
 describe("file_outline tool", () => {
   it("空路径返回友好提示", async () => {
     const r = await fileOutlineTool.execute({ path: "" }, ctx());
-    assert.ok(r.includes("不能为空"));
+    assert.ok(toolText(r).includes("不能为空"));
   });
 
   it("Access denied 映射为无权限提示", async () => {
     mockStatus = 403;
     mockBody = { error: "Access denied" };
     const r = await fileOutlineTool.execute({ path: "../secret.ts" }, ctx());
-    assert.ok(r.includes("无权限"));
+    assert.ok(toolText(r).includes("无权限"));
   });
 });
 
@@ -406,7 +434,7 @@ describe("str_replace_editor tool", () => {
       { file_path: "test.txt", old_string: "notfound", new_string: "replaced" },
       workspaceCtx(),
     );
-    assert.ok(r.includes("未找到匹配文本"));
+    assert.ok(toolText(r).includes("未找到匹配文本"));
   });
 
   it("old_string === new_string 拒绝", async () => {
@@ -415,7 +443,7 @@ describe("str_replace_editor tool", () => {
       { file_path: "test.txt", old_string: "hello", new_string: "hello" },
       workspaceCtx(),
     );
-    assert.ok(r.includes("相同"));
+    assert.ok(toolText(r).includes("相同"));
   });
 
   it("成功替换并返回结果", async () => {
@@ -424,7 +452,7 @@ describe("str_replace_editor tool", () => {
       { file_path: "test.txt", old_string: "world", new_string: "there" },
       workspaceCtx(),
     );
-    assert.ok(r.includes("已替换"));
+    assert.ok(toolText(r).includes("已替换"));
     const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
     assert.strictEqual(content, "hello there");
   });
@@ -438,7 +466,7 @@ describe("str_replace_editor tool", () => {
       authorizedWorkspaceCtx(calls),
     );
 
-    assert.ok(r.length > 0);
+    assert.ok(toolText(r).length > 0);
     assert.deepStrictEqual(calls.map((call) => [call.operation, call.source]), [
       ["read", "agent.str_replace.read"],
       ["write", "agent.str_replace.write"],
@@ -452,7 +480,7 @@ describe("str_replace_editor tool", () => {
       { file_path: "test.txt", old_string: "a", new_string: "x", replace_all: true },
       workspaceCtx(),
     );
-    assert.ok(r.includes("全部"));
+    assert.ok(toolText(r).includes("全部"));
     const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
     assert.strictEqual(content, "x b x b");
   });
@@ -463,7 +491,7 @@ describe("str_replace_editor tool", () => {
       { file_path: "test.txt", edits: [{ old_string: "a", new_string: "x" }] },
       workspaceCtx(),
     );
-    assert.ok(r.includes("replace_all"));
+    assert.ok(toolText(r).includes("replace_all"));
     const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
     assert.strictEqual(content, "a a a");
   });
@@ -474,7 +502,7 @@ describe("str_replace_editor tool", () => {
       { file_path: "test.txt", edits: [{ old_string: "a", new_string: "x", replace_all: true }] },
       workspaceCtx(),
     );
-    assert.ok(r.includes("3 处替换"));
+    assert.ok(toolText(r).includes("3 处替换"));
     const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
     assert.strictEqual(content, "x x x");
   });
@@ -485,7 +513,7 @@ describe("str_replace_editor tool", () => {
       { file_path: "../../../etc/passwd", old_string: "hello", new_string: "x" },
       workspaceCtx(),
     );
-    assert.ok(r.includes("Access denied") || r.includes("outside workspace"));
+    assert.ok(toolText(r).includes("Access denied") || toolText(r).includes("outside workspace"));
   });
 
   it("拒绝不存在的文件", async () => {
@@ -493,7 +521,7 @@ describe("str_replace_editor tool", () => {
       { file_path: "nonexistent.txt", old_string: "hello", new_string: "x" },
       workspaceCtx(),
     );
-    assert.ok(r.includes("不存在"));
+    assert.ok(toolText(r).includes("不存在"));
   });
 
   it("批量 edits 替换多个位置", async () => {
@@ -502,7 +530,7 @@ describe("str_replace_editor tool", () => {
       { file_path: "test.txt", edits: [{ old_string: "a", new_string: "x" }, { old_string: "c", new_string: "z" }] },
       workspaceCtx(),
     );
-    assert.ok(r.includes("已替换"));
+    assert.ok(toolText(r).includes("已替换"));
     const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
     assert.strictEqual(content, "x b z");
   });
@@ -514,7 +542,7 @@ describe("str_replace_editor tool", () => {
       { file_path: "test.txt", edits: [{ old_string: "111", new_string: "aaa" }, { old_string: "333", new_string: "ccc" }] },
       workspaceCtx(),
     );
-    assert.ok(r.includes("已替换"));
+    assert.ok(toolText(r).includes("已替换"));
     const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
     assert.strictEqual(content, "aaa 222 ccc");
   });
@@ -524,7 +552,7 @@ describe("str_replace_editor tool", () => {
       { file_path: "newfile.txt", old_string: "", new_string: "hello" },
       workspaceCtx(),
     );
-    assert.ok(r.includes("已创建"));
+    assert.ok(toolText(r).includes("已创建"));
     const content = readFileSync(resolve(dir, "newfile.txt"), "utf-8");
     assert.strictEqual(content, "hello");
   });
@@ -536,7 +564,7 @@ describe("str_replace_editor tool", () => {
       authorizedWorkspaceCtx(calls),
     );
 
-    assert.ok(r.length > 0);
+    assert.ok(toolText(r).length > 0);
     assert.deepStrictEqual(calls.map((call) => [call.operation, call.source]), [
       ["create", "agent.str_replace.create"],
     ]);
@@ -550,7 +578,7 @@ describe("str_replace_editor tool", () => {
       { file_path: "test.txt", old_string: "<fnr>", new_string: "<x>" },
       workspaceCtx(),
     );
-    assert.ok(r.includes("已替换"));
+    assert.ok(toolText(r).includes("已替换"));
     const content = readFileSync(resolve(dir, "test.txt"), "utf-8");
     assert.strictEqual(content, "some <x> here");
   });
@@ -576,7 +604,7 @@ describe("file_write tool", () => {
       { file_path: "new.txt", content: "hello" },
       workspaceCtx(),
     );
-    assert.ok(r.includes("已创建"));
+    assert.ok(toolText(r).includes("已创建"));
     const content = readFileSync(resolve(dir, "new.txt"), "utf-8");
     assert.strictEqual(content, "hello");
   });
@@ -606,7 +634,7 @@ describe("file_write tool", () => {
       { file_path: "exist.txt", content: "new" },
       workspaceCtx(),
     );
-    assert.ok(r.includes("已覆盖"));
+    assert.ok(toolText(r).includes("已覆盖"));
     const content = readFileSync(resolve(dir, "exist.txt"), "utf-8");
     assert.strictEqual(content, "new");
   });
@@ -640,7 +668,7 @@ describe("file_write tool", () => {
 
     const r = await fileWriteTool.execute({ file_path: "denied.txt", content: "blocked" }, ctx);
 
-    assert.ok(r.includes("permission denied for test"));
+    assert.ok(toolText(r).includes("permission denied for test"));
     assert.throws(() => readFileSync(resolve(dir, "denied.txt"), "utf-8"));
   });
 
@@ -649,7 +677,7 @@ describe("file_write tool", () => {
       { file_path: "../../../etc/hack", content: "evil" },
       workspaceCtx(),
     );
-    assert.ok(r.includes("Access denied") || r.includes("outside workspace"));
+    assert.ok(toolText(r).includes("Access denied") || toolText(r).includes("outside workspace"));
   });
 
   it("拒绝 symlink 目录逃逸", async () => {
@@ -667,7 +695,7 @@ describe("file_write tool", () => {
       { file_path: "escape-link/evil.txt", content: "oops" },
       workspaceCtx(),
     );
-    assert.ok(r.includes("Access denied") || r.includes("outside workspace"),
+    assert.ok(toolText(r).includes("Access denied") || toolText(r).includes("outside workspace"),
       "通过 symlink 写外部应被拒绝");
     rmSync(outsideDir, { recursive: true, force: true });
   });

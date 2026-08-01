@@ -39,6 +39,7 @@ export {
   normalizeServerName,
   buildMcpToolName,
   formatMcpContent,
+  normalizeMcpToolCapabilities,
   createMcpToolAdapter,
 } from "./MCPToolAdapter.js"
 

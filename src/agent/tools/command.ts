@@ -11,7 +11,7 @@
  *
  * 适用场景：单用户桌面开发环境，非企业级多用户权限治理。
  */
-import { defineAgentTool, type AgentTool, type CommandConfirmationRequest, type CommandConfirmationResponse, type CommandConfirmationScope, type PermissionSuggestion, type ToolContext } from "../types.js"
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool, type AgentToolResult, type CommandConfirmationRequest, type CommandConfirmationResponse, type CommandConfirmationScope, type PermissionSuggestion, type ToolContext } from "../types.js"
 import { spawn } from "child_process"
 import { existsSync } from "fs"
 import { dirname } from "path"
@@ -946,6 +946,61 @@ interface ConfirmationState {
   scope?: CommandConfirmationScope
   applyPermissionSuggestions?: boolean
   appliedPermissionRules?: string[]
+  command?: string
+  cwd?: string
+  shellDialect?: ShellDialect
+  execution?: CommandExecutionResult
+}
+
+interface CommandExecutionResult {
+  text: string
+  stdout: string
+  stderr: string
+  exitCode: number | null
+  truncated: boolean
+}
+
+function updateCommandAuthorization(
+  ctx: ToolContext | undefined,
+  status: "allow" | "deny",
+  state: ConfirmationState,
+  reason?: string,
+): void {
+  const decision = ctx?.authorizationDecision
+  if (!decision) return
+  decision.status = status
+  decision.source = "specialized"
+  decision.reason = reason
+  decision.scope = state.scope
+  decision.specialized = {
+    status,
+    reason,
+    scope: state.scope,
+    ...(state.appliedPermissionRules?.length
+      ? { appliedRules: [...state.appliedPermissionRules] }
+      : {}),
+  }
+}
+
+function commandDecisionResult(
+  text: string,
+  ctx: ToolContext | undefined,
+  state: ConfirmationState,
+  status: "allow" | "deny",
+  reason?: string,
+): AgentToolResult {
+  updateCommandAuthorization(ctx, status, state, reason)
+  const data = {
+    command: state.command || "",
+    cwd: state.cwd || ctx?.cwd || "",
+    shellDialect: state.shellDialect,
+    stdout: state.execution?.stdout || "",
+    stderr: state.execution?.stderr || "",
+    exitCode: state.execution?.exitCode ?? null,
+    truncated: state.execution?.truncated || false,
+  }
+  if (status === "deny") return structuredToolError(text, "command_denied", { ...data, reason })
+  return structuredToolResult(text, data)
 }
 
 function confirmationOutcomeText(state: ConfirmationState): string {
@@ -975,7 +1030,13 @@ function confirmationOutcomeText(state: ConfirmationState): string {
   return ""
 }
 
-function withConfirmationOutcome(result: string, state: ConfirmationState): string {
+function withConfirmationOutcome(result: string | CommandExecutionResult, state: ConfirmationState): string {
+  if (typeof result !== "string") {
+    state.execution = result
+    result = result.text
+  } else {
+    state.execution = { text: result, stdout: result, stderr: "", exitCode: 0, truncated: false }
+  }
   const text = confirmationOutcomeText(state)
   return text ? `${text}\n${result}` : result
 }
@@ -1090,21 +1151,21 @@ async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: Tool
     const child = bashExecutable
       ? spawn(bashExecutable, ["-lc", cmd], { cwd, env, stdio: ["pipe", "pipe", "pipe"], shell: false, timeout, windowsHide: true })
       : spawn(shellCommand, [], { cwd, env, stdio: ["pipe", "pipe", "pipe"], shell: true, timeout, windowsHide: true })
-    let stdout = "", stderr = ""
+    let stdout = "", stderr = "", truncated = false
     const stdoutDecoder = new StringDecoder("utf8"), stderrDecoder = new StringDecoder("utf8")
     const pushUpdate = (chunk: string) => ctx?.onUpdate?.(chunk)
     child.stdout?.on("data", (data: Buffer) => {
       const text = decodeCommandChunk(data, stdoutDecoder)
       const remaining = MAX_OUTPUT - stdout.length
       if (remaining <= 0) return
-      if (text.length >= remaining) { stdout += text.slice(0, remaining) + "\n...截断"; pushUpdate(text.slice(0, remaining)); pushUpdate("\n...截断"); child.kill(); return }
+      if (text.length >= remaining) { stdout += text.slice(0, remaining) + "\n...截断"; truncated = true; pushUpdate(text.slice(0, remaining)); pushUpdate("\n...截断"); child.kill(); return }
       stdout += text; pushUpdate(text)
     })
     child.stderr?.on("data", (data: Buffer) => {
       const text = decodeCommandChunk(data, stderrDecoder)
       const remaining = MAX_OUTPUT - stderr.length
       if (remaining <= 0) return
-      if (text.length >= remaining) { stderr += text.slice(0, remaining) + "\n...截断"; pushUpdate(text.slice(0, remaining)); pushUpdate("\n...截断"); child.kill(); return }
+      if (text.length >= remaining) { stderr += text.slice(0, remaining) + "\n...截断"; truncated = true; pushUpdate(text.slice(0, remaining)); pushUpdate("\n...截断"); child.kill(); return }
       stderr += text; pushUpdate(text)
     })
     child.on("error", (err) => { ctx?.onUpdate?.(`执行失败: ${err.message}\n`); reject(new Error(err.message)) })
@@ -1143,23 +1204,27 @@ export const commandTool: AgentTool = defineAgentTool({
   needsPermission: false,
   workspaceBounded: false,
   authorizationMode: "specialized",
+  resultFormat: "structured",
   execute: async (args, ctx) => {
     const cmd = String(args.command ?? "").trim()
-    if (!cmd) return "请输入要执行的命令"
+    const confirmationState: ConfirmationState = {}
+    confirmationState.command = cmd
+    confirmationState.cwd = String(args.cwd || ctx?.cwd || process.cwd())
+    if (!cmd) return commandDecisionResult("请输入要执行的命令", ctx, confirmationState, "deny", "Command is empty")
     const executionCwd = String(args.cwd || ctx?.cwd || process.cwd())
     const workspaceRoot = String(ctx?.workspace || ctx?.cwd || process.cwd())
     const shellDialect = shellDialectForCommand(cmd, ctx)
-    const confirmationState: ConfirmationState = {}
+    confirmationState.shellDialect = shellDialect
     const parsed = await parseCommandForSecurityAsync(cmd, { shellDialect })
 
     const danger = isDangerousCommand(cmd, { parsed, shellDialect })
     if (danger.dangerous) {
       await maybeLogSecurityVerdictShadowDiff(cmd, { cwd: executionCwd, workspaceRoot, shellDialect })
-      return `⛔ 危险命令已拦截: ${danger.reason}\n如需执行该命令，请在终端中手动运行。`
+      return commandDecisionResult(`⛔ 危险命令已拦截: ${danger.reason}\n如需执行该命令，请在终端中手动运行。`, ctx, confirmationState, "deny", danger.reason)
     }
 
     const compatibilityWarning = windowsCompatibilityWarning(cmd, shellDialect)
-    if (compatibilityWarning) return compatibilityWarning
+    if (compatibilityWarning) return commandDecisionResult(compatibilityWarning, ctx, confirmationState, "deny", "Shell compatibility check failed")
 
     const cmdIsReadOnly = isCommandReadOnly(cmd, { parsed, shellDialect })
     const readOnlyRequested = args.readOnly === true
@@ -1176,23 +1241,23 @@ export const commandTool: AgentTool = defineAgentTool({
     await maybeLogSecurityVerdictShadowDiff(cmd, { cwd: executionCwd, workspaceRoot, shellDialect })
 
     if (!pathResult.allowed && pathResult.hardDeny) {
-      return `⛔ 路径安全检查未通过: ${pathResult.reason}`
+      return commandDecisionResult(`⛔ 路径安全检查未通过: ${pathResult.reason}`, ctx, confirmationState, "deny", pathResult.reason)
     }
 
     if (readOnlyRequested) {
-      if (!cmdIsReadOnly) return `⛔ 当前处于只读模式，不允许执行非只读命令: ${cmd.slice(0, 100)}`
+      if (!cmdIsReadOnly) return commandDecisionResult(`⛔ 当前处于只读模式，不允许执行非只读命令: ${cmd.slice(0, 100)}`, ctx, confirmationState, "deny", "Command violates the read-only constraint")
       if (!pathResult.allowed || ctx?.permissionMode === "plan") {
         const reason = pathResult.allowed
           ? "当前为 plan 模式，所有命令需确认"
           : `当前处于只读模式，路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`
         if (!(await askUser(cmd, reason, ctx, confirmationState, commandConfirmationRequest(pathResult)))) {
-          return pathResult.allowed
+          return commandDecisionResult(pathResult.allowed
             ? cancelledWithConfirmationOutcome("⛔ 用户已取消执行", confirmationState)
-            : cancelledWithConfirmationOutcome(`⛔ 路径安全检查需要确认: ${pathResult.reason}`, confirmationState)
+            : cancelledWithConfirmationOutcome(`⛔ 路径安全检查需要确认: ${pathResult.reason}`, confirmationState), ctx, confirmationState, "deny", "Command confirmation was not granted")
         }
         maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
       }
-      return withConfirmationOutcome(await executeCmd(cmd, args, ctx, shellDialect), confirmationState)
+      return commandDecisionResult(withConfirmationOutcome(await executeCmd(cmd, args, ctx, shellDialect), confirmationState), ctx, confirmationState, "allow")
     }
 
     const mode = ctx?.permissionMode ?? "default"
@@ -1201,13 +1266,13 @@ export const commandTool: AgentTool = defineAgentTool({
         ? "当前为 plan 模式，所有命令需确认"
         : `当前为 plan 模式，且路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`
       if (!(await askUser(cmd, reason, ctx, confirmationState, commandConfirmationRequest(pathResult)))) {
-        return cancelledWithConfirmationOutcome("⛔ 用户已取消执行", confirmationState)
+        return commandDecisionResult(cancelledWithConfirmationOutcome("⛔ 用户已取消执行", confirmationState), ctx, confirmationState, "deny", "Command confirmation was not granted")
       }
       maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
     } else if (mode === "dontAsk") {
       if (!pathResult.allowed) {
         if (!(await askUser(cmd, `路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`, ctx, confirmationState, commandConfirmationRequest(pathResult)))) {
-          return cancelledWithConfirmationOutcome(`⛔ 路径安全检查需要确认: ${pathResult.reason}`, confirmationState)
+          return commandDecisionResult(cancelledWithConfirmationOutcome(`⛔ 路径安全检查需要确认: ${pathResult.reason}`, confirmationState), ctx, confirmationState, "deny", "Command path confirmation was not granted")
         }
         maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
       }
@@ -1221,12 +1286,12 @@ export const commandTool: AgentTool = defineAgentTool({
             ? "该命令不是只读操作，是否允许执行？"
             : `该命令不是只读操作，且路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`)
         if (!(await askUser(cmd, reason, ctx, confirmationState, commandConfirmationRequest(pathResult)))) {
-          return cancelledWithConfirmationOutcome("⛔ 用户已取消执行", confirmationState)
+          return commandDecisionResult(cancelledWithConfirmationOutcome("⛔ 用户已取消执行", confirmationState), ctx, confirmationState, "deny", "Command confirmation was not granted")
         }
         maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
       }
     }
 
-    return withConfirmationOutcome(await executeCmd(cmd, args, ctx, shellDialect), confirmationState)
+    return commandDecisionResult(withConfirmationOutcome(await executeCmd(cmd, args, ctx, shellDialect), confirmationState), ctx, confirmationState, "allow")
   },
 })

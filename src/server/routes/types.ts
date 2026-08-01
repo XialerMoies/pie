@@ -12,7 +12,7 @@ import type { RootRegistry } from "../root-registry.js";
 
 export type TraceEvent =
   | { type: "thinking"; status: "streaming" | "done"; text: string; turnId: string; id: string; seq?: number }
-  | { type: "tool"; status: "running" | "success" | "error"; name: string; input?: unknown; output?: string; error?: string; turnId: string; id: string; seq?: number }
+  | { type: "tool"; status: "running" | "success" | "error"; name: string; input?: unknown; output?: string; error?: string; metadata?: Record<string, unknown>; turnId: string; id: string; seq?: number }
   | { type: "step"; status: "info" | "success" | "error"; text: string; turnId: string; id: string; seq?: number };
 
 export interface ChatStreamEventFrame {

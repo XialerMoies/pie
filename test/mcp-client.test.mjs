@@ -164,8 +164,10 @@ describe("createMcpToolAdapter", () => {
       tool: { name: "t" },
       client: mockClient("result data"),
     });
-    const text = await tool.execute({}, { cwd: "", sessionId: "" });
-    assert.strictEqual(text, "result data");
+    const result = await tool.execute({}, { cwd: "", sessionId: "" });
+    assert.strictEqual(result.text, "result data");
+    assert.strictEqual(result.metadata.mcp.serverName, "s");
+    assert.strictEqual(result.metadata.mcp.toolName, "t");
   });
 
   it("execute 传递 arguments", async () => {
@@ -223,6 +225,109 @@ describe("createMcpToolAdapter", () => {
     assert.deepStrictEqual(tool.operations, ["execute"]);
     assert.strictEqual(tool.permissionSource, "mcp.external-server.run_task");
   });
+
+  it("normalizes complete safe annotations into a declared read-only capability", () => {
+    const tool = adapter.createMcpToolAdapter({
+      serverName: "docs",
+      tool: {
+        name: "lookup",
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      client: mockClient(),
+    });
+    assert.deepStrictEqual(tool.mcpCapabilities, {
+      serverName: "docs",
+      readOnly: true,
+      destructive: false,
+      idempotent: true,
+      openWorld: false,
+      declaration: "declared",
+    });
+    assert.strictEqual(tool.isReadOnly, true);
+    assert.strictEqual(tool.isDestructive, false);
+    assert.strictEqual(tool.riskLevel, "low");
+    assert.strictEqual(tool.needsPermission, true);
+  });
+
+  it("fails safe for missing, malformed, or contradictory annotations", () => {
+    for (const annotations of [
+      undefined,
+      { readOnlyHint: true },
+      { readOnlyHint: true, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      { readOnlyHint: "yes", destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    ]) {
+      assert.deepStrictEqual(adapter.normalizeMcpToolCapabilities(annotations), {
+        readOnly: false,
+        destructive: true,
+        idempotent: false,
+        openWorld: true,
+        declaration: "defaulted",
+      });
+    }
+  });
+
+  it("preserves structured MCP content and bounded content summaries", async () => {
+    const tool = adapter.createMcpToolAdapter({
+      serverName: "inventory",
+      tool: {
+        name: "lookup",
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      client: {
+        callTool: async () => ({
+          content: [
+            { type: "text", text: "found" },
+            { type: "image", mimeType: "image/png", data: "a".repeat(4096) },
+          ],
+          structuredContent: { id: 42, status: "ok" },
+          isError: false,
+        }),
+      },
+    });
+
+    const result = await tool.execute({}, { cwd: "", sessionId: "" });
+    assert.strictEqual(result.text, "found\n[Image: image/png]");
+    assert.deepStrictEqual(result.metadata.mcp.structuredContent, { id: 42, status: "ok" });
+    assert.deepStrictEqual(result.metadata.mcp.contentSummary, [
+      { type: "text", textLength: 5 },
+      { type: "image", mimeType: "image/png", dataLength: 4096 },
+    ]);
+    assert.strictEqual(result.metadata.mcp.isError, false);
+    assert.strictEqual(JSON.stringify(result.metadata).includes('"data":"'), false);
+  });
+
+  it("preserves MCP error metadata in trace events", async () => {
+    const events = [];
+    const tool = adapter.createMcpToolAdapter({
+      serverName: "inventory",
+      tool: { name: "fail" },
+      client: {
+        callTool: async () => ({
+          content: [{ type: "text", text: "server failed" }],
+          structuredContent: { code: "E_FAIL" },
+          isError: true,
+        }),
+      },
+    });
+    const piTool = piHelper.agentToolToPiTool(tool, "/repo", (event) => events.push(event), {
+      authorizeTool: async () => ({ allow: true }),
+    });
+
+    await assert.rejects(() => piTool.execute("call-error", {}), /server failed/);
+    assert.strictEqual(events.at(-1).isError, true);
+    assert.strictEqual(events.at(-1).metadata.mcp.isError, true);
+    assert.deepStrictEqual(events.at(-1).metadata.mcp.structuredContent, { code: "E_FAIL" });
+  });
 });
 
 // ─── agentToolToPiTool ─────────────────────────
@@ -257,6 +362,34 @@ describe("agentToolToPiTool", () => {
     const result = await piTool.execute("call1", {});
     assert.ok(Array.isArray(result.content));
     assert.strictEqual(result.content[0].text, "result text");
+    assert.deepStrictEqual(result.details, {});
+  });
+
+  it("preserves structured result metadata in PI details and trace events", async () => {
+    const events = [];
+    const agentTool = {
+      name: "structured",
+      description: "",
+      parameters: { type: "object", properties: {} },
+      isReadOnly: true,
+      execute: async () => ({
+        text: "structured text",
+        metadata: { provenance: { source: "test" }, count: 2 },
+      }),
+    };
+    const piTool = piHelper.agentToolToPiTool(agentTool, "/repo", (event) => events.push(event));
+    const result = await piTool.execute("call-structured", {});
+
+    assert.strictEqual(result.content[0].text, "structured text");
+    assert.deepStrictEqual(result.details, { provenance: { source: "test" }, count: 2 });
+    assert.deepStrictEqual(events.at(-1), {
+      type: "tool_execution_end",
+      toolCallId: "call-structured",
+      toolName: "structured",
+      result: "structured text",
+      metadata: { provenance: { source: "test" }, count: 2 },
+      isError: false,
+    });
   });
 
   it("execute 异常时透传错误", async () => {
@@ -332,6 +465,7 @@ describe("agentToolToPiTool", () => {
     assert.strictEqual(seenRequest.riskLevel, "high");
     assert.strictEqual(seenRequest.workspaceBounded, false);
     assert.strictEqual(seenRequest.permissionRequired, true);
+    assert.strictEqual(seenRequest.mcpCapabilities, undefined);
   });
 
   it("agentToolToPiTool denies permission-gated tools before execute", async () => {

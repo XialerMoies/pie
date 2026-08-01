@@ -1,4 +1,4 @@
-import { defineAgentTool, type AgentTool } from "../types.js"
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool } from "../types.js"
 import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
 export const fileReadTool: AgentTool = defineAgentTool({
@@ -26,7 +26,7 @@ export const fileReadTool: AgentTool = defineAgentTool({
   },
   execute: async (args, ctx) => {
     const path = String(args.path || "").trim()
-    if (!path) return "文件路径不能为空。"
+    if (!path) return structuredToolError("文件路径不能为空。", "invalid_path")
 
     const startLine = Math.max(1, Number(args.startLine) || 1)
     const maxLines = Math.min(Math.max(Number(args.maxLines) || 200, 1), 2000)
@@ -38,15 +38,22 @@ export const fileReadTool: AgentTool = defineAgentTool({
     const res = await localApiFetch(url, ctx)
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
     if (!res.ok || data.error) {
-      return data.error === "Access denied"
+      const text = data.error === "Access denied"
         ? `无权限读取"${path}"（路径不在工作区内）`
         : `读取失败：${data.error || data.message || `HTTP ${res.status}`}`
+      return structuredToolError(text, data.error === "Access denied" ? "path_access_denied" : "file_read_failed", { path, status: res.status })
     }
 
     // 二进制文件
     if (data.encoding === "base64") {
       const sizeKB = (data.size / 1024).toFixed(1)
-      return `[二进制文件] ${path} (${sizeKB}KB)，无法显示文本内容。`
+      return structuredToolResult(`[二进制文件] ${path} (${sizeKB}KB)，无法显示文本内容。`, {
+        ...data,
+        path,
+        lineRange: null,
+        totalLines: 0,
+        truncated: false,
+      })
     }
 
     // 按行切分
@@ -55,7 +62,13 @@ export const fileReadTool: AgentTool = defineAgentTool({
     const endLine = Math.min(startLine + maxLines - 1, totalLines)
 
     if (startLine > totalLines) {
-      return `文件共 ${totalLines} 行，起始行 ${startLine} 超过文件长度。`
+      return structuredToolResult(`文件共 ${totalLines} 行，起始行 ${startLine} 超过文件长度。`, {
+        ...data,
+        path,
+        lineRange: { start: startLine, end: startLine - 1 },
+        totalLines,
+        truncated: false,
+      }, [{ code: "line_range_empty", severity: "warning", message: "Requested start line is beyond the file length" }])
     }
 
     const slice = allLines.slice(startLine - 1, endLine)
@@ -70,7 +83,13 @@ export const fileReadTool: AgentTool = defineAgentTool({
     // 文件头信息
     const mtime = data.mtime ? data.mtime.slice(0, 16).replace("T", " ") : ""
     const header = `📄 ${path}  (${totalLines} 行, ${(data.size / 1024).toFixed(1)}KB${mtime ? ", " + mtime : ""})`
-    return header + "\n" + lines.join("\n") + truncated
+    return structuredToolResult(header + "\n" + lines.join("\n") + truncated, {
+      ...data,
+      path,
+      lineRange: { start: startLine, end: endLine },
+      totalLines,
+      truncated: endLine < totalLines,
+    })
   },
 
   isReadOnly: true,
@@ -80,4 +99,5 @@ export const fileReadTool: AgentTool = defineAgentTool({
   riskLevel: "low",
   needsPermission: false,
   workspaceBounded: true,
+  resultFormat: "structured",
 })

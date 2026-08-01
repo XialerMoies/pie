@@ -56,7 +56,16 @@ export async function authorizeToolPath(
   source: string,
 ): Promise<string> {
   const guardedPath = guardToolPath(root, target)
-  if (!ctx?.authorizePath) return guardedPath
+  if (!ctx?.authorizePath) {
+    ctx?.authorizationDecision?.pathDecisions?.push({
+      operation,
+      root,
+      path: guardedPath,
+      relativePath: relative(resolve(root), guardedPath),
+    })
+    return guardedPath
+  }
   const authorized = await ctx.authorizePath(root, guardedPath, operation, source)
+  ctx.authorizationDecision?.pathDecisions?.push(authorized)
   return guardToolPath(root, authorized.path)
 }

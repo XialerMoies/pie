@@ -11,7 +11,12 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
-import type { AgentTool, ToolParameterSchema } from "../types.js"
+import type {
+  AgentTool,
+  McpToolCapabilities,
+  McpToolCapabilityDeclaration,
+  ToolParameterSchema,
+} from "../types.js"
 
 // ─── 命名工具 ─────────────────────────────────────
 
@@ -80,6 +85,69 @@ export function formatMcpContent(
     .join("\n")
 }
 
+const DEFAULT_MCP_CAPABILITIES: McpToolCapabilities = {
+  readOnly: false,
+  destructive: true,
+  idempotent: false,
+  openWorld: true,
+  declaration: "defaulted",
+}
+
+export function normalizeMcpToolCapabilities(annotations: unknown): McpToolCapabilities {
+  if (!annotations || typeof annotations !== "object") return { ...DEFAULT_MCP_CAPABILITIES }
+  const value = annotations as Record<string, unknown>
+  const keys = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const
+  if (keys.some((key) => typeof value[key] !== "boolean")) return { ...DEFAULT_MCP_CAPABILITIES }
+
+  const normalized: McpToolCapabilities = {
+    readOnly: value.readOnlyHint as boolean,
+    destructive: value.destructiveHint as boolean,
+    idempotent: value.idempotentHint as boolean,
+    openWorld: value.openWorldHint as boolean,
+    declaration: "declared",
+  }
+  if (normalized.readOnly && normalized.destructive) return { ...DEFAULT_MCP_CAPABILITIES }
+  return normalized
+}
+
+function summarizeMcpContent(content: unknown[]): Array<Record<string, unknown>> {
+  return content.map((rawBlock) => {
+    if (!rawBlock || typeof rawBlock !== "object") return { type: "unknown" }
+    const block = rawBlock as Record<string, unknown>
+    const type = typeof block.type === "string" ? block.type : "unknown"
+    if (type === "text") {
+      return { type, textLength: typeof block.text === "string" ? block.text.length : 0 }
+    }
+    if (type === "image" || type === "audio") {
+      return {
+        type,
+        ...(typeof block.mimeType === "string" ? { mimeType: block.mimeType } : {}),
+        dataLength: typeof block.data === "string" ? block.data.length : 0,
+      }
+    }
+    const uri = typeof block.uri === "string"
+      ? block.uri
+      : block.resource && typeof block.resource === "object" && typeof (block.resource as Record<string, unknown>).uri === "string"
+        ? (block.resource as Record<string, unknown>).uri
+        : undefined
+    return { type, ...(uri ? { uri } : {}) }
+  })
+}
+
+function normalizeMcpData(content: unknown[]): unknown[] {
+  return content.map((rawBlock) => {
+    if (!rawBlock || typeof rawBlock !== "object") return { type: "unknown" }
+    const block = rawBlock as Record<string, unknown>
+    const type = typeof block.type === "string" ? block.type : "unknown"
+    return {
+      type,
+      ...(typeof block.text === "string" ? { text: block.text } : {}),
+      ...(typeof block.mimeType === "string" ? { mimeType: block.mimeType } : {}),
+      ...(typeof block.uri === "string" ? { uri: block.uri } : {}),
+    }
+  })
+}
+
 // ─── 适配器工厂 ────────────────────────────────────
 
 export interface McpToolAdapterOptions {
@@ -100,21 +168,32 @@ export interface McpToolAdapterOptions {
 export function createMcpToolAdapter(opts: McpToolAdapterOptions): AgentTool {
   const { serverName, tool, client } = opts
   const prefixedName = buildMcpToolName(serverName, tool.name)
+  const normalizedCapabilities = normalizeMcpToolCapabilities(tool.annotations)
+  const mcpCapabilities: McpToolCapabilityDeclaration = {
+    serverName,
+    ...normalizedCapabilities,
+  }
+  const safeReadOnly = normalizedCapabilities.declaration === "declared" &&
+    normalizedCapabilities.readOnly &&
+    !normalizedCapabilities.destructive &&
+    !normalizedCapabilities.openWorld
   // MCP tool 默认只读。工具本身的读写语义由 server 控制，不由客户端强制。
   // Phase 3 可通过服务器声明或其他标记覆盖此默认值。
   return {
     name: prefixedName,
     description: tool.description ?? "",
     parameters: convertInputSchema(tool.inputSchema),
-    isReadOnly: false,
-    isDestructive: true,
+    isReadOnly: safeReadOnly,
+    isDestructive: normalizedCapabilities.destructive,
     isConcurrencySafe: true,
     isEnabled: () => true,
     operations: ["execute"],
-    riskLevel: "high",
+    riskLevel: safeReadOnly ? "low" : "high",
     needsPermission: true,
     workspaceBounded: false,
     permissionSource: `mcp.${serverName}.${tool.name}`,
+    mcpCapabilities,
+    resultFormat: "structured",
     execute: async (args, ctx) => {
       const requestOptions: RequestOptions = {}
       const signal = (ctx as any).signal as AbortSignal | undefined
@@ -126,11 +205,33 @@ export function createMcpToolAdapter(opts: McpToolAdapterOptions): AgentTool {
         requestOptions,
       )
 
+      const content = Array.isArray(result.content) ? result.content : []
+      const metadata = {
+        mcp: {
+          serverName,
+          toolName: tool.name,
+          annotations: tool.annotations ?? null,
+          capabilities: normalizedCapabilities,
+          ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+          contentSummary: summarizeMcpContent(content as unknown[]),
+          isError: result.isError === true,
+        },
+      }
       if (result.isError) {
-        throw new Error(formatMcpContent(result.content as any[]))
+        const error = new Error(formatMcpContent(content as any[])) as Error & { metadata?: Record<string, unknown> }
+        error.metadata = {
+          ...metadata,
+          diagnostics: [{ code: "mcp_tool_error", severity: "error", message: error.message }],
+        }
+        throw error
       }
 
-      return formatMcpContent(result.content as any[])
+      return {
+        text: formatMcpContent(content as any[]),
+        data: result.structuredContent !== undefined ? result.structuredContent : normalizeMcpData(content as unknown[]),
+        diagnostics: [],
+        metadata,
+      }
     },
   }
 }

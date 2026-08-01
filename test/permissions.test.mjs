@@ -6,14 +6,17 @@ import { homedir, tmpdir } from "node:os";
 
 import {
   applySessionPermissionSuggestions,
+  createMcpCapabilityPermissionSuggestions,
   createPathPermissionSuggestions,
   createSessionPermissionState,
   createToolPermissionSuggestions,
   evaluatePathPermission,
+  findMatchingMcpCapabilityPermissionRule,
   findMatchingPathPermissionRule,
   findMatchingToolPermissionRule,
   pathPermissionToolForOperation,
   pathRuleContentForDirectory,
+  mcpCapabilityRuleContent,
   resetSessionPermissionState,
   toolRuleContentForTool,
 } from "../src/agent/permissions.ts";
@@ -272,5 +275,20 @@ describe("shared permission primitives", () => {
     assert.strictEqual(state.alwaysAllowRules.session[0].toolName, "Tool");
     assert.strictEqual(state.alwaysAllowRules.session[0].ruleContent, "Tool(mcp__fs__read)");
     assert.ok(findMatchingToolPermissionRule("mcp__fs__read", state.alwaysAllowRules.session));
+  });
+
+  it("matches server-scoped MCP capability rules and applies them through existing scoped storage", () => {
+    const rule = {
+      toolName: "McpCapability",
+      ruleContent: mcpCapabilityRuleContent("docs-server", "readOnly"),
+      match: "exact",
+    };
+    assert.ok(findMatchingMcpCapabilityPermissionRule("docs-server", "readOnly", [rule]));
+    assert.strictEqual(findMatchingMcpCapabilityPermissionRule("other-server", "readOnly", [rule]), undefined);
+
+    const state = createSessionPermissionState();
+    const suggestions = createMcpCapabilityPermissionSuggestions("docs-server", "readOnly");
+    applySessionPermissionSuggestions(state, suggestions);
+    assert.deepStrictEqual(state.alwaysAllowRules.session, [rule]);
   });
 });

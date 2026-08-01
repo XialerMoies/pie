@@ -37,6 +37,17 @@ const DESKTOP_SECURITY_TOKEN = process.env.MY_CODE_AGENT_DESKTOP_TOKEN || random
 delete process.env.MY_CODE_AGENT_DESKTOP_TOKEN;
 const trustedDesktopRoots = new TrustedDesktopRoots();
 
+// Packaged E2E runs in restricted Windows environments where Chromium's GPU
+// process and default user cache may be unavailable. Keep this test-only.
+if (E2E_MODE) {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-gpu-compositing");
+  app.commandLine.appendSwitch("in-process-gpu");
+  app.setPath("userData", path.join(DATA_DIR, "electron-user-data"));
+  app.setPath("cache", path.join(DATA_DIR, "electron-cache"));
+}
+
 function ensureDir(dir: string) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
@@ -101,14 +112,16 @@ function requestJson(
   pathname: string,
   method = "GET",
   payload?: unknown,
+  options: { includeToken?: boolean; headers?: Record<string, string>; timeoutMs?: number } = {},
 ): Promise<{ status: number; body: unknown }> {
   return new Promise((resolveRequest, reject) => {
     const body = payload === undefined ? "" : JSON.stringify(payload);
     const request = http.request(`http://127.0.0.1:${serverPort}${pathname}`, {
       method,
       headers: {
-        "X-My-Code-Agent-Token": DESKTOP_SECURITY_TOKEN,
+        ...(options.includeToken === false ? {} : { "X-My-Code-Agent-Token": DESKTOP_SECURITY_TOKEN }),
         ...(body ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } : {}),
+        ...options.headers,
       },
     }, (response) => {
       let text = "";
@@ -121,7 +134,7 @@ function requestJson(
       });
     });
     request.once("error", reject);
-    request.setTimeout(10_000, () => request.destroy(new Error(`E2E HTTP request timed out: ${pathname}`)));
+    request.setTimeout(options.timeoutMs ?? 10_000, () => request.destroy(new Error(`E2E HTTP request timed out: ${pathname}`)));
     if (body) request.write(body);
     request.end();
   });
@@ -152,7 +165,7 @@ async function waitForRendererReady(win: BrowserWindow): Promise<void> {
   throw new Error(`Renderer did not finish dashboard bootstrap within 30 seconds: ${JSON.stringify(snapshot)}`);
 }
 
-async function collectRendererE2EResult(win: BrowserWindow): Promise<Record<string, unknown>> {
+async function collectRendererE2EResult(win: BrowserWindow, outsidePath: string): Promise<Record<string, unknown>> {
   return win.webContents.executeJavaScript(`(async () => {
     const api = window.electronAPI;
     const preloadMethods = api ? Object.keys(api).sort() : [];
@@ -162,6 +175,23 @@ async function collectRendererE2EResult(win: BrowserWindow): Promise<Record<stri
       headers: token ? { 'X-My-Code-Agent-Token': token } : {},
     });
     const popup = window.open('https://example.com', '_blank');
+    const initialUrl = location.href;
+    location.href = 'https://example.com/blocked-navigation';
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const webview = document.createElement('webview');
+    webview.src = 'https://example.com/blocked-webview';
+    document.body.appendChild(webview);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    let webviewAttached = false;
+    try {
+      webviewAttached = typeof webview.getWebContentsId === 'function' && webview.getWebContentsId() > 0;
+    } catch {}
+    webview.remove();
+    const outsidePath = ${JSON.stringify(outsidePath)};
+    let revealOutsideRejected = false;
+    let trashOutsideRejected = false;
+    try { await api.showItemInFolder(outsidePath); } catch { revealOutsideRejected = true; }
+    try { await api.trashItem(outsidePath); } catch { trashOutsideRejected = true; }
     return {
       appRendered: Boolean(document.querySelector('#app')?.childElementCount),
       apiStatus: response.status,
@@ -169,6 +199,10 @@ async function collectRendererE2EResult(win: BrowserWindow): Promise<Record<stri
       nodeRequireType: typeof globalThis.require,
       inlineHandlerCount: document.querySelectorAll('[onclick],[onchange],[oninput],[onsubmit]').length,
       popupOpened: popup !== null,
+      externalNavigationBlocked: location.href === initialUrl,
+      webviewAttached,
+      revealOutsideRejected,
+      trashOutsideRejected,
       preloadMethods,
     };
   })()`, true);
@@ -185,16 +219,37 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
   e2eProbeStarted = true;
   try {
     await waitForRendererReady(win);
-    const renderer = await collectRendererE2EResult(win);
-    const unauthorizedApiStatus = await requestStatus(`http://127.0.0.1:${serverPort}/api/dashboard`);
     const e2eRoot = E2E_DATA_DIR || DATA_DIR;
     const workspace = path.join(e2eRoot, "workspace");
+    const siblingWorkspace = path.join(e2eRoot, "workspace-sibling");
     const externalRoot = path.join(path.dirname(e2eRoot), "external");
     ensureDir(workspace);
+    ensureDir(siblingWorkspace);
     ensureDir(externalRoot);
     fs.writeFileSync(path.join(e2eRoot, "read.txt"), "packaged-read", "utf-8");
     fs.writeFileSync(path.join(workspace, "read.txt"), "workspace-read", "utf-8");
     fs.writeFileSync(path.join(externalRoot, "read.txt"), "external-read", "utf-8");
+    fs.writeFileSync(path.join(externalRoot, ".env"), "SECRET=e2e", "utf-8");
+    fs.writeFileSync(path.join(externalRoot, "ipc.txt"), "ipc-outside", "utf-8");
+    fs.writeFileSync(path.join(siblingWorkspace, "read.txt"), "sibling-read", "utf-8");
+
+    const renderer = await collectRendererE2EResult(win, path.join(externalRoot, "ipc.txt"));
+    const unauthorizedApiStatus = await requestStatus(`http://127.0.0.1:${serverPort}/api/dashboard`);
+    const wrongTokenApi = await requestJson("/api/dashboard", "GET", undefined, {
+      headers: { "X-My-Code-Agent-Token": "forged-token" },
+    });
+    const hostileOriginApi = await requestJson("/api/dashboard", "GET", undefined, {
+      headers: { Origin: "https://evil.example" },
+    });
+    const crossSiteApi = await requestJson("/api/dashboard", "GET", undefined, {
+      headers: { "Sec-Fetch-Site": "cross-site" },
+    });
+    const unauthorizedMutationPath = path.join(e2eRoot, "unauthorized-write.txt");
+    const unauthorizedMutation = await requestJson("/api/file/write", "POST", {
+      root: e2eRoot,
+      path: "unauthorized-write.txt",
+      content: "must-not-exist",
+    }, { includeToken: false });
 
     const fileRead = await requestJson(
       `/api/file/read?root=${encodeURIComponent(e2eRoot)}&path=read.txt`,
@@ -207,12 +262,27 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
     const externalRead = await requestJson(
       `/api/file/read?root=${encodeURIComponent(externalRoot)}&path=read.txt`,
     );
+    let sensitiveExternalReadBlocked = false;
+    try {
+      const sensitiveExternalRead = await requestJson(
+        `/api/file/read?root=${encodeURIComponent(externalRoot)}&path=${encodeURIComponent(".env")}`,
+        "GET",
+        undefined,
+        { timeoutMs: 1_000 },
+      );
+      sensitiveExternalReadBlocked = sensitiveExternalRead.status !== 200;
+    } catch (error) {
+      sensitiveExternalReadBlocked = error instanceof Error && error.message.includes("timed out");
+    }
     const workspaceSwitch = await requestJson("/api/workspace/switch", "POST", { workspace });
     const workspaceRead = await requestJson(
       `/api/file/read?root=${encodeURIComponent(workspace)}&path=read.txt`,
     );
     const pathTraversal = await requestJson(
       `/api/file/read?root=${encodeURIComponent(workspace)}&path=${encodeURIComponent("../read.txt")}`,
+    );
+    const siblingTraversal = await requestJson(
+      `/api/file/read?root=${encodeURIComponent(workspace)}&path=${encodeURIComponent("../workspace-sibling/read.txt")}`,
     );
     writeE2EResult({
       ok: true,
@@ -221,12 +291,19 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
       pageTitle: win.webContents.getTitle(),
       renderer,
       unauthorizedApiStatus,
+      wrongTokenApiStatus: wrongTokenApi.status,
+      hostileOriginApiStatus: hostileOriginApi.status,
+      crossSiteApiStatus: crossSiteApi.status,
+      unauthorizedMutationStatus: unauthorizedMutation.status,
+      unauthorizedMutationCreated: fs.existsSync(unauthorizedMutationPath),
       fileReadStatus: fileRead.status,
       fileWriteStatus: fileWrite.status,
       externalReadStatus: externalRead.status,
+      sensitiveExternalReadBlocked,
       workspaceSwitchStatus: workspaceSwitch.status,
       workspaceReadStatus: workspaceRead.status,
       pathTraversalStatus: pathTraversal.status,
+      siblingTraversalStatus: siblingTraversal.status,
       windowCount: BrowserWindow.getAllWindows().length,
     });
   } catch (error) {

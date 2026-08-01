@@ -231,6 +231,27 @@ describe("SSE agent_end ordering", () => {
     assert.ok(toolBlock.output.includes("[截断"), "截断后应包含 [截断] 提示");
   });
 
+  it("preserves structured tool metadata in persisted and streamed traces", () => {
+    const writes = [];
+    const runtime = mockRuntime("", { flushed: true, getSessionId: () => "session-1" });
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write(chunk) { writes.push(String(chunk)); return true; }, end() {} },
+      turnId: "turn-1", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0,
+    };
+    attachSessionEvents(runtime, chatStream);
+    runtime.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-structured",
+      toolName: "mcp__docs__read",
+      result: "ok",
+      metadata: { mcp: { serverName: "docs", toolName: "read" } },
+      isError: false,
+    });
+
+    assert.ok(writes.some((chunk) => chunk.includes('"metadata":{"mcp":{"serverName":"docs","toolName":"read"}}')));
+  });
+
   it("tool_execution_update 单次 60KB chunk 触发 50KB 截断", () => {
     const runtime = mockRuntime("", { flushed: true, getSessionId: () => "session-1" });
     const chatStream = {

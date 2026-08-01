@@ -1,4 +1,4 @@
-import { defineAgentTool, type AgentTool } from "../types.js"
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool } from "../types.js"
 import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
 export const searchTool: AgentTool = defineAgentTool({
@@ -31,7 +31,7 @@ export const searchTool: AgentTool = defineAgentTool({
   },
   execute: async (args, ctx) => {
     const query = String(args.query || "").trim()
-    if (!query) return "搜索关键词不能为空。请提供 query 参数。"
+    if (!query) return structuredToolError("搜索关键词不能为空。请提供 query 参数。", "invalid_query")
 
     const type = String(args.type || "text").trim()
     const caseSensitive = args.caseSensitive === true
@@ -48,11 +48,11 @@ export const searchTool: AgentTool = defineAgentTool({
     const url = `${getLocalApiBaseUrl()}/api/search?${params.toString()}`
     const res = await localApiFetch(url, ctx)
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
-    if (!res.ok || data.error) return `搜索失败：${data.error || data.message || res.status}`
+    if (!res.ok || data.error) return structuredToolError(`搜索失败：${data.error || data.message || res.status}`, "search_failed", { query, status: res.status })
 
     if (!data.results || data.results.length === 0) {
-      if (type === "filename") return `没有找到文件名包含"${query}"的文件。`
-      return `没有找到内容包含"${query}"的文件（已忽略二进制文件、node_modules、.git 等目录）。`
+      const text = type === "filename" ? `没有找到文件名包含"${query}"的文件。` : `没有找到内容包含"${query}"的文件（已忽略二进制文件、node_modules、.git 等目录）。`
+      return structuredToolResult(text, { ...data, query, type, caseSensitive, maxResults, results: [], total: 0, truncated: Boolean(data.truncated) })
     }
 
     const lines: string[] = []
@@ -96,7 +96,7 @@ export const searchTool: AgentTool = defineAgentTool({
     renderGroup(docFiles, "文档/配置")
     renderGroup(otherFiles, "其他")
 
-    return lines.join("\n")
+    return structuredToolResult(lines.join("\n"), { ...data, query, type, caseSensitive, maxResults, results: data.results, total: data.total ?? data.results.length, truncated: Boolean(data.truncated) })
   },
 
   isReadOnly: true,
@@ -106,4 +106,5 @@ export const searchTool: AgentTool = defineAgentTool({
   riskLevel: "low",
   needsPermission: false,
   workspaceBounded: true,
+  resultFormat: "structured",
 })

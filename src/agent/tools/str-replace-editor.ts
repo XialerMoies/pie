@@ -11,7 +11,7 @@
  */
 import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from "fs";
 import { dirname } from "path";
-import { defineAgentTool, type AgentTool } from "../types.js";
+import { defineAgentTool, structuredToolResult, type AgentTool } from "../types.js";
 import { authorizeToolPath, guardToolPath } from "./path-authorization.js";
 
 const MAX_FILE_SIZE = 1024 * 1024; // 1 MB
@@ -217,6 +217,7 @@ export const strReplaceEditorTool: AgentTool = defineAgentTool({
   riskLevel: "high",
   needsPermission: false,
   workspaceBounded: true,
+  resultFormat: "structured",
   execute: async ({ file_path, old_string, new_string, replace_all, edits }, ctx) => {
     const fp = String(file_path ?? "");
     if (!fp) return "file_path 不能为空。";
@@ -233,7 +234,13 @@ export const strReplaceEditorTool: AgentTool = defineAgentTool({
       mkdirSync(dirname(absPath), { recursive: true });
       writeFileSync(absPath, String(new_string), "utf-8");
       const lines = String(new_string).split("\n").length;
-      return `已创建 ${fp}（${lines} 行）。创建新文件请用 file_write 工具。`;
+      return structuredToolResult(`已创建 ${fp}（${lines} 行）。创建新文件请用 file_write 工具。`, {
+        path: fp,
+        operation: "create",
+        applied: 1,
+        totalLines: lines,
+        changed: true,
+      });
     }
 
     // ── 模式 B：批量 edits ──────────────────────────────
@@ -310,6 +317,13 @@ export const strReplaceEditorTool: AgentTool = defineAgentTool({
     const changed = useEdits ? `${applied} 处替换` : `${editsToApply[0].replace_all ? "全部" : "1"} 处替换`;
     let preview = totalLines <= MAX_RESULT_LINES ? `\n\n${updated.slice(0, 2000)}` : "";
 
-    return `已替换 ${fp}：${changed}（文件共 ${totalLines} 行）。${preview}`;
+    return structuredToolResult(`已替换 ${fp}：${changed}（文件共 ${totalLines} 行）。${preview}`, {
+      path: fp,
+      operation: "write",
+      applied,
+      totalLines,
+      changed: true,
+      replaceAll: useEdits ? undefined : editsToApply[0].replace_all,
+    });
   },
 });

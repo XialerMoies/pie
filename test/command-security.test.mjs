@@ -1492,8 +1492,8 @@ describe("commandTool.execute 安全拦截", () => {
       { command: "rm -rf /" },
       { cwd: process.cwd(), sessionId: "" },
     )
-    ok(result.includes("⛔"), "危险命令应返回拦截提示")
-    ok(result.includes("危险命令已拦截"), "应包含拦截原因")
+    ok(result.text.includes("⛔"), "危险命令应返回拦截提示")
+    ok(result.text.includes("危险命令已拦截"), "应包含拦截原因")
   })
 
   it("危险命令参数变体也应被拦截", async () => {
@@ -1503,7 +1503,7 @@ describe("commandTool.execute 安全拦截", () => {
         { command: cmd },
         { cwd: process.cwd(), sessionId: "" },
       )
-      ok(result.includes("⛔"), `${cmd} 应被拦截`)
+      ok(result.text.includes("⛔"), `${cmd} 应被拦截`)
     }
   })
 
@@ -1528,8 +1528,8 @@ describe("commandTool.execute 安全拦截", () => {
     )
     equal(confirmCalls, 1)
     ok(confirmationReason.includes("complex bash expansion or control flow"), confirmationReason)
-    ok(result.includes("complex-confirm-ok"), result)
-    ok(result.includes("仅本次"), result)
+    ok(result.text.includes("complex-confirm-ok"), result)
+    ok(result.text.includes("仅本次"), result)
   })
 
   it("明确灾难性命令应硬拒且不能通过确认绕过", async () => {
@@ -1549,7 +1549,7 @@ describe("commandTool.execute 安全拦截", () => {
       },
     )
     equal(confirmCalls, 0)
-    ok(result.includes("危险命令已拦截"), result)
+    ok(result.text.includes("危险命令已拦截"), result)
   })
 
   it("只读硬约束应阻止复杂命令且不能通过确认绕过", async () => {
@@ -1569,8 +1569,8 @@ describe("commandTool.execute 安全拦截", () => {
       },
     )
     equal(confirmCalls, 0)
-    ok(result.includes("只读模式"), result)
-    ok(!result.includes("complex-readonly-blocked\n"), result)
+    ok(result.text.includes("只读模式"), result)
+    ok(!result.text.includes("complex-readonly-blocked\n"), result)
   })
 
   it("只读模式下非只读命令应被拦截", async () => {
@@ -1579,8 +1579,8 @@ describe("commandTool.execute 安全拦截", () => {
       { command: "touch newfile.txt", readOnly: true },
       { cwd: process.cwd(), sessionId: "" },
     )
-    ok(result.includes("⛔"), "非只读命令应返回拦截提示")
-    ok(result.includes("只读模式"), "应包含只读模式提示")
+    ok(result.text.includes("⛔"), "非只读命令应返回拦截提示")
+    ok(result.text.includes("只读模式"), "应包含只读模式提示")
   })
 
   it("只读模式下 find -delete 应被拦截", async () => {
@@ -1589,7 +1589,7 @@ describe("commandTool.execute 安全拦截", () => {
       { command: "find . -delete", readOnly: true },
       { cwd: process.cwd(), sessionId: "" },
     )
-    ok(result.includes("⛔"), "find -delete 在只读模式下应被拦截")
+    ok(result.text.includes("⛔"), "find -delete 在只读模式下应被拦截")
   })
 
   it("只读模式下 git branch -D 应被拦截", async () => {
@@ -1598,7 +1598,7 @@ describe("commandTool.execute 安全拦截", () => {
       { command: "git branch -D old", readOnly: true },
       { cwd: process.cwd(), sessionId: "" },
     )
-    ok(result.includes("⛔"), "git branch -D 在只读模式下应被拦截")
+    ok(result.text.includes("⛔"), "git branch -D 在只读模式下应被拦截")
   })
 
   it("只读模式下 & 后台写命令应被拦截", async () => {
@@ -1607,7 +1607,7 @@ describe("commandTool.execute 安全拦截", () => {
       { command: "ls & touch x", readOnly: true },
       { cwd: process.cwd(), sessionId: "" },
     )
-    ok(result.includes("⛔"), "& 后台写命令在只读模式下应被拦截")
+    ok(result.text.includes("⛔"), "& 后台写命令在只读模式下应被拦截")
   })
 
   it("只读模式下只读命令应正常执行", async () => {
@@ -1616,7 +1616,7 @@ describe("commandTool.execute 安全拦截", () => {
       { command: "echo read-only-ok", readOnly: true },
       { cwd: process.cwd(), sessionId: "" },
     )
-    ok(result.includes("read-only-ok"), "只读命令应正常执行")
+    ok(result.text.includes("read-only-ok"), "只读命令应正常执行")
   })
 
   it("Windows 下 mkdir -p 应提示兼容性问题且不创建 -p 目录", async () => {
@@ -1628,7 +1628,7 @@ describe("commandTool.execute 安全拦截", () => {
         { command: "mkdir -p src data out" },
         { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk", shellDialect: "cmd" },
       )
-      ok(result.includes("Windows"), "应提示 Windows cmd.exe 兼容性问题")
+      ok(result.text.includes("Windows"), "应提示 Windows cmd.exe 兼容性问题")
       equal(existsSync(join(workspace, "-p")), false)
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -1655,31 +1655,31 @@ describe("commandTool.execute 安全拦截", () => {
             { command: "mkdir -p data" },
             { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
           )
-          ok(!mkdirResult.includes("Windows"), mkdirResult)
+          ok(!mkdirResult.text.includes("Windows"), mkdirResult)
 
           const writeResult = await commandTool.execute(
             { command: "echo hello > data/out.txt" },
             { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
           )
-          ok(!writeResult.includes("No such file"), writeResult)
+          ok(!writeResult.text.includes("No such file"), writeResult)
 
           const catResult = await commandTool.execute(
             { command: "cat data/out.txt" },
             { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
           )
-          ok(catResult.includes("hello"), catResult)
+          ok(catResult.text.includes("hello"), catResult)
 
           const bashWriteResult = await commandTool.execute(
             { command: 'bash -lc "echo hi > data/bash.txt"' },
             { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
           )
-          ok(!bashWriteResult.includes("No such file"), bashWriteResult)
+          ok(!bashWriteResult.text.includes("No such file"), bashWriteResult)
 
           const bashCatResult = await commandTool.execute(
             { command: 'bash -lc "cat data/bash.txt"' },
             { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
           )
-          ok(bashCatResult.includes("hi"), bashCatResult)
+          ok(bashCatResult.text.includes("hi"), bashCatResult)
         })
       })
     } finally {
@@ -1696,8 +1696,8 @@ describe("commandTool.execute 安全拦截", () => {
         { command: "cd" },
         { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
       )
-      ok(result.includes(workspace), "bare cd should print the current workspace path")
-      ok(!result.includes("⛔"), "bare cd should not be blocked by path validation")
+      ok(result.text.includes(workspace), "bare cd should print the current workspace path")
+      ok(!result.text.includes("⛔"), "bare cd should not be blocked by path validation")
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1711,9 +1711,9 @@ describe("commandTool.execute 安全拦截", () => {
         { command: "echo $env:MY_CODE_AGENT_TREE_SITTER_SHADOW" },
         { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk", shellDialect: "cmd" },
       )
-      ok(result.includes("cmd.exe"), result)
-      ok(result.includes("$env:"), result)
-      ok(result.includes("启动桌面端前"), result)
+      ok(result.text.includes("cmd.exe"), result)
+      ok(result.text.includes("$env:"), result)
+      ok(result.text.includes("启动桌面端前"), result)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1728,8 +1728,8 @@ describe("commandTool.execute 安全拦截", () => {
           { command: "node -e \"process.stdout.write(process.env.MY_CODE_AGENT_DESKTOP_TOKEN || 'missing')\"" },
           { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
         )
-        ok(!result.includes("secret-desktop-token"), result)
-        ok(result.includes("missing"), result)
+        ok(!result.text.includes("secret-desktop-token"), result)
+        ok(result.text.includes("missing"), result)
       })
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -1744,8 +1744,8 @@ describe("commandTool.execute 安全拦截", () => {
         { command: "set MY_CODE_AGENT_TREE_SITTER_SHADOW=1 && echo %MY_CODE_AGENT_TREE_SITTER_SHADOW%" },
         { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk", shellDialect: "cmd" },
       )
-      ok(result.includes("本次 cmd 子进程"), result)
-      ok(result.includes("启动桌面端前"), result)
+      ok(result.text.includes("本次 cmd 子进程"), result)
+      ok(result.text.includes("启动桌面端前"), result)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1764,8 +1764,8 @@ describe("commandTool.execute 安全拦截", () => {
         { command, readOnly: true },
         { cwd: workspace, workspace, sessionId: "" },
       )
-      ok(result.includes("readonly-cd"), "cd 后读取 workspace 内文件应正常执行")
-      ok(!result.includes("⛔"), "不应被只读模式误拦截")
+      ok(result.text.includes("readonly-cd"), "cd 后读取 workspace 内文件应正常执行")
+      ok(!result.text.includes("⛔"), "不应被只读模式误拦截")
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1781,8 +1781,8 @@ describe("commandTool.execute 安全拦截", () => {
         { command: `cd /d "${workspace}" && dir /b`, readOnly: true },
         { cwd: workspace, workspace, sessionId: "" },
       )
-      ok(result.includes("package.json"), "cd /d 后查看 workspace 目录应正常执行")
-      ok(!result.includes("⛔"), "不应把 /d 当成越界路径")
+      ok(result.text.includes("package.json"), "cd /d 后查看 workspace 目录应正常执行")
+      ok(!result.text.includes("⛔"), "不应把 /d 当成越界路径")
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1799,8 +1799,8 @@ describe("commandTool 权限模式", () => {
       { command: "touch test.txt" },
       { cwd: process.cwd(), sessionId: "", permissionMode: "default" },
     )
-    ok(result.includes("⛔"), "无确认回调时应拒绝")
-    ok(result.includes("已取消"), "应提示已取消")
+    ok(result.text.includes("⛔"), "无确认回调时应拒绝")
+    ok(result.text.includes("已取消"), "应提示已取消")
   })
 
   it("plan 模式 + 无 confirmCommand 应被拒绝（fail-closed）", async () => {
@@ -1809,7 +1809,7 @@ describe("commandTool 权限模式", () => {
       { command: "echo plan-test" },
       { cwd: process.cwd(), sessionId: "", permissionMode: "plan" },
     )
-    ok(result.includes("⛔"), "plan 模式无确认回调时应拒绝")
+    ok(result.text.includes("⛔"), "plan 模式无确认回调时应拒绝")
   })
 
   it("default 模式 + 非只读 + confirmCommand=true 应放行", async () => {
@@ -1822,7 +1822,7 @@ describe("commandTool 权限模式", () => {
         confirmCommand: async () => true,
       },
     )
-    ok(result.length > 0, "确认通过后应执行命令"); ok(!result.includes("⛔"), "不应被拒绝")
+    ok(result.text.length > 0, "确认通过后应执行命令"); ok(!result.text.includes("⛔"), "不应被拒绝")
   })
 
   it("default 模式 + 非只读 + confirmCommand=false 应拒绝", async () => {
@@ -1835,7 +1835,7 @@ describe("commandTool 权限模式", () => {
         confirmCommand: async () => false,
       },
     )
-    ok(result.includes("⛔"), "确认拒绝时应拦截")
+    ok(result.text.includes("⛔"), "确认拒绝时应拦截")
   })
 
   it("dontAsk 模式 + 非只读应自动放行", async () => {
@@ -1847,7 +1847,7 @@ describe("commandTool 权限模式", () => {
         permissionMode: "dontAsk",
       },
     )
-    ok(result.includes("dontask-ok"), "dontAsk 模式应直接放行")
+    ok(result.text.includes("dontask-ok"), "dontAsk 模式应直接放行")
   })
 
   it("dontAsk 模式 + workspace 外写入应硬拒绝", async () => {
@@ -1865,8 +1865,8 @@ describe("commandTool 权限模式", () => {
           permissionMode: "dontAsk",
         },
       )
-      ok(result.includes("⛔"), "workspace 外写入不应在 dontAsk 下静默执行")
-      ok(result.includes("路径安全检查"), "应提示路径安全检查")
+      ok(result.text.includes("⛔"), "workspace 外写入不应在 dontAsk 下静默执行")
+      ok(result.text.includes("路径安全检查"), "应提示路径安全检查")
       equal(existsSync(join(root, "outside-command-security-test.txt")), false)
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -1908,7 +1908,7 @@ describe("commandTool 权限模式", () => {
       }
 
       const firstWrite = await commandTool.execute({ command: writeCommand }, writeCtx)
-      ok(firstWrite.includes("Write("), firstWrite)
+      ok(firstWrite.text.includes("Write("), firstWrite)
       equal(existsSync(join(external, "command-out.txt")), true)
       equal(writeConfirmCalls, 1)
       equal(writeState.additionalWorkingDirectories.size, 0)
@@ -1941,12 +1941,12 @@ describe("commandTool 权限模式", () => {
       }
 
       const firstRead = await commandTool.execute({ command: readCommand, readOnly: true }, readCtx)
-      ok(firstRead.includes("external-read"), firstRead)
+      ok(firstRead.text.includes("external-read"), firstRead)
       equal(readConfirmCalls, 0)
       equal(readState.alwaysAllowRules.session.length, 0)
 
       const secondRead = await commandTool.execute({ command: readCommand, readOnly: true }, readCtx)
-      ok(secondRead.includes("external-read"), secondRead)
+      ok(secondRead.text.includes("external-read"), secondRead)
       equal(readConfirmCalls, 0)
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -2027,7 +2027,7 @@ describe("commandTool 权限模式", () => {
       }
 
       const first = await commandTool.execute({ command: writeCommand }, ctx)
-      ok(first.includes("仅本次"), first)
+      ok(first.text.includes("仅本次"), first)
       equal(existsSync(join(external, "once-out.txt")), true)
       equal(confirmCalls, 1)
       equal(state.additionalWorkingDirectories.size, 0)
@@ -2072,7 +2072,7 @@ describe("commandTool 权限模式", () => {
       equal(applied.length, 1)
       equal(applied[0].scope, "workspace")
       ok(applied[0].suggestions.some((suggestion) => suggestion.type === "addPathRule"))
-      ok(result.includes("本项目"), result)
+      ok(result.text.includes("本项目"), result)
       equal(existsSync(join(external, "workspace-out.txt")), true)
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -2113,7 +2113,7 @@ describe("commandTool 权限模式", () => {
           },
         },
       )
-      ok(denied.length > 0, denied)
+      ok(denied.text.length > 0, denied)
       equal(denyConfirmCalls, 0)
       equal(existsSync(join(external, "deny-out.txt")), false)
 
@@ -2139,7 +2139,7 @@ describe("commandTool 权限模式", () => {
           },
         },
       )
-      ok(asked.includes("已完成"), asked)
+      ok(asked.text.includes("已完成"), asked)
       equal(askConfirmCalls, 1)
       equal(existsSync(join(workspace, "inside-ask.txt")), true)
     } finally {
@@ -2169,7 +2169,7 @@ describe("commandTool 权限模式", () => {
         },
       )
       equal(confirmCalls, 1)
-      ok(result.length > 0, result)
+      ok(result.text.length > 0, result)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -2193,7 +2193,7 @@ describe("commandTool 权限模式", () => {
             shellDialect: "posix-bash",
           },
         )
-        ok(result.includes("bash-ok"), result)
+        ok(result.text.includes("bash-ok"), result)
         equal(existsSync(join(workspace, "data", "out.txt")), true)
 
         if (process.platform === "win32") {
@@ -2207,7 +2207,7 @@ describe("commandTool 权限模式", () => {
               shellDialect: "cmd",
             },
           )
-          ok(whereResult.toLowerCase().includes("bash.exe"), whereResult)
+          ok(whereResult.text.toLowerCase().includes("bash.exe"), whereResult)
 
           const cmdBashResult = await commandTool.execute(
             { command: "bash -lc \"echo cmd-bash-ok > data/from-cmd-bash.txt && cat data/from-cmd-bash.txt\"" },
@@ -2219,7 +2219,7 @@ describe("commandTool 权限模式", () => {
               shellDialect: "cmd",
             },
           )
-          ok(cmdBashResult.includes("cmd-bash-ok"), cmdBashResult)
+          ok(cmdBashResult.text.includes("cmd-bash-ok"), cmdBashResult)
           equal(existsSync(join(workspace, "data", "from-cmd-bash.txt")), true)
         }
       })
@@ -2255,8 +2255,8 @@ describe("commandTool 权限模式", () => {
             },
           },
         )
-        ok(result.includes("⛔"), `${command} 应被硬拒绝`)
-        ok(result.includes("路径安全检查"), `${command} 应提示路径安全检查`)
+        ok(result.text.includes("⛔"), `${command} 应被硬拒绝`)
+        ok(result.text.includes("路径安全检查"), `${command} 应提示路径安全检查`)
       }
 
       equal(confirmCalls, 0, "硬拒绝不应进入确认回调")
@@ -2277,7 +2277,7 @@ describe("commandTool 权限模式", () => {
         permissionMode: "acceptEdits",
       },
     )
-    ok(result.includes("acceptedits-readonly-ok"), "acceptEdits 下只读 shell 命令应自动放行")
+    ok(result.text.includes("acceptedits-readonly-ok"), "acceptEdits 下只读 shell 命令应自动放行")
   })
 
   it("acceptEdits 模式 + 非只读 shell 无确认回调应 fail-closed", async () => {
@@ -2289,7 +2289,7 @@ describe("commandTool 权限模式", () => {
         permissionMode: "acceptEdits",
       },
     )
-    ok(result.includes("⛔"), "acceptEdits 不应等价于 dontAsk 自动执行非只读 shell")
+    ok(result.text.includes("⛔"), "acceptEdits 不应等价于 dontAsk 自动执行非只读 shell")
   })
 
   it("readOnly:true + dontAsk 模式仍应拒绝非只读命令", async () => {
@@ -2301,7 +2301,7 @@ describe("commandTool 权限模式", () => {
         permissionMode: "dontAsk",
       },
     )
-    ok(result.includes("⛔"), "readOnly 硬约束优先于 dontAsk")
+    ok(result.text.includes("⛔"), "readOnly 硬约束优先于 dontAsk")
   })
 
   it("plan 模式 + readOnly + 只读命令也应确认", async () => {
@@ -2310,7 +2310,7 @@ describe("commandTool 权限模式", () => {
       { command: "echo plan-readonly-test", readOnly: true },
       { cwd: process.cwd(), sessionId: "", permissionMode: "plan", confirmCommand: async () => false },
     )
-    ok(result.includes("⛔"), "plan 模式下只读命令也需确认")
+    ok(result.text.includes("⛔"), "plan 模式下只读命令也需确认")
   })
 
   it("模型通过 args 传 permissionMode 不可绕过 ctx 设置", async () => {
@@ -2319,7 +2319,7 @@ describe("commandTool 权限模式", () => {
       { command: "node --version", permissionMode: "dontAsk" },
       { cwd: process.cwd(), sessionId: "" },
     )
-    ok(result.includes("⛔"), "非只读 + 无 ctx.permissionMode + args.permissionMode=dontAsk 仍应拒绝")
+    ok(result.text.includes("⛔"), "非只读 + 无 ctx.permissionMode + args.permissionMode=dontAsk 仍应拒绝")
   })
 })
 

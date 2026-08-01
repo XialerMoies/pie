@@ -84,9 +84,79 @@ describe("custom tool trace emitter", () => {
       { command: "echo hello-stream" },
       { cwd: process.cwd(), sessionId: "", onUpdate: (chunk) => chunks.push(chunk) },
     );
-    assert.ok(result.includes("hello-stream"), "result 应包含命令输出");
+    assert.ok(result.text.includes("hello-stream"), "result 应包含命令输出");
     assert.ok(chunks.length > 0, "onUpdate 应被调用");
     assert.ok(chunks.some((c) => c.includes("hello-stream")), "chunks 应包含实际输出");
+  });
+
+  it("normalizes structured results through ToolRegistry", async () => {
+    const registry = new ToolRegistry();
+    const events = [];
+    registry.register({
+      name: "structured-tool",
+      description: "demo",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ text: "ok", metadata: { rows: 3 } }),
+      isReadOnly: true,
+    });
+
+    const [tool] = registry.toPITools("/repo", (event) => events.push(event));
+    const result = await tool.execute("call-structured", {});
+
+    assert.deepStrictEqual(result, {
+      content: [{ type: "text", text: "ok" }],
+      details: { rows: 3 },
+    });
+    assert.deepStrictEqual(events.at(-1), {
+      type: "tool_execution_end",
+      toolCallId: "call-structured",
+      toolName: "structured-tool",
+      result: "ok",
+      metadata: { rows: 3 },
+      isError: false,
+    });
+  });
+
+  it("propagates one structured authorization decision into details and trace", async () => {
+    const registry = new ToolRegistry();
+    const events = [];
+    const decision = {
+      status: "allow",
+      source: "rule",
+      scope: "session",
+      reason: "allowed by test rule",
+    };
+    registry.register({
+      name: "authorized-tool",
+      description: "demo",
+      parameters: { type: "object", properties: {} },
+      execute: async (_args, ctx) => {
+        assert.deepStrictEqual(ctx.authorizationDecision, decision);
+        return { text: "ok", metadata: { authorization: ctx.authorizationDecision } };
+      },
+      isReadOnly: true,
+      needsPermission: true,
+    });
+
+    const [tool] = registry.toPITools("/repo", (event) => events.push(event), {
+      authorizeTool: async () => ({ allow: true, decision }),
+    });
+    const result = await tool.execute("call-authorized", {});
+
+    assert.deepStrictEqual(result.details.authorization, decision);
+    assert.deepStrictEqual(events.at(-1).metadata.authorization, decision);
+  });
+
+  it("records the command specialized policy outcome in the shared decision", async () => {
+    const { commandTool } = await import("../src/agent/tools/command.ts");
+    const result = await commandTool.execute(
+      { command: "echo structured-command", readOnly: true },
+      { cwd: process.cwd(), sessionId: "", permissionMode: "default" },
+    );
+
+    assert.strictEqual(result.metadata.authorization.status, "allow");
+    assert.strictEqual(result.metadata.authorization.source, "specialized");
+    assert.strictEqual(result.metadata.authorization.specialized.status, "allow");
   });
 
   it("commandTool emits confirmation status through onUpdate", async () => {
@@ -103,8 +173,8 @@ describe("custom tool trace emitter", () => {
       },
     );
     const joined = chunks.join("");
-    assert.ok(result.length > 0, "confirmed command should execute");
-    assert.ok(result.includes("用户已允许命令执行"), "final result should show approval");
+    assert.ok(result.text.length > 0, "confirmed command should execute");
+    assert.ok(result.text.includes("用户已允许命令执行"), "final result should show approval");
     assert.ok(joined.includes("等待用户确认命令执行"), "trace should show waiting for confirmation");
     assert.ok(joined.includes("用户已允许命令执行"), "trace should show approval");
   });
@@ -116,7 +186,7 @@ describe("custom tool trace emitter", () => {
       { command: 'node -e "console.log(\'quoted-ok\')"' },
       { cwd: process.cwd(), sessionId: "", permissionMode: "dontAsk", onUpdate: (chunk) => chunks.push(chunk) },
     );
-    assert.ok(result.includes("quoted-ok"), "result 应包含 node -e 输出");
+    assert.ok(result.text.includes("quoted-ok"), "result 应包含 node -e 输出");
     assert.ok(chunks.join("").includes("quoted-ok"), "实时输出应包含 node -e 输出");
   });
 
@@ -128,8 +198,8 @@ describe("custom tool trace emitter", () => {
       { command: 'node -e "process.stderr.write(Buffer.from([0xce,0xc4,0xbc,0xfe]))"' },
       { cwd: process.cwd(), sessionId: "", permissionMode: "dontAsk", onUpdate: (chunk) => chunks.push(chunk) },
     );
-    assert.ok(result.includes("文件"), "result 应正确解码 GBK/GB18030 输出");
+    assert.ok(result.text.includes("文件"), "result 应正确解码 GBK/GB18030 输出");
     assert.ok(chunks.join("").includes("文件"), "实时输出也应正确解码");
-    assert.ok(!result.includes("�"), "result 不应包含替换字符");
+    assert.ok(!result.text.includes("�"), "result 不应包含替换字符");
   });
 });

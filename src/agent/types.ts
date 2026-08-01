@@ -36,7 +36,21 @@ export type CommandConfirmationResponse = boolean | CommandConfirmationResult | 
 export type PermissionDestination = PermissionRuleScope
 export type PermissionRuleMatch = "exact" | "prefix" | "wildcard"
 export type PathPermissionToolName = "Read" | "Write" | "Create" | "Remove"
-export type PermissionToolName = PathPermissionToolName | "Command" | "Tool"
+export type PermissionToolName = PathPermissionToolName | "Command" | "Tool" | "McpCapability"
+
+export type McpCapabilityName = "readOnly"
+
+export interface McpToolCapabilities {
+  readOnly: boolean
+  destructive: boolean
+  idempotent: boolean
+  openWorld: boolean
+  declaration: "declared" | "defaulted"
+}
+
+export interface McpToolCapabilityDeclaration extends McpToolCapabilities {
+  serverName: string
+}
 
 export interface PermissionRule {
   toolName: PermissionToolName
@@ -96,12 +110,44 @@ export interface ToolAuthorizationRequest {
   workspaceBounded: boolean
   authorizationMode: ToolAuthorizationMode
   permissionRequired?: boolean
+  mcpCapabilities?: McpToolCapabilityDeclaration
   args: Record<string, unknown>
 }
 
 export interface ToolAuthorizationResult {
   allow: boolean
   reason?: string
+  decision?: ToolExecutionDecision
+}
+
+export type ToolAuthorizationDecisionRequest = Omit<ToolAuthorizationRequest, "args">
+
+export type ToolExecutionDecisionStatus = "allow" | "deny" | "delegated"
+export type ToolExecutionDecisionSource = "implicit" | "rule" | "confirmation" | "specialized"
+
+export interface ToolSpecializedDecision {
+  status: "pending" | "allow" | "deny"
+  reason?: string
+  scope?: CommandConfirmationScope
+  appliedRules?: string[]
+}
+
+export interface ToolExecutionDecision {
+  status: ToolExecutionDecisionStatus
+  source: ToolExecutionDecisionSource
+  request?: ToolAuthorizationDecisionRequest
+  reason?: string
+  scope?: CommandConfirmationScope
+  appliedRules?: PermissionRule[]
+  pathDecisions?: ToolPathAuthorizationResult[]
+  specialized?: ToolSpecializedDecision
+}
+
+export function toolAuthorizationDecisionRequest(
+  request: ToolAuthorizationRequest,
+): ToolAuthorizationDecisionRequest {
+  const { args: _args, ...descriptor } = request
+  return descriptor
 }
 
 export type ToolAuthorizer = (
@@ -150,6 +196,8 @@ export interface ToolContext {
   ) => void
   authorizePath?: ToolPathAuthorizer
   authorizeTool?: ToolAuthorizer
+  /** One mutable, serializable authorization record shared by the tool and its path/specialized policies. */
+  authorizationDecision?: ToolExecutionDecision
   desktopApiToken?: string
 }
 
@@ -159,9 +207,77 @@ export type ToolTraceEmitter = (event: {
   toolName: string
   args?: Record<string, unknown>
   result?: string
+  data?: unknown
+  diagnostics?: AgentToolDiagnostic[]
+  metadata?: Record<string, unknown>
   partialResult?: string
   isError?: boolean
 }) => void
+
+export interface AgentToolDiagnostic {
+  code: string
+  severity: "info" | "warning" | "error"
+  message: string
+  details?: unknown
+}
+
+export interface AgentToolResult {
+  text: string
+  data?: unknown
+  diagnostics?: AgentToolDiagnostic[]
+  metadata?: Record<string, unknown>
+}
+
+export type NormalizedAgentToolResult = {
+  text: string
+  data: unknown
+  diagnostics: AgentToolDiagnostic[]
+  metadata: Record<string, unknown>
+}
+
+export type AgentToolExecutionResult = string | AgentToolResult
+
+export function structuredToolResult(
+  text: string,
+  data: unknown,
+  diagnostics: AgentToolDiagnostic[] = [],
+  metadata?: Record<string, unknown>,
+): AgentToolResult {
+  return { text, data, diagnostics, ...(metadata ? { metadata } : {}) }
+}
+
+export function structuredToolError(
+  text: string,
+  code = "tool_error",
+  details?: unknown,
+): AgentToolResult {
+  return {
+    text,
+    data: null,
+    diagnostics: [{ code, severity: "error", message: text, ...(details === undefined ? {} : { details }) }],
+  }
+}
+
+export function normalizeAgentToolExecutionResult(result: AgentToolExecutionResult): NormalizedAgentToolResult {
+  if (typeof result === "string") return { text: result, data: null, diagnostics: [], metadata: {} }
+  if (!result || typeof result.text !== "string") {
+    throw new Error("Tool returned an invalid structured result")
+  }
+  return {
+    text: result.text,
+    data: result.data === undefined ? null : result.data,
+    diagnostics: Array.isArray(result.diagnostics)
+      ? result.diagnostics.filter((diagnostic): diagnostic is AgentToolDiagnostic =>
+        Boolean(diagnostic) &&
+        typeof diagnostic === "object" &&
+        typeof diagnostic.code === "string" &&
+        (diagnostic.severity === "info" || diagnostic.severity === "warning" || diagnostic.severity === "error") &&
+        typeof diagnostic.message === "string",
+      )
+      : [],
+    metadata: result.metadata && typeof result.metadata === "object" ? result.metadata : {},
+  }
+}
 
 /** Tool 参数定义（JSON Schema 格式） */
 export interface ToolParameterSchema {
@@ -176,7 +292,7 @@ export interface AgentTool {
   name: string
   description: string
   parameters: ToolParameterSchema
-  execute(args: Record<string, unknown>, ctx: ToolContext): Promise<string>
+  execute(args: Record<string, unknown>, ctx: ToolContext): Promise<AgentToolExecutionResult>
 
   // ── 从 Claudecode 借鉴（现在就要） ──
   /** Coordinator 权限隔离：子 Agent 只能调 isReadOnly === true 的 tool */
@@ -194,6 +310,9 @@ export interface AgentTool {
   workspaceBounded?: boolean
   authorizationMode?: ToolAuthorizationMode
   permissionSource?: string
+  mcpCapabilities?: McpToolCapabilityDeclaration
+  /** Built-ins use structured results; omitted keeps string compatibility for MCP/third-party tools. */
+  resultFormat?: "structured"
 
   // ── 待后续开发 ──
   // aliases?: string[]
@@ -206,25 +325,56 @@ export async function authorizeToolExecution(
   tool: AgentTool,
   args: Record<string, unknown>,
   ctx: ToolContext,
-): Promise<void> {
-  const permissionRequired = tool.needsPermission === true
-  if (!ctx.authorizeTool) {
-    if (!permissionRequired) return
-    throw new Error(`Tool authorization unavailable: ${tool.name}`)
-  }
-  const decision = await ctx.authorizeTool({
+): Promise<ToolExecutionDecision> {
+  const request: ToolAuthorizationRequest = {
     toolName: tool.name,
     source: tool.permissionSource || `agent.${tool.name}`,
     operations: tool.operations || [],
     riskLevel: tool.riskLevel || "medium",
     workspaceBounded: tool.workspaceBounded !== false,
     authorizationMode: tool.authorizationMode || "generic",
-    permissionRequired,
+    permissionRequired: tool.needsPermission === true,
+    mcpCapabilities: tool.mcpCapabilities,
     args,
-  })
-  if (!decision.allow) {
-    throw new Error(decision.reason || `Tool execution denied: ${tool.name}`)
   }
+  const decisionRequest = toolAuthorizationDecisionRequest(request)
+  const permissionRequired = tool.needsPermission === true
+  if (!ctx.authorizeTool) {
+    if (!permissionRequired) {
+      return {
+        status: tool.authorizationMode === "specialized" ? "delegated" : "allow",
+        source: tool.authorizationMode === "specialized" ? "specialized" : "implicit",
+        request: decisionRequest,
+        reason: tool.authorizationMode === "specialized"
+          ? `Authorization is owned by the specialized ${tool.name} policy`
+          : "Tool does not require confirmation",
+        pathDecisions: [],
+        ...(tool.authorizationMode === "specialized"
+          ? { specialized: { status: "pending" as const } }
+          : {}),
+      }
+    }
+    throw new Error(`Tool authorization unavailable: ${tool.name}`)
+  }
+  const result = await ctx.authorizeTool(request)
+  const decision = result.decision || {
+    status: result.allow ? (tool.authorizationMode === "specialized" ? "delegated" : "allow") : "deny",
+    source: tool.authorizationMode === "specialized" ? "specialized" : "implicit",
+    request: decisionRequest,
+    reason: result.reason,
+    pathDecisions: [],
+    ...(tool.authorizationMode === "specialized"
+      ? { specialized: { status: "pending" as const } }
+      : {}),
+  }
+  decision.request ||= decisionRequest
+  decision.pathDecisions ||= []
+  if (!result.allow) {
+    const error = new Error(result.reason || `Tool execution denied: ${tool.name}`) as Error & { metadata?: Record<string, unknown> }
+    error.metadata = { authorization: decision }
+    throw error
+  }
+  return decision
 }
 
 const AUTHORIZED_TOOL = Symbol("authorizedTool")
@@ -240,12 +390,107 @@ export function defineAgentTool(tool: AgentTool): AgentTool {
   const authorizedTool: AgentTool = {
     ...tool,
     execute: async (args, ctx) => {
-      await authorizeToolExecution(tool, args, ctx)
-      return rawExecute(args, ctx)
+      const authorizationDecision = await authorizeToolExecution(tool, args, ctx)
+      const result = await rawExecute(args, { ...ctx, authorizationDecision })
+      if (tool.resultFormat !== "structured") return result
+      const normalized = normalizeAgentToolExecutionResult(result)
+      return {
+        text: normalized.text,
+        data: normalized.data,
+        diagnostics: normalized.diagnostics,
+        metadata: {
+          ...normalized.metadata,
+          tool: tool.name,
+          outcome: authorizationDecision.status === "deny" ? "denied" : "completed",
+          authorization: authorizationDecision,
+        },
+      }
     },
   }
   Object.defineProperty(authorizedTool, AUTHORIZED_TOOL, { value: true })
   return authorizedTool
+}
+
+export interface ToolExecutionExtraContext {
+  permissionMode?: ToolContext["permissionMode"]
+  confirmCommand?: ToolContext["confirmCommand"]
+  shellDialect?: ToolContext["shellDialect"]
+  additionalWorkingDirectories?: ToolContext["additionalWorkingDirectories"]
+  alwaysAllowRules?: ToolContext["alwaysAllowRules"]
+  alwaysDenyRules?: ToolContext["alwaysDenyRules"]
+  alwaysAskRules?: ToolContext["alwaysAskRules"]
+  applyPermissionSuggestions?: ToolContext["applyPermissionSuggestions"]
+  authorizePath?: ToolContext["authorizePath"]
+  authorizeTool?: ToolContext["authorizeTool"]
+  desktopApiToken?: ToolContext["desktopApiToken"]
+}
+
+export function agentToolToPIToolDefinition(
+  tool: AgentTool,
+  workspace?: string,
+  emitTrace?: ToolTraceEmitter,
+  extraCtx?: ToolExecutionExtraContext,
+) {
+  const authorizedTool = defineAgentTool(tool)
+  return {
+    name: authorizedTool.name,
+    label: authorizedTool.name,
+    description: authorizedTool.description,
+    parameters: authorizedTool.parameters,
+    execute: async (_toolCallId: string, params: unknown) => {
+      const args = params as Record<string, unknown>
+      emitTrace?.({ type: "tool_execution_start", toolCallId: _toolCallId, toolName: authorizedTool.name, args })
+      try {
+        const onUpdate = (chunk: string) => emitTrace?.({
+          type: "tool_execution_update",
+          toolCallId: _toolCallId,
+          toolName: authorizedTool.name,
+          partialResult: chunk,
+        })
+        const toolContext: ToolContext = {
+          cwd: workspace || "",
+          sessionId: "",
+          workspace,
+          toolCallId: _toolCallId,
+          onUpdate,
+          ...extraCtx,
+        }
+        const normalized = normalizeAgentToolExecutionResult(await authorizedTool.execute(args, toolContext))
+        const structured = authorizedTool.resultFormat === "structured"
+        emitTrace?.({
+          type: "tool_execution_end",
+          toolCallId: _toolCallId,
+          toolName: authorizedTool.name,
+          result: normalized.text,
+          ...(structured ? { data: normalized.data, diagnostics: normalized.diagnostics } : {}),
+          ...(Object.keys(normalized.metadata).length > 0 ? { metadata: normalized.metadata } : {}),
+          isError: false,
+        })
+        return {
+          content: [{ type: "text" as const, text: normalized.text }],
+          details: structured
+            ? { ...normalized.metadata, data: normalized.data, diagnostics: normalized.diagnostics }
+            : normalized.metadata,
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const metadata = error && typeof error === "object" &&
+          "metadata" in error && (error as { metadata?: unknown }).metadata &&
+          typeof (error as { metadata?: unknown }).metadata === "object"
+          ? (error as { metadata: Record<string, unknown> }).metadata
+          : undefined
+        emitTrace?.({
+          type: "tool_execution_end",
+          toolCallId: _toolCallId,
+          toolName: authorizedTool.name,
+          result: message,
+          ...(metadata ? { metadata } : {}),
+          isError: true,
+        })
+        throw error
+      }
+    },
+  } as any
 }
 
 export class ToolRegistry {
@@ -271,75 +516,8 @@ export class ToolRegistry {
   toPITools(
     workspace?: string,
     emitTrace?: ToolTraceEmitter,
-    extraCtx?: {
-      permissionMode?: ToolContext["permissionMode"]
-      confirmCommand?: ToolContext["confirmCommand"]
-      shellDialect?: ToolContext["shellDialect"]
-      additionalWorkingDirectories?: ToolContext["additionalWorkingDirectories"]
-      alwaysAllowRules?: ToolContext["alwaysAllowRules"]
-      alwaysDenyRules?: ToolContext["alwaysDenyRules"]
-      alwaysAskRules?: ToolContext["alwaysAskRules"]
-      applyPermissionSuggestions?: ToolContext["applyPermissionSuggestions"]
-      authorizePath?: ToolContext["authorizePath"]
-      authorizeTool?: ToolContext["authorizeTool"]
-      desktopApiToken?: ToolContext["desktopApiToken"]
-    },
+    extraCtx?: ToolExecutionExtraContext,
   ) {
-    return this.getAll().map((tool) => ({
-      name: tool.name,
-      label: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-      execute: async (_toolCallId: string, params: unknown) => {
-        const args = params as Record<string, unknown>
-        emitTrace?.({
-          type: "tool_execution_start",
-          toolCallId: _toolCallId,
-          toolName: tool.name,
-          args,
-        })
-        try {
-          const onUpdate = (chunk: string) => {
-            emitTrace?.({
-              type: "tool_execution_update",
-              toolCallId: _toolCallId,
-              toolName: tool.name,
-              partialResult: chunk,
-            })
-          }
-          const toolContext: ToolContext = {
-            cwd: workspace || "",
-            sessionId: "",
-            workspace,
-            toolCallId: _toolCallId,
-            onUpdate,
-            ...extraCtx,
-          }
-          const text = await tool.execute(args, toolContext)
-          emitTrace?.({
-            type: "tool_execution_end",
-            toolCallId: _toolCallId,
-            toolName: tool.name,
-            result: text,
-            isError: false,
-          })
-          // PI 要求 content 是数组格式，不能直接返回字符串
-          return {
-            content: [{ type: "text" as const, text }],
-            details: {},
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          emitTrace?.({
-            type: "tool_execution_end",
-            toolCallId: _toolCallId,
-            toolName: tool.name,
-            result: message,
-            isError: true,
-          })
-          throw error
-        }
-      },
-    })) as any
+    return this.getAll().map((tool) => agentToolToPIToolDefinition(tool, workspace, emitTrace, extraCtx)) as any
   }
 }

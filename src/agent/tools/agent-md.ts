@@ -7,7 +7,7 @@
 import { existsSync, writeFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { defineAgentTool, type AgentTool } from "../types.js";
+import { defineAgentTool, structuredToolResult, type AgentTool } from "../types.js";
 import { getCurrentRuntime } from "../globals.js";
 import { authorizeToolPath } from "./path-authorization.js";
 
@@ -38,6 +38,7 @@ export const writeAgentMdTool: AgentTool = defineAgentTool({
   riskLevel: "medium",
   needsPermission: false,
   workspaceBounded: true,
+  resultFormat: "structured",
   execute: async ({ content }, ctx) => {
     const root = ctx.workspace || APP_ROOT;
     const agentMdPath = resolve(root, "AGENT.md");
@@ -52,6 +53,13 @@ export const writeAgentMdTool: AgentTool = defineAgentTool({
     // 刷新系统 prompt 使当前对话立即生效
     const runtime = getCurrentRuntime();
     if (runtime) await runtime.refreshSystemPrompt();
-    return "AGENT.md 已更新，当前对话已生效。";
+    const textContent = String(content);
+    return structuredToolResult("AGENT.md 已更新，当前对话已生效。", {
+      path: authorizedFile,
+      operation,
+      bytes: Buffer.byteLength(textContent, "utf-8"),
+      lines: textContent.split("\n").length,
+      refreshedPrompt: true,
+    });
   },
 });

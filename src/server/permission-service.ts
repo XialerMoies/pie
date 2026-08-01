@@ -9,17 +9,23 @@ import type {
   PermissionSuggestion,
   PermissionToolName,
   SessionPermissionState,
+  McpCapabilityName,
+  McpToolCapabilityDeclaration,
   ToolAuthorizationRequest,
   ToolAuthorizationMode,
   ToolAuthorizationResult,
+  ToolExecutionDecision,
   ToolOperation,
   ToolRiskLevel,
 } from "../agent/types.js";
+import { toolAuthorizationDecisionRequest } from "../agent/types.js";
 import {
   applySessionPermissionSuggestions,
+  createMcpCapabilityPermissionSuggestions,
   createPathPermissionSuggestions,
   createToolPermissionSuggestions,
   evaluatePathPermission,
+  findMatchingMcpCapabilityPermissionRule,
   findMatchingToolPermissionRule,
   normalizePermissionPath,
   permissionRulesForScopes,
@@ -56,6 +62,8 @@ export interface PermissionAuditEntry {
   workspaceBounded?: boolean;
   authorizationMode?: ToolAuthorizationMode;
   permissionRequired?: boolean;
+  mcpCapabilities?: McpToolCapabilityDeclaration;
+  mcpCapabilityAutoAllowed?: boolean;
 }
 
 export type PermissionAuditOperation = PathPermissionOperation | "tool";
@@ -74,6 +82,7 @@ export interface ServerPermissionConfirmationRequest {
   workspaceBounded?: boolean;
   authorizationMode?: ToolAuthorizationMode;
   permissionRequired?: boolean;
+  mcpCapabilities?: McpToolCapabilityDeclaration;
 }
 
 export type ServerPermissionConfirmCallback = (
@@ -319,7 +328,10 @@ export class ServerPermissionService {
     const reason = permissionRequired
       ? `External tool "${request.toolName}" requires confirmation before execution`
       : `Tool "${request.toolName}" is tracked by the permission service`;
-    const suggestions = createToolPermissionSuggestions(request.toolName);
+    const mcpCapability = eligibleMcpCapability(request.mcpCapabilities);
+    const suggestions = mcpCapability
+      ? createMcpCapabilityPermissionSuggestions(request.mcpCapabilities!.serverName, mcpCapability)
+      : createToolPermissionSuggestions(request.toolName);
     const baseEntry = {
       source: request.source,
       operation: "tool" as const,
@@ -330,51 +342,110 @@ export class ServerPermissionService {
       workspaceBounded: request.workspaceBounded,
       authorizationMode: request.authorizationMode,
       permissionRequired,
+      mcpCapabilities: request.mcpCapabilities,
     };
     const state = this.sessionPermissionState;
+    const decisionRequest = toolAuthorizationDecisionRequest(request);
+    const result = (
+      allow: boolean,
+      decision: ToolExecutionDecision,
+      reason?: string,
+    ): ToolAuthorizationResult => ({ allow, ...(reason ? { reason } : {}), decision: { ...decision, request: decisionRequest } });
 
     const denyMatch = findScopedToolRule(request.toolName, state?.alwaysDenyRules);
-    if (denyMatch) {
+    const capabilityDenyMatch = mcpCapability && request.mcpCapabilities
+      ? findScopedMcpCapabilityRule(request.mcpCapabilities.serverName, mcpCapability, state?.alwaysDenyRules)
+      : undefined;
+    if (denyMatch || capabilityDenyMatch) {
+      const matchedScope = denyMatch?.scope || capabilityDenyMatch!.scope;
       this.record({
         ...baseEntry,
         decision: "deny",
-        reason: `Tool execution is denied by ${denyMatch.scope} rule`,
+        reason: `Tool execution is denied by ${matchedScope} rule`,
         code: "permission_denied",
       });
-      return { allow: false, reason: `Tool execution is denied by ${denyMatch.scope} rule` };
+      const deniedReason = `Tool execution is denied by ${matchedScope} rule`;
+      return result(false, {
+        status: "deny",
+        source: "rule",
+        reason: deniedReason,
+        scope: matchedScope,
+        appliedRules: [denyMatch?.rule || capabilityDenyMatch!.rule],
+        pathDecisions: [],
+      }, deniedReason);
     }
 
     if (request.authorizationMode === "specialized") {
-      return {
-        allow: true,
-        reason: `Authorization is owned by the specialized ${request.toolName} policy`,
-      };
+      const specializedReason = `Authorization is owned by the specialized ${request.toolName} policy`;
+      return result(true, {
+        status: "delegated",
+        source: "specialized",
+        reason: specializedReason,
+        pathDecisions: [],
+        specialized: { status: "pending" },
+      }, specializedReason);
     }
 
     const askMatch = findScopedToolRule(request.toolName, state?.alwaysAskRules);
+    const capabilityAskMatch = mcpCapability && request.mcpCapabilities
+      ? findScopedMcpCapabilityRule(request.mcpCapabilities.serverName, mcpCapability, state?.alwaysAskRules)
+      : undefined;
     const allowMatch = findScopedToolRule(request.toolName, state?.alwaysAllowRules);
-    if (allowMatch && !askMatch) {
+    const capabilityAllowMatch = mcpCapability && request.mcpCapabilities
+      ? findScopedMcpCapabilityRule(request.mcpCapabilities.serverName, mcpCapability, state?.alwaysAllowRules)
+      : undefined;
+    const effectiveAskMatch = askMatch || capabilityAskMatch;
+    if (allowMatch && !effectiveAskMatch) {
       this.record({
         ...baseEntry,
         decision: "allow",
         reason: `Allowed by ${allowMatch.scope} tool rule`,
       });
-      return { allow: true };
+      return result(true, {
+        status: "allow",
+        source: "rule",
+        reason: `Allowed by ${allowMatch.scope} tool rule`,
+        scope: allowMatch.scope,
+        appliedRules: [allowMatch.rule],
+        pathDecisions: [],
+      });
     }
 
-    if (!permissionRequired && !askMatch) {
+    if (capabilityAllowMatch && !effectiveAskMatch) {
+      this.record({
+        ...baseEntry,
+        decision: "allow",
+        reason: `Allowed by ${capabilityAllowMatch.scope} MCP ${mcpCapability} capability rule`,
+        mcpCapabilityAutoAllowed: true,
+      });
+      return result(true, {
+        status: "allow",
+        source: "rule",
+        reason: `Allowed by ${capabilityAllowMatch.scope} MCP ${mcpCapability} capability rule`,
+        scope: capabilityAllowMatch.scope,
+        appliedRules: [capabilityAllowMatch.rule],
+        pathDecisions: [],
+      });
+    }
+
+    if (!permissionRequired && !effectiveAskMatch) {
       this.record({
         ...baseEntry,
         decision: "allow",
         reason,
       });
-      return { allow: true };
+      return result(true, {
+        status: "allow",
+        source: "implicit",
+        reason,
+        pathDecisions: [],
+      });
     }
 
     this.record({
       ...baseEntry,
       decision: "ask",
-      reason: askMatch ? `Tool execution requires confirmation by ${askMatch.scope} rule` : reason,
+      reason: effectiveAskMatch ? `Tool execution requires confirmation by ${effectiveAskMatch.scope} rule` : reason,
     });
 
     if (!this.confirmPermission) {
@@ -384,7 +455,12 @@ export class ServerPermissionService {
         reason: "Tool permission confirmation is unavailable",
         code: "permission_confirmation_required",
       });
-      return { allow: false, reason: "Tool permission confirmation is unavailable" };
+      return result(false, {
+        status: "deny",
+        source: "confirmation",
+        reason: "Tool permission confirmation is unavailable",
+        pathDecisions: [],
+      }, "Tool permission confirmation is unavailable");
     }
 
     let response: CommandConfirmationResponse;
@@ -393,7 +469,7 @@ export class ServerPermissionService {
         source: request.source,
         operation: "tool",
         root,
-        reason: askMatch ? `Tool execution requires confirmation by ${askMatch.scope} rule` : reason,
+        reason: effectiveAskMatch ? `Tool execution requires confirmation by ${effectiveAskMatch.scope} rule` : reason,
         permissionSuggestions: suggestions,
         toolName: request.toolName,
         toolOperations: request.operations,
@@ -401,6 +477,7 @@ export class ServerPermissionService {
         workspaceBounded: request.workspaceBounded,
         authorizationMode: request.authorizationMode,
         permissionRequired,
+        mcpCapabilities: request.mcpCapabilities,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -410,7 +487,12 @@ export class ServerPermissionService {
         reason: `Permission confirmation failed: ${message}`,
         code: "permission_confirmation_failed",
       });
-      return { allow: false, reason: "Permission confirmation failed" };
+      return result(false, {
+        status: "deny",
+        source: "confirmation",
+        reason: "Permission confirmation failed",
+        pathDecisions: [],
+      }, "Permission confirmation failed");
     }
 
     const confirmed = typeof response === "boolean" ? { allow: response } : response;
@@ -421,12 +503,17 @@ export class ServerPermissionService {
         reason: "Tool permission confirmation denied or timed out",
         code: "permission_denied",
       });
-      return { allow: false, reason: "Tool permission confirmation denied or timed out" };
+      return result(false, {
+        status: "deny",
+        source: "confirmation",
+        reason: "Tool permission confirmation denied or timed out",
+        pathDecisions: [],
+      }, "Tool permission confirmation denied or timed out");
     }
 
-    if (confirmed.scope === "session" || confirmed.scope === "workspace") {
-      this.applyPermissionSuggestions(suggestions, confirmed.scope);
-    }
+    const appliedRules = confirmed.scope === "session" || confirmed.scope === "workspace"
+      ? this.applyPermissionSuggestions(suggestions, confirmed.scope)
+      : [];
 
     this.record({
       ...baseEntry,
@@ -437,7 +524,18 @@ export class ServerPermissionService {
           ? "Confirmed by user for this workspace"
           : "Confirmed by user once",
     });
-    return { allow: true };
+    return result(true, {
+      status: "allow",
+      source: "confirmation",
+      reason: confirmed.scope === "session"
+        ? "Confirmed by user for this session"
+        : confirmed.scope === "workspace"
+          ? "Confirmed by user for this workspace"
+          : "Confirmed by user once",
+      scope: confirmed.scope === "session" || confirmed.scope === "workspace" ? confirmed.scope : "once",
+      appliedRules,
+      pathDecisions: [],
+    });
   }
 
   getAuditTrail(limit = 100): PermissionAuditEntry[] {
@@ -767,7 +865,7 @@ export async function authorizeRoutePath(
     : guardPathWithinRoot(effectiveRoot, target, operation);
 }
 
-const PERMISSION_TOOL_NAMES = new Set<PermissionToolName>(["Read", "Write", "Create", "Remove", "Command", "Tool"]);
+const PERMISSION_TOOL_NAMES = new Set<PermissionToolName>(["Read", "Write", "Create", "Remove", "Command", "Tool", "McpCapability"]);
 const PERMISSION_RULE_MATCHES = new Set<PermissionRuleMatch>(["exact", "prefix", "wildcard"]);
 
 function isSensitiveWorkspaceRoot(workspace: string): boolean {
@@ -824,6 +922,32 @@ function findScopedToolRule(
 ): { rule: PermissionRule; scope: PermissionRuleScope } | undefined {
   for (const scope of ["session", "workspace"] as const) {
     const rule = findMatchingToolPermissionRule(toolName, rules?.[scope]);
+    if (rule) return { rule, scope };
+  }
+  return undefined;
+}
+
+function eligibleMcpCapability(
+  capabilities: McpToolCapabilityDeclaration | undefined,
+): McpCapabilityName | undefined {
+  if (
+    capabilities?.declaration === "declared" &&
+    capabilities.readOnly &&
+    !capabilities.destructive &&
+    !capabilities.openWorld
+  ) {
+    return "readOnly";
+  }
+  return undefined;
+}
+
+function findScopedMcpCapabilityRule(
+  serverName: string,
+  capability: McpCapabilityName,
+  rules: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>> | undefined,
+): { rule: PermissionRule; scope: PermissionRuleScope } | undefined {
+  for (const scope of ["session", "workspace"] as const) {
+    const rule = findMatchingMcpCapabilityPermissionRule(serverName, capability, rules?.[scope]);
     if (rule) return { rule, scope };
   }
   return undefined;

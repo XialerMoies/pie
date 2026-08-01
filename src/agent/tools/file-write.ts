@@ -6,7 +6,7 @@
  */
 import { writeFileSync, existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
-import { defineAgentTool, type AgentTool } from "../types.js";
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool } from "../types.js";
 import { authorizeToolPath, guardToolPath } from "./path-authorization.js";
 
 export const fileWriteTool: AgentTool = defineAgentTool({
@@ -35,6 +35,7 @@ export const fileWriteTool: AgentTool = defineAgentTool({
   riskLevel: "high",
   needsPermission: false,
   workspaceBounded: true,
+  resultFormat: "structured",
   execute: async ({ file_path, content }, ctx) => {
     const fp = String(file_path ?? "");
     const cnt = String(content ?? "");
@@ -50,7 +51,7 @@ export const fileWriteTool: AgentTool = defineAgentTool({
       const operation = existsSync(candidatePath) ? "write" : "create";
       absPath = await authorizeToolPath(ctx, root, candidatePath, operation, `agent.file_write.${operation}`);
     } catch (e: any) {
-      return e.message;
+      return structuredToolError(e.message, "path_authorization_denied", { path: fp });
     }
 
     // 确保父目录存在
@@ -64,6 +65,12 @@ export const fileWriteTool: AgentTool = defineAgentTool({
 
     const lines = cnt.split("\n").length;
     const sizeKB = (Buffer.byteLength(cnt, "utf-8") / 1024).toFixed(1);
-    return `${isNew ? "已创建" : "已覆盖"} ${fp}（${lines} 行，${sizeKB}KB）。`;
+    return structuredToolResult(`${isNew ? "已创建" : "已覆盖"} ${fp}（${lines} 行，${sizeKB}KB）。`, {
+      path: fp,
+      operation: isNew ? "create" : "write",
+      created: isNew,
+      bytes: Buffer.byteLength(cnt, "utf-8"),
+      lines,
+    });
   },
 });

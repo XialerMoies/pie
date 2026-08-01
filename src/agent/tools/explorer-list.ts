@@ -1,4 +1,4 @@
-import { defineAgentTool, type AgentTool } from "../types.js"
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool } from "../types.js"
 import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
 export const explorerListTool: AgentTool = defineAgentTool({
@@ -31,10 +31,11 @@ export const explorerListTool: AgentTool = defineAgentTool({
     const url = `${getLocalApiBaseUrl()}/api/explorer?${params.toString()}`
     const res = await localApiFetch(url, ctx)
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
-    if (!res.ok || data.error) return `列出目录失败：${data.error || data.message || res.status}`
+    if (!res.ok || data.error) return structuredToolError(`列出目录失败：${data.error || data.message || res.status}`, "explorer_failed", { path: subPath, status: res.status })
 
     const items = data.items || []
-    if (items.length === 0) return `目录"${subPath || "/"}"为空。`
+    const counts = { directories: items.filter((i: any) => i.isDir).length, files: items.filter((i: any) => !i.isDir).length }
+    if (items.length === 0) return structuredToolResult(`目录"${subPath || "/"}"为空。`, { ...data, path: subPath || ".", filter, items, counts })
 
     const dirs = items.filter((i: any) => i.isDir)
     const files = items.filter((i: any) => !i.isDir)
@@ -59,7 +60,7 @@ export const explorerListTool: AgentTool = defineAgentTool({
       }
     }
 
-    return lines.join("\n")
+    return structuredToolResult(lines.join("\n"), { ...data, path: subPath || ".", filter, items, counts })
   },
 
   isReadOnly: true,
@@ -69,4 +70,5 @@ export const explorerListTool: AgentTool = defineAgentTool({
   riskLevel: "low",
   needsPermission: false,
   workspaceBounded: true,
+  resultFormat: "structured",
 })

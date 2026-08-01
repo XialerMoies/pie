@@ -8,7 +8,13 @@
  * PI SDK 需要的 ToolDefinition[] 格式，传给 createAgentSession()。
  */
 
-import { ToolRegistry, defineAgentTool, type AgentTool, type ToolContext, type ToolTraceEmitter } from "../types.js"
+import {
+  ToolRegistry,
+  agentToolToPIToolDefinition,
+  type AgentTool,
+  type ToolContext,
+  type ToolTraceEmitter,
+} from "../types.js"
 import { gitStatusTool } from "./git-status.js"
 import { searchTool } from "./search.js"
 import { fileReadTool } from "./file-read.js"
@@ -84,59 +90,7 @@ export function agentToolToPiTool(
   emitTrace?: ToolTraceEmitter,
   extraCtx?: ExtraCtx,
 ) {
-  const authorizedTool = defineAgentTool(tool)
-  return {
-    name: authorizedTool.name,
-    label: authorizedTool.name,
-    description: authorizedTool.description,
-    parameters: authorizedTool.parameters,
-    execute: async (_toolCallId: string, params: unknown) => {
-      const args = params as Record<string, unknown>
-      emitTrace?.({
-        type: "tool_execution_start",
-        toolCallId: _toolCallId,
-        toolName: tool.name,
-        args,
-      })
-      try {
-        const onUpdate = (chunk: string) => {
-          emitTrace?.({
-            type: "tool_execution_update",
-            toolCallId: _toolCallId,
-            toolName: tool.name,
-            partialResult: chunk,
-          })
-        }
-        const toolContext: ToolContext = {
-          cwd: workspace || "",
-          sessionId: "",
-          workspace,
-          toolCallId: _toolCallId,
-          onUpdate,
-          ...extraCtx,
-        }
-        const text = await authorizedTool.execute(args, toolContext)
-        emitTrace?.({
-          type: "tool_execution_end",
-          toolCallId: _toolCallId,
-          toolName: tool.name,
-          result: text,
-          isError: false,
-        })
-        return { content: [{ type: "text" as const, text }], details: {} }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        emitTrace?.({
-          type: "tool_execution_end",
-          toolCallId: _toolCallId,
-          toolName: tool.name,
-          result: message,
-          isError: true,
-        })
-        throw error
-      }
-    },
-  } as any
+  return agentToolToPIToolDefinition(tool, workspace, emitTrace, extraCtx)
 }
 
 // ─── MCP 工具缓存（后台连接，不阻塞工具注册）─────────────

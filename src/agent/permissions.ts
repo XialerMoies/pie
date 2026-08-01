@@ -1,5 +1,12 @@
 import path from "path"
-import type { PermissionRule, PermissionRuleScope, PermissionSuggestion, PermissionToolName, SessionPermissionState } from "./types.js"
+import type {
+  McpCapabilityName,
+  PermissionRule,
+  PermissionRuleScope,
+  PermissionSuggestion,
+  PermissionToolName,
+  SessionPermissionState,
+} from "./types.js"
 import { isSensitiveExternalPath } from "./sensitive-paths.js"
 
 export type PathPermissionOperation = "read" | "write" | "create" | "remove"
@@ -78,6 +85,39 @@ export function createToolPermissionSuggestions(toolName: string): PermissionSug
     },
     destination: "session",
   }]
+}
+
+export function mcpCapabilityRuleContent(serverName: string, capability: McpCapabilityName): string {
+  return `McpCapability(${encodeURIComponent(serverName)},${capability})`
+}
+
+export function createMcpCapabilityPermissionSuggestions(
+  serverName: string,
+  capability: McpCapabilityName,
+): PermissionSuggestion[] {
+  return [{
+    type: "addToolRule",
+    toolName: `mcp:${serverName}:${capability}`,
+    rule: {
+      toolName: "McpCapability",
+      ruleContent: mcpCapabilityRuleContent(serverName, capability),
+      match: "exact",
+    },
+    destination: "session",
+  }]
+}
+
+export function findMatchingMcpCapabilityPermissionRule(
+  serverName: string,
+  capability: McpCapabilityName,
+  rules: readonly PermissionRule[] = [],
+): PermissionRule | undefined {
+  const expected = mcpCapabilityRuleContent(serverName, capability)
+  return rules.find((rule) => (
+    rule.toolName === "McpCapability" &&
+    rule.ruleContent === expected &&
+    (rule.match === undefined || rule.match === "exact")
+  ))
 }
 
 export function findMatchingPathPermissionRule(

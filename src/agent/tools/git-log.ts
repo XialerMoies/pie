@@ -1,4 +1,4 @@
-import { defineAgentTool, type AgentTool } from "../types.js"
+import { defineAgentTool, structuredToolResult, type AgentTool } from "../types.js"
 import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
 export const gitLogTool: AgentTool = defineAgentTool({
@@ -41,7 +41,7 @@ export const gitLogTool: AgentTool = defineAgentTool({
       lines.push(`  ${e.hash}  ${date}  ${e.message}`)
     }
 
-    return lines.join("\n")
+    return structuredToolResult(lines.join("\n"), { ...data, entries, count: entries.length, requestedCount: count })
   },
 
   isReadOnly: true,
@@ -51,4 +51,5 @@ export const gitLogTool: AgentTool = defineAgentTool({
   riskLevel: "low",
   needsPermission: false,
   workspaceBounded: true,
+  resultFormat: "structured",
 })

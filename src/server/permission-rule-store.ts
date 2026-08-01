@@ -23,7 +23,7 @@ interface WorkspacePermissionRuleDocument {
   workspaces: Record<string, WorkspacePermissionRuleEntry>;
 }
 
-const TOOL_NAMES = new Set<PermissionToolName>(["Read", "Write", "Create", "Remove", "Command", "Tool"]);
+const TOOL_NAMES = new Set<PermissionToolName>(["Read", "Write", "Create", "Remove", "Command", "Tool", "McpCapability"]);
 const MATCH_MODES = new Set<PermissionRuleMatch>(["exact", "prefix", "wildcard"]);
 
 export class FileWorkspacePermissionRuleStore implements WorkspacePermissionRuleStore {

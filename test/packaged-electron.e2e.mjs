@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,6 +18,7 @@ const resultFile = join(tempRoot, "result.json");
 const dataDir = join(tempRoot, "data");
 let output = "";
 let child;
+let passed = false;
 
 function stopProcessTree() {
   if (!child) return;
@@ -30,6 +31,21 @@ function stopProcessTree() {
   }
   child.stdout?.destroy();
   child.stderr?.destroy();
+}
+
+async function removeTempRoot() {
+  let lastError;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    try {
+      rmSync(tempRoot, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!error || !["EBUSY", "EPERM", "ENOTEMPTY"].includes(error.code)) throw error;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    }
+  }
+  console.warn(`could not remove packaged Electron E2E temp root; leaving it for cleanup: ${tempRoot}`, lastError);
 }
 
 function waitForResult() {
@@ -55,7 +71,7 @@ function waitForResult() {
 }
 
 try {
-  child = spawn(executable, ["--disable-gpu"], {
+  child = spawn(executable, ["--disable-gpu", "--disable-gpu-compositing", "--in-process-gpu"], {
     cwd: ROOT,
     windowsHide: true,
     env: {
@@ -80,13 +96,24 @@ try {
   assert.equal(result.renderer?.nodeRequireType, "undefined");
   assert.equal(result.renderer?.inlineHandlerCount, 0);
   assert.equal(result.renderer?.popupOpened, false);
+  assert.equal(result.renderer?.externalNavigationBlocked, true);
+  assert.equal(result.renderer?.webviewAttached, false);
+  assert.equal(result.renderer?.revealOutsideRejected, true);
+  assert.equal(result.renderer?.trashOutsideRejected, true);
   assert.equal(result.unauthorizedApiStatus, 403);
+  assert.equal(result.wrongTokenApiStatus, 403);
+  assert.equal(result.hostileOriginApiStatus, 403);
+  assert.equal(result.crossSiteApiStatus, 403);
+  assert.equal(result.unauthorizedMutationStatus, 403);
+  assert.equal(result.unauthorizedMutationCreated, false);
   assert.equal(result.fileReadStatus, 200);
   assert.equal(result.fileWriteStatus, 200);
   assert.equal(result.externalReadStatus, 200);
+  assert.equal(result.sensitiveExternalReadBlocked, true);
   assert.equal(result.workspaceSwitchStatus, 200);
   assert.equal(result.workspaceReadStatus, 200);
   assert.equal(result.pathTraversalStatus, 403);
+  assert.equal(result.siblingTraversalStatus, 403);
   assert.equal(result.windowCount, 1);
   assert.deepEqual(result.renderer?.preloadMethods, [
     "close",
@@ -100,8 +127,17 @@ try {
     "spawnTerminal",
     "trashItem",
   ]);
+  passed = true;
   console.log("packaged Electron E2E passed", JSON.stringify(result));
 } finally {
   stopProcessTree();
-  rmSync(tempRoot, { recursive: true, force: true });
+  if (process.platform === "win32") {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+  }
+  if (!passed && process.env.CI) {
+    writeFileSync(join(tempRoot, "electron-output.log"), output, "utf8");
+    console.error(`packaged Electron E2E artifacts retained at ${tempRoot}`);
+  } else {
+    await removeTempRoot();
+  }
 }

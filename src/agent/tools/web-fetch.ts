@@ -6,7 +6,7 @@
  * - 不需要 API Key
  */
 
-import { defineAgentTool, type AgentTool } from "../types.js"
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool } from "../types.js"
 
 const FETCH_TIMEOUT_MS = 30_000
 const MAX_CONTENT_LENGTH = 500_000
@@ -114,9 +114,10 @@ export const webFetchTool: AgentTool = defineAgentTool({
   riskLevel: "medium",
   needsPermission: false,
   workspaceBounded: false,
+  resultFormat: "structured",
   execute: async (args) => {
     const url = String(args.url ?? "").trim()
-    if (!url) return "请输入 URL"
+    if (!url) return structuredToolError("请输入 URL", "invalid_url")
 
     // 自动补全 https://
     const fullUrl = url.startsWith("http://") || url.startsWith("https://")
@@ -138,10 +139,14 @@ export const webFetchTool: AgentTool = defineAgentTool({
         output += "\n\n[内容过长，仅显示前 50000 字符]"
       }
 
-      return output
+      return structuredToolResult(output, {
+        ...result,
+        displayedBytes: Math.min(result.content.length, 50_000),
+        truncated: result.content.length > 50_000,
+      })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      return `抓取失败: ${msg}`
+      return structuredToolError(`抓取失败: ${msg}`, "web_fetch_failed", { url: fullUrl })
     }
   },
 })

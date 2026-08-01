@@ -216,6 +216,14 @@ describe("server permission service", () => {
       assert.strictEqual(second.getRulesSnapshot().alwaysAllowRules[0].scope, "workspace");
       assert.deepStrictEqual(second.removeRule("allow", 0, "workspace"), rule);
       assert.strictEqual(new FileWorkspacePermissionRuleStore(file).load(workspace).alwaysAllowRules.length, 0);
+
+      const capabilityRule = {
+        toolName: "McpCapability",
+        ruleContent: "McpCapability(docs,readOnly)",
+        match: "exact",
+      };
+      assert.strictEqual(second.addRule("allow", capabilityRule, "workspace").added, true);
+      assert.deepStrictEqual(new FileWorkspacePermissionRuleStore(file).load(workspace).alwaysAllowRules, [capabilityRule]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -607,7 +615,10 @@ describe("server permission service", () => {
         args: { path: "/tmp" },
       });
 
-      assert.deepStrictEqual(result, { allow: true });
+      assert.strictEqual(result.allow, true);
+      assert.strictEqual(result.decision?.status, "allow");
+      assert.strictEqual(result.decision?.source, "confirmation");
+      assert.strictEqual(result.decision?.scope, "session");
       const second = await service.authorizeTool({
         toolName: "mcp__external__run",
         source: "mcp.external.run",
@@ -617,7 +628,10 @@ describe("server permission service", () => {
         args: { path: "/tmp" },
       });
 
-      assert.deepStrictEqual(second, { allow: true });
+      assert.strictEqual(second.allow, true);
+      assert.strictEqual(second.decision?.status, "allow");
+      assert.strictEqual(second.decision?.source, "rule");
+      assert.strictEqual(second.decision?.scope, "session");
       assert.strictEqual(confirmCount, 1);
       assert.strictEqual(state.alwaysAllowRules.session[0].toolName, "Tool");
       assert.strictEqual(state.alwaysAllowRules.session[0].ruleContent, "Tool(mcp__external__run)");
@@ -635,6 +649,129 @@ describe("server permission service", () => {
       assert.strictEqual(audit[0].permissionRequired, true);
       assert.strictEqual(audit[1].operation, "tool");
       assert.strictEqual(audit[1].toolName, "mcp__external__run");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("grants safe MCP capabilities per server after confirmation and reuses the grant", async () => {
+    const root = makeTempRoot("server-perm-mcp-capability-");
+    try {
+      let confirmCount = 0;
+      let firstRequest;
+      const state = createSessionPermissionState();
+      const service = new ServerPermissionService({
+        sessionPermissionState: state,
+        workspaceRootProvider: () => root,
+        confirmPermission: async (request) => {
+          confirmCount += 1;
+          firstRequest = request;
+          return { allow: true, scope: "session" };
+        },
+      });
+      const capabilities = {
+        serverName: "docs",
+        readOnly: true,
+        destructive: false,
+        idempotent: true,
+        openWorld: false,
+        declaration: "declared",
+      };
+
+      const first = await service.authorizeTool({
+        toolName: "mcp__docs__read_page",
+        source: "mcp.docs.read_page",
+        operations: ["execute"],
+        riskLevel: "low",
+        workspaceBounded: false,
+        permissionRequired: true,
+        mcpCapabilities: capabilities,
+        args: {},
+      });
+      const second = await service.authorizeTool({
+        toolName: "mcp__docs__search",
+        source: "mcp.docs.search",
+        operations: ["execute"],
+        riskLevel: "low",
+        workspaceBounded: false,
+        permissionRequired: true,
+        mcpCapabilities: capabilities,
+        args: {},
+      });
+
+      assert.strictEqual(first.allow, true);
+      assert.strictEqual(first.decision?.status, "allow");
+      assert.strictEqual(first.decision?.source, "confirmation");
+      assert.strictEqual(first.decision?.scope, "session");
+      assert.strictEqual(second.allow, true);
+      assert.strictEqual(second.decision?.status, "allow");
+      assert.strictEqual(second.decision?.source, "rule");
+      assert.strictEqual(second.decision?.scope, "session");
+      assert.strictEqual(confirmCount, 1);
+      assert.strictEqual(firstRequest.permissionSuggestions[0].rule.ruleContent, "McpCapability(docs,readOnly)");
+      assert.deepStrictEqual(state.alwaysAllowRules.session[0], {
+        toolName: "McpCapability",
+        ruleContent: "McpCapability(docs,readOnly)",
+        match: "exact",
+      });
+      const audit = service.getAuditTrail();
+      assert.strictEqual(audit.at(-1).mcpCapabilityAutoAllowed, true);
+      assert.deepStrictEqual(audit.at(-1).mcpCapabilities, capabilities);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not use read-only grants for open-world or defaulted MCP declarations", async () => {
+    const root = makeTempRoot("server-perm-mcp-capability-deny-");
+    try {
+      let confirmCount = 0;
+      const state = createSessionPermissionState();
+      state.alwaysAllowRules.session.push({
+        toolName: "McpCapability",
+        ruleContent: "McpCapability(docs,readOnly)",
+        match: "exact",
+      });
+      const service = new ServerPermissionService({
+        sessionPermissionState: state,
+        workspaceRootProvider: () => root,
+        confirmPermission: async () => {
+          confirmCount += 1;
+          return { allow: false };
+        },
+      });
+
+      for (const capabilities of [
+        {
+          serverName: "docs",
+          readOnly: true,
+          destructive: false,
+          idempotent: true,
+          openWorld: true,
+          declaration: "declared",
+        },
+        {
+          serverName: "docs",
+          readOnly: false,
+          destructive: true,
+          idempotent: false,
+          openWorld: true,
+          declaration: "defaulted",
+        },
+      ]) {
+        const result = await service.authorizeTool({
+          toolName: "mcp__docs__unsafe",
+          source: "mcp.docs.unsafe",
+          operations: ["execute"],
+          riskLevel: "high",
+          workspaceBounded: false,
+          permissionRequired: true,
+          mcpCapabilities: capabilities,
+          args: {},
+        });
+        assert.strictEqual(result.allow, false);
+      }
+      assert.strictEqual(confirmCount, 2);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -688,7 +825,9 @@ describe("server permission service", () => {
         args: { path: "ok.txt" },
       });
 
-      assert.deepStrictEqual(result, { allow: true });
+      assert.strictEqual(result.allow, true);
+      assert.strictEqual(result.decision?.status, "allow");
+      assert.strictEqual(result.decision?.source, "implicit");
       assert.strictEqual(confirmCount, 0);
       const audit = service.getAuditTrail();
       assert.strictEqual(audit.length, 1);

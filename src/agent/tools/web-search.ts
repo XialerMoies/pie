@@ -1,4 +1,4 @@
-import { defineAgentTool, type AgentTool, type ToolContext } from "../types.js";
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool, type ToolContext } from "../types.js";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -252,9 +252,16 @@ export const webSearchTool: AgentTool = defineAgentTool({
   riskLevel: "medium",
   needsPermission: false,
   workspaceBounded: false,
+  resultFormat: "structured",
   execute: async (args, ctx) => {
     const query = String(args.query ?? "");
-    if (!query.trim()) return "请输入搜索关键词";
-    return await webSearch(query.trim(), ctx);
+    if (!query.trim()) return structuredToolError("请输入搜索关键词", "invalid_query");
+    const normalizedQuery = query.trim();
+    const text = await webSearch(normalizedQuery, ctx);
+    return structuredToolResult(text, {
+      query: normalizedQuery,
+      backend: searchBackend,
+      text,
+    });
   },
 });

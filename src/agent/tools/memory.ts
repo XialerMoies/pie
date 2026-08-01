@@ -9,7 +9,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { defineAgentTool, type AgentTool, type ToolContext } from "../types.js";
+import { defineAgentTool, structuredToolResult, type AgentTool, type ToolContext } from "../types.js";
 import { getCurrentRuntime } from "../globals.js";
 import { authorizeToolPath } from "./path-authorization.js";
 
@@ -72,6 +72,7 @@ export const readMemoryTool: AgentTool = defineAgentTool({
   riskLevel: "low",
   needsPermission: false,
   workspaceBounded: false,
+  resultFormat: "structured",
   execute: async ({ name }, ctx) => {
     const n = String(name ?? "");
     if (!validMemoryName(n)) return `无效的记忆名称"${n}"。名称只允许字母、数字、点、下划线、短横线，最长 64 字符。`;
@@ -79,7 +80,8 @@ export const readMemoryTool: AgentTool = defineAgentTool({
     if (!existsSync(filePath)) return `未找到记忆"${n}"。用 write_memory 创建一条新的。`;
     try {
       const authorizedFile = await authorizeMemoryPath(ctx, filePath, "read", "agent.memory.read");
-      return readFileSync(authorizedFile, "utf-8");
+      const content = readFileSync(authorizedFile, "utf-8");
+      return structuredToolResult(content, { name: n, path: authorizedFile, content, operation: "read" });
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
     }
@@ -110,6 +112,7 @@ export const writeMemoryTool: AgentTool = defineAgentTool({
   riskLevel: "medium",
   needsPermission: false,
   workspaceBounded: false,
+  resultFormat: "structured",
   execute: async ({ name, content }, ctx) => {
     const n = String(name ?? "");
     if (!validMemoryName(n)) return `无效的记忆名称"${n}"。名称只允许字母、数字、点、下划线、短横线，最长 64 字符。`;
@@ -131,6 +134,13 @@ export const writeMemoryTool: AgentTool = defineAgentTool({
     // 刷新系统 prompt 使当前对话立即看到更新
     const runtime = getCurrentRuntime();
     if (runtime) await runtime.refreshSystemPrompt();
-    return `记忆"${n}"已更新。`;
+    const textContent = String(content);
+    return structuredToolResult(`记忆"${n}"已更新。`, {
+      name: n,
+      path: authorizedFile,
+      operation,
+      bytes: Buffer.byteLength(textContent, "utf-8"),
+      lines: textContent.split("\n").length,
+    });
   },
 });

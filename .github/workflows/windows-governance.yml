@@ -1,0 +1,49 @@
+name: Windows governance
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-governance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:build
+
+  packaged-electron:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run dist:dir
+      - run: npm run test:electron:e2e:run
+        env:
+          CI: "true"
+      - name: Upload packaged E2E diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-electron-e2e-diagnostics
+          path: .tmp-packaged-e2e-*/**
+          if-no-files-found: ignore

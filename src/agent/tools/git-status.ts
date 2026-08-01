@@ -1,4 +1,4 @@
-import { defineAgentTool, type AgentTool } from "../types.js"
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool } from "../types.js"
 import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
 export const gitStatusTool: AgentTool = defineAgentTool({
@@ -20,7 +20,7 @@ export const gitStatusTool: AgentTool = defineAgentTool({
       const hint = data.error === "not_a_repo"
         ? "当前目录不是 Git 仓库。需要先 `git init` 初始化，或切换到有 .git 的工作区。"
         : `Git 操作失败：${data.message || data.error || `HTTP ${res.status}`}`
-      return hint
+      return structuredToolError(hint, data.error === "not_a_repo" ? "not_a_git_repository" : "git_status_failed", { status: res.status, error: data.error })
     }
     // 构建 LLM 友好的摘要
     const lines: string[] = []
@@ -51,7 +51,15 @@ export const gitStatusTool: AgentTool = defineAgentTool({
         lines.push(`  ${tag}\t${e.path}`)
       }
     }
-    return lines.join("\n") || "没有变更，工作区干净"
+    const summary = {
+      total: data.total ?? data.entries?.length ?? 0,
+      modified: data.modified ?? 0,
+      added: data.added ?? 0,
+      deleted: data.deleted ?? 0,
+      ahead: data.ahead ?? 0,
+      behind: data.behind ?? 0,
+    }
+    return structuredToolResult(lines.join("\n") || "没有变更，工作区干净", { ...data, summary })
   },
 
   isReadOnly: true,
@@ -61,4 +69,5 @@ export const gitStatusTool: AgentTool = defineAgentTool({
   riskLevel: "low",
   needsPermission: false,
   workspaceBounded: true,
+  resultFormat: "structured",
 })

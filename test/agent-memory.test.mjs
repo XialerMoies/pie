@@ -42,7 +42,7 @@ describe("write_agent_md", () => {
     assert.strictEqual(existsSync(resolve(dir, "AGENT.md")), false);
 
     const result = await writeAgentMdTool.execute({ content }, ctx);
-    assert.ok(result.includes("已更新"), "应返回成功提示");
+    assert.ok(result.text.includes("已更新"), "应返回成功提示");
 
     const written = readFileSync(resolve(dir, "AGENT.md"), "utf-8");
     assert.strictEqual(written, content);
@@ -100,7 +100,7 @@ describe("agent-md authorization", () => {
           authorizePath: async () => { throw new Error("permission denied for test"); },
         }),
       );
-      assert.ok(result.includes("permission denied for test"));
+      assert.ok(result.text.includes("permission denied for test"));
       assert.strictEqual(existsSync(resolve(testDir, "AGENT.md")), false);
     } finally {
       rmSync(testDir, { recursive: true, force: true });
@@ -154,13 +154,13 @@ describe("memory name validation", () => {
   describe("read_memory rejects path traversal", () => {
     it("拒绝 ../x 名称", async () => {
       const result = await readMemoryTool.execute({ name: "../secret" }, toolCtx());
-      assert.ok(result.includes("无效的记忆名称"), "应返回校验提示");
-      assert.ok(result.includes("../secret"), "应回显输入");
+      assert.ok(result.text.includes("无效的记忆名称"), "应返回校验提示");
+      assert.ok(result.text.includes("../secret"), "应回显输入");
     });
 
     it("拒绝空名称", async () => {
       const result = await readMemoryTool.execute({ name: "" }, toolCtx());
-      assert.ok(result.includes("无效的记忆名称"));
+      assert.ok(result.text.includes("无效的记忆名称"));
     });
   });
 
@@ -170,7 +170,7 @@ describe("memory name validation", () => {
         { name: "../../etc/passwd", content: "hack" },
         toolCtx(),
       );
-      assert.ok(result.includes("无效的记忆名称"));
+      assert.ok(result.text.includes("无效的记忆名称"));
     });
 
     it("拒绝超长名称", async () => {
@@ -178,7 +178,7 @@ describe("memory name validation", () => {
         { name: "a".repeat(65), content: "test" },
         toolCtx(),
       );
-      assert.ok(result.includes("无效的记忆名称"));
+      assert.ok(result.text.includes("无效的记忆名称"));
     });
 
     it("拒绝以点开头", async () => {
@@ -186,7 +186,7 @@ describe("memory name validation", () => {
         { name: ".hidden", content: "test" },
         toolCtx(),
       );
-      assert.ok(result.includes("无效的记忆名称"));
+      assert.ok(result.text.includes("无效的记忆名称"));
     });
   });
 });
@@ -220,7 +220,7 @@ describe("agent memory authorization", () => {
         toolCtx({ authorizePath }),
       );
 
-      assert.strictEqual(result, "# permission test");
+      assert.strictEqual(result.text, "# permission test");
       assert.ok(calls.some((call) => call.source === "agent.memory.create"));
       assert.ok(calls.some((call) => call.source === "agent.memory.index.write"));
       assert.ok(calls.some((call) => call.source === "agent.memory.read"));
@@ -244,7 +244,7 @@ describe("agent memory authorization", () => {
       }),
     );
 
-    assert.ok(result.includes("permission denied for test"));
+    assert.ok(result.text.includes("permission denied for test"));
     assert.ok(target);
     assert.strictEqual(existsSync(target), false);
   });

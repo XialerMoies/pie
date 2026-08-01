@@ -369,6 +369,7 @@ export function attachSessionEvents(
           name: event.toolName || "unknown",
           output: event.result,
           error: event.isError ? event.result : undefined,
+          metadata: event.metadata,
           turnId,
           id: tid,
         };
