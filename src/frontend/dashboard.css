@@ -844,11 +844,6 @@ body{background:var(--bg);height:100vh}
 .perm-empty{padding:18px 10px;text-align:center;color:var(--tm);font-size:.7rem}
 .perm-empty.small{padding:7px 8px;text-align:left;font-size:.64rem}
 .perm-error{color:var(--rs)}
-.perm-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:0 4px 6px}
-.perm-stat{border:1px solid var(--bd);background:var(--bc);border-radius:5px;padding:4px 5px;text-align:center;font-size:.6rem;font-family:var(--fm);color:var(--ts)}
-.perm-stat--allow{color:var(--em)}
-.perm-stat--ask{color:var(--am)}
-.perm-stat--deny{color:var(--rs)}
 .perm-audit-list{display:flex;flex-direction:column;gap:4px;padding:0 4px 8px}
 .perm-audit-row{border-left:3px solid var(--bd);background:var(--bc);border-radius:6px;padding:6px 7px}
 .perm-audit-row--allow{border-left-color:var(--em)}
@@ -861,24 +856,11 @@ body{background:var(--bg);height:100vh}
 .perm-path{margin-top:4px;color:var(--ts);font-size:.62rem;font-family:var(--fm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .perm-reason{margin-top:4px;color:var(--rs);font-size:.61rem;line-height:1.35}
 .perm-time{margin-top:4px;color:var(--tm);font-size:.56rem;font-family:var(--fm)}
-.perm-rule-toolbar{display:flex;align-items:center;gap:6px;padding:0 4px 6px}
-.perm-rule-count{flex:1;color:var(--tm);font-size:.62rem;font-family:var(--fm)}
-.perm-rule-toolbar .perm-input{width:68px;flex:0 0 68px;padding:3px 5px}
-.perm-mini-btn,.perm-primary-btn{border:none;border-radius:5px;font-family:var(--fb);cursor:pointer;transition:all .1s;white-space:nowrap}
-.perm-mini-btn{font-size:.62rem;padding:3px 8px;background:var(--bd);color:var(--ts)}
-.perm-mini-btn:hover{background:var(--bl);color:var(--tx)}
-.perm-mini-btn.danger{background:rgba(239,68,68,.12);color:var(--rs)}
-.perm-rule-section,.perm-rule-add{padding:0 4px;margin-bottom:8px}
+.perm-rule-section{padding:0 4px;margin-bottom:8px}
 .perm-section-title{font-size:.6rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--tm);padding:0 2px 4px}
 .perm-rule-row,.perm-workdir-row{display:flex;align-items:center;gap:5px;background:var(--bc);border-radius:6px;padding:5px 6px;margin-bottom:3px;min-width:0}
 .perm-rule-meta{display:flex;align-items:center;gap:3px;flex:0 0 auto}
 .perm-rule-tool,.perm-rule-match{font-size:.56rem;font-family:var(--fm);border-radius:3px;padding:1px 4px;background:var(--bd);color:var(--ts)}
 .perm-rule-tool{color:var(--tx)}
 .perm-rule-content{flex:1;min-width:0;font-size:.61rem;font-family:var(--fm);color:var(--ts);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.perm-add-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:5px}
-.perm-input{width:100%;min-width:0;box-sizing:border-box;background:var(--bh);border:1px solid var(--bd);border-radius:5px;padding:5px 6px;font-size:.64rem;color:var(--tx);font-family:var(--fb);outline:none}
-.perm-input:focus{border-color:var(--am)}
-.perm-rule-input{font-family:var(--fm);margin-bottom:5px}
-.perm-primary-btn{width:100%;padding:5px 8px;background:var(--am);color:#0A0A0F;font-size:.68rem;font-weight:700}
-.perm-primary-btn:hover{background:#fbbf24}
 

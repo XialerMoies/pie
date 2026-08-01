@@ -28,6 +28,7 @@ import {
   findMatchingMcpCapabilityPermissionRule,
   findMatchingToolPermissionRule,
   normalizePermissionPath,
+  pathPermissionRuleOverlapsRoot,
   permissionRulesForScopes,
   type PathPermissionDecision,
   type PathPermissionOperation,
@@ -596,6 +597,14 @@ export class ServerPermissionService {
     this.syncWorkspaceRules();
     const state = this.requireSessionPermissionState();
     const normalized = normalizePermissionRule(rule);
+    const workspaceRoot = this.workspaceRootProvider?.();
+    if (list === "ask" && workspaceRoot && pathPermissionRuleOverlapsRoot(normalized, workspaceRoot)) {
+      throw new ServerPermissionError(
+        "Ask rules cannot target paths inside the active workspace",
+        400,
+        "workspace_internal_ask_rule",
+      );
+    }
     const rules = rulesForList(state, list, scope);
     const exists = rules.some((existing) => (
       existing.toolName === normalized.toolName &&

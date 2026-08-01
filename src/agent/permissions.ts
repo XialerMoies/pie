@@ -302,6 +302,25 @@ function pathRuleMatches(resolvedPath: string, rule: PermissionRule, operation: 
   return isPathInside(resolvedPath, path.resolve(stripRecursiveGlob(pattern)))
 }
 
+export function pathPermissionRuleOverlapsRoot(rule: PermissionRule, root: string): boolean {
+  const operation = rule.toolName === "Read"
+    ? "read"
+    : rule.toolName === "Write"
+      ? "write"
+      : rule.toolName === "Create"
+        ? "create"
+        : rule.toolName === "Remove" ? "remove" : undefined
+  if (!operation) return false
+
+  const pattern = pathRulePattern(rule, operation)
+  if (!pattern) return false
+  if (pathRuleMatches(path.resolve(root), rule, operation)) return true
+
+  const globIndex = pattern.search(/[*?\[]/)
+  const staticPrefix = (globIndex >= 0 ? pattern.slice(0, globIndex) : pattern).replace(/[\\/]+$/, "")
+  return !!staticPrefix && isPathInside(path.resolve(staticPrefix), root)
+}
+
 function stripToolRuleWrapper(ruleContent: string): string {
   const trimmed = stripSurroundingQuotes(ruleContent)
   if (trimmed.startsWith("Tool(") && trimmed.endsWith(")")) {

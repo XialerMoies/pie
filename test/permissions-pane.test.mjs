@@ -73,6 +73,16 @@ const state = {
       permissionRequired: true,
       reason: "External tool requires confirmation",
     },
+    {
+      id: 4,
+      timestamp: "2026-07-29T10:03:00.000Z",
+      source: "confirmed.external.write",
+      operation: "write",
+      root: "E:\\external",
+      path: "E:\\external\\ok.txt",
+      decision: "allow",
+      reason: "Confirmed by user for this session",
+    },
   ],
   calls: [],
 };
@@ -119,6 +129,16 @@ function resetState() {
       permissionRequired: true,
       reason: "External tool requires confirmation",
     },
+    {
+      id: 4,
+      timestamp: "2026-07-29T10:03:00.000Z",
+      source: "confirmed.external.write",
+      operation: "write",
+      root: "E:\\external",
+      path: "E:\\external\\ok.txt",
+      decision: "allow",
+      reason: "Confirmed by user for this session",
+    },
   ];
   state.calls = [];
 }
@@ -164,13 +184,21 @@ before(async () => {
 });
 
 describe("permissions pane", () => {
+  it("keeps the pane focused on recent decisions and existing rules", () => {
+    const source = readFileSync(new URL("../src/frontend/pane/permissions/index.ts", import.meta.url), "utf-8");
+    assert.doesNotMatch(source, /perm-stats/);
+    assert.doesNotMatch(source, /perm-add-rule/);
+    assert.doesNotMatch(source, /perm-clear-all/);
+    assert.match(source, /isRecentPermissionDecision/);
+  });
+
   it("keeps session primary while exposing project-scoped confirmation", () => {
     const source = readFileSync(new URL("../src/frontend/dashboard/dashboard-helpers.ts", import.meta.url), "utf-8");
     assert.match(source, /data-choice="workspace"/);
     assert.match(source, /class="command-confirm-btn primary" data-choice="session"/);
   });
 
-  it("renders permission audit and rule controls", async () => {
+  it("renders only recent final confirmations and user rules", async () => {
     const render = registeredPanes.get("permissions");
     assert.ok(render, "permissions pane should be registered");
     const container = doc.createElement("div");
@@ -180,14 +208,11 @@ describe("permissions pane", () => {
     await waitTick();
     await waitTick();
 
-    assert.match(container.textContent, /Allow 1/);
-    assert.match(container.textContent, /Deny 1/);
-    assert.match(container.textContent, /Tool/);
+    assert.strictEqual(container.querySelector(".perm-stats"), null);
+    assert.doesNotMatch(container.textContent, /file\.write/);
+    assert.doesNotMatch(container.textContent, /mcp__external__run/);
     assert.match(container.textContent, /mcp\.install/);
-    assert.match(container.textContent, /mcp__external__run/);
-    assert.match(container.textContent, /Ops: execute/);
-    assert.match(container.textContent, /Prompt: required/);
-    assert.match(container.textContent, /Scope: external/);
+    assert.match(container.textContent, /confirmed\.external\.write/);
 
     const rulesTab = container.querySelector('[data-perm-tab="rules"]');
     assert.ok(rulesTab);
@@ -198,6 +223,8 @@ describe("permissions pane", () => {
     assert.match(container.textContent, /Write\(E:\\\\blocked\.txt\)/);
     assert.match(container.textContent, /项目/);
     assert.ok(container.querySelector('[data-rule-remove="deny:workspace:0"]'));
+    assert.strictEqual(container.querySelector("#perm-add-rule"), null);
+    assert.strictEqual(container.querySelector("#perm-clear-all"), null);
     container.remove();
   });
 
@@ -226,7 +253,7 @@ describe("permissions pane", () => {
     container.remove();
   });
 
-  it("defaults manual rules to session and sends an explicit workspace scope", async () => {
+  it("does not expose manual rule creation or bulk clearing", async () => {
     const render = registeredPanes.get("permissions");
     const container = doc.createElement("div");
     doc.body.appendChild(container);
@@ -236,39 +263,10 @@ describe("permissions pane", () => {
     container.querySelector('[data-perm-tab="rules"]').dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
     await waitTick();
 
-    const scope = container.querySelector("#perm-add-scope");
-    assert.strictEqual(scope?.value, "session");
-    scope.value = "workspace";
-    const input = container.querySelector("#perm-add-content");
-    input.value = "Tool(mcp__workspace__read)";
-    container.querySelector("#perm-add-rule").dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
-    await waitTick();
-
-    const addCall = state.calls.find((call) => call.url === "/api/permissions/rules" && call.method === "POST");
-    assert.ok(addCall);
-    assert.strictEqual(JSON.parse(addCall.options.body).scope, "workspace");
-    container.remove();
-  });
-
-  it("clears only the selected workspace scope", async () => {
-    const render = registeredPanes.get("permissions");
-    const container = doc.createElement("div");
-    doc.body.appendChild(container);
-
-    render(container);
-    await waitTick();
-    container.querySelector('[data-perm-tab="rules"]').dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
-    await waitTick();
-
-    const scope = container.querySelector("#perm-add-scope");
-    scope.value = "workspace";
-    container.querySelector("#perm-clear-all").dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
-    await waitTick();
-
-    const clearCall = state.calls.find((call) => call.url === "/api/permissions/rules/clear" && call.method === "POST");
-    assert.ok(clearCall);
-    assert.strictEqual(JSON.parse(clearCall.options.body).scope, "workspace");
-    assert.strictEqual(state.rules.alwaysAllowRules.some((rule) => rule.scope === "session"), true);
+    assert.strictEqual(container.querySelector("#perm-add-scope"), null);
+    assert.strictEqual(container.querySelector("#perm-add-rule"), null);
+    assert.strictEqual(container.querySelector("#perm-clear-all"), null);
+    assert.strictEqual(state.calls.some((call) => call.method === "POST"), false);
     container.remove();
   });
 });

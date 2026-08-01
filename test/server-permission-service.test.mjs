@@ -1129,6 +1129,53 @@ describe("server permission service", () => {
     }
   });
 
+  it("rejects path Ask rules that overlap the active workspace", async () => {
+    const root = makeTempRoot("server-perm-internal-ask-route-");
+    try {
+      const workspace = resolve(root, "workspace");
+      const external = resolve(root, "external");
+      mkdirSync(workspace);
+      mkdirSync(external);
+      const service = new ServerPermissionService({
+        sessionPermissionState: createSessionPermissionState(),
+        workspaceRootProvider: () => workspace,
+        permissionRuleStore: new FileWorkspacePermissionRuleStore(resolve(root, "permission-rules.json")),
+      });
+      const ctx = routeCtx(workspace, service);
+      const internalRule = {
+        toolName: "Write",
+        ruleContent: `Write(${resolve(workspace, "src", "**")})`,
+        match: "wildcard",
+      };
+
+      for (const scope of ["session", "workspace"]) {
+        const res = makeRes();
+        await handlePermissions(makeReq("POST", "/api/permissions/rules", {
+          list: "ask",
+          scope,
+          rule: internalRule,
+        }), res, ctx);
+
+        assert.strictEqual(res._status, 400);
+        assert.strictEqual(JSON.parse(res._body).code, "workspace_internal_ask_rule");
+      }
+      assert.strictEqual(service.getRulesSnapshot().alwaysAskRules.length, 0);
+
+      const externalRes = makeRes();
+      await handlePermissions(makeReq("POST", "/api/permissions/rules", {
+        list: "ask",
+        rule: {
+          toolName: "Write",
+          ruleContent: `Write(${resolve(external, "**")})`,
+          match: "wildcard",
+        },
+      }), externalRes, ctx);
+      assert.strictEqual(externalRes._status, 200);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("clears all session permission rules and working directories", async () => {
     const root = makeTempRoot("server-perm-rules-clear-");
     try {

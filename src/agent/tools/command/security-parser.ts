@@ -156,7 +156,7 @@ function parseWithLegacyFacade(command: string, dialect: ShellDialect, depth: nu
   return parseShellWrapperIfPresent(parseWithLegacyAdapter(command, dialect), depth)
 }
 
-function envFlagEnabled(name: string): boolean {
+export function envFlagEnabled(name: string): boolean {
   const value = process.env[name]?.toLowerCase()
   return value === "1" || value === "true" || value === "yes" || value === "on"
 }

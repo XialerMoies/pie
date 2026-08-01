@@ -19,7 +19,7 @@ import { StringDecoder } from "string_decoder"
 import { TextDecoder } from "util"
 import { validateCommandPaths } from "./command/path-validation.js"
 import { isCommandReadOnly } from "./command/read-only.js"
-import { defaultShellDialect, parseCommandForSecurity, parseCommandForSecurityAsync, parseCommandForSecurityWithTreeSitterAsync } from "./command/security-parser.js"
+import { defaultShellDialect, envFlagEnabled, parseCommandForSecurity, parseCommandForSecurityAsync, parseCommandForSecurityWithTreeSitterAsync } from "./command/security-parser.js"
 import type { SecurityParseResult, SecurityRedirect, ShellDialect, SimpleCommand } from "./command/security-ast.js"
 import { parseShellCommand, shellDialectFromEnv, tokensWithoutRedirects } from "./command/shell-parser.js"
 
@@ -844,14 +844,9 @@ export interface CommandSecurityVerdictShadowOptions {
   shellDialect?: ShellDialect
 }
 
-function commandSecurityEnvFlagEnabled(name: string): boolean {
-  const value = process.env[name]?.toLowerCase()
-  return value === "1" || value === "true" || value === "yes" || value === "on"
-}
-
 function treeSitterVerdictShadowEnabled(): boolean {
-  return commandSecurityEnvFlagEnabled("MY_CODE_AGENT_TREE_SITTER_SHADOW") ||
-    commandSecurityEnvFlagEnabled("MY_CODE_AGENT_TREE_SITTER_SHADOW_ONLY")
+  return envFlagEnabled("MY_CODE_AGENT_TREE_SITTER_SHADOW") ||
+    envFlagEnabled("MY_CODE_AGENT_TREE_SITTER_SHADOW_ONLY")
 }
 
 function normalizeDangerForShadow(result: DangerResult): object {
