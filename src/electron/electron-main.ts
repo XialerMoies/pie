@@ -556,10 +556,10 @@ function createWindow() {
     console.error(`❌ Window load failed: ${errorDescription} (code: ${errorCode}) url: ${url}`);
   });
 
-  mainWindow.webContents.on("console-message" as any, (_event: Electron.Event, level: number, message: string, line: number, sourceId: number) => {
-    if (E2E_MODE) e2eDiagnostics.push(`console[${level}] ${sourceId}:${line} ${message}`);
-    if (message.includes("404") || message.includes("Failed") || message.includes("Error")) {
-      console.warn(`[page:${sourceId}:${line}] ${message}`);
+  mainWindow.webContents.on("console-message", (details) => {
+    if (E2E_MODE) e2eDiagnostics.push(`console[${details.level}] ${details.sourceId}:${details.lineNumber} ${details.message}`);
+    if (details.message.includes("404") || details.message.includes("Failed") || details.message.includes("Error")) {
+      console.warn(`[page:${details.sourceId}:${details.lineNumber}] ${details.message}`);
     }
   });
 

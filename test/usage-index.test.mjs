@@ -3,7 +3,7 @@
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, unlinkSync, utimesSync } from "node:fs";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -132,6 +132,9 @@ describe("incrementalScan", () => {
       JSON.stringify({ type: "session", id: "s1" }),
       JSON.stringify({ type: "message", message: { role: "assistant", usage: { input: 99, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 1 } } } }),
     ].join("\n") + "\n");
+    // 显式拨快 mtime，避免快速文件系统上写+扫描落在同一毫秒导致增量扫描跳过
+    const future = new Date(Date.now() + 2000);
+    utimesSync(f, future, future);
 
     const next = mod.incrementalScan(root, idx);
     assert.strictEqual(next.sessions.s1.input, 99);

@@ -608,6 +608,15 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
       })
     }
     if (operation === "read") return { allowed: true }
+    // 删除越界直接拒绝（硬拦），不进入确认——与"写/创建/删除越界直接拒绝"政策一致。
+    // 此前仅当路径碰巧被 isDangerousRemovalPath 判为高风险（如父目录恰为盘符根）才 hardDeny，
+    // 其余外部删除降级成 requiresConfirmation，导致结果随 cwd 深度而变。
+    if (operation === "remove") {
+      return fail(`${label}路径不在 workspace/授权目录内: ${token}`, true, {
+        operation,
+        blockedPath: resolved,
+      })
+    }
 
     const directory = permissionDirectoryForPath(resolved, operation)
     return fail(`${label}路径不在 workspace/授权目录内: ${token}`, false, {

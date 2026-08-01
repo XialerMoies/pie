@@ -20,9 +20,30 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # package-lock.json 大部分 resolved URL 指向 npmmirror（本地生成），
+      # GitHub runner 在美国拉国内镜像会超时。CI 强制用 npmjs 并重写 host。
+      - name: Force default registry for CI
+        run: |
+          echo "registry=https://registry.npmjs.org/" > .npmrc
+          echo "replace-registry-host=always" >> .npmrc
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      # problems-bottom-bar 测试加载编译产物 src/frontend/gen/*.js（gitignore），
+      # 需先 compile 生成 gen/，否则 npm test 阶段 ENOENT。
+      - run: npm run compile:frontend-ts
+      - name: Run npm test (capture output)
+        shell: bash
+        run: npm test 2>&1 | tee .test-output.txt
+      - name: Show failing test blocks
+        if: failure()
+        shell: bash
+        run: grep -A 18 '^not ok' .test-output.txt | head -400
+      - name: Upload test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-test-output
+          path: .test-output.txt
       - run: npm run test:build
 
   packaged-electron:
@@ -35,6 +56,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Force default registry for CI
+        run: |
+          echo "registry=https://registry.npmjs.org/" > .npmrc
+          echo "replace-registry-host=always" >> .npmrc
       - run: npm ci
       - run: npm run dist:dir
       - run: npm run test:electron:e2e:run
