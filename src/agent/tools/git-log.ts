@@ -1,7 +1,7 @@
-import type { AgentTool } from "../types.js"
+import { defineAgentTool, type AgentTool } from "../types.js"
 import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
-export const gitLogTool: AgentTool = {
+export const gitLogTool: AgentTool = defineAgentTool({
   name: "git_log",
   description:
     "查看 Git 提交历史。配合 git-status 使用：git-status 看当前状态，git-log 看历史记录。",
@@ -51,4 +51,4 @@ export const gitLogTool: AgentTool = {
   riskLevel: "low",
   needsPermission: false,
   workspaceBounded: true,
-}
+})

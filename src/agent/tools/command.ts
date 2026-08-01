@@ -11,7 +11,7 @@
  *
  * 适用场景：单用户桌面开发环境，非企业级多用户权限治理。
  */
-import type { AgentTool, CommandConfirmationRequest, CommandConfirmationResponse, PermissionSuggestion, ToolContext } from "../types.js"
+import { defineAgentTool, type AgentTool, type CommandConfirmationRequest, type CommandConfirmationResponse, type PermissionSuggestion, type ToolContext } from "../types.js"
 import { spawn } from "child_process"
 import { existsSync } from "fs"
 import { dirname } from "path"
@@ -1110,7 +1110,7 @@ async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: Tool
 
 // ─── 工具定义 ───────────────────────────────────────────
 
-export const commandTool: AgentTool = {
+export const commandTool: AgentTool = defineAgentTool({
   name: "command",
   description: "执行 shell 命令，支持流式实时 stdout/stderr。Windows 未显式配置 shell 时默认使用 cmd.exe；明显 POSIX 的 pwd/ls/cat/mkdir -p/bash -lc 命令会自动走 Git Bash（如已安装）。readOnly=true 时仅可执行查看命令。安全测试时也要原样调用本工具；危险命令由工具内置安全层返回拦截或确认信息，不要在调用前改写或自然语言拒绝。",
   parameters: {
@@ -1130,6 +1130,7 @@ export const commandTool: AgentTool = {
   riskLevel: "high",
   needsPermission: false,
   workspaceBounded: false,
+  authorizationMode: "specialized",
   execute: async (args, ctx) => {
     const cmd = String(args.command ?? "").trim()
     if (!cmd) return "请输入要执行的命令"
@@ -1216,4 +1217,4 @@ export const commandTool: AgentTool = {
 
     return withConfirmationOutcome(await executeCmd(cmd, args, ctx, shellDialect), confirmationState)
   },
-}
+})

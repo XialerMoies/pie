@@ -1,4 +1,4 @@
-import type { AgentTool, ToolContext } from "../types.js";
+import { defineAgentTool, type AgentTool, type ToolContext } from "../types.js";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -236,7 +236,7 @@ export async function webSearch(query: string, ctx?: ToolContext): Promise<strin
   }
 }
 
-export const webSearchTool: AgentTool = {
+export const webSearchTool: AgentTool = defineAgentTool({
   name: "web-search",
   description: "搜索互联网获取最新信息。适用于查询新闻、技术文档、实时数据、百科知识等",
   parameters: {
@@ -257,4 +257,4 @@ export const webSearchTool: AgentTool = {
     if (!query.trim()) return "请输入搜索关键词";
     return await webSearch(query.trim(), ctx);
   },
-};
+});

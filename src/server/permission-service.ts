@@ -9,6 +9,7 @@ import type {
   PermissionToolName,
   SessionPermissionState,
   ToolAuthorizationRequest,
+  ToolAuthorizationMode,
   ToolAuthorizationResult,
   ToolOperation,
   ToolRiskLevel,
@@ -46,6 +47,7 @@ export interface PermissionAuditEntry {
   toolOperations?: readonly ToolOperation[];
   riskLevel?: ToolRiskLevel;
   workspaceBounded?: boolean;
+  authorizationMode?: ToolAuthorizationMode;
   permissionRequired?: boolean;
 }
 
@@ -63,6 +65,7 @@ export interface ServerPermissionConfirmationRequest {
   toolOperations?: readonly ToolOperation[];
   riskLevel?: ToolRiskLevel;
   workspaceBounded?: boolean;
+  authorizationMode?: ToolAuthorizationMode;
   permissionRequired?: boolean;
 }
 
@@ -304,6 +307,7 @@ export class ServerPermissionService {
       toolOperations: request.operations,
       riskLevel: request.riskLevel,
       workspaceBounded: request.workspaceBounded,
+      authorizationMode: request.authorizationMode,
       permissionRequired,
     };
     const state = this.sessionPermissionState;
@@ -317,6 +321,13 @@ export class ServerPermissionService {
         code: "permission_denied",
       });
       return { allow: false, reason: "Tool execution is denied by session rule" };
+    }
+
+    if (request.authorizationMode === "specialized") {
+      return {
+        allow: true,
+        reason: `Authorization is owned by the specialized ${request.toolName} policy`,
+      };
     }
 
     const askRule = findMatchingToolPermissionRule(request.toolName, state?.alwaysAskRules.session);
@@ -367,6 +378,7 @@ export class ServerPermissionService {
         toolOperations: request.operations,
         riskLevel: request.riskLevel,
         workspaceBounded: request.workspaceBounded,
+        authorizationMode: request.authorizationMode,
         permissionRequired,
       });
     } catch (error) {

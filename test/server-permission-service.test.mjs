@@ -543,6 +543,38 @@ describe("server permission service", () => {
     }
   });
 
+  it("delegates specialized command authorization without a generic prompt or allow audit", async () => {
+    const root = makeTempRoot("server-perm-specialized-command-");
+    try {
+      let confirmCount = 0;
+      const service = new ServerPermissionService({
+        workspaceRootProvider: () => root,
+        confirmPermission: async () => {
+          confirmCount += 1;
+          return { allow: true };
+        },
+      });
+
+      const result = await service.authorizeTool({
+        toolName: "command",
+        source: "agent.command",
+        operations: ["execute"],
+        riskLevel: "high",
+        workspaceBounded: false,
+        authorizationMode: "specialized",
+        permissionRequired: false,
+        args: { command: "echo hello" },
+      });
+
+      assert.strictEqual(result.allow, true);
+      assert.match(result.reason, /specialized command policy/);
+      assert.strictEqual(confirmCount, 0);
+      assert.deepStrictEqual(service.getAuditTrail(), []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("persists and reloads tool permission audit history", async () => {
     const root = makeTempRoot("server-perm-tool-audit-store-");
     try {

@@ -1,7 +1,7 @@
-import type { AgentTool } from "../types.js"
+import { defineAgentTool, type AgentTool } from "../types.js"
 import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
-export const fileOutlineTool: AgentTool = {
+export const fileOutlineTool: AgentTool = defineAgentTool({
   name: "file_outline",
   description:
     "查看代码文件的结构目录——列出所有函数、类型、接口、方法的签名及其行号。" +
@@ -62,4 +62,4 @@ export const fileOutlineTool: AgentTool = {
   riskLevel: "low",
   needsPermission: false,
   workspaceBounded: true,
-}
+})

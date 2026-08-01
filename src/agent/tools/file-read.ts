@@ -1,7 +1,7 @@
-import type { AgentTool } from "../types.js"
+import { defineAgentTool, type AgentTool } from "../types.js"
 import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
-export const fileReadTool: AgentTool = {
+export const fileReadTool: AgentTool = defineAgentTool({
   name: "file_read",
   description:
     "读取文件内容。支持指定行范围、自动截断大文件。比 bash cat 更安全：大文件不会刷爆上下文，" +
@@ -80,4 +80,4 @@ export const fileReadTool: AgentTool = {
   riskLevel: "low",
   needsPermission: false,
   workspaceBounded: true,
-}
+})

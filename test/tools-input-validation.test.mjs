@@ -52,6 +52,8 @@ afterEach(() => {
 import { fileReadTool } from "../src/agent/tools/file-read.ts";
 import { explorerListTool } from "../src/agent/tools/explorer-list.ts";
 import { fileOutlineTool } from "../src/agent/tools/file-outline.ts";
+import { gitLogTool } from "../src/agent/tools/git-log.ts";
+import { gitStatusTool } from "../src/agent/tools/git-status.ts";
 import { searchTool } from "../src/agent/tools/search.ts";
 import { setSearchBackend, webSearchTool } from "../src/agent/tools/web-search.ts";
 import { toolRegistry } from "../src/agent/tools/index.ts";
@@ -70,7 +72,7 @@ describe("builtin tool governance metadata", () => {
     ["file_outline", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: true }],
     ["web-search", { operations: ["execute"], riskLevel: "medium", needsPermission: false, workspaceBounded: false }],
     ["web-fetch", { operations: ["execute"], riskLevel: "medium", needsPermission: false, workspaceBounded: false }],
-    ["command", { operations: ["execute"], riskLevel: "high", needsPermission: false, workspaceBounded: false }],
+    ["command", { operations: ["execute"], riskLevel: "high", needsPermission: false, workspaceBounded: false, authorizationMode: "specialized" }],
     ["write_agent_md", { operations: ["create", "write"], riskLevel: "medium", needsPermission: false, workspaceBounded: true }],
     ["read_memory", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: false }],
     ["write_memory", { operations: ["read", "create", "write"], riskLevel: "medium", needsPermission: false, workspaceBounded: false }],
@@ -104,7 +106,67 @@ describe("builtin tool governance metadata", () => {
       assert.strictEqual(tool.riskLevel, expected.riskLevel, `${name} riskLevel drifted`);
       assert.strictEqual(tool.needsPermission, expected.needsPermission, `${name} needsPermission drifted`);
       assert.strictEqual(tool.workspaceBounded, expected.workspaceBounded, `${name} workspaceBounded drifted`);
+      if (expected.authorizationMode) {
+        assert.strictEqual(tool.authorizationMode, expected.authorizationMode, `${name} authorizationMode drifted`);
+      }
     }
+  });
+});
+
+describe("tool execution authorization gateway", () => {
+  it("direct local API tool calls use the same authorizer as registry calls", async () => {
+    const cases = [
+      [gitStatusTool, {}],
+      [searchTool, { query: "needle" }],
+      [fileReadTool, { path: "src/index.ts" }],
+      [explorerListTool, { path: "." }],
+      [gitLogTool, {}],
+      [fileOutlineTool, { path: "src/index.ts" }],
+    ];
+    const authorized = [];
+    const authorizeTool = async (request) => {
+      authorized.push(request.toolName);
+      return { allow: true };
+    };
+
+    for (const [tool, args] of cases) {
+      try {
+        await tool.execute(args, ctx({ authorizeTool }));
+      } catch {
+        // The mock response is intentionally minimal; authorization is the assertion here.
+      }
+    }
+
+    assert.deepStrictEqual(new Set(authorized), new Set(cases.map(([tool]) => tool.name)));
+
+    const registryTool = toolRegistry.get("file_read");
+    assert.ok(registryTool);
+    let registryCalls = 0;
+    try {
+      await registryTool.execute({ path: "src/index.ts" }, ctx({
+        authorizeTool: async () => {
+          registryCalls++;
+          return { allow: true };
+        },
+      }));
+    } catch {}
+    assert.strictEqual(registryCalls, 1);
+  });
+
+  it("denied direct tool calls stop before the local API", async () => {
+    let fetchCalls = 0;
+    global.fetch = async () => {
+      fetchCalls++;
+      throw new Error("fetch should not run");
+    };
+
+    await assert.rejects(
+      () => fileReadTool.execute({ path: "secret.txt" }, ctx({
+        authorizeTool: async () => ({ allow: false, reason: "denied by test" }),
+      })),
+      /denied by test/,
+    );
+    assert.strictEqual(fetchCalls, 0);
   });
 });
 

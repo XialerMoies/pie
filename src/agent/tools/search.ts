@@ -1,7 +1,7 @@
-import type { AgentTool } from "../types.js"
+import { defineAgentTool, type AgentTool } from "../types.js"
 import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
-export const searchTool: AgentTool = {
+export const searchTool: AgentTool = defineAgentTool({
   name: "search",
   description:
     "在项目中搜索代码。支持两种模式：filename（按文件名匹配）和 text（全文搜索）。" +
@@ -106,4 +106,4 @@ export const searchTool: AgentTool = {
   riskLevel: "low",
   needsPermission: false,
   workspaceBounded: true,
-}
+})

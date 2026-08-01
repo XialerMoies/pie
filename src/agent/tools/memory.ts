@@ -9,7 +9,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import type { AgentTool, ToolContext } from "../types.js";
+import { defineAgentTool, type AgentTool, type ToolContext } from "../types.js";
 import { getCurrentRuntime } from "../globals.js";
 import { authorizeToolPath } from "./path-authorization.js";
 
@@ -53,7 +53,7 @@ async function updateMemoryIndex(ctx?: ToolContext): Promise<void> {
   }
 }
 
-export const readMemoryTool: AgentTool = {
+export const readMemoryTool: AgentTool = defineAgentTool({
   name: "read_memory",
   description: "读取一条全局记忆的完整内容。全局记忆记录用户偏好、习惯、项目无关的知识。name 是记忆文件名（不含 .md）。使用前先看 prompt 中的 MEMORY.md 索引了解有哪些记忆可用。",
   parameters: {
@@ -84,9 +84,9 @@ export const readMemoryTool: AgentTool = {
       return error instanceof Error ? error.message : String(error);
     }
   },
-};
+});
 
-export const writeMemoryTool: AgentTool = {
+export const writeMemoryTool: AgentTool = defineAgentTool({
   name: "write_memory",
   description: "写入或更新一条全局记忆。全局记忆记录用户编码偏好、说话风格、习惯等跨项目通用的信息。name 是记忆名称（不含 .md），content 是完整 markdown 内容（建议含标题）。写入后自动刷新系统 prompt，当前对话可见。",
   parameters: {
@@ -133,4 +133,4 @@ export const writeMemoryTool: AgentTool = {
     if (runtime) await runtime.refreshSystemPrompt();
     return `记忆"${n}"已更新。`;
   },
-};
+});

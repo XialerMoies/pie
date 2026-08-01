@@ -6,7 +6,7 @@
  * - 不需要 API Key
  */
 
-import type { AgentTool } from "../types.js"
+import { defineAgentTool, type AgentTool } from "../types.js"
 
 const FETCH_TIMEOUT_MS = 30_000
 const MAX_CONTENT_LENGTH = 500_000
@@ -98,7 +98,7 @@ async function fetchUrl(targetUrl: string): Promise<FetchResult> {
 
 // ─── AgentTool ─────────────────────────────────────
 
-export const webFetchTool: AgentTool = {
+export const webFetchTool: AgentTool = defineAgentTool({
   name: "web-fetch",
   description: "抓取指定 URL 的网页内容并转为可读文本。用于查看文档、网页、API 响应等",
   parameters: {
@@ -144,4 +144,4 @@ export const webFetchTool: AgentTool = {
       return `抓取失败: ${msg}`
     }
   },
-}
+})

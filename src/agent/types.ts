@@ -85,6 +85,7 @@ export type ToolPathOperation = "read" | "write" | "create" | "remove"
 
 export type ToolOperation = ToolPathOperation | "execute"
 export type ToolRiskLevel = "low" | "medium" | "high"
+export type ToolAuthorizationMode = "generic" | "specialized"
 
 export interface ToolAuthorizationRequest {
   toolName: string
@@ -92,6 +93,7 @@ export interface ToolAuthorizationRequest {
   operations: readonly ToolOperation[]
   riskLevel: ToolRiskLevel
   workspaceBounded: boolean
+  authorizationMode: ToolAuthorizationMode
   permissionRequired?: boolean
   args: Record<string, unknown>
 }
@@ -186,6 +188,7 @@ export interface AgentTool {
   riskLevel?: ToolRiskLevel
   needsPermission?: boolean
   workspaceBounded?: boolean
+  authorizationMode?: ToolAuthorizationMode
   permissionSource?: string
 
   // ── 待后续开发 ──
@@ -211,6 +214,7 @@ export async function authorizeToolExecution(
     operations: tool.operations || [],
     riskLevel: tool.riskLevel || "medium",
     workspaceBounded: tool.workspaceBounded !== false,
+    authorizationMode: tool.authorizationMode || "generic",
     permissionRequired,
     args,
   })
@@ -219,13 +223,34 @@ export async function authorizeToolExecution(
   }
 }
 
+const AUTHORIZED_TOOL = Symbol("authorizedTool")
+
+/**
+ * Wrap a tool at its definition boundary so direct callers and registry callers
+ * share the same authorization path. The marker keeps wrapping idempotent.
+ */
+export function defineAgentTool(tool: AgentTool): AgentTool {
+  if ((tool as AgentTool & { [AUTHORIZED_TOOL]?: boolean })[AUTHORIZED_TOOL]) return tool
+
+  const rawExecute = tool.execute
+  const authorizedTool: AgentTool = {
+    ...tool,
+    execute: async (args, ctx) => {
+      await authorizeToolExecution(tool, args, ctx)
+      return rawExecute(args, ctx)
+    },
+  }
+  Object.defineProperty(authorizedTool, AUTHORIZED_TOOL, { value: true })
+  return authorizedTool
+}
+
 export class ToolRegistry {
   private tools = new Map<string, AgentTool>()
 
   /** 注册一个 Tool（同名幂等，不会覆盖） */
   register(tool: AgentTool): void {
     if (this.tools.has(tool.name)) return
-    this.tools.set(tool.name, tool)
+    this.tools.set(tool.name, defineAgentTool(tool))
   }
 
   /** 按名称获取 Tool */
@@ -286,7 +311,6 @@ export class ToolRegistry {
             onUpdate,
             ...extraCtx,
           }
-          await authorizeToolExecution(tool, args, toolContext)
           const text = await tool.execute(args, toolContext)
           emitTrace?.({
             type: "tool_execution_end",

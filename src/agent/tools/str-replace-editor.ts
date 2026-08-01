@@ -9,9 +9,9 @@
  *   2. old_string: "" + new_string → 创建新文件
  *   3. edits: [{old_string, new_string}] → 批量替换
  */
-import { readFileSync, writeFileSync, existsSync, statSync, realpathSync, mkdirSync } from "fs";
-import { resolve, relative, isAbsolute, sep, dirname } from "path";
-import type { AgentTool } from "../types.js";
+import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from "fs";
+import { dirname } from "path";
+import { defineAgentTool, type AgentTool } from "../types.js";
 import { authorizeToolPath, guardToolPath } from "./path-authorization.js";
 
 const MAX_FILE_SIZE = 1024 * 1024; // 1 MB
@@ -78,29 +78,6 @@ function preserveQuoteStyle(oldString: string, actualOld: string, newString: str
     r = r.replace(/'/g, () => { const q = open ? CURLY_SO : CURLY_SC; open = !open; return q; });
   }
   return r;
-}
-
-// ─── 路径防护 ──────────────────────────────────────────────
-
-function guardPath(root: string, filePath: string): string {
-  const rootResolved = resolve(root);
-  let resolved = resolve(rootResolved, filePath);
-  try {
-    resolved = realpathSync(resolved);
-  } catch {
-    const segs = relative(rootResolved, resolved).split(sep).filter(Boolean);
-    let safe = rootResolved;
-    for (const seg of segs) {
-      const c = resolve(safe, seg);
-      try { safe = realpathSync(c); } catch { safe = c; }
-    }
-    resolved = safe;
-  }
-  const rel = relative(rootResolved, resolved);
-  if (rel.startsWith("..") || isAbsolute(rel)) {
-    throw new Error(`Access denied: "${filePath}" is outside workspace`);
-  }
-  return resolved;
 }
 
 // ─── 替换执行 ──────────────────────────────────────────────
@@ -202,7 +179,7 @@ function applyEdits(content: string, edits: EditOp[]): EditApplyResult {
 
 // ─── 工具定义 ──────────────────────────────────────────────
 
-export const strReplaceEditorTool: AgentTool = {
+export const strReplaceEditorTool: AgentTool = defineAgentTool({
   name: "str_replace_editor",
   description:
     "精确文件编辑工具。三种模式：\n" +
@@ -335,4 +312,4 @@ export const strReplaceEditorTool: AgentTool = {
 
     return `已替换 ${fp}：${changed}（文件共 ${totalLines} 行）。${preview}`;
   },
-};
+});

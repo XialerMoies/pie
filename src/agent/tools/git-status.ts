@@ -1,7 +1,7 @@
-import type { AgentTool } from "../types.js"
+import { defineAgentTool, type AgentTool } from "../types.js"
 import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
-export const gitStatusTool: AgentTool = {
+export const gitStatusTool: AgentTool = defineAgentTool({
   name: "git-status",
   description:
     "查看当前 Git 仓库的状态，包括已修改的文件、暂存区、未跟踪的文件、分支信息",
@@ -61,4 +61,4 @@ export const gitStatusTool: AgentTool = {
   riskLevel: "low",
   needsPermission: false,
   workspaceBounded: true,
-}
+})

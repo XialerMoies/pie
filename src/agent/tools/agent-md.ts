@@ -7,14 +7,14 @@
 import { existsSync, writeFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import type { AgentTool } from "../types.js";
+import { defineAgentTool, type AgentTool } from "../types.js";
 import { getCurrentRuntime } from "../globals.js";
 import { authorizeToolPath } from "./path-authorization.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(__dirname, "..", "..", "..");
 
-export const writeAgentMdTool: AgentTool = {
+export const writeAgentMdTool: AgentTool = defineAgentTool({
   name: "write_agent_md",
   description:
     "更新项目级记忆（AGENT.md）。记录项目配置（构建/测试/部署方式）、" +
@@ -54,4 +54,4 @@ export const writeAgentMdTool: AgentTool = {
     if (runtime) await runtime.refreshSystemPrompt();
     return "AGENT.md 已更新，当前对话已生效。";
   },
-};
+});

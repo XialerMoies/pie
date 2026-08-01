@@ -8,7 +8,7 @@
  * PI SDK 需要的 ToolDefinition[] 格式，传给 createAgentSession()。
  */
 
-import { ToolRegistry, authorizeToolExecution, type AgentTool, type ToolContext, type ToolTraceEmitter } from "../types.js"
+import { ToolRegistry, defineAgentTool, type AgentTool, type ToolContext, type ToolTraceEmitter } from "../types.js"
 import { gitStatusTool } from "./git-status.js"
 import { searchTool } from "./search.js"
 import { fileReadTool } from "./file-read.js"
@@ -84,11 +84,12 @@ export function agentToolToPiTool(
   emitTrace?: ToolTraceEmitter,
   extraCtx?: ExtraCtx,
 ) {
+  const authorizedTool = defineAgentTool(tool)
   return {
-    name: tool.name,
-    label: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
+    name: authorizedTool.name,
+    label: authorizedTool.name,
+    description: authorizedTool.description,
+    parameters: authorizedTool.parameters,
     execute: async (_toolCallId: string, params: unknown) => {
       const args = params as Record<string, unknown>
       emitTrace?.({
@@ -114,8 +115,7 @@ export function agentToolToPiTool(
           onUpdate,
           ...extraCtx,
         }
-        await authorizeToolExecution(tool, args, toolContext)
-        const text = await tool.execute(args, toolContext)
+        const text = await authorizedTool.execute(args, toolContext)
         emitTrace?.({
           type: "tool_execution_end",
           toolCallId: _toolCallId,
