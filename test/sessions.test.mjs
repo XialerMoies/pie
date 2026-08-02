@@ -44,6 +44,24 @@ describe("parseSessionMessages", () => {
     assert.strictEqual(msgs[1].blocks[0].type, "tool_use");
   });
 
+  it("真实 PI message 无 turnId 时按 trace turnId 恢复 assistant blocks", () => {
+    const c = [
+      JSON.stringify({ type: "session", id: "s1" }),
+      JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "run" }] } }),
+      JSON.stringify({ type: "message", id: "a1", message: { role: "assistant", content: [{ type: "thinking", thinking: "先想" }, { type: "toolCall", name: "command" }] } }),
+      JSON.stringify({ type: "trace", turnId: "turn-1", event: { type: "thinking", status: "done", text: "先想", id: "think-1" } }),
+      JSON.stringify({ type: "trace", turnId: "turn-1", event: { type: "tool", status: "success", name: "command", output: "ok", id: "tool-1" } }),
+      JSON.stringify({ type: "assistant_block", turnId: "turn-1", block: { type: "thinking", text: "先想", status: "done", blockId: "m1:thinking-0", seq: 1 } }),
+      JSON.stringify({ type: "assistant_block", turnId: "turn-1", block: { type: "tool", name: "command", output: "ok", status: "success", blockId: "tool-call-1", seq: 2 } }),
+      JSON.stringify({ type: "message", id: "a2", message: { role: "assistant", content: [{ type: "text", text: "完成" }] } }),
+      JSON.stringify({ type: "assistant_block", turnId: "turn-1", block: { type: "text", text: "完成", blockId: "m1:text-1", seq: 3 } }),
+    ].join("\n");
+    const msgs = mod.parseSessionMessages(c);
+    assert.strictEqual(msgs.length, 2);
+    assert.deepStrictEqual(msgs[1].blocks.map(b => b.type), ["thinking", "tool", "text"]);
+    assert.deepStrictEqual(msgs[1].blocks.map(b => b.blockId), ["m1:thinking-0", "tool-call-1", "m1:text-1"]);
+  });
+
   it("assistant 消息先写入时仍能回挂后续 block", () => {
     const c = [
       JSON.stringify({ type: "session", id: "s1" }),
@@ -138,15 +156,15 @@ describe("parseSessionMessages", () => {
     assert.strictEqual(msgs.length, 2);
     const blocks = msgs[1].blocks;
     assert.ok(blocks, "旧 trace 应被转为 blocks");
-    assert.strictEqual(blocks.length, 4, "thinking + tool_use + tool_result + text = 4");
+    // B-5：tool 合并为一个 block → thinking + tool + text = 3
+    assert.strictEqual(blocks.length, 3, "thinking + tool + text = 3");
     assert.strictEqual(blocks[0].type, "thinking");
     assert.strictEqual(blocks[0].text, "先搜一下");
-    assert.strictEqual(blocks[1].type, "tool_use");
+    assert.strictEqual(blocks[1].type, "tool");
     assert.strictEqual(blocks[1].name, "search");
-    assert.strictEqual(blocks[2].type, "tool_result");
-    assert.strictEqual(blocks[2].output, "结果");
-    assert.strictEqual(blocks[3].type, "text");
-    assert.strictEqual(blocks[3].text, "这是结果");
+    assert.strictEqual(blocks[1].output, "结果");
+    assert.strictEqual(blocks[2].type, "text");
+    assert.strictEqual(blocks[2].text, "这是结果");
   });
 
   it("旧 trace 不覆盖已有 assistant_block", () => {
@@ -195,14 +213,11 @@ describe("parseSessionMessages", () => {
     ].join("\n");
     const msgs = mod.parseSessionMessages(c);
     const blocks = msgs[1].blocks;
-    const use = blocks.find((b) => b.type === "tool_use");
-    const result = blocks.find((b) => b.type === "tool_result");
-    assert.ok(use, "应有 tool_use");
-    assert.ok(result, "应有 tool_result");
+    const use = blocks.find((b) => b.type === "tool");
+    assert.ok(use, "应有 tool");
     assert.strictEqual(use.status, "error");
     assert.strictEqual(use.input?.path, "/tmp", "input 应保留");
-    assert.strictEqual(result.isError, true);
-    assert.strictEqual(result.output, "文件不存在");
+    assert.strictEqual(use.error, "文件不存在");
   });
 
   it("running-only 工具不自称为 success", () => {
@@ -214,13 +229,10 @@ describe("parseSessionMessages", () => {
     ].join("\n");
     const msgs = mod.parseSessionMessages(c);
     const blocks = msgs[1].blocks;
-    const use = blocks.find((b) => b.type === "tool_use");
-    const result = blocks.find((b) => b.type === "tool_result");
-    assert.ok(use, "应有 tool_use");
+    const use = blocks.find((b) => b.type === "tool");
+    assert.ok(use, "应有 tool");
     assert.strictEqual(use.status, "error", "running-only 工具不应标记为 success");
-    assert.ok(result, "应有 tool_result");
-    assert.strictEqual(result.isError, true);
-    assert.strictEqual(result.output, "[中断]");
+    assert.strictEqual(use.error, "[中断]");
   });
 
   it("解析 compaction entry 生成独立卡片", () => {
@@ -338,7 +350,7 @@ describe("parseSessionMessages", () => {
     const textBlocks = msgs[1].blocks.filter((b) => b.type === "text");
     assert.strictEqual(textBlocks.length, 1, "应含一个 text block");
     assert.ok(textBlocks[0].text.includes("status done"));
-    assert.ok(msgs[1].blocks.some((b) => b.type === "tool_use"));
-    assert.ok(msgs[1].blocks.some((b) => b.type === "tool_result"));
+    // B-5：tool 合并为单个 block
+    assert.ok(msgs[1].blocks.some((b) => b.type === "tool"));
   });
 });

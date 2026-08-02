@@ -325,6 +325,8 @@ function applyGeneralSetting(): void {
 }
 
 function applyEditorSettings(): void {
+  const theme = App.Preferences.get('editor-theme', 'vs-dark');
+  document.documentElement.classList.toggle('theme-light', theme === 'vs');
   const m = (window as any).__monaco;
   if (m?.updateSettings) m.updateSettings();
 }

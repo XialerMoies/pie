@@ -218,8 +218,13 @@ export function emitBlock(
   options?: SessionPersistenceOptions,
 ): void {
   const idx = chatStream.blocks.findIndex(b => b.blockId === block.blockId);
-  if (idx >= 0) chatStream.blocks[idx] = block;
-  else chatStream.blocks.push(block);
+  if (idx >= 0) {
+    // B-5：更新已存在的 block 时保留初始 seq，避免在事件流中"移动位置"（顺序漂移）。
+    // 只有首次创建才分配新 seq；后续 text/thinking/tool 更新都不改变位置。
+    chatStream.blocks[idx] = { ...block, seq: chatStream.blocks[idx].seq };
+  } else {
+    chatStream.blocks.push(block);
+  }
   if (options?.persist !== false) {
     persistBlockEvent(runtime, block, options);
   }
@@ -301,6 +306,12 @@ export function attachSessionEvents(
       flushPendingTracePersist(runtime, turnId, { authorizeSessionWrite });
     }
 
+    // B-5：assistant message 序号——工具调用后的新 assistant message 从 contentIndex 0 重新开始，
+    // blockId 需带 message 前缀避免跨 message 冲突。
+    if (event.type === "message_start" && event.message?.role === "assistant") {
+      chatStream.messageSeq = (chatStream.messageSeq || 0) + 1;
+    }
+
     // ─── Tool trace ─────────────────────────────────────────
     if (event.type === "tool_execution_start" && turnId) {
       if (!chatStream.emittedTraces.has(tid)) {
@@ -313,17 +324,20 @@ export function attachSessionEvents(
           id: tid,
         };
         emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
-        const seq = nextBlockSeq(chatStream);
+        // B-5：tool 物理合并成一个 block（type:"tool"，含 input，运行中更新 output，
+        // 结束时更新 status）。blockId 用 toolCallId 稳定，seq 首次分配、更新保留。
+        // persist:false——running 态不落盘，只有 tool_execution_end 持久化最终态，
+        // 避免同一 blockId 在 JSONL 里重复（刷新恢复出多个工具节点）。
         const block: AssistantBlock = {
-          type: "tool_use", status: "running",
+          type: "tool", status: "running",
           toolCallId: event.toolCallId || "",
           name: event.toolName || "unknown",
           input: event.args,
           turnId,
-          blockId: "tool-" + seq,
-          seq,
+          blockId: "tool-" + (event.toolCallId || nextBlockSeq(chatStream)),
+          seq: nextBlockSeq(chatStream),
         };
-        emitBlock(runtime, chatStream, block, { authorizeSessionWrite });
+        emitBlock(runtime, chatStream, block, { persist: false });
       }
     }
 
@@ -340,7 +354,7 @@ export function attachSessionEvents(
       emitTrace(runtime, chatStream, trace, { minIntervalMs: 250, authorizeSessionWrite });
       if (event.partialResult) {
         const toolBlock = chatStream.blocks.find(
-          (b): b is AssistantBlock & { type: "tool_use" } => b.type === "tool_use" && b.toolCallId === event.toolCallId
+          (b): b is AssistantBlock & { type: "tool" } => b.type === "tool" && b.toolCallId === event.toolCallId
         );
         if (toolBlock && !(toolBlock.output || "").includes("[截断")) {
           const chunk = String(event.partialResult ?? "");
@@ -374,76 +388,141 @@ export function attachSessionEvents(
           id: tid,
         };
         emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
+        // B-5：tool 合并——更新已有 tool block 的 status/output/error，不单独生成 tool_result。
+        // blockId 稳定，emitBlock 保留初始 seq。
         const flowBlock2 = chatStream.blocks.find(
-          (b): b is AssistantBlock & { type: "tool_use" } =>
-            b.type === "tool_use" && b.toolCallId === event.toolCallId
+          (b): b is AssistantBlock & { type: "tool" } =>
+            b.type === "tool" && b.toolCallId === event.toolCallId
         );
         const flowOut = flowBlock2?.output || "";
-        const seq = nextBlockSeq(chatStream);
         const block: AssistantBlock = {
-          type: "tool_result", toolUseId: event.toolCallId || "",
+          type: "tool",
+          toolCallId: event.toolCallId || "",
+          name: flowBlock2?.name || event.toolName || "unknown",
+          input: flowBlock2?.input,
           output: event.result || flowOut || undefined,
-          isError: event.isError === true,
+          error: event.isError ? (event.result || flowOut) : undefined,
+          status: event.isError ? "error" : "success",
           turnId,
-          blockId: "result-" + seq,
-          seq,
+          blockId: "tool-" + (event.toolCallId || flowBlock2?.blockId || nextBlockSeq(chatStream)),
+          seq: nextBlockSeq(chatStream),
         };
         emitBlock(runtime, chatStream, block, { authorizeSessionWrite });
       }
     }
 
-    // ─── Thinking trace ──────────────────────────────────────
+    // ─── Thinking trace / text & thinking block ──────────────
     if (event.type === "message_update" && turnId) {
       const msg = event.message;
       if (msg?.role === "assistant" && msg?.content) {
-        const fullText = msg.content.filter((c: any) => c.type === "text").map((c: any) => c.text || "").join("");
         const fullThinking = msg.content.filter((c: any) => c.type === "thinking").map((c: any) => c.thinking || "").join("");
-
-        const textState = appendAssistantSnapshot(chatStream.textBuffer, chatStream.currentTextSnapshot, fullText);
         const thinkingState = appendAssistantSnapshot(chatStream.thinkingBuffer, chatStream.currentThinkingSnapshot, fullThinking);
-
-        chatStream.currentTextSnapshot = textState.snapshot;
         chatStream.currentThinkingSnapshot = thinkingState.snapshot;
 
-        if (textState.delta) {
+        // B-5：用 contentIndex 作 text/thinking 的稳定 blockId（content 数组结构稳定，
+        // 同块多次 delta 的 contentIndex 恒定）。首次创建分配 seq，更新由 emitBlock 保留原 seq。
+        // assistantMessageEvent 是单个增量（text_delta 等），contentIndex 指向对应 content 块。
+        const inc = (event as any).assistantMessageEvent as
+          | { type: string; contentIndex?: number; delta?: string }
+          | undefined;
+        const incIndex = typeof inc?.contentIndex === "number" ? inc.contentIndex : -1;
+
+        if (inc?.type === "text_delta" || inc?.type === "text_end" || inc?.type === "text_start") {
+          // contentIndex 是 content 数组的位置索引（pi-ai 组装时 content.length-1）。
+          // content 块本身没有 index 字段，直接用下标取值。
+          // blockId 带 message 前缀，避免工具前后不同 assistant message 的 contentIndex 冲突。
+          const mprefix = `m${chatStream.messageSeq || 1}`;
+          const contentBlock = msg.content[incIndex];
+          const curText = contentBlock?.type === "text" ? (contentBlock.text || "") : (inc.delta || "");
+          const block: AssistantBlock = {
+            type: "text",
+            text: curText,
+            turnId,
+            blockId: `${mprefix}:text-${incIndex}`,
+            seq: nextBlockSeq(chatStream),
+          };
+          emitBlock(runtime, chatStream, block, { persist: false });
+          if (inc.delta) {
+            // P2-1：done.text 应是全部正文拼接，不是只留最后一段。
+            // 用当前 message 的完整文本更新 snapshot（累积），跨 message 由 messageSeq 区分。
+            chatStream.textBuffer = curText;
+            chatStream.currentTextSnapshot = curText;
+            writeChatEvent(chatStream, { type: "delta", text: inc.delta });
+          }
+        } else if (inc?.type === "thinking_delta" || inc?.type === "thinking_end" || inc?.type === "thinking_start") {
+          // B-5：thinking 独立成块——用 contentIndex 作稳定 blockId，多段思考各自独立。
+          const mprefix = `m${chatStream.messageSeq || 1}`;
+          const contentBlock = msg.content[incIndex];
+          const curThinking = contentBlock?.type === "thinking" ? (contentBlock.thinking || "") : (inc.delta || "");
+          // 同步 thinkingBuffer（累积），供 done.thinking 与 thinking 收尾 trace 使用
+          chatStream.thinkingBuffer = thinkingState.aggregate;
+          const trace: TraceEvent = {
+            type: "thinking", status: "streaming",
+            text: curThinking,
+            turnId,
+            id: `${mprefix}:thinking-${incIndex}`,
+          };
+          emitTrace(runtime, chatStream, trace, { minIntervalMs: 250, authorizeSessionWrite });
+          const block: AssistantBlock = {
+            type: "thinking",
+            text: curThinking,
+            status: "streaming",
+            turnId,
+            blockId: `${mprefix}:thinking-${incIndex}`,
+            seq: nextBlockSeq(chatStream),
+          };
+          emitBlock(runtime, chatStream, block, { persist: false });
+        } else {
+          // 无 contentIndex 的兼容路径：遍历 content 的 text 块，用块序号作 blockId。
+          // 工具边界后 content 新增 text 块会生成新段；同段更新由 emitBlock 保留 seq。
+          const textBlocks = msg.content.filter((c: any) => c.type === "text");
+          if (!chatStream.textSegments) chatStream.textSegments = [];
+          const segCount = chatStream.textSegments.length;
+          const totalText = textBlocks.map((c: any) => c.text || "").join("");
+          const textState = appendAssistantSnapshot(chatStream.textBuffer, chatStream.currentTextSnapshot, totalText);
+          chatStream.currentTextSnapshot = textState.snapshot;
           chatStream.textBuffer = textState.aggregate;
-          writeChatEvent(chatStream, { type: "delta", text: textState.delta });
-          // 同步更新 text block（流式不持久化）
-          if (chatStream.textBuffer) {
-            const block: AssistantBlock = {
-              type: "text",
-              text: chatStream.textBuffer,
+          for (let i = 0; i < textBlocks.length; i++) {
+            const curText = textBlocks[i].text || "";
+            const prev = chatStream.textSegments[i] ?? "";
+            const delta = curText.startsWith(prev) ? curText.slice(prev.length) : curText;
+            if (delta || prev !== curText) {
+              chatStream.textSegments[i] = curText;
+              const block: AssistantBlock = {
+                type: "text", text: curText, turnId,
+                blockId: `text-${i}`, seq: nextBlockSeq(chatStream),
+              };
+              emitBlock(runtime, chatStream, block, { persist: false });
+              if (i >= segCount || !prev) {
+                writeChatEvent(chatStream, { type: "delta", text: delta || curText });
+              }
+            }
+          }
+          while (chatStream.textSegments.length > textBlocks.length) chatStream.textSegments.pop();
+          // 兼容路径：thinking 也合并为单一 block（无 contentIndex 时）
+          if (thinkingState.delta) {
+            chatStream.thinkingBuffer = thinkingState.aggregate;
+            const tidThinking = "thinking@" + turnId;
+            if (!chatStream.emittedTraces.has(tidThinking)) {
+              chatStream.emittedTraces.add(tidThinking);
+            }
+            const trace: TraceEvent = {
+              type: "thinking", status: "streaming",
+              text: chatStream.thinkingBuffer,
               turnId,
-              blockId: "text-0",
+              id: tidThinking,
+            };
+            emitTrace(runtime, chatStream, trace, { minIntervalMs: 250, authorizeSessionWrite });
+            const block: AssistantBlock = {
+              type: "thinking",
+              text: chatStream.thinkingBuffer,
+              status: "streaming",
+              turnId,
+              blockId: tidThinking,
               seq: nextBlockSeq(chatStream),
             };
             emitBlock(runtime, chatStream, block, { persist: false });
           }
-        }
-        if (thinkingState.delta) {
-          chatStream.thinkingBuffer = thinkingState.aggregate;
-          // 每收到一段 thinking 都发一条 trace 更新
-          const tidThinking = "thinking@" + turnId;
-          if (!chatStream.emittedTraces.has(tidThinking)) {
-            chatStream.emittedTraces.add(tidThinking);
-          }
-          const trace: TraceEvent = {
-            type: "thinking", status: "streaming",
-            text: chatStream.thinkingBuffer,
-            turnId,
-            id: tidThinking,
-          };
-          emitTrace(runtime, chatStream, trace, { minIntervalMs: 250, authorizeSessionWrite });
-          // 同步更新 thinking block（流式不持久化）
-          const block: AssistantBlock = {
-            type: "thinking",
-            text: chatStream.thinkingBuffer,
-            status: "streaming",
-            turnId,
-            blockId: tidThinking,
-            seq: nextBlockSeq(chatStream),
-          };
-          emitBlock(runtime, chatStream, block, { persist: false });
         }
       }
     }
@@ -463,9 +542,52 @@ export function attachSessionEvents(
         emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
       }
       flushPendingTracePersist(runtime, turnId, { authorizeSessionWrite });
+
+      // B-5 P1-3：indexed thinking 收尾——agent_end 时把仍是 streaming 的
+      // thinking block（m<seq>:thinking-<idx>）更新为 done，避免回复结束后仍显示"进行中"。
+      for (let i = 0; i < chatStream.blocks.length; i++) {
+        const b = chatStream.blocks[i];
+        if (b.type === "thinking" && b.status === "streaming") {
+          chatStream.blocks[i] = { ...b, status: "done" as const };
+        }
+      }
       flushPendingBlockPersist(runtime, turnId, { authorizeSessionWrite });
 
-      // 持久化流式 text / thinking block（之前 persist: false 未落盘）
+      // B-5：末尾必须是正文节点（硬不变量）。
+      // 若 blocks 末尾不是 text（纯工具调用/只有 thinking），补一个正文收尾节点：
+      //  - textBuffer 有真实正文 → 补真实正文
+      //  - 无正文 → 补占位正文（本轮未生成最终回复）
+      //  - 错误/中断 → 说明未完成（不伪装成正常回复）
+      const lastBlock = chatStream.blocks[chatStream.blocks.length - 1];
+      if (lastBlock?.type !== "text") {
+        // agent_end 事件用 messages 数组（SDK AgentEndEvent: { type, messages: AgentMessage[] }），
+        // 取最后一个 assistant message 的错误信息判断中断/失败。
+        const finalMsgs = (event as any).messages as
+          | Array<{ role?: string; stopReason?: string; errorMessage?: string }>
+          | undefined;
+        const finalMsg = Array.isArray(finalMsgs)
+          ? finalMsgs.filter((m) => m?.role === "assistant").pop()
+          : undefined;
+        const aborted = finalMsg?.stopReason === "error" || finalMsg?.stopReason === "aborted" || Boolean(finalMsg?.errorMessage);
+        const realText = chatStream.textBuffer?.trim();
+        let trailingText: string;
+        if (aborted) {
+          trailingText = (finalMsg?.errorMessage || "本轮回复未完成（发生错误或已中断）。").trim();
+        } else if (realText) {
+          trailingText = chatStream.textBuffer;
+        } else {
+          trailingText = "本轮未生成最终回复。";
+        }
+        const trailSeq = nextBlockSeq(chatStream);
+        const trailBlock: AssistantBlock = {
+          type: "text", text: trailingText, turnId,
+          blockId: "text-trailing", seq: trailSeq,
+        };
+        // persist:false——由下方"持久化流式 text/thinking block"统一落盘一次，避免重复
+        emitBlock(runtime, chatStream, trailBlock, { persist: false });
+      }
+
+      // 持久化 text / thinking block（流式 persist:false 与末尾兜底在此统一落盘一次）
       for (const block of chatStream.blocks) {
         if (block.type === "text" || block.type === "thinking") {
           persistBlockEvent(runtime, block, { authorizeSessionWrite });
@@ -477,9 +599,17 @@ export function attachSessionEvents(
         tagSessionHeader(runtime.session.sessionFile, ws, authorizeSessionWrite);
       }
 
+      // P2-1：done.text 应为全部正文拼接（多段正文/多 message 的完整内容），
+      // 不依赖可能被单段覆盖的 textBuffer。从 blocks 收集所有 text block 按 seq 拼接。
+      const fullText = chatStream.blocks
+        .filter((b) => b.type === "text")
+        .sort((a, b) => a.seq - b.seq)
+        .map((b) => b.text || "")
+        .join("\n\n");
+
       writeChatEvent(chatStream, {
           type: "done",
-          text: chatStream.textBuffer,
+          text: fullText || chatStream.textBuffer,
           thinking: chatStream.thinkingBuffer || undefined,
           turnId,
           sessionId,
@@ -496,6 +626,7 @@ export function attachSessionEvents(
       chatStream.emittedTraces = new Set();
       chatStream.blocks = [];
       chatStream.blockSeq = 0;
+      chatStream.textSegments = [];
       chatStream.currentWorkspace = "";
     }
   });

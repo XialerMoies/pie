@@ -209,8 +209,8 @@ function renderCurrentSessionUsage(container: HTMLElement): void {
       <div class="usage-detail">
         <span class="usage-dl">输入</span><span class="usage-dv">${fmt(d.tokens.input)}</span>
         <span class="usage-dl">输出</span><span class="usage-dv">${fmt(d.tokens.output)}</span>
-        <span class="usage-dl">命中</span><span class="usage-dv">${fmt(d.tokens.cacheRead)}</span>
-        <span class="usage-dl">未命中</span><span class="usage-dv">${fmt(d.tokens.cacheWrite)}</span>
+        <span class="usage-dl">缓存命中</span><span class="usage-dv">${fmt(d.tokens.cacheRead)}</span>
+        <span class="usage-dl">缓存写入</span><span class="usage-dv">${fmt(d.tokens.cacheWrite)}</span>
       </div>
     </div>
 

@@ -72,8 +72,16 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
     try { stats = (session as any).getSessionStats?.(); } catch {}
 
     const tokens = stats?.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    const hitRate = (tokens.cacheRead + tokens.cacheWrite) > 0
-      ? Math.round(tokens.cacheRead / (tokens.cacheRead + tokens.cacheWrite) * 100)
+    // B-4：命中率口径 = 缓存命中 / 全部输入。input 已是"非缓存输入"
+    // （pi-ai 各 provider 映射统一：Anthropic input_tokens 不含缓存；
+    //  OpenAI/DeepSeek 侧 prompt_tokens 已扣 cached_tokens/miss 部分），
+    // 故总输入 = input + cacheRead + cacheWrite。
+    // 旧公式 cacheRead/(cacheRead+cacheWrite) 漏掉 input：
+    //  - DeepSeek 无 cacheWrite（恒 0）→ 命中一次后分母只剩 cacheRead，永远 100%
+    //  - 例：input=10000 cacheRead=5000 cacheWrite=2000 → 真实 29%，旧口径报 71%
+    const totalInput = tokens.input + tokens.cacheRead + tokens.cacheWrite;
+    const hitRate = totalInput > 0
+      ? Math.round(tokens.cacheRead / totalInput * 100)
       : 0;
     const sessionId = (session as any).sessionManager?.getSessionId?.() ?? "";
     const isCompacting = !!(session as any).isCompacting;

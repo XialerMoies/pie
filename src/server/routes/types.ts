@@ -26,6 +26,9 @@ export interface ChatStreamEventFrame {
 export type AssistantBlock =
   | { type: "thinking"; text: string; status: "streaming" | "done"; turnId: string; blockId: string; seq: number }
   | { type: "text"; text: string; turnId: string; blockId: string; seq: number }
+  // B-5：tool 物理合并为一个 block（含 input/output/error，一个 seq）。
+  // tool_use/tool_result 保留用于旧数据回放兼容。
+  | { type: "tool"; toolCallId: string; name: string; input?: unknown; output?: string; error?: string; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
   | { type: "tool_use"; toolCallId: string; name: string; input?: unknown; output?: string; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
   | { type: "tool_result"; toolUseId: string; output?: string; isError?: boolean; turnId: string; blockId: string; seq: number }
   | { type: "step"; text: string; status: "info" | "success" | "error"; turnId: string; blockId: string; seq: number };
@@ -49,6 +52,12 @@ export interface ChatStreamState {
   blocks: AssistantBlock[];
   /** block 顺序号生成器（单调递增） */
   blockSeq: number;
+  /** B-5：正文分段——每个 text 块的当前文本，索引即 content 中 text 块位置。
+   *  流式时同一 text 块逐步追加；工具边界后 content 出现新 text 块时新增段。 */
+  textSegments?: string[];
+  /** B-5：当前 turn 内 assistant message 序号。每次 message_start（assistant）递增，
+   *  用于 blockId 前缀避免工具前后不同 message 的 contentIndex 冲突。 */
+  messageSeq?: number;
   /** SSE event sequence and bounded replay window for reconnecting clients. */
   eventSeq: number;
   eventHistory: ChatStreamEventFrame[];

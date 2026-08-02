@@ -206,7 +206,9 @@ describe("dashboard routes", () => {
     assert.strictEqual(data.contextUsage.tokens, 1234);
     assert.ok(data.tokens, "应有 tokens");
     assert.strictEqual(data.tokens.input, 500);
-    assert.strictEqual(data.cacheHitRate, 67, "100/(100+50)*100 = 67%");
+    // B-4：命中率口径修正 = cacheRead/(input+cacheRead+cacheWrite)
+    // = 100/(500+100+50) ≈ 15%（旧公式漏 input 误报 67%）
+    assert.strictEqual(data.cacheHitRate, 15, "100/(500+100+50)*100 ≈ 15%");
     assert.strictEqual(data.compactCount, 0, "无 compaction entry");
     assert.strictEqual(data.isStreaming, false);
     assert.strictEqual(data.isCompacting, false);

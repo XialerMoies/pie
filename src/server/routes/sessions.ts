@@ -163,7 +163,15 @@ type SessionTrace =
   | { type: "tool"; status: "running" | "success" | "error"; name: string; input?: unknown; output?: string; error?: string; turnId?: string; id: string }
   | { type: "step"; status: "info" | "success" | "error"; text: string; turnId?: string; id: string };
 
-type SessionMessage = { role: string; content: string; thinking?: string; turnId?: string; trace?: SessionTrace[]; _compacted?: boolean };
+type SessionMessage = {
+  role: string;
+  content: string;
+  thinking?: string;
+  turnId?: string;
+  trace?: SessionTrace[];
+  blocks?: any[];
+  _compacted?: boolean;
+};
 
 type SessionBranchInfo = { id: string; name?: string };
 
@@ -324,23 +332,35 @@ function convertTracesToBlocks(traces: SessionTrace[], content?: string): any[] 
       const last = group[group.length - 1] as SessionTrace & { type: "tool"; error?: string; output?: string };
       const isError = last.status === 'error' || last.status === 'running';
       const terminalStatus = isError ? 'error' : 'success';
+      // B-5：tool 合并成一个 block（一个 seq）
       blocks.push({
-        type: 'tool_use', toolCallId: t.id, name: t.name, input: t.input,
+        type: 'tool', toolCallId: t.id, name: t.name, input: t.input,
+        output: isError ? undefined : last.output,
+        error: isError ? (last.error || (last.status === 'running' ? '[中断]' : undefined)) : undefined,
         status: terminalStatus,
-        turnId: t.turnId || '', blockId: t.id + '_use', seq: seq++,
-      });
-      blocks.push({
-        type: 'tool_result', toolUseId: t.id,
-        output: isError ? (last.error || (last.status === 'running' ? '[中断]' : undefined)) : last.output,
-        isError,
-        turnId: t.turnId || '', blockId: t.id + '_result', seq: seq++,
+        turnId: t.turnId || '', blockId: t.id, seq: seq++,
       });
     }
   }
 
-  // 如果有正文且没有 text block，添加一个 text block
-  if (content && !blocks.some(b => b.type === 'text')) {
-    blocks.push({ type: 'text', text: content, turnId: '', blockId: 'text-0', seq: seq++ });
+  // B-5：末尾必须是正文节点（硬不变量，与实时流规则一致）。
+  //  - 有正文但末尾不是 text → 末尾补一个 text（正文若被 tool 截断，正文本身已在尾部）
+  //  - 无正文 → 补占位正文（本轮未生成最终回复）
+  //  - 错误/中断 → 说明未完成（不伪装成正常回复）
+  const lastBlock = blocks[blocks.length - 1];
+  const hasTrailingText = lastBlock?.type === 'text';
+  if (!hasTrailingText) {
+    const hadError = traces.some((t: SessionTrace & { status?: string; error?: string }) =>
+      t.status === 'error' || Boolean(t.error));
+    let text: string;
+    if (content && content.trim()) {
+      text = content;
+    } else if (hadError) {
+      text = '本轮回复未完成（发生错误或已中断）。';
+    } else {
+      text = '本轮未生成最终回复。';
+    }
+    blocks.push({ type: 'text', text, turnId: '', blockId: 'text-trailing', seq: seq++ });
   }
 
   return blocks;
@@ -364,8 +384,16 @@ export function parseSessionMessages(content: string): SessionMessage[] {
     if (entry.type !== "assistant_block" || !entry.block) continue;
     const turnId = entry.turnId || entry.block.turnId || "";
     if (!turnId) continue;
-    if (!blocksByTurn.has(turnId)) blocksByTurn.set(turnId, []);
-    blocksByTurn.get(turnId)!.push(entry.block);
+    // B-5：同一 blockId 可能出现多次（流式更新时多份落盘/历史遗留）——
+    // 按 blockId 合并：保留第一次的 seq（位置），用最后一次的内容（最新状态）。
+    const list = blocksByTurn.get(turnId) || [];
+    const prevIdx = list.findIndex((b: any) => b.blockId === entry.block.blockId);
+    if (prevIdx === -1) {
+      list.push(entry.block);
+    } else {
+      list[prevIdx] = { ...entry.block, seq: list[prevIdx].seq };
+    }
+    blocksByTurn.set(turnId, list);
   }
   const mergeTrace = (trace: SessionTrace[], item: SessionTrace): SessionTrace[] => {
     const idx = trace.findIndex((existing) => existing.id === item.id);
@@ -392,6 +420,15 @@ export function parseSessionMessages(content: string): SessionMessage[] {
       last.content = [last.content, message.content].filter(Boolean).join("\n\n");
       last.thinking = [last.thinking, message.thinking].filter(Boolean).join("\n\n") || undefined;
       last.trace = appendTrace(last.trace || [], message.trace || []);
+      if (message.blocks?.length) {
+        const blocks = [...((last as any).blocks || [])];
+        for (const block of message.blocks) {
+          const idx = blocks.findIndex((existing: any) => existing.blockId === block.blockId);
+          if (idx === -1) blocks.push(block);
+          else blocks[idx] = { ...block, seq: blocks[idx].seq };
+        }
+        (last as any).blocks = blocks.sort((a: any, b: any) => (a.seq || 0) - (b.seq || 0));
+      }
       if (!last.turnId && message.turnId) last.turnId = message.turnId;
       return;
     }
@@ -464,12 +501,24 @@ export function parseSessionMessages(content: string): SessionMessage[] {
         if (role === "assistant" && traceTurnId) message.turnId = traceTurnId;
         if (thinkingContent) message.thinking = thinkingContent;
         if (trace && trace.length > 0) message.trace = trace;
-        // 优先使用 assistant_block 记录（新协议），按 turnId 精确匹配
+        // 优先使用 assistant_block 记录（新协议）。真实 PI message 记录没有
+        // turnId，需用本消息之前挂起的 trace 中的 turnId 关联当前 assistant。
         if (role === "assistant") {
-          const tid = entry.turnId || entry.id;
-          if (tid && blocksByTurn.has(tid)) {
-            (message as any).blocks = blocksByTurn.get(tid)!.sort((a, b) => a.seq - b.seq);
+          const candidateTurnIds = new Set<string>();
+          if (entry.turnId) candidateTurnIds.add(entry.turnId);
+          if (entry.id) candidateTurnIds.add(entry.id);
+          for (const item of trace || []) {
+            if (item.turnId) candidateTurnIds.add(item.turnId);
+          }
+          const matchedBlocks: any[] = [];
+          for (const tid of candidateTurnIds) {
+            const turnBlocks = blocksByTurn.get(tid);
+            if (!turnBlocks) continue;
+            matchedBlocks.push(...turnBlocks);
             blocksByTurn.delete(tid);
+          }
+          if (matchedBlocks.length > 0) {
+            (message as any).blocks = matchedBlocks.sort((a, b) => a.seq - b.seq);
           }
         }
         pushMessage(message);

@@ -609,15 +609,15 @@ export function monacoSetLanguage(id: string): void {
 
 /** 从设置页更新编辑器配置 */
 export function updateEditorSettings(): void {
-  if (!editor) return;
   const fontSize = App.Preferences.getNumber('editor-font-size', 13, 10, 24);
   const tabSize = App.Preferences.getNumber('editor-tab-size', 2, 1, 16);
   const useTabs = App.Preferences.getBoolean('editor-use-tabs');
   const theme = App.Preferences.get('editor-theme', 'vs-dark');
-  editor.updateOptions({ fontSize, tabSize, indentSize: tabSize, useTabStops: useTabs });
   const isLight = theme === 'vs';
   document.documentElement.classList.toggle('theme-light', isLight);
   monaco.editor.setTheme(isLight ? 'app-light' : 'app-dark');
+  if (!editor) return;
+  editor.updateOptions({ fontSize, tabSize, indentSize: tabSize, useTabStops: useTabs });
 }
 
 /** 释放 Monaco 焦点（防止它阻塞 UI 事件） */

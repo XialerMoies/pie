@@ -77,7 +77,7 @@ async function ensureSessionForSend(): Promise<ChatSendContext> {
       chatSetActiveSessionTabId(sessionId);
       return { sessionId, persistent: true, draftId: activeTabId };
     }
-    return { sessionId, persistent: false, draftId: activeTabId && chatIsDraftSessionId(activeTabId) ? activeTabId : undefined };
+    return { sessionId, persistent: Boolean(sessionId), draftId: activeTabId && chatIsDraftSessionId(activeTabId) ? activeTabId : undefined };
   } catch {
     const draftId = activeTabId && chatIsDraftSessionId(activeTabId) ? activeTabId : undefined;
     return {

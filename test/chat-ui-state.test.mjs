@@ -351,7 +351,7 @@ describe("chat ui state", () => {
     assert.strictEqual(env.state.M[1].blocks[0].text, "你好");
   });
 
-  it("默认空白页发送后删除临时会话", async () => {
+  it("空白页发送后保留新建会话", async () => {
     env.state.M = [];
     const streams = [];
     class MockEventSource {
@@ -381,10 +381,7 @@ describe("chat ui state", () => {
     streams[0].onmessage({ data: JSON.stringify({ type: "done", text: "临时回答", sessionId: "temp-session" }) });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const deleteCall = fetchCalls.find(([url, method]) => String(url).includes("/api/sessions/delete") && method === "POST");
-    assert.ok(deleteCall);
-    assert.strictEqual(JSON.parse(deleteCall[2].body).id, "temp-session");
-    assert.strictEqual(localStorage.getItem("last-session-id"), null);
+    assert.ok(!fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/delete") && method === "POST"));
   });
 
   it("草稿标签首次发送会升级为真实会话", async () => {

@@ -218,6 +218,18 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean): string 
       id: blockId(b),
     }, defaultOpen);
   }
+  if (b.type === 'tool') {
+    // B-5：tool 合并 block——直接渲染（含 input/output/error/status）
+    return renderTraceItem({
+      type: 'tool',
+      status: b.status || 'running',
+      name: b.name || 'tool',
+      input: b.input,
+      output: b.error ? undefined : b.output,
+      error: b.error,
+      id: blockId(b),
+    });
+  }
   if (b.type === 'tool_use') {
     const result = blocks.find(item => item.type === 'tool_result' && item.toolUseId && item.toolUseId === b.toolCallId);
     const status = result ? (result.isError ? 'error' : 'success') : (b.status || 'running');
@@ -285,6 +297,48 @@ function renderBlocks(blocks: any[]): string {
   return `<div class="assistant-blocks">${parts.join('')}</div>`;
 }
 
+function renderBlockNode(block: any, blocks: any[]): HTMLElement | null {
+  const html = renderEventBlock(block, blocks);
+  if (!html) return null;
+  const node = document.createElement('div');
+  node.className = 'assistant-block block-event';
+  node.dataset.blockId = blockId(block);
+  node.innerHTML = html;
+  return node;
+}
+
+function replaceBlockContents(target: HTMLElement, html: string): void {
+  const details = target.querySelector('details');
+  const wasOpen = details?.open === true;
+  target.innerHTML = html;
+  if (wasOpen) target.querySelector('details')?.setAttribute('open', '');
+}
+
+function insertBlockNode(flow: HTMLElement, block: any, blocks: any[]): boolean {
+  const node = renderBlockNode(block, blocks);
+  if (!node) return false;
+  const seq = Number.isFinite(block.seq) ? block.seq : Number.MAX_SAFE_INTEGER;
+  // block 节点在 .trace 容器内层（assistant-blocks > trace > block-event[data-block-id]），
+  // 用 querySelectorAll 而非 children 才能在正确位置插入（seq 乱序时新 block 插到更大的 block 之前）。
+  const before = Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
+    .find((child) => {
+      const id = child.dataset.blockId;
+      const existing = blocks.find((item) => blockId(item) === id);
+      return existing && (Number.isFinite(existing.seq) ? existing.seq : Number.MAX_SAFE_INTEGER) > seq;
+    });
+  if (before) before.parentElement?.insertBefore(node, before);
+  else {
+    let trace = flow.querySelector<HTMLElement>('.trace.block-trace');
+    if (!trace) {
+      trace = document.createElement('div');
+      trace.className = 'trace block-trace';
+      flow.appendChild(trace);
+    }
+    trace.appendChild(node);
+  }
+  return true;
+}
+
 function renderMessage(m: any): string {
   const c = m.role + (m.streaming ? ' go' : ''), lb = m.role === 'user' ? '你' : 'Pi';
   const ty = m.streaming ? `<div class="ty"><span class="ty-d"></span><span class="ty-d"></span><span class="ty-d"></span></div>` : '';
@@ -342,8 +396,8 @@ function updateLastBlock(block: any): boolean {
       return true;
     }
   }
-  if (target && block.type === 'tool_use') {
-    target.innerHTML = renderEventBlock(block, message.blocks);
+  if (target && (block.type === 'tool' || block.type === 'tool_use' || block.type === 'tool_result' || block.type === 'step')) {
+    replaceBlockContents(target, renderEventBlock(block, message.blocks));
     return true;
   }
   if (block.type === 'tool_result') {
@@ -352,14 +406,13 @@ function updateLastBlock(block: any): boolean {
       const toolTarget = Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
         .find(element => element.dataset.blockId === blockId(toolUse));
       if (toolTarget) {
-        toolTarget.innerHTML = renderEventBlock(toolUse, message.blocks);
+        replaceBlockContents(toolTarget, renderEventBlock(toolUse, message.blocks));
         return true;
       }
     }
   }
 
-  flow.outerHTML = renderBlocks(message.blocks);
-  return true;
+  return insertBlockNode(flow, block, message.blocks);
 }
 
 function finalizeLastMessage(): boolean {

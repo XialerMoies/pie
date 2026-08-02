@@ -346,6 +346,48 @@ describe("msgs() 渲染", () => {
     assert.ok(targetBefore.textContent.includes("step 2"));
   });
 
+  it("流式新增 block 只插入新节点，不重建已有事件流", () => {
+    state.M = [{
+      role: "assistant",
+      streaming: true,
+      blocks: [{ type: "thinking", status: "done", text: "先想", blockId: "think-1", seq: 1 }],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    const flowBefore = panel.querySelector('.assistant-blocks');
+    const firstBefore = panel.querySelector('[data-block-id="think-1"]');
+
+    const block = { type: "tool", status: "running", name: "command", blockId: "tool-1", seq: 2 };
+    state.M[0].blocks.push(block);
+    const updated = win.App.Chat.updateLastBlock(block);
+
+    assert.strictEqual(updated, true);
+    assert.strictEqual(panel.querySelector('.assistant-blocks'), flowBefore, "保留事件流 DOM");
+    assert.strictEqual(panel.querySelector('[data-block-id="think-1"]'), firstBefore, "保留已有节点 DOM");
+    const inserted = panel.querySelector('[data-block-id="tool-1"]');
+    assert.ok(inserted, "只插入新增节点");
+    assert.strictEqual(inserted.parentElement?.classList.contains("trace"), true, "新增节点仍在时间线容器内");
+  });
+
+  it("流式新增 block seq 乱序时插入到正确位置（中间插入）", () => {
+    state.M = [{
+      role: "assistant",
+      streaming: true,
+      blocks: [
+        { type: "thinking", status: "done", text: "先想", blockId: "think-1", seq: 1 },
+        { type: "text", text: "总结", blockId: "text-1", seq: 3 },
+      ],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    // 新增 seq=2 的 tool，应插入 think-1 与 text-1 之间
+    const toolBlock = { type: "tool", status: "running", name: "command", blockId: "tool-1", seq: 2 };
+    state.M[0].blocks.push(toolBlock);
+    win.App.Chat.updateLastBlock(toolBlock);
+    const order = [...panel.querySelectorAll('[data-block-id]')].map((e) => e.dataset.blockId);
+    assert.deepStrictEqual(order, ["think-1", "tool-1", "text-1"], "中间插入按 seq 排序");
+  });
+
   it("首个 tool_use block 只填充消息内容区", () => {
     state.M = [{ role: "assistant", content: "", streaming: true }];
     const panel = doc.getElementById("ms");

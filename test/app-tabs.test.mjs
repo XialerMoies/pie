@@ -233,6 +233,22 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     assert.deepStrictEqual(labels, ["真实会话标题"]);
   });
 
+  it("更多标签菜单限制宽度并保留关闭按钮", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    assert.match(css, /\.ctx-tabs-menu\{[^}]*width:min\(360px,calc\(100vw - 16px\)\)/);
+    assert.match(css, /\.ctx-tabs-menu \.ctx-tab-close\{opacity:1\}/);
+
+    const ts = win.App.Tabs;
+    ts.openTab({ kind: "session", id: "sess-long-title", title: "新会话", sessionId: "sess-long-title" });
+    win.sessionTabLabel = () => "运行 git log --oneline -5 查看最近的提交然后继续执行状态检查并生成总结";
+    win.tabMoreMenu(new MouseEvent("click", { clientX: 999, clientY: 12 }));
+
+    const menu = win.document.querySelector(".ctx-tabs-menu");
+    assert.ok(menu, "使用专用的标签更多菜单容器");
+    assert.ok(menu.querySelector(".ctx-tab-label"), "长标题仍保留在菜单中");
+    assert.ok(menu.querySelector(".ctx-tab-close"), "关闭按钮仍位于菜单内部");
+  });
+
   // ─── Activate dispatch ──────────────────────────────
 
   it("activate(file) 调用 file handler", () => {

@@ -39,7 +39,9 @@ before(async () => {
 
 beforeEach(() => {
   document.body.innerHTML = "";
+  document.documentElement.classList.remove("theme-light");
   storage.clear();
+  delete win.__monaco;
   win.__state.D = null;
   win._provOrder = [];
   fetchImpl = async (url) => {
@@ -140,5 +142,22 @@ describe("settings DOM boundary", () => {
 
     document.querySelector('[data-settings-action="close"]')?.click();
     assert.strictEqual(document.getElementById("settings-modal"), null);
+  });
+
+  it("applies the theme immediately before Monaco is ready", async () => {
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+
+    document.querySelector('.ms-item[data-st="general"]')?.click();
+    const theme = document.getElementById("gs-theme");
+    assert.ok(theme);
+
+    theme.value = "vs";
+    theme.dispatchEvent(new win.Event("change", { bubbles: true }));
+    assert.strictEqual(document.documentElement.classList.contains("theme-light"), true);
+
+    theme.value = "vs-dark";
+    theme.dispatchEvent(new win.Event("change", { bubbles: true }));
+    assert.strictEqual(document.documentElement.classList.contains("theme-light"), false);
   });
 });

@@ -26,7 +26,7 @@ interface Message {
 }
 
 interface AssistantBlock {
-  type: 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'step';
+  type: 'thinking' | 'text' | 'tool' | 'tool_use' | 'tool_result' | 'step';
   text?: string;
   status?: 'streaming' | 'done' | 'running' | 'success' | 'error' | 'info';
   name?: string;

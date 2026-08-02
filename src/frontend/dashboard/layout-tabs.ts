@@ -200,7 +200,7 @@ function tabMoreMenu(e: MouseEvent): void {
   const allTabs: AppTab[] = ts?.getTabs?.() ?? [];
   const maxH = Math.min(allTabs.length * 28 + 70, 450);
   const menu = document.createElement('div');
-  menu.className = 'ctx-menu';
+  menu.className = 'ctx-menu ctx-tabs-menu';
   placeContextMenu(menu, e.clientX, e.clientY + 4, { maxHeight: maxH });
 
   const T = (window as any).App?.Tabs;

@@ -146,6 +146,7 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         chatStream.traceSeq = 0;
         chatStream.blockSeq = 0;
         chatStream.blocks = [];
+        chatStream.textSegments = [];
         chatStream.emittedTraces = new Set();
         if (workspace) chatStream.currentWorkspace = workspace;
         // 切换 agent 工作目录到当前项目（重建 AgentSession）
