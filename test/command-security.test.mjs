@@ -538,25 +538,30 @@ describe("validateCommandPaths", () => {
   })
 
   it("mv 源路径和目标路径应按 remove/write 分开验证", () => {
-    const removeOutside = validateCommandPaths("mv ../outside.txt inside.txt", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
-    equal(removeOutside.allowed, false)
-    equal(!removeOutside.allowed && removeOutside.hardDeny, true)
+    const { root, workspace } = tempWorkspace()
+    try {
+      // 外部 mv 源 = remove 操作 → 确认并建议 Remove 规则（不再硬拦，结果不随 cwd 深度变化）
+      const removeOutside = validateCommandPaths("mv ../outside.txt inside.txt", {
+        cwd: workspace,
+        workspaceRoot: workspace,
+      })
+      expectPathRuleSuggestion(removeOutside, "remove")
 
-    const insideMove = validateCommandPaths("mv inside.txt moved.txt", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
-    equal(insideMove.allowed, true)
+      const insideMove = validateCommandPaths("mv inside.txt moved.txt", {
+        cwd: workspace,
+        workspaceRoot: workspace,
+      })
+      equal(insideMove.allowed, true)
 
-    const targetDirectoryOutside = validateCommandPaths("mv -t ../outside-dir inside.txt", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
-    equal(targetDirectoryOutside.allowed, false)
-    ok(!targetDirectoryOutside.allowed && targetDirectoryOutside.reason.includes("写入路径"))
+      const targetDirectoryOutside = validateCommandPaths("mv -t ../outside-dir inside.txt", {
+        cwd: workspace,
+        workspaceRoot: workspace,
+      })
+      equal(targetDirectoryOutside.allowed, false)
+      ok(!targetDirectoryOutside.allowed && targetDirectoryOutside.reason.includes("写入路径"))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it("workspace 外普通读取默认放行且显式 ask 规则仍生效", () => {
@@ -603,13 +608,37 @@ describe("validateCommandPaths", () => {
   })
 
   it("-- 后以 - 开头的路径仍应参与验证", () => {
-    const result = validateCommandPaths("rm -- ../outside.txt", {
-      cwd: process.cwd(),
-      workspaceRoot: process.cwd(),
-    })
-    equal(result.allowed, false)
-    equal(!result.allowed && result.hardDeny, true)
-    ok(!result.allowed && result.reason.includes("删除路径"))
+    const { root, workspace } = tempWorkspace()
+    try {
+      const result = validateCommandPaths("rm -- ../outside.txt", {
+        cwd: workspace,
+        workspaceRoot: workspace,
+      })
+      // `--` 后的外部删除路径仍参与验证 → 走确认通道（新策略，不随 cwd 深度变化）
+      equal(result.allowed, false)
+      ok(!result.allowed && !result.hardDeny && result.requiresConfirmation)
+      ok(!result.allowed && result.reason.includes("删除路径"))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("删除系统目录/盘符根级路径始终硬拦，不进入确认", () => {
+    const { root, workspace } = tempWorkspace()
+    const dangerous = process.platform === "win32"
+      ? "rm -rf C:\\Windows"
+      : "rm -rf /usr"
+    try {
+      const result = validateCommandPaths(dangerous, {
+        cwd: workspace,
+        workspaceRoot: workspace,
+      })
+      equal(result.allowed, false)
+      equal(!result.allowed && result.hardDeny, true)
+      ok(!result.allowed && result.reason.includes("删除路径指向高风险目录"))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it("输入重定向和变量重定向路径应验证", () => {
