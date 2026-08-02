@@ -11,7 +11,7 @@ import {
   pathRuleContentForDirectory as sharedPathRuleContentForDirectory,
 } from "../../permissions.js"
 import { isSensitiveExternalPath } from "../../sensitive-paths.js"
-import type { AdditionalWorkingDirectory, PathPermissionToolName, PermissionRule, PermissionSuggestion } from "../../types.js"
+import type { AdditionalWorkingDirectory, PathPermissionToolName, PermissionRule, PermissionRuleScope, PermissionSuggestion } from "../../types.js"
 
 type PathOperation = "read" | "write" | "create" | "remove"
 
@@ -32,9 +32,9 @@ export interface PathValidationOptions {
   shellDialect?: ShellDialect
   parsed?: SecurityParseResult
   additionalWorkingDirectories?: ReadonlyMap<string, AdditionalWorkingDirectory>
-  alwaysAllowRules?: Record<"session", PermissionRule[]>
-  alwaysDenyRules?: Record<"session", PermissionRule[]>
-  alwaysAskRules?: Record<"session", PermissionRule[]>
+  alwaysAllowRules?: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>>
+  alwaysDenyRules?: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>>
+  alwaysAskRules?: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>>
 }
 
 type PathCommand =
@@ -306,9 +306,9 @@ function isInsidePath(candidate: string, root: string): boolean {
 interface PathValidationScope {
   workspaceRoot: string
   allowedWorkingRoots: string[]
-  alwaysAllowRules?: Record<"session", PermissionRule[]>
-  alwaysDenyRules?: Record<"session", PermissionRule[]>
-  alwaysAskRules?: Record<"session", PermissionRule[]>
+  alwaysAllowRules?: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>>
+  alwaysDenyRules?: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>>
+  alwaysAskRules?: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>>
 }
 
 function addUniquePath(paths: string[], seen: Set<string>, value: string): void {
@@ -439,6 +439,18 @@ function matchingPathRule(resolvedPath: string, operation: PathOperation, rules:
   return findMatchingPathPermissionRule(resolvedPath, operation, rules)
 }
 
+function matchingScopedPathRule(
+  resolvedPath: string,
+  operation: PathOperation,
+  rules?: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>>,
+): PermissionRule | undefined {
+  for (const scope of ["session", "workspace"] as const) {
+    const match = matchingPathRule(resolvedPath, operation, rules?.[scope])
+    if (match) return match
+  }
+  return undefined
+}
+
 function permissionDirectoryForPath(resolvedPath: string, operation: PathOperation, assumeDirectory = false): string {
   if (assumeDirectory) return resolvedPath
   try {
@@ -536,10 +548,10 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
     const base = globBase(clean)
     const resolvedBase = resolvePathToken(base, cwd)
     if (!isInsidePath(resolvedBase, workspaceRoot)) {
-      if (matchingPathRule(resolvedBase, operation, scope.alwaysDenyRules?.session)) {
+      if (matchingScopedPathRule(resolvedBase, operation, scope.alwaysDenyRules)) {
         return fail(`${label}路径被本会话规则拒绝: ${token}`, true, { operation, blockedPath: resolvedBase })
       }
-      if (matchingPathRule(resolvedBase, operation, scope.alwaysAskRules?.session)) {
+      if (matchingScopedPathRule(resolvedBase, operation, scope.alwaysAskRules)) {
         const directory = permissionDirectoryForPath(resolvedBase, operation, true)
         return fail(`${label}路径需要本会话规则确认: ${token}`, false, {
           operation,
@@ -547,7 +559,7 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
           suggestions: externalPathSuggestions(directory, operation),
         })
       }
-      if (isInsideAnyPath(resolvedBase, scope.allowedWorkingRoots) || matchingPathRule(resolvedBase, operation, scope.alwaysAllowRules?.session)) {
+      if (isInsideAnyPath(resolvedBase, scope.allowedWorkingRoots) || matchingScopedPathRule(resolvedBase, operation, scope.alwaysAllowRules)) {
         return { allowed: true }
       }
       if (isSensitiveExternalPath(resolvedBase, workspaceRoot)) {
@@ -569,10 +581,10 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
     if (operation === "remove" && isDangerousRemovalPath(resolved, workspaceRoot)) {
       return fail(`删除路径指向高风险目录: ${token}`, true)
     }
-    if (matchingPathRule(resolved, operation, scope.alwaysDenyRules?.session)) {
+    if (matchingScopedPathRule(resolved, operation, scope.alwaysDenyRules)) {
       return fail(`${label}路径被本会话规则拒绝: ${token}`, true, { operation, blockedPath: resolved })
     }
-    if (matchingPathRule(resolved, operation, scope.alwaysAskRules?.session)) {
+    if (matchingScopedPathRule(resolved, operation, scope.alwaysAskRules)) {
       const directory = permissionDirectoryForPath(resolved, operation)
       return fail(`${label}路径需要本会话规则确认: ${token}`, false, {
         operation,
@@ -585,10 +597,10 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
     if (operation === "remove" && isDangerousRemovalPath(resolved, workspaceRoot)) {
       return fail(`删除路径指向高风险目录: ${token}`, true)
     }
-    if (matchingPathRule(resolved, operation, scope.alwaysDenyRules?.session)) {
+    if (matchingScopedPathRule(resolved, operation, scope.alwaysDenyRules)) {
       return fail(`${label}路径被本会话规则拒绝: ${token}`, true, { operation, blockedPath: resolved })
     }
-    if (matchingPathRule(resolved, operation, scope.alwaysAskRules?.session)) {
+    if (matchingScopedPathRule(resolved, operation, scope.alwaysAskRules)) {
       const directory = permissionDirectoryForPath(resolved, operation)
       return fail(`${label}路径需要本会话规则确认: ${token}`, false, {
         operation,
@@ -597,7 +609,7 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
       })
     }
     if (isInsideAnyPath(resolved, scope.allowedWorkingRoots)) return { allowed: true }
-    if (matchingPathRule(resolved, operation, scope.alwaysAllowRules?.session)) return { allowed: true }
+    if (matchingScopedPathRule(resolved, operation, scope.alwaysAllowRules)) return { allowed: true }
 
     if (isSensitiveExternalPath(resolved, workspaceRoot)) {
       const directory = permissionDirectoryForPath(resolved, operation)
@@ -608,15 +620,6 @@ function validatePathToken(token: string | undefined, operation: PathOperation, 
       })
     }
     if (operation === "read") return { allowed: true }
-    // 删除越界直接拒绝（硬拦），不进入确认——与"写/创建/删除越界直接拒绝"政策一致。
-    // 此前仅当路径碰巧被 isDangerousRemovalPath 判为高风险（如父目录恰为盘符根）才 hardDeny，
-    // 其余外部删除降级成 requiresConfirmation，导致结果随 cwd 深度而变。
-    if (operation === "remove") {
-      return fail(`${label}路径不在 workspace/授权目录内: ${token}`, true, {
-        operation,
-        blockedPath: resolved,
-      })
-    }
 
     const directory = permissionDirectoryForPath(resolved, operation)
     return fail(`${label}路径不在 workspace/授权目录内: ${token}`, false, {

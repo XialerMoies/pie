@@ -278,6 +278,44 @@ describe("server permission service", () => {
     }
   });
 
+  it("persists workspace-scoped Remove authorization across service instances", async () => {
+    const root = makeTempRoot("server-perm-remove-confirm-");
+    try {
+      const workspace = resolve(root, "workspace");
+      const external = resolve(root, "external");
+      mkdirSync(workspace);
+      mkdirSync(external);
+      const file = resolve(root, "permission-rules.json");
+      const first = new ServerPermissionService({
+        sessionPermissionState: createSessionPermissionState(),
+        workspaceRootProvider: () => workspace,
+        permissionRuleStore: new FileWorkspacePermissionRuleStore(file),
+        confirmPermission: async (request) => {
+          assert.strictEqual(request.operation, "remove");
+          return { allow: true, scope: "workspace" };
+        },
+      });
+
+      await first.authorizePath(external, "stale.txt", "remove", "test.workspace.remove-confirm");
+
+      const persisted = new FileWorkspacePermissionRuleStore(file).load(workspace);
+      assert.deepStrictEqual(persisted.alwaysAllowRules, [{
+        toolName: "Remove",
+        ruleContent: `Remove(${resolve(external, "**")})`,
+        match: "wildcard",
+      }]);
+
+      const second = new ServerPermissionService({
+        sessionPermissionState: createSessionPermissionState(),
+        workspaceRootProvider: () => workspace,
+        permissionRuleStore: new FileWorkspacePermissionRuleStore(file),
+      });
+      await second.authorizePath(external, "stale.txt", "remove", "test.workspace.remove-reload");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("authorizes and audits in-root path operations", async () => {
     const root = makeTempRoot("server-perm-");
     try {

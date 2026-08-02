@@ -436,6 +436,70 @@ describe("validateCommandPaths", () => {
     }
   })
 
+  it("workspace 级路径规则应被 Shell 命令校验消费", () => {
+    const { root, workspace } = tempWorkspace()
+    const external = join(root, "external")
+    mkdirSync(external, { recursive: true })
+
+    try {
+      const result = validateCommandPaths(`echo hi > ${join(external, "out.txt")}`, {
+        cwd: workspace,
+        workspaceRoot: workspace,
+        alwaysAllowRules: {
+          session: [],
+          workspace: [{
+            toolName: "Write",
+            ruleContent: `Write(${join(external, "**")})`,
+            match: "wildcard",
+          }],
+        },
+      })
+      equal(result.allowed, true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("工作区外普通删除应确认并建议 Remove 规则，授权后允许", () => {
+    const { root, workspace } = tempWorkspace()
+    const external = join(root, "external")
+    mkdirSync(external, { recursive: true })
+    const target = join(external, "outside.txt")
+    writeFileSync(target, "outside\n")
+    const command = process.platform === "win32"
+      ? String.raw`del ..\external\outside.txt`
+      : "rm ../external/outside.txt"
+
+    try {
+      const pending = validateCommandPaths(command, {
+        cwd: workspace,
+        workspaceRoot: workspace,
+      })
+      expectPathAsk(pending, "remove", "addPathRule")
+      ok(!pending.allowed && pending.suggestions?.some((suggestion) => (
+        suggestion.type === "addPathRule"
+        && suggestion.rule.toolName === "Remove"
+        && suggestion.rule.ruleContent === `Remove(${join(external, "**")})`
+      )))
+
+      const allowed = validateCommandPaths(command, {
+        cwd: workspace,
+        workspaceRoot: workspace,
+        alwaysAllowRules: {
+          session: [],
+          workspace: [{
+            toolName: "Remove",
+            ruleContent: `Remove(${join(external, "**")})`,
+            match: "wildcard",
+          }],
+        },
+      })
+      equal(allowed.allowed, true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it("cd 后继续执行写入时应硬拒绝", () => {
     const result = validateCommandPaths("cd subdir && echo hi > out.txt", {
       cwd: process.cwd(),
@@ -1948,6 +2012,106 @@ describe("commandTool 权限模式", () => {
       const secondRead = await commandTool.execute({ command: readCommand, readOnly: true }, readCtx)
       ok(secondRead.text.includes("external-read"), secondRead)
       equal(readConfirmCalls, 0)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("项目级路径规则应控制 Shell 对工作区外的写入和删除", async () => {
+    const { root, workspace } = tempWorkspace()
+    const external = join(root, "external")
+    mkdirSync(external, { recursive: true })
+    const writeTarget = process.platform === "win32"
+      ? "..\\external\\workspace-out.txt"
+      : "../external/workspace-out.txt"
+    const writeCommand = `echo workspace-write > ${writeTarget}`
+    const removeCommand = process.platform === "win32"
+      ? String.raw`del ..\external\workspace-out.txt`
+      : "rm ../external/workspace-out.txt"
+
+    try {
+      const state = createSessionPermissionState()
+      state.alwaysAllowRules.workspace.push(
+        {
+          toolName: "Write",
+          ruleContent: `Write(${join(external, "**")})`,
+          match: "wildcard",
+        },
+        {
+          toolName: "Remove",
+          ruleContent: `Remove(${join(external, "**")})`,
+          match: "wildcard",
+        },
+      )
+      const ctx = {
+        cwd: workspace,
+        workspace,
+        sessionId: "",
+        permissionMode: "dontAsk",
+        additionalWorkingDirectories: state.additionalWorkingDirectories,
+        alwaysAllowRules: state.alwaysAllowRules,
+        alwaysDenyRules: state.alwaysDenyRules,
+        alwaysAskRules: state.alwaysAskRules,
+      }
+
+      const writeResult = await commandTool.execute({ command: writeCommand }, ctx)
+      ok(writeResult.text.includes("已完成"), writeResult)
+      equal(existsSync(join(external, "workspace-out.txt")), true)
+
+      const removeResult = await commandTool.execute({ command: removeCommand }, ctx)
+      ok(removeResult.text.includes("已完成"), removeResult)
+      equal(existsSync(join(external, "workspace-out.txt")), false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("工作区外删除确认后应自动生成并复用 Remove 规则", async () => {
+    const { root, workspace } = tempWorkspace()
+    const external = join(root, "external")
+    mkdirSync(external, { recursive: true })
+    const target = join(external, "stale.txt")
+    const removeCommand = process.platform === "win32"
+      ? String.raw`del ..\external\stale.txt`
+      : "rm ../external/stale.txt"
+
+    try {
+      writeFileSync(target, "stale\n")
+      const state = createSessionPermissionState()
+      let confirmCalls = 0
+      const ctx = {
+        cwd: workspace,
+        workspace,
+        sessionId: "",
+        permissionMode: "dontAsk",
+        additionalWorkingDirectories: state.additionalWorkingDirectories,
+        alwaysAllowRules: state.alwaysAllowRules,
+        alwaysDenyRules: state.alwaysDenyRules,
+        alwaysAskRules: state.alwaysAskRules,
+        applyPermissionSuggestions: (suggestions) => applySessionPermissionSuggestions(state, suggestions),
+        confirmCommand: async (_command, _reason, request) => {
+          confirmCalls++
+          ok(request?.permissionSuggestions?.some((suggestion) => (
+            suggestion.type === "addPathRule" && suggestion.rule.toolName === "Remove"
+          )))
+          return { allow: true, scope: "session" }
+        },
+      }
+
+      const first = await commandTool.execute({ command: removeCommand }, ctx)
+      ok(first.text.includes("Remove("), first)
+      equal(existsSync(target), false)
+      equal(confirmCalls, 1)
+      ok(state.alwaysAllowRules.session.some((rule) => (
+        rule.toolName === "Remove"
+        && rule.match === "wildcard"
+        && rule.ruleContent === `Remove(${join(external, "**")})`
+      )))
+
+      writeFileSync(target, "stale-again\n")
+      await commandTool.execute({ command: removeCommand }, ctx)
+      equal(existsSync(target), false)
+      equal(confirmCalls, 1)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
