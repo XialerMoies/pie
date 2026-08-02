@@ -80,6 +80,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     await import("../src/frontend/services/tab-store.ts");
     global.placeContextMenu = win.placeContextMenu;
     await import("../src/frontend/dashboard/layout-tabs.ts");
+    await import("../src/frontend/dashboard/dashboard-layout.ts");
     global.App = win.App;
   });
 
@@ -335,6 +336,284 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     ts.openTab({ kind: "session", id: "sess-m", title: "M", sessionId: "sess-m" });
     ts.registerTabBehavior("session", { activate() {}, close() {} });
     assert.doesNotThrow(() => win.App.Tabs.contextMenu(new MouseEvent("contextmenu"), "sess-m"));
+  });
+
+  // ─── reset 不清除行为注册（workspace 切换回归） ──────────
+
+  it("reset 后 file 行为仍保留——标签仍可 activate/close", () => {
+    const ts = win.App.Tabs;
+    const calls = [];
+    ts.registerTabBehavior("file", {
+      activate(t) { calls.push("a:" + t.id); },
+      close(t) { calls.push("c:" + t.id); },
+    });
+    // 模拟 workspace 切换：reset 清空标签状态
+    ts.reset();
+    ts.openTab({ kind: "file", id: "/post-reset.ts", title: "post.ts", path: "/post-reset.ts" });
+    win.App.Tabs.activate("/post-reset.ts");
+    win.App.Tabs.close("/post-reset.ts");
+    assert.deepStrictEqual(calls, ["a:/post-reset.ts", "c:/post-reset.ts"],
+      "reset 不能清空行为注册，否则 workspace 切换后标签无法切换/关闭");
+  });
+
+  // ─── 关闭最后一个会话标签 → 自动激活下一个文件标签 ────────
+
+  it("关闭最后一个会话标签时，自动激活下一个文件标签（加载其内容）", async () => {
+    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    const ts = win.App.Tabs;
+    const activated = [];
+    ts.registerTabBehavior("file", {
+      activate(t) { activated.push(t.id); },
+      close() {},
+    });
+    // 文件标签 + 会话标签（commitSessionTab 把 draft 升级为 session，并注册 session id）
+    ts.openTab({ kind: "file", id: "/only-file.ts", title: "only-file.ts", path: "/only-file.ts" });
+    const draftId = "draft:last-sess-" + Date.now().toString(36);
+    ts.openTab({ kind: "chat", id: draftId, title: "新会话", draftId });
+    ts.activateTab(draftId);
+    win.commitSessionTab(draftId, "sess-last", "最后一个会话");
+
+    win.App.Tabs.close("sess-last");
+
+    assert.deepStrictEqual(activated, ["/only-file.ts"],
+      "关闭最后一个会话标签后应激活下一个文件标签（closeTab 只改 activeId 不加载内容）");
+  });
+
+  it("删除最后一个会话（列表操作）→ 自动激活下一个文件标签", async () => {
+    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    const ts = win.App.Tabs;
+    const activated = [];
+    ts.registerTabBehavior("file", {
+      activate(t) { activated.push(t.id); },
+      close() {},
+    });
+    ts.openTab({ kind: "file", id: "/del-file.ts", title: "del-file.ts", path: "/del-file.ts" });
+    const draftId = "draft:del-" + Date.now().toString(36);
+    ts.openTab({ kind: "chat", id: draftId, title: "新会话", draftId });
+    ts.activateTab(draftId);
+    win.commitSessionTab(draftId, "sess-del", "待删除");
+
+    const prevConfirm = global.confirmAsync;
+    const prevFetch = global.fetch;
+    global.confirmAsync = async () => true;
+    global.fetch = async () => ({ ok: true, json: async () => ({ ok: true }) });
+    try {
+      await win.deleteSession("sess-del");
+    } finally {
+      global.confirmAsync = prevConfirm;
+      global.fetch = prevFetch;
+    }
+    // deleteSession 的 fetch.then 是 fire-and-forget，等它跑完
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.deepStrictEqual(activated, ["/del-file.ts"],
+      "删除最后一个会话后应激活下一个文件标签（列表删除路径）");
+  });
+
+  it("会话↔会话切换：激活 B 后 activeId 与消息都切到 B", async () => {
+    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    const ts = win.App.Tabs;
+    const mk = (draft, sess) => {
+      ts.openTab({ kind: "chat", id: draft, title: "新会话", draftId: draft });
+      ts.activateTab(draft);
+      win.commitSessionTab(draft, sess, sess);
+    };
+    mk("draft:a-" + Date.now().toString(36), "sess-a");
+    mk("draft:b-" + Date.now().toString(36), "sess-b");
+
+    const prevFetch = global.fetch;
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(String(init?.body || "{}"));
+      const id = body.id;
+      return {
+        ok: true,
+        json: async () => ({ ok: true, activeSessionId: id, messages: [{ role: "user", content: "msg-" + id }] }),
+      };
+    };
+    try {
+      win.App.Tabs.activate("sess-b");
+      await new Promise((r) => setTimeout(r, 20));
+    } finally {
+      global.fetch = prevFetch;
+    }
+
+    assert.strictEqual(ts.getState().activeId, "sess-b",
+      `激活会话 B 后 activeId 应为 sess-b（实际 ${ts.getState().activeId}）`);
+    const msgs = win.App.ChatState.getMessages().map((m) => m.content);
+    assert.ok(msgs.includes("msg-sess-b"), `消息应切到 B（实际 ${JSON.stringify(msgs)}）`);
+  });
+
+  it("关闭会话 B 时 B 的旧激活请求晚到应丢弃，不能重开 B 或覆盖 A 内容", async () => {
+    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    const ts = win.App.Tabs;
+    const mk = (draft, sess) => {
+      ts.openTab({ kind: "chat", id: draft, title: "新会话", draftId: draft });
+      ts.activateTab(draft);
+      win.commitSessionTab(draft, sess, sess);
+    };
+    mk("draft:a-" + Date.now().toString(36), "sess-a");
+    mk("draft:b-" + Date.now().toString(36), "sess-b");
+
+    // 可控 fetch：按请求 id 挂起，逐个放行
+    const pendings = new Map();
+    const prevFetch = global.fetch;
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(String(init?.body || "{}"));
+      return new Promise((resolve) => pendings.set(body.id, resolve));
+    };
+    const resolveOne = (id) => {
+      pendings.get(id)({
+        ok: true,
+        json: async () => ({ ok: true, activeSessionId: id, messages: [{ role: "user", content: "msg-" + id }] }),
+      });
+      pendings.delete(id);
+    };
+    try {
+      // 点 B → B 请求挂起；立即关 B → A 激活 + A 请求挂起
+      win.App.Tabs.activate("sess-b");
+      win.App.Tabs.close("sess-b");
+      // A 响应先到 → A 生效
+      resolveOne("sess-a");
+      await new Promise((r) => setTimeout(r, 10));
+      assert.strictEqual(ts.getState().activeId, "sess-a", "A 应生效");
+      assert.ok(!ts.getTab("sess-b"), "B 标签应已关闭");
+      // B 旧响应晚到 → 必须丢弃：不得重开 B / 不得覆盖 A 内容 / 不得改 activeId
+      resolveOne("sess-b");
+      await new Promise((r) => setTimeout(r, 10));
+      assert.ok(!ts.getTab("sess-b"), "B 旧响应不得重新打开 B 标签");
+      assert.strictEqual(ts.getState().activeId, "sess-a", "activeId 应保持 A");
+      const msgs = win.App.ChatState.getMessages().map((m) => m.content);
+      assert.deepStrictEqual(msgs, ["msg-sess-a"], "内容应保持 A（B 旧响应被丢弃）");
+    } finally {
+      global.fetch = prevFetch;
+    }
+  });
+
+  it("关闭会话的 next-active 规则：右邻优先 / 无右邻选左 / 无左邻选右", async () => {
+    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    const ts = win.App.Tabs;
+    const mk = (draft, sess) => {
+      ts.openTab({ kind: "chat", id: draft, title: "新会话", draftId: draft });
+      ts.activateTab(draft);
+      win.commitSessionTab(draft, sess, sess);
+    };
+
+    const prevFetch = global.fetch;
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(String(init?.body || "{}"));
+      return { ok: true, json: async () => ({ ok: true, activeSessionId: body.id, messages: [{ role: "user", content: "msg-" + body.id }] }) };
+    };
+
+    const closeAndGetActive = async (closeId) => {
+      win.App.Tabs.close(closeId);
+      await new Promise((r) => setTimeout(r, 20));
+      return ts.getState().activeId;
+    };
+
+    try {
+      // 场景1：左侧有、右侧有 → 关闭中间的 → 选右侧
+      ts.reset();
+      mk("draft:r1-" + Date.now().toString(36), "sa"); mk("draft:r2-" + Date.now().toString(36), "sb"); mk("draft:r3-" + Date.now().toString(36), "sc");
+      ts.activateTab("sb");
+      assert.strictEqual(await closeAndGetActive("sb"), "sc", "[A,B,C] 关 B → 右邻 C");
+
+      // 场景2：左侧有、右侧无 → 关闭最右 → 选左侧
+      ts.reset();
+      mk("draft:r4-" + Date.now().toString(36), "sa2"); mk("draft:r5-" + Date.now().toString(36), "sb2");
+      ts.activateTab("sb2");
+      assert.strictEqual(await closeAndGetActive("sb2"), "sa2", "[A,B] 关 B（最右）→ 左邻 A");
+
+      // 场景3：左侧无、右侧有 → 关闭最左 → 选右侧
+      ts.reset();
+      mk("draft:r6-" + Date.now().toString(36), "sa3"); mk("draft:r7-" + Date.now().toString(36), "sb3");
+      ts.activateTab("sa3");
+      assert.strictEqual(await closeAndGetActive("sa3"), "sb3", "[A,B] 关 A（最左）→ 右邻 B");
+
+      // 场景5：关闭后唯一剩下的标签是文件 → 加载文件内容（非会话也不丢）
+      ts.reset();
+      ts.openTab({ kind: "file", id: "/only.ts", title: "only.ts", path: "/only.ts", content: "only" });
+      ts.openTab({ kind: "session", id: "sa5", title: "A", sessionId: "sa5" });
+      ts.activateTab("sa5");
+      assert.strictEqual(await closeAndGetActive("sa5"), "/only.ts",
+        "[文件, sess-a] 关 sess-a → 唯一剩余文件 /only.ts");
+
+      // 场景4（混合）：[sess-a, sess-b, /f1.ts] 关 sess-b → 右邻是文件 /f1.ts，应选它
+      ts.reset();
+      ts.openTab({ kind: "session", id: "sa4", title: "A", sessionId: "sa4" });
+      ts.openTab({ kind: "session", id: "sb4", title: "B", sessionId: "sb4" });
+      ts.openTab({ kind: "file", id: "/f1.ts", title: "f1.ts", path: "/f1.ts", content: "f1" });
+      ts.activateTab("sb4");
+      assert.strictEqual(await closeAndGetActive("sb4"), "/f1.ts",
+        "[sess-a, sess-b, /f1.ts] 关 sess-b → 右邻文件 /f1.ts（不是左侧会话）");
+    } finally {
+      global.fetch = prevFetch;
+    }
+  });
+
+  it("列表路径(switchSession 兜底)快速点 A→B：B 生效，A 旧响应被丢弃", async () => {
+    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    const ts = win.App.Tabs;
+    const pendings = new Map();
+    const prevFetch = global.fetch;
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(String(init?.body || "{}"));
+      return new Promise((resolve) => pendings.set(body.id, resolve));
+    };
+    const resolveOne = (id) => {
+      pendings.get(id)({ ok: true, json: async () => ({ ok: true, activeSessionId: id, messages: [{ role: "user", content: "msg-" + id }] }) });
+      pendings.delete(id);
+    };
+    try {
+      win.switchSession("sess-a");
+      win.switchSession("sess-b");
+      resolveOne("sess-a"); // A 旧响应先到 → 应被 B 取代而丢弃
+      await new Promise((r) => setTimeout(r, 10));
+      assert.ok(!win.App.ChatState.getMessages().some((m) => m.content === "msg-sess-a"),
+        "A 旧响应被丢弃（B 已取代）");
+      resolveOne("sess-b");
+      await new Promise((r) => setTimeout(r, 10));
+      assert.strictEqual(ts.getState().activeId, "sess-b", "B（最新）生效");
+      assert.ok(ts.getTab("sess-b"), "B 标签创建");
+      assert.ok(win.App.ChatState.getMessages().some((m) => m.content === "msg-sess-b"), "B 内容加载");
+    } finally {
+      global.fetch = prevFetch;
+    }
+  });
+
+  it("用户已交互时启动恢复不覆盖当前激活标签（hydrate/文件 fetch 晚到竞态）", async () => {
+    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    const ts = win.App.Tabs;
+    ts.openTab({ kind: "session", id: "sess-a", title: "A", sessionId: "sess-a" });
+    ts.openTab({ kind: "session", id: "sess-b", title: "B", sessionId: "sess-b" });
+    ts.activateTab("sess-b");
+    assert.strictEqual(win.hasUserInteractedWithTabs?.(), false, "初始未交互");
+
+    const prevFetch = global.fetch;
+    // mock 回显请求的 id（用于检测恢复是否会重新激活 sess-a）
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(String(init?.body || "{}"));
+      return { ok: true, json: async () => ({ ok: true, activeSessionId: body.id, messages: [] }) };
+    };
+    try {
+      win.App.Tabs.activate("sess-b"); // 用户点 B → 标记交互
+      await new Promise((r) => setTimeout(r, 10));
+      assert.strictEqual(win.hasUserInteractedWithTabs?.(), true, "激活后已交互");
+    } finally {
+      global.fetch = prevFetch;
+    }
+
+    // 模拟启动恢复晚到：持久化 activeView 是"另一个"会话 sess-a，
+    // restoreFileTabs → restoreActiveTab 若无视交互会把 activeId 快照回 sess-a
+    const realGetSnapshot = win.App.State.getSnapshot;
+    win.App.State.getSnapshot = () => ({ ...realGetSnapshot(), activeView: { type: "session", id: "sess-a" } });
+    try {
+      win.restoreFileTabs();
+      await new Promise((r) => setTimeout(r, 10)); // 等恢复触发的 fetch 落地
+      assert.strictEqual(ts.getState().activeId, "sess-b",
+        "用户已交互时恢复不得把 activeId 覆盖回持久化的会话 sess-a");
+    } finally {
+      win.App.State.getSnapshot = realGetSnapshot;
+    }
   });
 
   // ─── 无 handler 时不做降级（安全 no-op） ──────────────

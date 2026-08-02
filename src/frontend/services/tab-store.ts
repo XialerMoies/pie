@@ -137,17 +137,18 @@ export function moveTab(from: number, to: number): void {
   _syncToState();
 }
 
-/** 清空标签状态及兼容投影。 */
+/** 清空标签状态（不涉及行为注册）。 */
 export function reset(): void {
   _items = [];
   _activeId = null;
-  _behaviors.clear();
+  // 注意：不能清空 _behaviors —— 行为注册是模块级装配（file/session/chat 各自注册一次）。
+  // workspace 切换等场景调用 reset() 时若清空，App.Tabs.activate/close 将找不到 handler，
+  // 导致标签无法切换/关闭（回归 bug1/bug2）。
 }
 
-/** 关闭后自动选下一个 active */
+/** 关闭后自动选下一个 active：优先右侧相邻；若关闭的是最后一个则选左侧相邻 */
 function _getNextActiveId(closedIdx: number): string | null {
   if (_items.length === 0) return null;
-  // 优先选左侧相邻，否则选右侧相邻
   const nextIdx = Math.min(closedIdx, _items.length - 1);
   return _items[nextIdx]?.id ?? null;
 }

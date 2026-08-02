@@ -383,6 +383,13 @@ async function restoreSessionTabs(): Promise<void> {
   fetchSessionIndex().catch(() => {});
 
   const store = await App.State.hydrate();
+  // 用户已手动激活过标签（hydrate 慢，恢复流程晚到）→ 跳过恢复，避免把 activeId/
+  // 标签列表快照回持久化状态覆盖用户正在进行的操作。
+  if ((window as any).hasUserInteractedWithTabs?.()) {
+    const appUI = (window as any).App?.UI;
+    if (appUI?.restorePanel) appUI.restorePanel(store.panel.active || 'explorer');
+    return;
+  }
   const items = store.tabs.items || [];
   const persistedActiveId = store.tabs.activeId || (store.activeView.type !== 'chat' ? store.activeView.id : null);
   const activeId = store.activeView.type === 'session' ? store.activeView.id : null;
@@ -537,6 +544,9 @@ function emitSessionActivated(sessionId: string): void {
 window.onceSessionActivated = onceSessionActivated;
 window.emitSessionActivated = emitSessionActivated;
 
+/** 让所有在途的会话激活请求过期（文件/其他标签激活时调用——统一竞态防护） */
+window.invalidateSessionActivation = (): void => { _sessionActivationSeq++; _markUserTabInteraction(); };
+
 /** 激活失败时的状态回滚 */
 function _activateFailReset(): void {
   App.Chat?.resetMsgKeys?.();
@@ -593,7 +603,9 @@ function closeSessionTab(id: string): void {
     if (nextTab) {
       if (nextTab.kind === 'file') {
         setActiveSessionTabId(null);
-        ts?.activateTab(nextTab.id);
+        const handler = ts?.getTabBehavior?.('file');
+        if (handler?.activate) handler.activate(nextTab);
+        else ts?.activateTab(nextTab.id);
         loadSessions();
         saveUiState();
         return;
@@ -936,27 +948,33 @@ async function deleteSession(id: string): Promise<void> {
         toast('已删除');
 
         // forgetSessionTab 会调用 TabStore.closeTab 自动选下一个标签
-        const nextId = forgetSessionTab(id);
+        forgetSessionTab(id);
         const ts = App.Tabs;
 
-        if (nextId) {
-          // 有下一个会话标签 → 切换到它
-          renderSessionTabs(nextId); switchSession(nextId);
+        // 激活 TabStore 自动选中的下一个（_getNextActiveId：右邻优先、无右邻选左，
+        // 跨文件/会话标签）。不要按会话列表选——混合标签时会漏掉右侧文件邻居。
+        const nextTab = ts?.getActiveTab?.();
+        if (nextTab) {
+          renderSessionTabs(nextTab.id);
+          const handler = ts?.getTabBehavior?.(nextTab.kind);
+          if (handler?.activate) { handler.activate(nextTab); }
+          else if (nextTab.kind === 'file') {
+            const m = (window as any).__monaco;
+            if (m?.tsCloseFile) m.tsCloseFile(id);
+            ts?.activateTab(nextTab.id);
+            if (m?.setValue) { m.setValue(nextTab.content || ''); m.setLang(nextTab.id); }
+          } else {
+            switchSession(nextTab.id);
+          }
         } else {
-          // 没有其他会话标签
+          // 真的没有其他标签了 → 欢迎页（需 renderTabs 移除已删会话的标签）
           App.Chat?.resetMsgKeys?.();
           App.ChatState.clearMessages();
           App.ChatState.setBusy(false);
-
-          const nextTab = ts?.getActiveTab?.();
-          if (nextTab?.kind === 'file') {
-            // 有文件标签 → 保持文件标签
-          } else {
-            // 真的没有其他标签了 → 欢迎页
-            setActiveSessionTabId(null);
-            const msgsEl = $('ms');
-            if (msgsEl) { msgsEl.innerHTML = window.msgs ? window.msgs() : ''; msgsEl.scrollTop = 0; }
-          }
+          setActiveSessionTabId(null);
+          renderSessionTabs('');
+          const msgsEl = $('ms');
+          if (msgsEl) { msgsEl.innerHTML = window.msgs ? window.msgs() : ''; msgsEl.scrollTop = 0; }
         }
 
         // 重置输入框
@@ -1020,16 +1038,23 @@ function switchSession(id: string, options?: ApplySessionMessagesOptions): void 
     if (handler?.activate) { handler.activate(tab, options); return; }
   }
   // 降级：TabStore 无此 tab 时直接执行（兼容测试/未迁移场景）
-  if (isDraftSessionId(id)) { _setupDraftSession(id); return; }
+  // 兜底路径同样参与 seq 竞态防护：旧请求晚到不得重开已关闭标签/覆盖当前内容
+  _markUserTabInteraction();
+  if (isDraftSessionId(id)) { _sessionActivationSeq++; _setupDraftSession(id); return; }
+  const seq = ++_sessionActivationSeq;
   const ws = App.State.getWorkspacePath();
   fetch('/api/sessions/activate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, workspace: ws }) })
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then((data: any) => {
+      if (seq !== _sessionActivationSeq) return; // 已被更新的激活取代 → 丢弃
       if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
       _disposeActiveStream();
       _applySessionMessages(data, id, options);
       toast('已切换到会话 (' + App.ChatState.getMessages().length + ' 条消息)');
-    }).catch(() => { _activateFailReset(); toast('会话已失效'); loadSessions(); });
+    }).catch(() => {
+      if (seq !== _sessionActivationSeq) return; // 过期失败不重置当前标签
+      _activateFailReset(); toast('会话已失效'); loadSessions();
+    });
 }
 
 // ─── 会话列表事件委托（替代 inline onclick）────────────────
@@ -1116,11 +1141,27 @@ if (AppSess) {
 }
 
 // ─── Session/Chat handler（Phase 2：真实行为入口）────────
+
+// 会话激活请求序号。每次 _sessionActivate 递增；回调只在序号仍是当前值时生效。
+// 防止异步竞态：关闭/切换后，旧会话的迟到响应重新打开已关闭标签并覆盖当前内容。
+// （只丢弃旧响应，不改变激活时机——区别于按 tab.id 比对 activeId 的做法）
+let _sessionActivationSeq = 0;
+
+// 用户是否已手动激活过标签（会话/文件/草稿）。用于阻止启动恢复流程（异步 hydrate /
+// 文件内容 fetch）晚到时覆盖用户正在进行的操作（把 activeId 快照回持久化的会话）。
+let _userInteractedWithTabs = false;
+(window as any).hasUserInteractedWithTabs = () => _userInteractedWithTabs;
+function _markUserTabInteraction(): void { _userInteractedWithTabs = true; }
+
 function _sessionActivate(tab: AppTab, options?: ApplySessionMessagesOptions): void {
+  _markUserTabInteraction();
   if (tab.kind === 'chat' || isDraftSessionId(tab.id)) {
+    // 切到草稿同样使在途的会话请求过期，避免旧响应晚到覆盖草稿页
+    _sessionActivationSeq++;
     _setupDraftSession(tab.id);
     return;
   }
+  const seq = ++_sessionActivationSeq;
   const ws = App.State.getWorkspacePath();
   fetch('/api/sessions/activate', {
     method: 'POST',
@@ -1130,41 +1171,62 @@ function _sessionActivate(tab: AppTab, options?: ApplySessionMessagesOptions): v
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   }).then((data: { ok: boolean; activeSessionId?: string; messages?: any[]; error?: string }) => {
+    if (seq !== _sessionActivationSeq) return; // 已被更新的激活取代 → 丢弃
     if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
     _disposeActiveStream();
     _applySessionMessages(data, tab.id, options);
     toast('已切换到会话 (' + App.ChatState.getMessages().length + ' 条消息)');
-  }).catch(() => { _activateFailReset(); toast('会话已失效'); loadSessions(); });
+  }).catch(() => {
+    if (seq !== _sessionActivationSeq) return; // 过期失败不重置当前标签
+    _activateFailReset(); toast('会话已失效'); loadSessions();
+  });
 }
 
 function _sessionClose(tab: AppTab): void {
   // 必须在 forgetSessionTab 之前捕获 activeId（TabStore 会在 closeTab 后更新 activeId）
-  const wasActive = getActiveSessionTabId() === tab.id;
-  const nextId = forgetSessionTab(tab.id);
-  const activeId = getActiveSessionTabId() || '';
-  if (wasActive) {
-    if (nextId) {
-      // 先同步更新 DOM（让标签立即消失）
-      renderSessionTabs(nextId);
-      // 再异步激活下个 tab（加载消息、刷新列表）
-      const tabs = App.Tabs;
-      const nextTab = tabs?.getTab?.(nextId);
-      if (nextTab) { const handler = tabs?.getTabBehavior?.(nextTab.kind); handler?.activate?.(nextTab); }
-      else switchSession(nextId);
-    } else {
-      App.Chat?.resetMsgKeys?.();
-      setActiveSessionTabId(null);
-      App.ChatState.clearMessages();
-      App.ChatState.setBusy(false);
-      renderSessionTabs('');
-      const msgsEl = $('ms');
-      if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : '';
-      loadSessions();
-      saveUiState();
-    }
+  // 用 TabStore 底层 activeId 判定"是否激活标签"（不经 getActiveSessionTabId 的
+  // 递归深度守卫——它触发时返回 null 会让 wasActive 误判为 false，导致关闭不切换）
+  const wasActive = App.Tabs.getActiveTab?.()?.id === tab.id;
+  forgetSessionTab(tab.id);
+  if (!wasActive) {
+    // 关闭的是非激活会话：保持当前 active，仅刷新标签栏
+    renderSessionTabs(getActiveSessionTabId() || undefined);
+    saveUiState();
     return;
   }
-  renderSessionTabs(activeId);
+
+  // 关闭的是当前激活会话 → 激活 TabStore 自动选中的下一个。
+  // closeTab 的 _getNextActiveId 遵循"右邻优先、无右邻选左"规则，跨文件/会话标签。
+  // （不要按会话列表选 nextId——混合标签时会漏掉右侧的文件邻居）
+  const ts = App.Tabs;
+  const nextTab = ts?.getActiveTab?.();
+  if (nextTab) {
+    renderSessionTabs(nextTab.id);
+    const handler = ts?.getTabBehavior?.(nextTab.kind);
+    if (handler?.activate) { handler.activate(nextTab); return; }
+    // 降级（handler 未注册时）
+    if (nextTab.kind === 'file') {
+      const m = (window as any).__monaco;
+      if (m?.tsCloseFile) m.tsCloseFile(tab.id);
+      ts?.activateTab(nextTab.id);
+      if (m?.setValue) { m.setValue(nextTab.content || ''); m.setLang(nextTab.id); }
+      renderSessionTabs(nextTab.id);
+      saveUiState();
+      return;
+    }
+    switchSession(nextTab.id);
+    return;
+  }
+
+  // 真的没有其他标签了 → 欢迎页
+  App.Chat?.resetMsgKeys?.();
+  App.ChatState.clearMessages();
+  App.ChatState.setBusy(false);
+  setActiveSessionTabId(null);
+  renderSessionTabs('');
+  const msgsEl = $('ms');
+  if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : '';
+  loadSessions();
   saveUiState();
 }
 

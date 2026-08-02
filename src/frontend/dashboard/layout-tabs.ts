@@ -242,8 +242,13 @@ function tabMoreMenu(e: MouseEvent): void {
 // ─── File handler ────────────────────────────
 async function _fileActivate(tab: AppTab): Promise<void> {
   mark("file-activate-start");
+  // 激活任意标签都让在途的会话请求过期——统一竞态防护：点文件应取消挂起的会话加载
+  if (typeof (window as any).invalidateSessionActivation === 'function') (window as any).invalidateSessionActivation();
   const ts = App.Tabs;
   if (ts) ts.activateTab(tab.id);
+  // 先渲染标签栏（不依赖 Monaco）——Monaco 慢加载/加载失败也不能阻塞标签切换与显示。
+  // 否则首次点击文件时标签栏空白，直到 Monaco 就绪才出现（体验断档）。
+  if (typeof (window as any).renderTabs === 'function') (window as any).renderTabs();
   const editorEl = $('fc-editor');
   if (!editorEl) return;
 
@@ -309,9 +314,21 @@ function _fileClose(tab: AppTab): void {
   if (pstore) pstore.clearFile(tab.id);
   // TabStore 处理移除 + 自动切换 activeId（_fileTabs 已投影自 TabStore，无需手动 splice）
   const ts = App.Tabs;
-  if (ts) ts.closeTab(tab.id);
+  if (!ts) return;
+  const wasActive = ts.getActiveTab?.()?.id === tab.id;
+  ts.closeTab(tab.id);
   _syncTabsToStore();
   renderTabs();
+  // 关闭的是当前激活标签时，自动激活下一个标签并加载其内容。
+  // closeTab 只改 activeId，不会加载编辑器内容——需再次走 activate handler
+  // （文件→加载 Monaco 内容 / 会话→加载消息），否则主区停在已关闭标签的内容上。
+  if (wasActive) {
+    const next = ts.getActiveTab?.();
+    if (next) {
+      const handler = ts.getTabBehavior?.(next.kind);
+      if (handler?.activate) handler.activate(next);
+    }
+  }
 }
 
 // ─── TabBehavior 注册 ──────────────────────────────
