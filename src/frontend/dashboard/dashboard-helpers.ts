@@ -173,7 +173,12 @@ function F(s: number): string {
 /** scroll element to bottom */
 function sb(id: string): void {
   const e = $(id);
-  if (e) e.scrollTop = e.scrollHeight;
+  if (!e) return;
+  if (id === 'ms' && typeof App.Chat?.scrollToLatest === 'function') {
+    App.Chat.scrollToLatest({ force: false });
+    return;
+  }
+  e.scrollTop = e.scrollHeight;
 }
 
 /** toast notification — type: 'info' | 'error' | 'success' */

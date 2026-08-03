@@ -113,6 +113,10 @@ describe("dashboard action delegation", () => {
     const app = doc.getElementById("app");
     assert.ok(app);
     assert.strictEqual(app.querySelectorAll("[onclick], [onchange], [oninput]").length, 0);
+    const jumpLatest = app.querySelector("#chat-jump-latest");
+    assert.ok(jumpLatest, "chat layout should include a jump-to-latest button");
+    assert.strictEqual(jumpLatest.textContent.trim(), "", "jump-to-latest should remain icon-only");
+    assert.ok(jumpLatest.querySelector("svg"));
 
     app.querySelector("[data-layout-action='panel'][data-side='search']")?.click();
     app.querySelector("[data-layout-action='window'][data-window-action='minimize']")?.click();

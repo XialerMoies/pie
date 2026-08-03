@@ -28,6 +28,7 @@ global.logTiming = () => {};
 
   doc.body.innerHTML = [
     '<div id="ms"></div>',
+    '<button id="chat-jump-latest" aria-hidden="true" tabindex="-1"></button>',
     '<textarea id="ci"></textarea>',
     '<button id="cs"></button>',
     '<button id="fi-model-btn"></button>',
@@ -674,5 +675,42 @@ describe("chat ui state", () => {
     const panel = env.doc.getElementById("ms");
     assert.ok(panel.innerHTML.includes("Pi"), "空 M 时应渲染欢迎屏");
     assert.ok(panel.innerHTML.includes("编码"), "欢迎屏应有提示文字");
+  });
+
+  it("用户离开底部后显示回到最新按钮，点击后平滑回到底部", () => {
+    const panel = env.doc.getElementById("ms");
+    const button = env.doc.getElementById("chat-jump-latest");
+    let scrollTop = 220;
+    let scrollHeight = 1000;
+    let behavior = "";
+    Object.defineProperties(panel, {
+      scrollTop: { configurable: true, get: () => scrollTop, set: (value) => { scrollTop = value; } },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      clientHeight: { configurable: true, get: () => 300 },
+    });
+    panel.scrollTo = (options) => {
+      scrollTop = options.top;
+      behavior = options.behavior;
+    };
+
+    panel.dispatchEvent(new env.win.Event("scroll"));
+
+    assert.strictEqual(button.classList.contains("on"), true);
+    assert.strictEqual(button.getAttribute("aria-hidden"), "false");
+    assert.strictEqual(button.tabIndex, 0);
+
+    env.win.App.Chat.scrollToLatest({ force: false });
+    assert.strictEqual(scrollTop, 220, "stream updates must not pull a user away from history");
+
+    button.click();
+    assert.strictEqual(scrollTop, scrollHeight);
+    assert.strictEqual(behavior, "smooth");
+    assert.strictEqual(button.classList.contains("on"), false);
+    assert.strictEqual(button.getAttribute("aria-hidden"), "true");
+    assert.strictEqual(button.tabIndex, -1);
+
+    scrollHeight = 1200;
+    env.win.App.Chat.scrollToLatest({ force: false });
+    assert.strictEqual(scrollTop, 1200, "auto-follow resumes after returning to latest");
   });
 });

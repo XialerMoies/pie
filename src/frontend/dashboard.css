@@ -360,8 +360,12 @@ body{background:var(--bg);height:100vh}
 .fi-area.drag-over .fi-box{border-color:var(--am);box-shadow:0 0 0 1px var(--am),0 8px 32px var(--sd)}
 
 /* ─── Chat Input — 对话框 + Token + 按钮栏 ──── */
-.fi-area{flex-shrink:0;width:80%;max-width:740px;margin:0 auto;padding:8px 0 20px;display:flex;flex-direction:column;gap:6px;align-items:stretch;animation:fi-in .25s ease-out;box-sizing:content-box}
+.fi-area{flex-shrink:0;width:80%;max-width:740px;margin:0 auto;padding:8px 0 20px;display:flex;flex-direction:column;gap:6px;align-items:stretch;animation:fi-in .25s ease-out;box-sizing:content-box;position:relative}
 @media(min-width:1200px){.fi-area{width:100%;min-width:400px;max-width:740px}}
+.chat-jump-latest{position:absolute;z-index:12;top:-34px;left:50%;width:32px;height:32px;padding:0;border:1px solid var(--bd);border-radius:50%;background:var(--be);color:var(--ts);box-shadow:0 6px 18px var(--sd);display:grid;place-items:center;cursor:pointer;opacity:0;visibility:hidden;pointer-events:none;transform:translate(-50%,6px);transition:opacity .14s ease,transform .14s ease,background .14s ease,border-color .14s ease,color .14s ease}
+.chat-jump-latest.on{opacity:1;visibility:visible;pointer-events:auto;transform:translate(-50%,0)}
+.chat-jump-latest:hover{background:var(--bh);border-color:var(--bl);color:var(--tx)}
+.chat-jump-latest:focus-visible{outline:2px solid var(--am);outline-offset:2px}
 .command-confirm-slot{display:none;width:100%}
 .command-confirm-slot.on{display:block}
 @keyframes fi-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}

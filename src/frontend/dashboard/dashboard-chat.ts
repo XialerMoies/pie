@@ -12,6 +12,56 @@ type ChatSendContext = {
 };
 
 let activeSendContext: ChatSendContext | null = null;
+const CHAT_LATEST_THRESHOLD = 72;
+let chatFollowLatest = true;
+let chatSmoothScrollTimer: ReturnType<typeof setTimeout> | null = null;
+
+function chatSetJumpLatestVisible(visible: boolean): void {
+  const button = $('chat-jump-latest') as HTMLButtonElement | null;
+  if (!button) return;
+  button.classList.toggle('on', visible);
+  button.setAttribute('aria-hidden', visible ? 'false' : 'true');
+  button.tabIndex = visible ? 0 : -1;
+}
+
+function chatIsNearLatest(messages: HTMLElement): boolean {
+  return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= CHAT_LATEST_THRESHOLD;
+}
+
+function chatSyncLatestState(): void {
+  const messages = $('ms');
+  if (!messages) return;
+  const nearLatest = chatIsNearLatest(messages);
+  chatFollowLatest = nearLatest;
+  chatSetJumpLatestVisible(!nearLatest);
+}
+
+function chatScheduleSmoothScrollSync(): void {
+  if (chatSmoothScrollTimer !== null) clearTimeout(chatSmoothScrollTimer);
+  chatSmoothScrollTimer = setTimeout(() => {
+    chatSmoothScrollTimer = null;
+    chatSyncLatestState();
+  }, 120);
+}
+
+function chatScrollToLatest(options: { force?: boolean; smooth?: boolean } = {}): boolean {
+  const messages = $('ms');
+  if (!messages) return false;
+  if (!options.force && !chatFollowLatest) {
+    chatSetJumpLatestVisible(true);
+    return false;
+  }
+
+  chatFollowLatest = true;
+  chatSetJumpLatestVisible(false);
+  if (options.smooth && typeof messages.scrollTo === 'function') {
+    messages.scrollTo({ top: messages.scrollHeight, behavior: 'smooth' });
+    chatScheduleSmoothScrollSync();
+  } else {
+    messages.scrollTop = messages.scrollHeight;
+  }
+  return true;
+}
 
 function chatGetActiveSessionTabId(): string | null {
   const fn = (window as any).getActiveSessionTabId;
@@ -259,11 +309,26 @@ function markLastMessageRendered(): void {
 /** 重置消息 key 缓存（用于 M 被整体替换的场景） */
 function resetMsgKeys(): void {
   _msgKeys = [];
+  if (chatSmoothScrollTimer !== null) clearTimeout(chatSmoothScrollTimer);
+  chatSmoothScrollTimer = null;
+  chatFollowLatest = true;
+  chatSetJumpLatestVisible(false);
 }
 
 function bind(): void {
   const ci = $('ci') as HTMLTextAreaElement | null, cs = $('cs') as HTMLButtonElement | null;
   if (!ci || !cs) return;
+
+  const messages = $('ms');
+  const jumpLatest = $('chat-jump-latest') as HTMLButtonElement | null;
+  messages?.addEventListener('scroll', () => {
+    if (chatSmoothScrollTimer !== null) chatScheduleSmoothScrollSync();
+    else chatSyncLatestState();
+  }, { passive: true });
+  jumpLatest?.addEventListener('click', () => {
+    chatScrollToLatest({ force: true, smooth: true });
+  });
+  chatSyncLatestState();
 
   ci.addEventListener('input', () => {
     ci.style.height = 'auto';
@@ -310,7 +375,7 @@ function bind(): void {
     App.ChatState.appendMessage({ role: 'user', content: ciVal });
     App.ChatState.setBusy(true);
     App.ChatState.appendMessage({ role: 'assistant', content: '', thinking: '', streaming: true });
-    updateUI(); sb('ms');
+    updateUI(); chatScrollToLatest({ force: true });
     const _ws = App.State.getWorkspacePath();
     App.ChatStream.close();
     const gen = App.ChatStream.open();
@@ -726,4 +791,5 @@ window.showModelPicker = showModelPicker;
   App.Chat.copyLastError = copyLastError;
   App.Chat.refreshWorkspaceState = refreshWorkspaceState;
   App.Chat.resetMsgKeys = resetMsgKeys;
+  App.Chat.scrollToLatest = chatScrollToLatest;
 } }

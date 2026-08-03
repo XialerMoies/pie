@@ -135,6 +135,8 @@ interface AppChat {
   copyLastError(): Promise<void>;
   refreshWorkspaceState(): void;
   scheduleMessagesRender(scroll?: boolean): void;
+  resetMsgKeys(): void;
+  scrollToLatest(options?: { force?: boolean; smooth?: boolean }): boolean;
   isBusy(): boolean;
 }
 interface AppChatState {
