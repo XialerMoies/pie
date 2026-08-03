@@ -41,6 +41,7 @@ import {
   resolveBashExecutable,
   shellDialectForCommand,
 } from "../src/agent/tools/command.ts"
+import { isDangerousCommand as isDangerousCommandDirect } from "../src/agent/tools/command/dangerous-command.ts"
 import { validateCommandPaths } from "../src/agent/tools/command/path-validation.ts"
 import { isCommandReadOnly } from "../src/agent/tools/command/read-only.ts"
 import {
@@ -1247,6 +1248,10 @@ describe("isReadOnlyCommand", () => {
 // ─── isDangerousCommand ─────────────────────────────────
 
 describe("isDangerousCommand", () => {
+  it("keeps the command.ts compatibility export bound to the extracted module", () => {
+    equal(isDangerousCommand, isDangerousCommandDirect)
+  })
+
   // rm -rf 高危（标准形态）
   for (const cmd of [
     "rm -rf /",
