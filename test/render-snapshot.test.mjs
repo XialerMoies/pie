@@ -46,6 +46,7 @@ globalThis.toast = () => {};
 globalThis.confirmAsync = async () => true;
 globalThis.winCtrl = () => {};
 globalThis.refresh = async () => {};
+globalThis.getPane = () => null;
 globalThis.S = (name, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24"><use href="#${name}"/></svg>`;
 globalThis.E = (s) => String(s ?? "");
 globalThis.F = (s) => Math.floor(s/60) + '分' + Math.floor(s%60) + '秒';
@@ -520,6 +521,39 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes('trace-text'), "最后一个节点是 text block");
     const lastNodeMatch = html.match(/<div class="trace-node trace-text">/g);
     assert.ok(lastNodeMatch, "text 节点存在");
+  });
+});
+
+describe("side panel interaction", () => {
+  it("opens the requested panel when restored state and startup DOM disagree", () => {
+    win.App.State.updatePanel({ active: "chat", closed: false, width: 260 });
+
+    const oldSidebar = doc.querySelector(".sbar");
+    oldSidebar?.remove();
+    const sidebar = doc.createElement("div");
+    sidebar.className = "sbar";
+    sidebar.innerHTML = [
+      '<button class="b on" data-side="explorer"></button>',
+      '<button class="b" data-side="chat"></button>',
+    ].join("");
+    doc.body.appendChild(sidebar);
+
+    const panel = doc.getElementById("si");
+    assert.ok(panel);
+    panel.className = "sinfo";
+    panel.style.width = "260px";
+    panel.innerHTML = '<div class="panel-content" id="pc"></div>';
+
+    win.togglePanel("chat");
+
+    assert.strictEqual(panel.classList.contains("closed"), false, "first click should keep the panel open");
+    assert.strictEqual(sidebar.querySelector('[data-side="chat"]')?.classList.contains("on"), true);
+    assert.strictEqual(win.App.State.getSnapshot().panel.active, "chat");
+
+    win.togglePanel("chat");
+    assert.strictEqual(panel.classList.contains("closed"), true, "clicking the visible panel again should close it");
+
+    sidebar.remove();
   });
 });
 

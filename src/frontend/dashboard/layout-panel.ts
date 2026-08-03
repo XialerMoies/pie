@@ -23,7 +23,9 @@ function togglePanel(name: string): void {
   const si = $('si'), pc = $('pc');
   if (!si || !pc) return;
   const activePanel = App.State.getSnapshot().panel.active || 'explorer';
-  if (activePanel === name && !si.classList.contains('closed')) {
+  const highlightedButton = document.querySelector('.sbar .b[data-side].on') as HTMLElement | null;
+  const visiblePanel = highlightedButton?.dataset.side || activePanel;
+  if (visiblePanel === name && !si.classList.contains('closed')) {
     si.classList.add('closed');
     si.style.width = '';
     document.querySelectorAll('.sbar .b[data-side]').forEach(b => (b as HTMLElement).classList.remove('on'));
