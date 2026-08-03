@@ -55,6 +55,8 @@ body{background:var(--bg);height:100vh}
 .status-problems:focus-visible{outline:1px solid var(--am);outline-offset:-2px}
 .status-problems svg{flex-shrink:0}
 .status-problems-counts{display:flex;align-items:center;gap:4px;font:500 .6rem var(--fm)}
+.permission-mode-badge{display:none;align-items:center;margin-left:auto;padding:0 9px;color:#fecaca;background:rgba(127,29,29,.85);font:700 .58rem var(--fm);letter-spacing:.08em}
+.permission-mode-badge.on{display:flex}
 .status-problems-error{color:var(--ud)}
 .status-problems-warning{color:var(--uw)}
 .pb-panel{flex-shrink:0;max-height:38vh;min-height:0;overflow:hidden;border-top:1px solid var(--bd);background:var(--bs);display:flex;flex-direction:column}
@@ -839,6 +841,17 @@ body{background:var(--bg);height:100vh}
 .perm-icon-btn:hover{background:var(--bc);color:var(--tx);border-color:var(--bd)}
 .perm-icon-btn.danger{color:var(--rs);flex:0 0 auto}
 .perm-icon-btn.danger:hover{background:rgba(239,68,68,.14);border-color:rgba(239,68,68,.28)}
+.perm-mode-select{max-width:116px;height:24px;border:1px solid var(--bd);border-radius:4px;background:var(--bc);color:var(--ts);font:500 .6rem var(--fb)}
+.perm-yes-badge{display:none;padding:2px 4px;border-radius:3px;background:rgba(127,29,29,.85);color:#fecaca;font:700 .54rem var(--fm);letter-spacing:.06em}
+.perm-yes-badge.on{display:inline-flex}
+.permission-risk-dialog{width:min(420px,calc(100vw - 32px));padding:18px;background:var(--bs);border:1px solid rgba(248,113,113,.45);border-radius:7px;box-shadow:0 18px 60px rgba(0,0,0,.45);color:var(--tx)}
+.permission-risk-title{font:700 .86rem var(--fd);color:#fecaca}
+.permission-risk-copy{margin-top:10px;color:var(--ts);font-size:.72rem;line-height:1.5}
+.permission-risk-check{display:flex;align-items:center;gap:7px;margin-top:14px;color:var(--ts);font-size:.7rem}
+.permission-risk-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:18px}
+.permission-risk-actions button{padding:6px 10px;border:1px solid var(--bd);border-radius:4px;background:var(--bc);color:var(--ts);font-size:.68rem;cursor:pointer}
+.permission-risk-actions button.danger{background:#7f1d1d;border-color:#ef4444;color:#fee2e2}
+.permission-risk-actions button:disabled{opacity:.45;cursor:not-allowed}
 .perm-tabs{display:flex;border-bottom:1px solid var(--bd);margin-bottom:6px}
 .perm-tab{flex:1;padding:5px 0;border:none;background:transparent;color:var(--tm);font-size:.7rem;cursor:pointer;font-family:var(--fb);transition:all .1s;border-bottom:2px solid transparent}
 .perm-tab.active{color:var(--tx);border-bottom-color:var(--am)}

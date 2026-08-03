@@ -17,6 +17,7 @@ import type {
   ToolExecutionDecision,
   ToolOperation,
   ToolRiskLevel,
+  PermissionMode,
 } from "../agent/types.js";
 import { toolAuthorizationDecisionRequest } from "../agent/types.js";
 import {
@@ -155,6 +156,20 @@ export class ServerPermissionService {
     this.permissionRuleStore = options.permissionRuleStore;
     this.maxAuditEntries = options.maxAuditEntries ?? 500;
     this.loadPersistedAudit();
+  }
+
+  recordPermissionModeChange(mode: PermissionMode, source: string): void {
+    this.record({
+      source,
+      operation: "tool",
+      root: this.workspaceRootProvider?.() || "",
+      toolName: "PermissionMode",
+      toolOperations: ["execute"],
+      riskLevel: mode === "yes" ? "high" : "low",
+      permissionRequired: true,
+      decision: "allow",
+      reason: `Permission mode changed to ${mode}`,
+    });
   }
 
   async authorizePath(

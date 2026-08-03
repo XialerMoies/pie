@@ -164,6 +164,9 @@ global.fetch = async (url, options = {}) => {
     target.push({ ...body.rule, scope: body.scope, index: target.filter((rule) => rule.scope === body.scope).length });
     return { ok: true, json: async () => ({ ok: true, added: true, rules: state.rules }) };
   }
+  if (textUrl === "/api/permissions/mode" && !options.method) {
+    return { ok: true, json: async () => ({ mode: "standard" }) };
+  }
   if (textUrl === "/api/permissions/rules/clear" && options.method === "POST") {
     const body = JSON.parse(options.body);
     for (const key of ["alwaysAllowRules", "alwaysDenyRules", "alwaysAskRules"]) {

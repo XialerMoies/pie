@@ -34,6 +34,7 @@ function layout(): void {
   (window as any).App?.Session?.restoreSessionTabs?.();
   // Problems 底部栏初始化（DOM 已就绪）
   _initProblemsBar();
+  void refreshPermissionModeBadge();
   // 空闲预加载 Monaco，让首次文件打开不卡（首屏稳定后 1s）
   setTimeout(() => {
     if (typeof loadMonaco === 'function' && !(window as any).__monaco) {
@@ -138,7 +139,23 @@ function buildStatusBar(): string {
       <span class="status-problems-label">问题</span>
       <span class="status-problems-counts" id="pb-status-counts"></span>
     </button>
+    <span class="permission-mode-badge" id="permission-mode-badge" aria-label="权限模式"></span>
   </footer>`;
+}
+
+async function refreshPermissionModeBadge(): Promise<void> {
+  try {
+    const response = await fetch('/api/permissions/mode');
+    if (!response.ok) return;
+    const body = await response.json();
+    const badge = document.getElementById('permission-mode-badge');
+    if (!badge) return;
+    const yes = body.mode === 'yes';
+    badge.textContent = yes ? 'YES' : '';
+    badge.classList.toggle('on', yes);
+  } catch {
+    // The badge is informational; a server restart should not affect layout.
+  }
 }
 
 function bindLayoutActions(container: HTMLElement): void {

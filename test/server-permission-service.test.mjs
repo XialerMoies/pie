@@ -19,6 +19,7 @@ import { handleSessions } from "../src/server/routes/sessions.ts";
 import { handleSettings } from "../src/server/routes/settings.ts";
 import { handleUiState } from "../src/server/routes/ui-state.ts";
 import { RootRegistry } from "../src/server/root-registry.ts";
+import { createPermissionModeController } from "../src/server/permission-mode.ts";
 import { makeReq, makeRes, makeResWithEvents } from "./helpers/http.mjs";
 
 function routeCtx(root, permissionService) {
@@ -1106,6 +1107,30 @@ describe("server permission service", () => {
       await handlePermissions(deleteReq, deleteRes, ctx);
       assert.strictEqual(deleteRes._status, 200);
       assert.strictEqual(service.getRulesSnapshot().alwaysDenyRules.length, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("manages permission mode and requires acknowledgement for Yes", async () => {
+    const root = makeTempRoot("server-perm-mode-");
+    try {
+      const mode = createPermissionModeController();
+      const ctx = { ...routeCtx(root, undefined), permissionMode: mode };
+
+      const initial = makeRes();
+      await handlePermissions(makeReq("GET", "/api/permissions/mode"), initial, ctx);
+      assert.strictEqual(JSON.parse(initial._body).mode, "standard");
+
+      const rejected = makeRes();
+      await handlePermissions(makeReq("POST", "/api/permissions/mode", { mode: "yes" }), rejected, ctx);
+      assert.strictEqual(rejected._status, 400);
+      assert.strictEqual(mode.get(), "standard");
+
+      const accepted = makeRes();
+      await handlePermissions(makeReq("POST", "/api/permissions/mode", { mode: "yes", acknowledgeRisk: true }), accepted, ctx);
+      assert.strictEqual(accepted._status, 200);
+      assert.strictEqual(mode.get(), "yes");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

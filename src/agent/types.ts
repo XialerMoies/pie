@@ -21,6 +21,7 @@ export type ShellDialect = "cmd" | "posix-bash" | "powershell"
 
 export type PermissionRuleScope = "session" | "workspace"
 export type CommandConfirmationScope = "once" | PermissionRuleScope
+export type PermissionMode = "plan" | "standard" | "dontAsk" | "yes"
 
 export interface CommandConfirmationResult {
   allow: boolean
@@ -123,7 +124,7 @@ export interface ToolAuthorizationResult {
 export type ToolAuthorizationDecisionRequest = Omit<ToolAuthorizationRequest, "args">
 
 export type ToolExecutionDecisionStatus = "allow" | "deny" | "delegated"
-export type ToolExecutionDecisionSource = "implicit" | "rule" | "confirmation" | "specialized"
+export type ToolExecutionDecisionSource = "implicit" | "rule" | "confirmation" | "specialized" | "mode"
 
 export interface ToolSpecializedDecision {
   status: "pending" | "allow" | "deny"
@@ -177,7 +178,9 @@ export interface ToolContext {
   /** 中间输出回调（工具执行中产生 stdout 时调用） */
   onUpdate?: (chunk: string) => void
   /** 权限模式：由宿主/UI 设置，模型不可控 */
-  permissionMode?: "default" | "plan" | "acceptEdits" | "dontAsk"
+  permissionMode?: PermissionMode
+  /** Read the current host-controlled mode at command execution time. */
+  getPermissionMode?: () => PermissionMode
   /** 实际 shell 方言：由宿主/UI 设置，模型不可控 */
   shellDialect?: ShellDialect
   /** 用户确认回调：返回 true/allow=允许，false/undefined=拒绝。无此回调时默认拒绝（fail-closed） */
@@ -339,6 +342,15 @@ export async function authorizeToolExecution(
   }
   const decisionRequest = toolAuthorizationDecisionRequest(request)
   const permissionRequired = tool.needsPermission === true
+  if (ctx.getPermissionMode?.() === "yes" || ctx.permissionMode === "yes") {
+    return {
+      status: "allow",
+      source: "mode",
+      request: decisionRequest,
+      reason: "Allowed by Yes permission mode",
+      pathDecisions: [],
+    }
+  }
   if (!ctx.authorizeTool) {
     if (!permissionRequired) {
       return {
@@ -413,6 +425,7 @@ export function defineAgentTool(tool: AgentTool): AgentTool {
 
 export interface ToolExecutionExtraContext {
   permissionMode?: ToolContext["permissionMode"]
+  getPermissionMode?: ToolContext["getPermissionMode"]
   confirmCommand?: ToolContext["confirmCommand"]
   shellDialect?: ToolContext["shellDialect"]
   additionalWorkingDirectories?: ToolContext["additionalWorkingDirectories"]

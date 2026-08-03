@@ -1420,8 +1420,11 @@ describe("isDangerousCommand", () => {
     "git -C . push --force origin main",
     "git -C . clean -fd",
   ]) {
-    it(`应检测为危险: ${cmd}`, () => {
-      ok(isDangerousCommand(cmd).dangerous, `${cmd} 应被检测为危险`)
+    it(`高危 Git 应要求确认: ${cmd}`, () => {
+      const result = isDangerousCommand(cmd)
+      equal(result.dangerous, false, `${cmd} 不应再直接硬拦截`)
+      equal(result.requiresConfirmation, true, `${cmd} 应要求用户确认`)
+      ok(result.reason.includes("Git"), `${cmd} 应说明 Git 风险`)
     })
   }
 
@@ -1436,6 +1439,52 @@ describe("isDangerousCommand", () => {
       ok(!isDangerousCommand(cmd).dangerous, `${cmd} 不应被检测为危险`)
     })
   }
+
+  it("standard 模式下普通 Git 直通，高危 Git 进入一次确认", async () => {
+    const { commandTool } = await import("../src/agent/tools/command.ts")
+    const { root, workspace } = tempWorkspace()
+    try {
+      let regularConfirmCalls = 0
+      const regular = await commandTool.execute(
+        { command: "git status" },
+        {
+          cwd: workspace,
+          workspace,
+          sessionId: "",
+          permissionMode: "standard",
+          confirmCommand: async () => {
+            regularConfirmCalls++
+            return false
+          },
+        },
+      )
+      equal(regularConfirmCalls, 0, "普通 Git 不应弹确认")
+      ok(!regular.text.includes("用户已拒绝"), regular.text)
+
+      let highRiskConfirmCalls = 0
+      let highRiskReason = ""
+      const highRisk = await commandTool.execute(
+        { command: "git reset --hard HEAD" },
+        {
+          cwd: workspace,
+          workspace,
+          sessionId: "",
+          permissionMode: "dontAsk",
+          confirmCommand: async (_command, reason) => {
+            highRiskConfirmCalls++
+            highRiskReason = reason
+            return false
+          },
+        },
+      )
+      equal(highRiskConfirmCalls, 1, "高危 Git 应只请求一次确认")
+      ok(highRiskReason.includes("Git"), highRiskReason)
+      ok(highRisk.text.includes("用户已拒绝"), highRisk.text)
+      ok(!highRisk.text.includes("危险命令已拦截"), highRisk.text)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 
   // Claude Code bashSecurity validator 核心语义回归
   for (const cmd of [
@@ -1653,7 +1702,7 @@ describe("commandTool.execute 安全拦截", () => {
         cwd: process.cwd(),
         workspace: process.cwd(),
         sessionId: "",
-        permissionMode: "default",
+        permissionMode: "standard",
         shellDialect: "posix-bash",
         confirmCommand: async () => {
           confirmCalls++
@@ -1886,11 +1935,11 @@ describe("commandTool.execute 安全拦截", () => {
 
 describe("commandTool 权限模式", () => {
 
-  it("default 模式 + 非只读 + 无 confirmCommand 应被拒绝（fail-closed）", async () => {
+  it("standard 模式 + 非只读 + 无 confirmCommand 应被拒绝（fail-closed）", async () => {
     const { commandTool } = await import("../src/agent/tools/command.ts")
     const result = await commandTool.execute(
-      { command: "touch test.txt" },
-      { cwd: process.cwd(), sessionId: "", permissionMode: "default" },
+      { command: "node --version" },
+      { cwd: process.cwd(), sessionId: "", permissionMode: "standard" },
     )
     ok(result.text.includes("⛔"), "无确认回调时应拒绝")
     ok(result.text.includes("已取消"), "应提示已取消")
@@ -1905,30 +1954,115 @@ describe("commandTool 权限模式", () => {
     ok(result.text.includes("⛔"), "plan 模式无确认回调时应拒绝")
   })
 
-  it("default 模式 + 非只读 + confirmCommand=true 应放行", async () => {
+  it("standard 模式 + 非只读 + confirmCommand=true 应放行", async () => {
     const { commandTool } = await import("../src/agent/tools/command.ts")
     const result = await commandTool.execute(
       { command: "node --version" },
       {
         cwd: process.cwd(), sessionId: "",
-        permissionMode: "default",
+        permissionMode: "standard",
         confirmCommand: async () => true,
       },
     )
     ok(result.text.length > 0, "确认通过后应执行命令"); ok(!result.text.includes("⛔"), "不应被拒绝")
   })
 
-  it("default 模式 + 非只读 + confirmCommand=false 应拒绝", async () => {
+  it("standard 模式 + 非只读 + confirmCommand=false 应拒绝", async () => {
     const { commandTool } = await import("../src/agent/tools/command.ts")
     const result = await commandTool.execute(
       { command: "node --version" },
       {
         cwd: process.cwd(), sessionId: "",
-        permissionMode: "default",
+        permissionMode: "standard",
         confirmCommand: async () => false,
       },
     )
     ok(result.text.includes("⛔"), "确认拒绝时应拦截")
+  })
+
+  it("standard 模式下路径已授权的纯文件操作不弹确认", async () => {
+    const { commandTool } = await import("../src/agent/tools/command.ts")
+    const { root, workspace } = tempWorkspace()
+    try {
+      let confirmCalls = 0
+      const result = await commandTool.execute(
+        { command: "echo fast-path > fast-path.txt" },
+        {
+          cwd: workspace,
+          workspace,
+          sessionId: "",
+          permissionMode: "standard",
+          confirmCommand: async () => {
+            confirmCalls++
+            return false
+          },
+        },
+      )
+      equal(confirmCalls, 0)
+      equal(existsSync(join(workspace, "fast-path.txt")), true)
+      ok(!result.text.includes("用户已拒绝"), result.text)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("standard 模式下带隐藏副作用的 find/sed/awk 不走 fast-path", async () => {
+    const { commandTool } = await import("../src/agent/tools/command.ts")
+    const { root, workspace } = tempWorkspace()
+    try {
+      const commands = [
+        "find . -delete",
+        "sed 'w ../outside-target.txt' a.txt",
+        "find -exec sh -c 'echo escaped' {} ;",
+        "awk 'BEGIN{system(\"echo escaped\")}'",
+      ]
+      for (const command of commands) {
+        let confirmCalls = 0
+        const result = await commandTool.execute(
+          { command },
+          {
+            cwd: workspace,
+            workspace,
+            sessionId: "",
+            permissionMode: "standard",
+            confirmCommand: async () => {
+              confirmCalls++
+              return false
+            },
+          },
+        )
+        equal(confirmCalls, 1, `${command} 应进入命令确认`)
+        ok(result.text.includes("用户已取消") || result.text.includes("用户已拒绝"), result.text)
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("yes 模式放行普通命令但仍硬拦真正危险命令", async () => {
+    const { commandTool } = await import("../src/agent/tools/command.ts")
+    let confirmCalls = 0
+    const ordinary = await commandTool.execute(
+      { command: "node --version" },
+      {
+        cwd: process.cwd(),
+        sessionId: "",
+        permissionMode: "yes",
+        confirmCommand: async () => {
+          confirmCalls++
+          return false
+        },
+      },
+    )
+    ok(!ordinary.text.includes("用户已拒绝"), ordinary.text)
+    equal(confirmCalls, 0)
+
+    const dangerous = await commandTool.execute(
+      { command: "shutdown -h now" },
+      { cwd: process.cwd(), sessionId: "", permissionMode: "yes", confirmCommand: async () => { confirmCalls++; return true } },
+    )
+    ok(dangerous.text.includes("危险命令已拦截"), dangerous.text)
+    equal(confirmCalls, 0)
   })
 
   it("dontAsk 模式 + 非只读应自动放行", async () => {
@@ -2020,7 +2154,7 @@ describe("commandTool 权限模式", () => {
         cwd: workspace,
         workspace,
         sessionId: "",
-        permissionMode: "default",
+        permissionMode: "standard",
         additionalWorkingDirectories: readState.additionalWorkingDirectories,
         alwaysAllowRules: readState.alwaysAllowRules,
         alwaysDenyRules: readState.alwaysDenyRules,
@@ -2146,7 +2280,7 @@ describe("commandTool 权限模式", () => {
     }
   })
 
-  it("default mode should still confirm non-read-only commands after a Write path rule matches", async () => {
+  it("standard mode should fast-path pure file commands after a Write path rule matches", async () => {
     const { root, workspace } = tempWorkspace()
     const external = join(root, "external")
     mkdirSync(external, { recursive: true })
@@ -2168,7 +2302,7 @@ describe("commandTool 权限模式", () => {
         cwd: workspace,
         workspace,
         sessionId: "",
-        permissionMode: "default",
+        permissionMode: "standard",
         additionalWorkingDirectories: state.additionalWorkingDirectories,
         alwaysAllowRules: state.alwaysAllowRules,
         alwaysDenyRules: state.alwaysDenyRules,
@@ -2182,8 +2316,8 @@ describe("commandTool 权限模式", () => {
       }
 
       await commandTool.execute({ command: writeCommand }, ctx)
-      equal(confirmCalls, 1)
-      equal(suggestionCount, 0)
+      equal(confirmCalls, 0)
+      equal(suggestionCount, -1)
       equal(existsSync(join(external, "default-out.txt")), true)
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -2459,30 +2593,6 @@ describe("commandTool 权限模式", () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
-  })
-
-  it("acceptEdits 模式 + 只读命令应自动放行", async () => {
-    const { commandTool } = await import("../src/agent/tools/command.ts")
-    const result = await commandTool.execute(
-      { command: "echo acceptedits-readonly-ok" },
-      {
-        cwd: process.cwd(), sessionId: "",
-        permissionMode: "acceptEdits",
-      },
-    )
-    ok(result.text.includes("acceptedits-readonly-ok"), "acceptEdits 下只读 shell 命令应自动放行")
-  })
-
-  it("acceptEdits 模式 + 非只读 shell 无确认回调应 fail-closed", async () => {
-    const { commandTool } = await import("../src/agent/tools/command.ts")
-    const result = await commandTool.execute(
-      { command: "node --version" },
-      {
-        cwd: process.cwd(), sessionId: "",
-        permissionMode: "acceptEdits",
-      },
-    )
-    ok(result.text.includes("⛔"), "acceptEdits 不应等价于 dontAsk 自动执行非只读 shell")
   })
 
   it("readOnly:true + dontAsk 模式仍应拒绝非只读命令", async () => {

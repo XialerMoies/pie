@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-1065%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-1068%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
   <img src="https://img.shields.io/badge/license-AGPLv3-6366F1?style=flat&labelColor=1a1a2e" alt="License">
   <img src="https://img.shields.io/badge/electron-39-F59E0B?style=flat&labelColor=1a1a2e" alt="Electron">
   <img src="https://img.shields.io/badge/typescript-5.9-3178C6?style=flat&labelColor=1a1a2e" alt="TypeScript">
@@ -130,15 +130,15 @@ npm run dist:portable
 ### 测试
 
 ```bash
-npm test            # 全量 1065 项测试（unit + routes + frontend）
+npm test            # 全量 1068 项测试（unit + routes + frontend）
 npm run test:build  # 构建验证 + smoke test
 npm run typecheck   # TypeScript 类型检查
 ```
 
 | 套件 | 数量 | 覆盖 |
 |------|------|------|
-| unit | 668 | Shell/权限安全（含 workspace 级规则、外部删除确认、高危删除硬拦）、工具、状态存储、偏好 facade、MCP、搜索替换、Agent memory |
-| routes | 250 | API、PathGuard、root provenance、桌面认证、会话/项目权限、session、SSE 重放、TS、附件与 trace、事件流 block 持久化、workspace Remove 规则跨实例持久化 |
+| unit | 670 | Shell/权限安全（含 workspace 级规则、外部删除确认、高危删除硬拦、4 种权限模式、pure-file-op fast-path）、工具、状态存储、偏好 facade、MCP、搜索替换、Agent memory |
+| routes | 251 | API、PathGuard、root provenance、桌面认证、会话/项目权限、session、SSE 重放、TS、附件与 trace、事件流 block 持久化、workspace Remove 规则跨实例持久化、权限模式 API |
 | frontend | 147 | 消息、会话、workspace、tabs、聊天/Explorer 流生命周期、权限中心、Explorer/Search/Git/MCP、DOM 事件所有权、桌面认证启动与 Monaco 生命周期、事件流增量渲染 |
 | CSS | 20+20 | 变量定义完整性扫描（dark + light 各 20 项） |
 

@@ -22,6 +22,7 @@ import { isCommandReadOnly } from "./command/read-only.js"
 import { defaultShellDialect, envFlagEnabled, parseCommandForSecurity, parseCommandForSecurityAsync, parseCommandForSecurityWithTreeSitterAsync } from "./command/security-parser.js"
 import type { SecurityParseResult, SecurityRedirect, ShellDialect, SimpleCommand } from "./command/security-ast.js"
 import { parseShellCommand, shellDialectFromEnv, tokensWithoutRedirects } from "./command/shell-parser.js"
+import { isPureFileOperation, isRegularGitOperation } from "./command/pure-file-op.js"
 
 const MAX_OUTPUT = 100 * 1024 // 100KB 总输出上限
 const COMMAND_TIMEOUT = 300_000 // 5 分钟
@@ -57,7 +58,9 @@ function _hasUnquotedLineBreak(cmd: string): boolean {
 
 // ─── 危险命令检测 ───────────────────────────────────────
 
-type DangerResult = { dangerous: false } | { dangerous: true; reason: string }
+type DangerResult =
+  | { dangerous: false; requiresConfirmation?: boolean; reason?: string }
+  | { dangerous: true; reason: string }
 
 interface DangerousCommandOptions {
   parsed?: SecurityParseResult
@@ -391,6 +394,10 @@ function danger(reason: string, sample: string): DangerResult {
   return { dangerous: true, reason: `${reason}: ${sample.slice(0, 120)}` }
 }
 
+function confirmDanger(reason: string, sample: string): DangerResult {
+  return { dangerous: false, requiresConfirmation: true, reason: `${reason}: ${sample.slice(0, 120)}` }
+}
+
 function baseCommandName(token: string | undefined): string {
   if (!token) return ""
   const base = token.replace(/\\/g, "/").split("/").pop() ?? token
@@ -520,18 +527,18 @@ function astGitDanger(command: SimpleCommand, sample: string): DangerResult | nu
       arg === "-f" || shortFlagHas(arg, "f") || arg === "--force" ||
       arg.startsWith("--force-with-lease") || arg.startsWith("+")
     )
-    if (forced) return danger("Git 强制推送", sample)
+    if (forced) return confirmDanger("高风险 Git 操作：强制推送可能覆盖远端历史", sample)
   }
 
   if (sub.name === "clean") {
     const force = args.some((arg) => arg === "--force" || shortFlagHas(arg, "f"))
     const recursive = args.some((arg) => arg === "-d" || shortFlagHas(arg, "d"))
-    if (force && recursive) return danger("Git clean 删除文件", sample)
+    if (force && recursive) return confirmDanger("高风险 Git 操作：Git clean 将删除未跟踪文件", sample)
   }
 
-  if (sub.name === "reset" && args.some((arg) => arg === "--hard")) return danger("Git 破坏性操作", sample)
-  if (sub.name === "checkout" && args.some((arg) => arg === "--force" || shortFlagHas(arg, "f"))) return danger("Git 破坏性操作", sample)
-  if (sub.name === "rebase" && args.some((arg) => arg === "--onto" || arg === "--interactive" || arg === "-i")) return danger("Git 破坏性操作", sample)
+  if (sub.name === "reset" && args.some((arg) => arg === "--hard")) return confirmDanger("高风险 Git 操作：Git reset --hard 会丢弃未提交修改", sample)
+  if (sub.name === "checkout" && args.some((arg) => arg === "--force" || shortFlagHas(arg, "f"))) return confirmDanger("高风险 Git 操作：强制 checkout 会覆盖工作区修改", sample)
+  if (sub.name === "rebase" && args.some((arg) => arg === "--onto" || arg === "--interactive" || arg === "-i")) return confirmDanger("高风险 Git 操作：交互式或重定位 rebase 会改写提交历史", sample)
   if (sub.name === "commit" && (command.nextOperator || command.redirects.length > 0)) {
     return danger("git commit 后含 shell 运算符或重定向", sample)
   }
@@ -699,8 +706,8 @@ export function isDangerousCommand(cmd: string, options: DangerousCommandOptions
   if (astResult) return astResult
 
   if (_rmIsDangerous(trimmed)) return { dangerous: true, reason: `递归删除危险路径: ${trimmed.slice(0, 120)}` }
-  if (_gitPushIsForce(trimmed)) return { dangerous: true, reason: `Git 强制推送: ${trimmed.slice(0, 120)}` }
-  if (_gitCleanIsDangerous(trimmed)) return { dangerous: true, reason: `Git clean 删除文件: ${trimmed.slice(0, 120)}` }
+  if (_gitPushIsForce(trimmed)) return confirmDanger("高风险 Git 操作：强制推送可能覆盖远端历史", trimmed)
+  if (_gitCleanIsDangerous(trimmed)) return confirmDanger("高风险 Git 操作：Git clean 将删除未跟踪文件", trimmed)
   if (_chmodIsDangerous(trimmed)) return { dangerous: true, reason: `文件权限高危操作: ${trimmed.slice(0, 120)}` }
   if (_delIsDangerous(trimmed)) return { dangerous: true, reason: `Windows 强制递归删除: ${trimmed.slice(0, 120)}` }
   if (_removeItemIsDangerous(trimmed)) return { dangerous: true, reason: `PowerShell 递归删除: ${trimmed.slice(0, 120)}` }
@@ -709,7 +716,6 @@ export function isDangerousCommand(cmd: string, options: DangerousCommandOptions
     { patterns: _DANGEROUS_FS, cat: "文件系统破坏性操作" },
     { patterns: _DANGEROUS_SYSTEM, cat: "系统控制命令" },
     { patterns: _DANGEROUS_PIPE_SHELL, cat: "远程下载后执行" },
-    { patterns: _DANGEROUS_GIT_SIMPLE, cat: "Git 破坏性操作" },
     { patterns: _DANGEROUS_KILL, cat: "进程杀伤" },
   ] as const
 
@@ -717,6 +723,10 @@ export function isDangerousCommand(cmd: string, options: DangerousCommandOptions
     for (const re of patterns) {
       if (re.test(trimmed)) return { dangerous: true, reason: `${cat}: ${trimmed.slice(0, 120)}` }
     }
+  }
+
+  for (const re of _DANGEROUS_GIT_SIMPLE) {
+    if (re.test(trimmed)) return confirmDanger("高风险 Git 操作", trimmed)
   }
 
   return { dangerous: false }
@@ -852,7 +862,9 @@ function treeSitterVerdictShadowEnabled(): boolean {
 function normalizeDangerForShadow(result: DangerResult): object {
   return result.dangerous
     ? { dangerous: true, reason: result.reason }
-    : { dangerous: false }
+    : result.requiresConfirmation
+      ? { dangerous: false, requiresConfirmation: true, reason: result.reason }
+      : { dangerous: false }
 }
 
 function normalizePathForShadow(result: ReturnType<typeof validateCommandPaths>): object {
@@ -1218,11 +1230,21 @@ export const commandTool: AgentTool = defineAgentTool({
       return commandDecisionResult(`⛔ 危险命令已拦截: ${danger.reason}\n如需执行该命令，请在终端中手动运行。`, ctx, confirmationState, "deny", danger.reason)
     }
 
+    let dangerConfirmed = false
+    if (danger.requiresConfirmation) {
+      const dangerReason = danger.reason || "High-risk command requires confirmation"
+      if (!(await askUser(cmd, dangerReason, ctx, confirmationState))) {
+        return commandDecisionResult(cancelledWithConfirmationOutcome("Command confirmation was rejected", confirmationState), ctx, confirmationState, "deny", dangerReason)
+      }
+      dangerConfirmed = true
+    }
+
     const compatibilityWarning = windowsCompatibilityWarning(cmd, shellDialect)
     if (compatibilityWarning) return commandDecisionResult(compatibilityWarning, ctx, confirmationState, "deny", "Shell compatibility check failed")
 
     const cmdIsReadOnly = isCommandReadOnly(cmd, { parsed, shellDialect })
     const readOnlyRequested = args.readOnly === true
+    const mode = ctx?.getPermissionMode?.() ?? ctx?.permissionMode ?? "standard"
     const pathResult = validateCommandPaths(cmd, {
       cwd: executionCwd,
       workspaceRoot,
@@ -1235,13 +1257,13 @@ export const commandTool: AgentTool = defineAgentTool({
     })
     await maybeLogSecurityVerdictShadowDiff(cmd, { cwd: executionCwd, workspaceRoot, shellDialect })
 
-    if (!pathResult.allowed && pathResult.hardDeny) {
+    if (mode !== "yes" && !pathResult.allowed && pathResult.hardDeny) {
       return commandDecisionResult(`⛔ 路径安全检查未通过: ${pathResult.reason}`, ctx, confirmationState, "deny", pathResult.reason)
     }
 
     if (readOnlyRequested) {
       if (!cmdIsReadOnly) return commandDecisionResult(`⛔ 当前处于只读模式，不允许执行非只读命令: ${cmd.slice(0, 100)}`, ctx, confirmationState, "deny", "Command violates the read-only constraint")
-      if (!pathResult.allowed || ctx?.permissionMode === "plan") {
+      if (!pathResult.allowed || mode === "plan") {
         const reason = pathResult.allowed
           ? "当前为 plan 模式，所有命令需确认"
           : `当前处于只读模式，路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`
@@ -1255,7 +1277,10 @@ export const commandTool: AgentTool = defineAgentTool({
       return commandDecisionResult(withConfirmationOutcome(await executeCmd(cmd, args, ctx, shellDialect), confirmationState), ctx, confirmationState, "allow")
     }
 
-    const mode = ctx?.permissionMode ?? "default"
+    if (mode === "yes") {
+      return commandDecisionResult(withConfirmationOutcome(await executeCmd(cmd, args, ctx, shellDialect), confirmationState), ctx, confirmationState, "allow")
+    }
+
     if (mode === "plan") {
       const reason = pathResult.allowed
         ? "当前为 plan 模式，所有命令需确认"
@@ -1272,14 +1297,13 @@ export const commandTool: AgentTool = defineAgentTool({
         maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
       }
     } else {
-      if (!cmdIsReadOnly || !pathResult.allowed) {
-        const reason = mode === "acceptEdits"
-          ? (pathResult.allowed
-            ? "acceptEdits 仅自动接受文件编辑，shell 非只读命令仍需确认"
-            : `acceptEdits 仅自动接受文件编辑，且路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`)
-          : (pathResult.allowed
-            ? "该命令不是只读操作，是否允许执行？"
-            : `该命令不是只读操作，且路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`)
+      const standardAutoAllow = mode === "standard" && pathResult.allowed && (
+        isPureFileOperation(parsed) || isRegularGitOperation(parsed)
+      )
+      if (!pathResult.allowed || (!dangerConfirmed && !cmdIsReadOnly && !standardAutoAllow)) {
+        const reason = pathResult.allowed
+          ? "该命令不是只读操作，是否允许执行？"
+          : `该命令不是只读操作，且路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`
         if (!(await askUser(cmd, reason, ctx, confirmationState, commandConfirmationRequest(pathResult)))) {
           return commandDecisionResult(cancelledWithConfirmationOutcome("⛔ 用户已取消执行", confirmationState), ctx, confirmationState, "deny", "Command confirmation was not granted")
         }

@@ -4,6 +4,7 @@ type PermissionDecision = "allow" | "ask" | "deny";
 type PermissionOperation = "read" | "write" | "create" | "remove" | "tool";
 type PermissionRuleList = "allow" | "deny" | "ask";
 type PermissionRuleScope = "session" | "workspace";
+type PermissionMode = "plan" | "standard" | "dontAsk" | "yes";
 
 interface PermissionAuditEntry {
   id: number;
@@ -42,6 +43,7 @@ const PERMISSION_PANEL_ID = "permissions-panel-root";
 let _permissionsTab: "audit" | "rules" = "audit";
 let _permissionsAudit: PermissionAuditEntry[] = [];
 let _permissionsRules: PermissionRulesSnapshot | null = null;
+let _permissionMode: PermissionMode = "standard";
 
 function permissionsPaneRender(container: HTMLElement): void {
   container.innerHTML = `<div id="${PERMISSION_PANEL_ID}">${renderPermissionsPanel()}</div>`;
@@ -54,6 +56,10 @@ function renderPermissionsPanel(): string {
     <div class="perm-panel">
       <div class="perm-head">
         <div class="perm-title">${S("ishield", 16)}<span>权限</span></div>
+        <select class="perm-mode-select" id="perm-mode" title="权限模式">
+          ${permissionModeOptions()}
+        </select>
+        <span class="perm-yes-badge${_permissionMode === "yes" ? " on" : ""}" id="perm-yes-badge">YES</span>
         <button class="perm-icon-btn" id="perm-refresh" title="刷新" type="button">${S("irefresh", 14)}</button>
       </div>
       <div class="perm-tabs" role="tablist">
@@ -71,6 +77,10 @@ function renderPermissionsContent(): string {
 }
 
 function bindPermissionsPanel(container: HTMLElement): void {
+  container.querySelector<HTMLSelectElement>("#perm-mode")?.addEventListener("change", (event) => {
+    const mode = (event.target as HTMLSelectElement).value as PermissionMode;
+    void requestPermissionMode(mode);
+  });
   container.querySelector("#perm-refresh")?.addEventListener("click", () => {
     void refreshPermissionsPanel(true);
   });
@@ -94,6 +104,12 @@ async function refreshPermissionsPanel(forceToast = false): Promise<void> {
     const auditBody = await auditRes.json();
     _permissionsAudit = Array.isArray(auditBody.audit) ? auditBody.audit : [];
     _permissionsRules = await rulesRes.json();
+    const modeRes = await fetch("/api/permissions/mode");
+    if (modeRes.ok) {
+      const modeBody = await modeRes.json();
+      if (isPermissionMode(modeBody.mode)) _permissionMode = modeBody.mode;
+    }
+    updatePermissionModeBadge();
     syncPermissionsPanel();
     if (forceToast) toast("权限信息已刷新", "success");
   } catch (err) {
@@ -102,6 +118,73 @@ async function refreshPermissionsPanel(forceToast = false): Promise<void> {
       content.innerHTML = `<div class="perm-empty perm-error">加载失败: ${E((err as Error).message)}</div>`;
     }
   }
+}
+
+function isPermissionMode(value: unknown): value is PermissionMode {
+  return value === "plan" || value === "standard" || value === "dontAsk" || value === "yes";
+}
+
+function permissionModeOptions(): string {
+  return ([
+    ["plan", "计划模式"],
+    ["standard", "标准模式"],
+    ["dontAsk", "不询问模式"],
+    ["yes", "Yes 模式"],
+  ] as const).map(([value, label]) => `<option value="${value}"${_permissionMode === value ? " selected" : ""}>${label}</option>`).join("");
+}
+
+async function requestPermissionMode(mode: PermissionMode): Promise<void> {
+  if (mode === "yes" && !(await confirmYesMode())) {
+    syncPermissionsPanel();
+    return;
+  }
+  try {
+    const response = await fetch("/api/permissions/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode, ...(mode === "yes" ? { acknowledgeRisk: true } : {}) }),
+    });
+    const body = await response.json();
+    if (!response.ok || !body.ok) throw new Error(body.error || `HTTP ${response.status}`);
+    _permissionMode = mode;
+    updatePermissionModeBadge();
+    syncPermissionsPanel();
+    toast(`已切换为${mode === "yes" ? " Yes" : ""}权限模式`, "success");
+  } catch (error) {
+    syncPermissionsPanel();
+    toast(`权限模式切换失败: ${(error as Error).message}`, "error");
+  }
+}
+
+function updatePermissionModeBadge(): void {
+  const badge = document.getElementById("permission-mode-badge");
+  if (!badge) return;
+  badge.textContent = _permissionMode === "yes" ? "YES" : "";
+  badge.classList.toggle("on", _permissionMode === "yes");
+}
+
+function confirmYesMode(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay permission-risk-overlay";
+    overlay.innerHTML = `
+      <div class="permission-risk-dialog" role="dialog" aria-modal="true" aria-labelledby="permission-risk-title">
+        <div class="permission-risk-title" id="permission-risk-title">开启 Yes 模式（危险）</div>
+        <div class="permission-risk-copy">Yes 模式会放行路径和普通命令授权。危险命令仍会被安全层拦截。</div>
+        <label class="permission-risk-check"><input id="permission-risk-ack" type="checkbox"> 我理解不可逆风险</label>
+        <div class="permission-risk-actions"><button type="button" data-risk-choice="cancel">取消</button><button type="button" class="danger" data-risk-choice="confirm" disabled>我已知晓并开启</button></div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const confirm = overlay.querySelector<HTMLButtonElement>('[data-risk-choice="confirm"]');
+    overlay.querySelector<HTMLInputElement>("#permission-risk-ack")?.addEventListener("change", (event) => {
+      if (confirm) confirm.disabled = !(event.target as HTMLInputElement).checked;
+    });
+    overlay.querySelectorAll<HTMLButtonElement>("[data-risk-choice]").forEach((button) => button.addEventListener("click", () => {
+      const allowed = button.dataset.riskChoice === "confirm" && confirm?.disabled === false;
+      overlay.remove();
+      resolve(allowed);
+    }));
+  });
 }
 
 (window as any).refreshPermissionsPanel = refreshPermissionsPanel;

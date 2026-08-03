@@ -55,6 +55,16 @@ export async function authorizeToolPath(
   operation: ToolPathOperation,
   source: string,
 ): Promise<string> {
+  if (ctx?.getPermissionMode?.() === "yes" || ctx?.permissionMode === "yes") {
+    const bypassedPath = resolve(root, target)
+    ctx.authorizationDecision?.pathDecisions?.push({
+      operation,
+      root,
+      path: bypassedPath,
+      relativePath: relative(resolve(root), bypassedPath),
+    })
+    return bypassedPath
+  }
   const guardedPath = guardToolPath(root, target)
   if (!ctx?.authorizePath) {
     ctx?.authorizationDecision?.pathDecisions?.push({

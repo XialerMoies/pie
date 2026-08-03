@@ -27,6 +27,7 @@ import { FilePermissionAuditStore } from "./permission-audit-store.js";
 import { FileWorkspacePermissionRuleStore } from "./permission-rule-store.js";
 import { contentTypeForStaticAsset, resolveStaticAssetPath } from "./static-assets.js";
 import { RootRegistry } from "./root-registry.js";
+import { createPermissionModeController } from "./permission-mode.js";
 import { writeChatEvent } from "./chat-stream.js";
 
 export type SessionWriteAuthorizer = (sessionFile: string, source: string) => void;
@@ -652,6 +653,9 @@ async function main() {
     auditStore: new FilePermissionAuditStore(resolve(PI_CONFIG_DIR, "permission-audit.json"), { maxEntries: 2000 }),
     permissionRuleStore: new FileWorkspacePermissionRuleStore(resolve(PI_CONFIG_DIR, "permission-rules.json")),
   });
+  const permissionMode = createPermissionModeController("standard", (mode) => {
+    permissionService.recordPermissionModeChange(mode, "permissions.mode");
+  });
 
   runtime = await initAgent({
     agentDir: PI_CONFIG_DIR,
@@ -659,7 +663,7 @@ async function main() {
     sessionsDir: SESSIONS_DIR,
     authFile: resolve(PI_CONFIG_DIR, "auth.json"),
     modelsFile: resolve(PI_CONFIG_DIR, "models.json"),
-    permissionMode: "default",
+    getPermissionMode: () => permissionMode.get(),
     shellDialect: shellDialectFromEnv(),
     confirmCommand: createCommandConfirmCallback(chatStream),
     desktopApiToken: security.token,
@@ -699,6 +703,7 @@ async function main() {
     sseClients,
     security,
     permissionService,
+    permissionMode,
     rootRegistry,
     paths: {
       APP_ROOT,

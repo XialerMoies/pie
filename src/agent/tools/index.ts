@@ -63,6 +63,7 @@ export function registerTool(
 
 type ExtraCtx = {
   permissionMode?: ToolContext["permissionMode"]
+  getPermissionMode?: ToolContext["getPermissionMode"]
   confirmCommand?: ToolContext["confirmCommand"]
   shellDialect?: ToolContext["shellDialect"]
   additionalWorkingDirectories?: ToolContext["additionalWorkingDirectories"]

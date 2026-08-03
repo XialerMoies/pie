@@ -7,6 +7,7 @@ import type { AgentRuntime } from "../../agent/index.js";
 import type { DesktopSecurityConfig } from "../security.js";
 import type { ServerPermissionService } from "../permission-service.js";
 import type { RootRegistry } from "../root-registry.js";
+import type { PermissionModeController } from "../permission-mode.js";
 
 // ─── Trace Event 类型 ────────────────────────────────────
 
@@ -71,6 +72,7 @@ export interface ServerContext {
   security?: DesktopSecurityConfig;
   permissionService?: ServerPermissionService;
   rootRegistry?: RootRegistry;
+  permissionMode?: PermissionModeController;
   paths: {
     APP_ROOT: string;
     DATA_DIR: string;

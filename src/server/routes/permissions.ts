@@ -9,12 +9,37 @@ import {
 import { resolvePermissionConfirmation } from "../permission-confirmation.js";
 import { parseBody } from "./parse-body.js";
 import type { RouteHandler } from "./types.js";
+import { isPermissionMode } from "../permission-mode.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 const RULE_LISTS = new Set<PermissionRuleListName>(["allow", "deny", "ask"]);
 
 export const handlePermissions: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
+
+  if (url === "/api/permissions/mode" && method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json", ...cors });
+    res.end(JSON.stringify({ mode: ctx.permissionMode?.get() || "standard" }));
+    return true;
+  }
+
+  if (url === "/api/permissions/mode" && method === "POST") {
+    try {
+      const body = await parseBody(req);
+      if (!isPermissionMode(body?.mode)) throw new Error("Invalid permission mode");
+      if (body.mode === "yes" && body.acknowledgeRisk !== true) {
+        res.writeHead(400, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, code: "risk_acknowledgement_required", error: "Yes mode requires risk acknowledgement" }));
+        return true;
+      }
+      const mode = ctx.permissionMode?.set(body.mode) || body.mode;
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ ok: true, mode }));
+    } catch (err) {
+      writeRouteError(res, 400, "invalid_permission_mode", err);
+    }
+    return true;
+  }
 
   if (url === "/api/permissions/confirm" && method === "POST") {
     try {

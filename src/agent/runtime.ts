@@ -29,6 +29,7 @@ export interface RuntimeConfig {
   modelsFile: string
   /** 权限模式：由宿主设置，传递给工具执行上下文 */
   permissionMode?: ToolContext["permissionMode"]
+  getPermissionMode?: ToolContext["getPermissionMode"]
   /** 实际 shell 方言：由宿主设置，传递给命令安全解析 */
   shellDialect?: ToolContext["shellDialect"]
   /** 用户确认回调：返回 true=允许，false/undefined=拒绝 */
@@ -43,6 +44,7 @@ export interface RuntimeConfig {
 type RuntimeToolExtraContext = Pick<
   ToolContext,
   | "permissionMode"
+  | "getPermissionMode"
   | "confirmCommand"
   | "shellDialect"
   | "additionalWorkingDirectories"
@@ -57,9 +59,10 @@ type RuntimeToolExtraContext = Pick<
 
 export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraContext | undefined {
   const permissionState = config.sessionPermissionState
-  if (!config.permissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken) return undefined
+  if (!config.permissionMode && !config.getPermissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken) return undefined
   return {
     permissionMode: config.permissionMode,
+    getPermissionMode: config.getPermissionMode,
     confirmCommand: config.confirmCommand,
     shellDialect: config.shellDialect,
     additionalWorkingDirectories: permissionState?.additionalWorkingDirectories,
