@@ -159,7 +159,7 @@ describe("custom tool trace emitter", () => {
     assert.strictEqual(result.metadata.authorization.specialized.status, "allow");
   });
 
-  it("commandTool emits confirmation status through onUpdate", async () => {
+  it("commandTool emits waiting status and returns approval once", async () => {
     const { commandTool } = await import("../src/agent/tools/command.ts");
     const chunks = [];
     const result = await commandTool.execute(
@@ -175,8 +175,17 @@ describe("custom tool trace emitter", () => {
     const joined = chunks.join("");
     assert.ok(result.text.length > 0, "confirmed command should execute");
     assert.ok(result.text.includes("用户已允许命令执行"), "final result should show approval");
+    assert.strictEqual(
+      (result.text.match(/用户已允许命令执行/g) || []).length,
+      1,
+      "final result should show approval once",
+    );
     assert.ok(joined.includes("等待用户确认命令执行"), "trace should show waiting for confirmation");
-    assert.ok(joined.includes("用户已允许命令执行"), "trace should show approval");
+    assert.strictEqual(
+      (joined.match(/用户已允许命令执行/g) || []).length,
+      0,
+      "trace should not repeat the final approval status",
+    );
   });
 
   it("commandTool preserves quoted node -e commands", async () => {

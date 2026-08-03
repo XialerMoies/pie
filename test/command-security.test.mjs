@@ -1942,7 +1942,7 @@ describe("commandTool 权限模式", () => {
       { cwd: process.cwd(), sessionId: "", permissionMode: "standard" },
     )
     ok(result.text.includes("⛔"), "无确认回调时应拒绝")
-    ok(result.text.includes("已取消"), "应提示已取消")
+    ok(result.text.includes("没有确认通道"), "应说明确认通道不可用")
   })
 
   it("plan 模式 + 无 confirmCommand 应被拒绝（fail-closed）", async () => {
@@ -1969,15 +1969,20 @@ describe("commandTool 权限模式", () => {
 
   it("standard 模式 + 非只读 + confirmCommand=false 应拒绝", async () => {
     const { commandTool } = await import("../src/agent/tools/command.ts")
+    const updates = []
     const result = await commandTool.execute(
       { command: "node --version" },
       {
         cwd: process.cwd(), sessionId: "",
         permissionMode: "standard",
         confirmCommand: async () => false,
+        onUpdate: (chunk) => updates.push(chunk),
       },
     )
     ok(result.text.includes("⛔"), "确认拒绝时应拦截")
+    equal((result.text.match(/用户已拒绝命令执行/g) || []).length, 1, "最终结果只显示一次拒绝文案")
+    equal((result.text.match(/用户已取消执行/g) || []).length, 0, "最终结果不应再追加取消文案")
+    equal((updates.join("").match(/用户已拒绝命令执行/g) || []).length, 0, "确认过程不应重复播报拒绝文案")
   })
 
   it("standard 模式下路径已授权的纯文件操作不弹确认", async () => {

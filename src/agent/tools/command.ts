@@ -1049,7 +1049,8 @@ function withConfirmationOutcome(result: string | CommandExecutionResult, state:
 }
 
 function cancelledWithConfirmationOutcome(result: string, state: ConfirmationState): string {
-  return withConfirmationOutcome(result, state)
+  const detail = result.replace(/^⛔ 用户已取消执行\s*/u, "").trim()
+  return withConfirmationOutcome(detail, state)
 }
 
 function normalizeConfirmationResponse(result: CommandConfirmationResponse): { allowed: boolean; scope?: CommandConfirmationScope; applyPermissionSuggestions: boolean } {
@@ -1077,7 +1078,6 @@ async function askUser(
 ): Promise<boolean> {
   if (!ctx?.confirmCommand) {
     state && (state.outcome = "unavailable")
-    ctx?.onUpdate?.(`${confirmationOutcomeText({ outcome: "unavailable" })}\n`)
     return false
   }
   const summary = reason.replace(/\s+/g, " ").trim()
@@ -1089,11 +1089,9 @@ async function askUser(
       state.scope = result.scope
       state.applyPermissionSuggestions = result.applyPermissionSuggestions
     }
-    ctx.onUpdate?.(`${confirmationOutcomeText({ outcome: result.allowed ? "allowed" : "rejected", scope: result.scope })}\n`)
     return result.allowed
   } catch {
     state && (state.outcome = "failed")
-    ctx.onUpdate?.(`${confirmationOutcomeText({ outcome: "failed" })}\n`)
     return false
   }
 }
