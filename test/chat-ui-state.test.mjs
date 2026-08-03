@@ -28,6 +28,7 @@ global.logTiming = () => {};
 
   doc.body.innerHTML = [
     '<div id="ms"></div>',
+    '<nav id="chat-timeline" class="chat-timeline" aria-label="会话时间线" aria-hidden="true"></nav>',
     '<button id="chat-jump-latest" aria-hidden="true" tabindex="-1"></button>',
     '<textarea id="ci"></textarea>',
     '<button id="cs"></button>',
@@ -129,6 +130,7 @@ describe("chat ui state", () => {
     env.win.App.ChatState.replaceMessages([{ role: "assistant", content: "hello" }]);
     await import(`../src/frontend/services/chat-stream.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
+    await import(`../src/frontend/chat/chat-timeline.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/dashboard-chat.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${ts}`);
     env.win.bind();
@@ -667,6 +669,34 @@ describe("chat ui state", () => {
 
   it("resetMsgKeys 暴露在 App.Chat 上", () => {
     assert.ok(typeof App.Chat.resetMsgKeys === "function", "resetMsgKeys 应是函数");
+  });
+
+  it("message reconciliation syncs Timeline without rebuilding unchanged turns and reset clears it", () => {
+    env.win.App.ChatState.replaceMessages([
+      { role: "user", content: "问题一" },
+      { role: "assistant", content: "回复一" },
+      { role: "user", content: "问题二" },
+      { role: "assistant", content: "回复二" },
+      { role: "user", content: "问题三" },
+      { role: "assistant", content: "回复三" },
+    ]);
+
+    env.win.updateUI();
+    const timeline = env.doc.getElementById("chat-timeline");
+    assert.strictEqual(timeline.classList.contains("on"), true);
+    const firstButton = timeline.querySelector('[data-timeline-index="0"]');
+    assert.ok(firstButton);
+
+    const last = env.win.App.ChatState.getMessages().at(-1);
+    last.content = "回复三，继续流式更新";
+    last._rv = 1;
+    env.win.updateUI();
+
+    assert.strictEqual(timeline.querySelector('[data-timeline-index="0"]'), firstButton);
+
+    env.win.App.Chat.resetMsgKeys();
+    assert.strictEqual(timeline.classList.contains("on"), false);
+    assert.strictEqual(timeline.childElementCount, 0);
   });
 
   it("空 M 时 updateUI 渲染欢迎屏", () => {

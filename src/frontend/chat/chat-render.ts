@@ -339,30 +339,33 @@ function insertBlockNode(flow: HTMLElement, block: any, blocks: any[]): boolean 
   return true;
 }
 
-function renderMessage(m: any): string {
+function renderMessage(m: any, messageIndex = -1): string {
   const c = m.role + (m.streaming ? ' go' : ''), lb = m.role === 'user' ? '你' : 'Pi';
   const ty = m.streaming ? `<div class="ty"><span class="ty-d"></span><span class="ty-d"></span><span class="ty-d"></span></div>` : '';
   const error = m.error ? renderErrorCard(m.error) : '';
+  const indexAttr = Number.isInteger(messageIndex) && messageIndex >= 0
+    ? ` data-message-index="${messageIndex}"`
+    : '';
 
   // Compact summary 专用渲染
   if (m._compacted) {
     const content = m.content ? mdRender(m.content) : '';
-    return `<div class="compact-summary">${content}</div>`;
+    return `<div class="compact-summary"${indexAttr}>${content}</div>`;
   }
 
   if (m.blocks && m.blocks.length > 0) {
-    return `<div class="m ${c}${m.error ? ' error' : ''}"><div class="ml">${lb}</div>${error}<div class="mt block-flow">${renderBlocks(m.blocks)}</div>${ty}</div>`;
+    return `<div class="m ${c}${m.error ? ' error' : ''}"${indexAttr}><div class="ml">${lb}</div>${error}<div class="mt block-flow">${renderBlocks(m.blocks)}</div>${ty}</div>`;
   }
 
   const content = m.content ? mdRender(m.content) : '';
   const think = m.thinking ? `<details class="think"><summary>🤔 思考过程</summary>${mdRender(m.thinking)}</details>` : '';
-  return `<div class="m ${c}${m.error ? ' error' : ''}"><div class="ml">${lb}</div>${error}${think}<div class="mt">${content}</div>${ty}</div>`;
+  return `<div class="m ${c}${m.error ? ' error' : ''}"${indexAttr}><div class="ml">${lb}</div>${error}${think}<div class="mt">${content}</div>${ty}</div>`;
 }
 
 function msgs(): string {
   const M = App.ChatState.getMessages();
   if (M.length === 0) return '<div class="wl"><h2>Pi — 你的代码助手</h2><p>在下方输入，开始编码</p></div>';
-  return M.map(renderMessage).join('\n');
+  return M.map((message, index) => renderMessage(message, index)).join('\n');
 }
 
 function updateLastBlock(block: any): boolean {

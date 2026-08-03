@@ -252,6 +252,20 @@ body{background:var(--bg);height:100vh}
 /* ─── Main Content ──────────────────────────────────────────── */
 .mc{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;position:relative}
 .msgs{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:0;min-width:0;max-width:100%}
+.chat-timeline{position:absolute;z-index:14;top:calc(50% - 34px);right:16px;display:none;max-height:calc(100% - 184px);transform:translateY(-50%);pointer-events:none}
+.chat-timeline.on{display:block;pointer-events:auto}
+.chat-timeline-directory{display:flex;flex-direction:column;width:34px;max-width:min(280px,calc(100vw - 96px));max-height:min(360px,calc(100vh - 230px));padding:5px 0;overflow-x:hidden;overflow-y:auto;border:1px solid transparent;border-radius:6px;background:transparent;box-shadow:none;transition:width .16s ease,background .16s ease,border-color .16s ease,box-shadow .16s ease}
+.chat-timeline-item{display:grid;grid-template-columns:minmax(0,1fr) 28px;align-items:center;width:100%;height:28px;min-height:28px;padding:0;border:0;background:transparent;color:var(--ts);font:500 .68rem var(--fb);text-align:left;cursor:pointer}
+.chat-timeline-prompt{min-width:0;padding-left:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0;transform:translateX(6px);transition:opacity .12s ease,transform .16s ease}
+.chat-timeline-mark{justify-self:end;width:12px;height:2px;margin-right:3px;border-radius:2px;background:var(--tm);opacity:.65;transition:width .14s ease,background .14s ease,opacity .14s ease}
+.chat-timeline-item.active .chat-timeline-mark{width:12px;background:var(--in);opacity:1}
+.chat-timeline-item:hover .chat-timeline-mark,.chat-timeline-item:focus-visible .chat-timeline-mark{width:24px;background:var(--in);opacity:1}
+.chat-timeline-item:hover,.chat-timeline-item:focus-visible{color:var(--tx);background:var(--bh);outline:0}
+.chat-timeline-item:focus-visible{box-shadow:inset 2px 0 0 var(--in)}
+.chat-timeline:hover .chat-timeline-directory,.chat-timeline:focus-within .chat-timeline-directory{width:min(280px,calc(100vw - 96px));background:var(--bg);border-color:var(--bd);box-shadow:0 10px 28px var(--sd)}
+.chat-timeline:hover .chat-timeline-prompt,.chat-timeline:focus-within .chat-timeline-prompt{opacity:1;transform:translateX(0)}
+@media(max-width:760px){.chat-timeline{right:13px}.chat-timeline-directory{max-width:min(220px,calc(100vw - 72px))}.chat-timeline:hover .chat-timeline-directory,.chat-timeline:focus-within .chat-timeline-directory{width:min(220px,calc(100vw - 72px))}}
+@media(max-width:520px){.chat-timeline{display:none!important}}
 .m{padding:10px 12px 12px 12px;font-size:.85rem;line-height:1.7;word-wrap:break-word;animation:in .15s ease-out;position:relative;min-width:0;max-width:100%}
 @keyframes in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 /* B-7：渲染 class 是 m assistant / m user（完整单词），

@@ -249,6 +249,7 @@ function _applyMsgsDiff(msgsEl: HTMLElement, scroll: boolean): void {
   if (!rm) {
     const fallback = (window as any).msgs ? (window as any).msgs() || "" : "";
     msgsEl.innerHTML = fallback;
+    App.ChatTimeline?.sync();
     if (scroll) sb("ms");
     return;
   }
@@ -272,7 +273,7 @@ function _applyMsgsDiff(msgsEl: HTMLElement, scroll: boolean): void {
     // 变了：渲染新节点并替换
     _msgKeys[i] = mk;
     const wrapper = document.createElement("div");
-    wrapper.innerHTML = rm(M[i]);
+    wrapper.innerHTML = rm(M[i], i);
     const newChild = wrapper.firstElementChild;
     if (!newChild) continue;
 
@@ -296,6 +297,7 @@ function _applyMsgsDiff(msgsEl: HTMLElement, scroll: boolean): void {
     changed = true;
   }
 
+  App.ChatTimeline?.sync();
   if (changed && scroll) sb("ms");
 }
 
@@ -313,6 +315,7 @@ function resetMsgKeys(): void {
   chatSmoothScrollTimer = null;
   chatFollowLatest = true;
   chatSetJumpLatestVisible(false);
+  App.ChatTimeline?.reset();
 }
 
 function bind(): void {
@@ -324,10 +327,12 @@ function bind(): void {
   messages?.addEventListener('scroll', () => {
     if (chatSmoothScrollTimer !== null) chatScheduleSmoothScrollSync();
     else chatSyncLatestState();
+    App.ChatTimeline?.handleMessagesScroll();
   }, { passive: true });
   jumpLatest?.addEventListener('click', () => {
     chatScrollToLatest({ force: true, smooth: true });
   });
+  App.ChatTimeline?.bind();
   chatSyncLatestState();
 
   ci.addEventListener('input', () => {

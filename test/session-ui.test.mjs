@@ -23,6 +23,7 @@ global.localStorage = {
 };
 
 const registeredPanes = new Map();
+const timelineCalls = [];
 global.registerPane = (name, render) => {
   registeredPanes.set(name, render);
 };
@@ -86,6 +87,7 @@ win.App = {
   },
   UI: {},
   Chat: {},
+  ChatTimeline: { sync: () => timelineCalls.push("sync") },
   File: {},
   Session: {},
   Settings: {},
@@ -410,6 +412,7 @@ describe("session ui state", () => {
   });
 
   it("刷新恢复时丢弃空草稿，不把幽灵新会话带回标签栏", async () => {
+    const timelineCallCount = timelineCalls.length;
     const draftId = "draft:stale-after-refresh";
     uiState.tabs.items = [
       { kind: "chat", id: draftId, title: "新会话", draftId, order: 0 },
@@ -425,6 +428,7 @@ describe("session ui state", () => {
     assert.deepStrictEqual(win.__state._sessionTabs, ["sess-restored"]);
     assert.strictEqual(win.__state._activeSessionTabId, "sess-restored");
     assert.deepStrictEqual(uiState.tabs.items.map((tab) => tab.id), ["sess-restored"]);
+    assert.ok(timelineCalls.length > timelineCallCount, "restoring session messages should sync Timeline");
   });
 
   it("重命名标题优先于新会话默认标题", async () => {
@@ -543,6 +547,7 @@ describe("session ui state", () => {
   });
 
   it("branchSession 会创建分支并切到新线程", async () => {
+    const timelineCallCount = timelineCalls.length;
     sessionListState = 3;
     await win.branchSession("sess-b");
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -551,6 +556,7 @@ describe("session ui state", () => {
     assert.ok(win.__state._sessionTabs.includes("branch-new"));
     assert.strictEqual(win.App.ChatState.getMessages().length, 2);
     assert.strictEqual(win.App.ChatState.getMessages()[1].content, "分支上下文");
+    assert.ok(timelineCalls.length > timelineCallCount, "branch messages should sync Timeline");
   });
 
   it("App.Tabs.activate 会添加并激活会话标签", async () => {

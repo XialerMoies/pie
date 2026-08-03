@@ -61,6 +61,7 @@ function resetWorkspaceState(workspace: string): void {
   App.Chat?.clearAttachments?.();
   const msgsEl = $('ms');
   if (msgsEl) { msgsEl.innerHTML = (window as any).msgs ? (window as any).msgs() : ''; msgsEl.scrollTop = 0; }
+  App.ChatTimeline?.sync();
   const ci = $('ci') as HTMLTextAreaElement | null;
   if (ci) { ci.disabled = false; ci.value = ''; ci.style.height = 'auto'; }
   const cs = $('cs') as HTMLButtonElement | null;

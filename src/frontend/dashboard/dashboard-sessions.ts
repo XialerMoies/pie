@@ -467,6 +467,7 @@ async function restoreSessionTabsImpl(): Promise<void> {
             ? (window.msgs ? window.msgs() : '')
             : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
         }
+        App.ChatTimeline?.sync();
       }
     } catch { /* 静默降级 */ }
   }
@@ -533,6 +534,7 @@ function _applySessionMessages(
       setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50);
     }
   }
+  App.ChatTimeline?.sync();
   const activeId = data.activeSessionId || fallbackId;
   if (activeId) { rememberSessionTab(activeId); setActiveSessionTabId(activeId); renderSessionTabs(activeId); }
   if (opts.refreshSessions !== false) loadSessions();
@@ -613,6 +615,7 @@ function _setupDraftSession(id: string): void {
   if (ci) { ci.value = ''; ci.style.height = 'auto'; }
   const msgsEl = $('ms');
   if (msgsEl) msgsEl.innerHTML = '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
+  App.ChatTimeline?.sync();
   renderSessionTabs(id);
   loadSessions();
 }
@@ -655,7 +658,16 @@ function closeSessionTab(id: string): void {
       }
     }
     // 真的没有其他标签了，才创建新会话
-    App.Chat?.resetMsgKeys?.(); setActiveSessionTabId(null); App.ChatState.clearMessages(); App.ChatState.setBusy(false); renderSessionTabs(''); const msgsEl = $('ms'); if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : ''; loadSessions(); saveUiState();
+    App.Chat?.resetMsgKeys?.();
+    setActiveSessionTabId(null);
+    App.ChatState.clearMessages();
+    App.ChatState.setBusy(false);
+    renderSessionTabs('');
+    const msgsEl = $('ms');
+    if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : '';
+    App.ChatTimeline?.sync();
+    loadSessions();
+    saveUiState();
     return;
   }
   renderSessionTabs(getActiveSessionTabId() || undefined);
@@ -1014,6 +1026,7 @@ async function deleteSession(id: string): Promise<void> {
           renderSessionTabs('');
           const msgsEl = $('ms');
           if (msgsEl) { msgsEl.innerHTML = window.msgs ? window.msgs() : ''; msgsEl.scrollTop = 0; }
+          App.ChatTimeline?.sync();
         }
 
         // 重置输入框
@@ -1062,6 +1075,7 @@ function branchSession(id: string): void {
     }
     const msgsEl = $('ms');
     if (msgsEl) { msgsEl.innerHTML = window.msgs ? window.msgs() : ''; setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50); }
+    App.ChatTimeline?.sync();
     toast('已创建分支线程', 'success');
     loadSessions();
   }).catch(() => toast('创建分支失败', 'error'));
@@ -1269,6 +1283,7 @@ function _sessionClose(tab: AppTab): void {
   renderSessionTabs('');
   const msgsEl = $('ms');
   if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : '';
+  App.ChatTimeline?.sync();
   loadSessions();
   saveUiState();
 }

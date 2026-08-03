@@ -118,6 +118,7 @@ const bundleOrder = [
   "gen/services/problems-store.js",
   "gen/service/explorer-service.js",
   "gen/chat/chat-render.js",
+  "gen/chat/chat-timeline.js",
   "gen/chat/chat-mode.js",
   "gen/chat/chat-token.js",
   "gen/chat/chat-attachments.js",

@@ -495,6 +495,15 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes("normal reply"), "内容渲染");
   });
 
+  it("renderMessage exposes the current message index for Timeline targets", () => {
+    const html = win.App.Chat.renderMessage({
+      role: "user",
+      content: "定位问题",
+    }, 4);
+
+    assert.ok(html.includes('data-message-index="4"'));
+  });
+
   it("blocks 中 text block 渲染在事件流内", () => {
     const html = win.App.Chat.renderMessage({
       role: "assistant",

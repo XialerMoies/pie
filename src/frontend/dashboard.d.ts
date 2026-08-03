@@ -150,6 +150,12 @@ interface AppChatState {
   setDashboard(data: DashboardData | null): void;
   reset(): void;
 }
+interface AppChatTimeline {
+  bind(): void;
+  sync(): void;
+  handleMessagesScroll(): void;
+  reset(): void;
+}
 interface ChatStreamHandlers {
   onMessage?: (event: MessageEvent) => void;
   onError?: (event: Event) => void;
@@ -294,6 +300,7 @@ interface AppNamespace {
   UI: AppUI;
   Chat: AppChat;
   ChatState: AppChatState;
+  ChatTimeline: AppChatTimeline;
   ChatStream: AppChatStream;
   File: AppFile;
   Session: AppSession;

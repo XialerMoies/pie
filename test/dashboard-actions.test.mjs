@@ -1,5 +1,6 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 
 const win = new Window();
@@ -117,6 +118,18 @@ describe("dashboard action delegation", () => {
     assert.ok(jumpLatest, "chat layout should include a jump-to-latest button");
     assert.strictEqual(jumpLatest.textContent.trim(), "", "jump-to-latest should remain icon-only");
     assert.ok(jumpLatest.querySelector("svg"));
+    const timeline = app.querySelector("#chat-timeline");
+    assert.ok(timeline, "chat layout should include a Timeline host");
+    assert.strictEqual(timeline.tagName, "NAV");
+    assert.strictEqual(timeline.getAttribute("aria-label"), "会话时间线");
+    assert.strictEqual(timeline.getAttribute("aria-hidden"), "true");
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    assert.match(css, /\.chat-timeline\{[^}]*position:absolute/);
+    assert.match(css, /\.chat-timeline-directory\{[^}]*max-width:/);
+    assert.match(css, /\.chat-timeline:hover[^}]*\.chat-timeline-directory/);
+    assert.match(css, /\.chat-timeline-item\.active \.chat-timeline-mark\{[^}]*width:12px/);
+    assert.match(css, /\.chat-timeline-item:hover \.chat-timeline-mark[^}]*width:24px/);
+    assert.match(css, /@media\(max-width:/);
 
     app.querySelector("[data-layout-action='panel'][data-side='search']")?.click();
     app.querySelector("[data-layout-action='window'][data-window-action='minimize']")?.click();

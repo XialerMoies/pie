@@ -60,6 +60,7 @@ global.logTiming = () => {};
     },
     UI: {},
     Chat: { clearAttachments: () => calls.push(["clearAttachments"]) },
+    ChatTimeline: { sync: () => calls.push(["syncTimeline"]) },
     File: {},
     Session: {},
     Settings: {},
@@ -139,6 +140,7 @@ describe("workspace ui isolation", () => {
     assert.ok(env.calls.some((call) => call[0] === "renderPanel" && call[1] === "explorer"));
     assert.ok(env.calls.some((call) => call[0] === "loadSessions"));
     assert.ok(env.calls.some((call) => call[0] === "refreshGit"));
+    assert.ok(env.calls.some((call) => call[0] === "syncTimeline"));
   });
 
   it("openFolder ignores an equivalent Windows workspace path", async () => {

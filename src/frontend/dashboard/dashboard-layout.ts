@@ -90,6 +90,7 @@ function buildMainArea(): string {
         <button class="tr-btn" id="tr-btn" title="压缩上下文">压缩</button>
       </div>
       <div class="msgs" id="ms">${window.msgs ? window.msgs() : ''}</div>
+      <nav class="chat-timeline" id="chat-timeline" aria-label="会话时间线" aria-hidden="true"></nav>
       <div class="file-content" id="file-content" style="display:none">
         <div class="fc-toolbar"><span class="fc-status" id="fc-status"></span></div>
         <div class="fc-editor" id="fc-editor"></div>
