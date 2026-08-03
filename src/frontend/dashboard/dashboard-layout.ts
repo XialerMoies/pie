@@ -18,6 +18,18 @@ function closeChatTab(): void {
   renderTabs();
 }
 
+/** 输入玻璃面板高度变化时同步消息区底部内边距与淡出位置，保证最后一条消息可滚到面板上方 */
+function syncMsgScrollPadding(): void {
+  const fi = $('fi');
+  const ms = $('ms');
+  if (!fi || !ms) return;
+  const panelHeight = fi.offsetHeight;
+  if (panelHeight > 0) {
+    ms.style.paddingBottom = `${panelHeight + 24}px`;
+    ms.style.setProperty('--fade-bottom', `${panelHeight}px`);
+  }
+}
+
 function layout(): void {
   const app = $('app')!;
   app.innerHTML = buildTopBar() + buildSideBar() + buildSidePanel() + buildMainArea() + buildStatusBar();
@@ -30,6 +42,12 @@ function layout(): void {
   const pc = $('pc');
   if (pc) renderPanel(activePanel, pc);
   bind();
+  syncMsgScrollPadding();
+  const fi = $('fi');
+  if (fi && typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => syncMsgScrollPadding());
+    ro.observe(fi);
+  }
   // 从 UiStateStore 快照恢复会话和文件标签页。
   (window as any).App?.Session?.restoreSessionTabs?.();
   // Problems 底部栏初始化（DOM 已就绪）

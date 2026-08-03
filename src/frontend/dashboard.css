@@ -173,7 +173,7 @@ body{background:var(--bg);height:100vh}
 .tb-item.tb-drop{box-shadow:inset 2px 0 0 var(--am)}
 
 /* ─── Token Rail (主区域左侧，跟输入框等高) ────────────────────── */
-.tr-rail{position:absolute;left:0;top:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;width:46px;min-height:78px;flex-shrink:0;padding:8px 5px;font-size:10px;color:var(--ts);cursor:pointer;user-select:none;border-radius:0 12px 12px 0;background:var(--be);border:1px solid var(--bd);border-left:none;box-shadow:2px 0 12px var(--sd);backdrop-filter:blur(8px);z-index:20}
+.tr-rail{position:absolute;left:0;top:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;width:46px;min-height:78px;flex-shrink:0;padding:8px 5px;font-size:10px;color:var(--ts);cursor:pointer;user-select:none;border-radius:0 12px 12px 0;background:color-mix(in srgb,var(--be) 58%,transparent);border:1px solid color-mix(in srgb,var(--bd) 70%,transparent);border-left:none;box-shadow:2px 0 12px var(--sd);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);z-index:20}
 .tr-rail:hover{background:var(--bh)}
 .tr-pct,.tr-cr{display:block;width:100%;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
 .tr-pct{font-weight:600;font-family:var(--fm);color:var(--tx)}
@@ -251,7 +251,7 @@ body{background:var(--bg);height:100vh}
 
 /* ─── Main Content ──────────────────────────────────────────── */
 .mc{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;position:relative}
-.msgs{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:0;min-width:0;max-width:100%}
+.msgs{flex:1;overflow-y:auto;padding:12px 16px 180px;display:flex;flex-direction:column;gap:0;min-width:0;max-width:100%;-webkit-mask-image:linear-gradient(to top,transparent 0,rgba(0,0,0,.6) var(--fade-bottom,170px),#000 calc(var(--fade-bottom,170px) + 32px));mask-image:linear-gradient(to top,transparent 0,rgba(0,0,0,.6) var(--fade-bottom,170px),#000 calc(var(--fade-bottom,170px) + 32px))}
 .chat-timeline{position:absolute;z-index:14;top:calc(50% - 34px);right:16px;display:none;max-height:calc(100% - 184px);transform:translateY(-50%);pointer-events:none}
 .chat-timeline.on{display:block;pointer-events:auto}
 .chat-timeline-directory{display:flex;flex-direction:column;width:34px;max-width:min(280px,calc(100vw - 96px));max-height:min(360px,calc(100vh - 230px));padding:5px 0;overflow-x:hidden;overflow-y:auto;border:1px solid transparent;border-radius:6px;background:transparent;box-shadow:none;transition:width .16s ease,background .16s ease,border-color .16s ease,box-shadow .16s ease}
@@ -374,8 +374,7 @@ body{background:var(--bg);height:100vh}
 .fi-area.drag-over .fi-box{border-color:var(--am);box-shadow:0 0 0 1px var(--am),0 8px 32px var(--sd)}
 
 /* ─── Chat Input — 对话框 + Token + 按钮栏 ──── */
-.fi-area{flex-shrink:0;width:80%;max-width:740px;margin:0 auto;padding:8px 0 20px;display:flex;flex-direction:column;gap:6px;align-items:stretch;animation:fi-in .25s ease-out;box-sizing:content-box;position:relative}
-@media(min-width:1200px){.fi-area{width:100%;min-width:400px;max-width:740px}}
+.fi-area{position:absolute;left:0;right:0;bottom:0;z-index:10;padding:8px 0 20px;display:flex;flex-direction:column;gap:6px;align-items:center;animation:fi-in .25s ease-out;box-sizing:border-box;background:transparent}
 .chat-jump-latest{position:absolute;z-index:12;top:-34px;left:50%;width:32px;height:32px;padding:0;border:1px solid var(--bd);border-radius:50%;background:var(--be);color:var(--ts);box-shadow:0 6px 18px var(--sd);display:grid;place-items:center;cursor:pointer;opacity:0;visibility:hidden;pointer-events:none;transform:translate(-50%,6px);transition:opacity .14s ease,transform .14s ease,background .14s ease,border-color .14s ease,color .14s ease}
 .chat-jump-latest.on{opacity:1;visibility:visible;pointer-events:auto;transform:translate(-50%,0)}
 .chat-jump-latest:hover{background:var(--bh);border-color:var(--bl);color:var(--tx)}
@@ -388,7 +387,7 @@ body{background:var(--bg);height:100vh}
 /* (removed: .fi-token-box moved to Token Rail in main-tabs) */
 
 /* ─── 主对话框 ─── */
-.fi-box{flex:1;display:flex;flex-direction:column;background:var(--be);border:1px solid var(--bd);border-radius:12px;box-shadow:0 8px 32px var(--sd);backdrop-filter:blur(8px);position:relative;min-height:78px}
+.fi-box{flex:1;width:min(80%,740px);display:flex;flex-direction:column;background:color-mix(in srgb,var(--be) 58%,transparent);border:1px solid color-mix(in srgb,var(--bd) 70%,transparent);border-radius:14px;box-shadow:0 12px 40px var(--sd);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);position:relative;min-height:78px}
 .fi-box textarea{flex:1;border:none;background:0 0;color:var(--tx);font-size:.85rem;font-family:var(--fb);outline:none;resize:none;line-height:1.5;padding:8px 14px 4px;min-height:34px;max-height:100px}
 .fi-box textarea::placeholder{color:var(--tm)}
 
