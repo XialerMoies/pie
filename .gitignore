@@ -26,3 +26,6 @@ docs/
 pi-test-*/
 usage-test-*/
 ws-tag-*/
+
+# MCP 工作区配置可能含密钥，不入库
+.mcp.json

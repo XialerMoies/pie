@@ -178,6 +178,8 @@ interface AppSession {
   maybeAutoTitleSession(id: string, assistantText?: string): Promise<string | null>;
   getActiveSessionTabId(): string | null;
   setActiveSessionTabId(id: string | null): void;
+  ensureDraftSessionTab(): string;
+  whenReady(): Promise<void>;
   renderSessionTabs(activeId?: string): void;
 }
 interface AppSettings {

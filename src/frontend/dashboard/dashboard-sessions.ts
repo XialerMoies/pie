@@ -36,6 +36,7 @@ let _sessionDataCache: SessionDataCache | null = null;
 let _sessionListSeq = 0;
 const DRAFT_SESSION_PREFIX = 'draft:';
 let _sessionTabLookup = new Map<string, SessionInfo>();
+let _sessionRestorePromise: Promise<void> | null = null;
 
 function bumpSessionListSeq(): number {
   _sessionListSeq += 1;
@@ -52,6 +53,16 @@ function isDraftSessionId(id: string | null | undefined): boolean {
 
 function createDraftSessionId(): string {
   return DRAFT_SESSION_PREFIX + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+function ensureDraftSessionTab(): string {
+  const activeId = getActiveSessionTabId();
+  if (activeId) return activeId;
+  const id = createDraftSessionId();
+  rememberSessionTab(id);
+  setActiveSessionTabId(id);
+  renderSessionTabs(id);
+  return id;
 }
 
 function normalizeSessionTabIds(ids: unknown[]): string[] {
@@ -378,7 +389,7 @@ function saveUiState(): void {
 }
 
 /** 启动时恢复完整 UI 状态：会话标签 + 活跃 session 消息 + 面板 */
-async function restoreSessionTabs(): Promise<void> {
+async function restoreSessionTabsImpl(): Promise<void> {
   // 先拉取会话元数据索引，确保顶部标签尽早显示正确标题
   fetchSessionIndex().catch(() => {});
 
@@ -391,15 +402,27 @@ async function restoreSessionTabs(): Promise<void> {
     return;
   }
   const items = store.tabs.items || [];
+  // 草稿没有独立的 session 文件，刷新后无法恢复其内容；持久化空草稿会
+  // 把一次启动/发送竞态变成永久的“新会话”标签。真实 session 标签照常恢复。
+  const restoredItems = items.filter(tab => !(tab.kind === 'chat' && isDraftSessionId(tab.id)));
   const persistedActiveId = store.tabs.activeId || (store.activeView.type !== 'chat' ? store.activeView.id : null);
-  const activeId = store.activeView.type === 'session' ? store.activeView.id : null;
-  App.Tabs?.restoreTabs?.(items, persistedActiveId);
+  const preferredActiveId = persistedActiveId && !isDraftSessionId(persistedActiveId)
+    ? persistedActiveId
+    : null;
+  const activeId = preferredActiveId && restoredItems.some(tab => tab.id === preferredActiveId)
+    ? preferredActiveId
+    : restoredItems.find(tab => tab.kind === 'session')?.id || null;
+  App.Tabs?.restoreTabs?.(restoredItems, activeId);
+  // restoreTabs 是内存操作；同步一次 canonical 快照，确保清理的 draft
+  // 不会在随后 saveUiState 时又从 UiStateStore 旧快照写回来。
+  App.State.syncTabs?.(restoredItems, activeId);
   // hydrate 后立即恢复文件标签（确保 UiStateStore.tabs.items 可用，避免独立定时器的竞态）
   if (typeof (window as any).restoreFileTabs === 'function') (window as any).restoreFileTabs();
-  const ids = items.filter(tab => tab.kind === 'session' || tab.kind === 'chat').map(tab => tab.id);
+  const ids = restoredItems.filter(tab => tab.kind === 'session' || tab.kind === 'chat').map(tab => tab.id);
   const activePanel = store.panel.active || 'explorer';
 
   if (!activeId && ids.length === 0 && readSessionTabIds().length === 0) {
+    if (restoredItems.length !== items.length) saveUiState();
     return; // 无历史状态
   }
 
@@ -448,6 +471,22 @@ async function restoreSessionTabs(): Promise<void> {
     } catch { /* 静默降级 */ }
   }
   saveUiState();
+}
+
+/** 启动恢复只允许有一个实例，发送流程可以等待同一个 Promise。 */
+function restoreSessionTabs(): Promise<void> {
+  if (!_sessionRestorePromise) {
+    _sessionRestorePromise = restoreSessionTabsImpl().catch((error) => {
+      // 恢复失败不能让后续发送永久卡在 rejected Promise 上；发送流程仍可
+      // 在当前空状态创建并绑定一个新的草稿会话。
+      console.warn('[session-restore] failed', error);
+    });
+  }
+  return _sessionRestorePromise;
+}
+
+function whenSessionRestoreReady(): Promise<void> {
+  return _sessionRestorePromise || Promise.resolve();
 }
 
 /** 关闭当前 SSE 连接 + 重置忙状态 */
@@ -1115,6 +1154,8 @@ window.branchSession = branchSession as any;
 (window as any).maybeAutoTitleSession = maybeAutoTitleSession;
 (window as any).getActiveSessionTabId = getActiveSessionTabId;
 (window as any).setActiveSessionTabId = setActiveSessionTabId;
+(window as any).ensureDraftSessionTab = ensureDraftSessionTab;
+(window as any).whenSessionRestoreReady = whenSessionRestoreReady;
 (window as any).renderSessionTabs = renderSessionTabs;
 (window as any).migrateSessionTabLabels = migrateSessionTabLabels;
 (window as any).switchSession = switchSession;
@@ -1134,6 +1175,8 @@ if (AppSess) {
   AppSess.maybeAutoTitleSession = maybeAutoTitleSession;
   AppSess.getActiveSessionTabId = getActiveSessionTabId;
   AppSess.setActiveSessionTabId = setActiveSessionTabId;
+  AppSess.ensureDraftSessionTab = ensureDraftSessionTab;
+  AppSess.whenReady = whenSessionRestoreReady;
   AppSess.renderSessionTabs = renderSessionTabs;
   AppSess.restoreSessionTabs = restoreSessionTabs;
   AppSess.saveUiState = saveUiState;

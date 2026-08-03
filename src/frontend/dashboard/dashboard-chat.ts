@@ -58,7 +58,17 @@ function chatCommitSessionTab(oldId: string, newId: string): void {
 }
 
 async function ensureSessionForSend(): Promise<ChatSendContext> {
-  const activeTabId = chatGetActiveSessionTabId();
+  const waitForRestore = (window as any).whenSessionRestoreReady
+    || (window as any).App?.Session?.whenReady;
+  if (typeof waitForRestore === 'function') await waitForRestore();
+
+  // 恢复完成后重新读取 activeId；不能使用恢复开始前的空快照。
+  let activeTabId = chatGetActiveSessionTabId();
+  if (!activeTabId) {
+    const ensureDraft = (window as any).ensureDraftSessionTab
+      || (window as any).App?.Session?.ensureDraftSessionTab;
+    if (typeof ensureDraft === 'function') activeTabId = ensureDraft() || null;
+  }
   if (activeTabId && !chatIsDraftSessionId(activeTabId)) {
     return { sessionId: activeTabId, persistent: true };
   }

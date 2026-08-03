@@ -52,6 +52,8 @@ let _state: WorkspaceUiState = { ...DEFAULT_STATE };
 const _listeners = new Set<Listener>();
 let _hydrated = false;
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
+let _saveGeneration = 0;
+let _savePromise: Promise<boolean> | null = null;
 
 // ─── localStorage 旧 key（迁移用） ──────────────────────
 
@@ -334,14 +336,30 @@ async function saveNow(): Promise<boolean> {
   if (!_state.workspacePath) {
     try { _state.workspacePath = localStorage.getItem(OLD.WS_KEY) || ""; } catch {}
   }
-  try {
-    const payload = serializeStateForSave(_state);
-    const r = await fetch("/api/ui-state", {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    return r.ok;
-  } catch { return false; }
+  ++_saveGeneration;
+  if (_savePromise) return _savePromise;
+
+  let lastWrittenGeneration = 0;
+  _savePromise = (async () => {
+    let result = true;
+    do {
+      lastWrittenGeneration = _saveGeneration;
+      try {
+        const payload = serializeStateForSave(_state);
+        const r = await fetch("/api/ui-state", {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        result = r.ok && result;
+      } catch { result = false; }
+    } while (lastWrittenGeneration !== _saveGeneration);
+    return result;
+  })().finally(() => {
+    _savePromise = null;
+    // A state change can land between the final comparison and cleanup.
+    if (_saveGeneration > lastWrittenGeneration) void saveNow();
+  });
+  return _savePromise;
 }
 
 function _notify(): void {

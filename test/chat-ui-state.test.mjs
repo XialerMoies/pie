@@ -384,6 +384,49 @@ describe("chat ui state", () => {
     assert.ok(!fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/delete") && method === "POST"));
   });
 
+  it("启动恢复未完成时发送消息只绑定一个恢复后的会话", async () => {
+    env.state.M = [];
+    env.state._sessionTabs = [];
+    env.state._activeSessionTabId = null;
+    let releaseRestore;
+    const restore = new Promise((resolve) => { releaseRestore = resolve; });
+    env.win.whenSessionRestoreReady = () => restore;
+    env.win.ensureDraftSessionTab = () => {
+      env.state._sessionTabs = ["draft:restored"];
+      env.state._activeSessionTabId = "draft:restored";
+      return "draft:restored";
+    };
+
+    const streams = [];
+    class MockEventSource {
+      constructor() { this.onmessage = null; this.onerror = null; attachEventListeners(this); streams.push(this); }
+      close() {}
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+    const fetchCalls = [];
+    global.fetch = async (url, init = {}) => {
+      fetchCalls.push([url, init.method || "GET"]);
+      if (String(url).includes("/api/sessions/new")) return { ok: true, json: async () => ({ ok: true, id: "restored-session" }) };
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+    env.win.fetch = global.fetch;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "恢复竞态";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.strictEqual(fetchCalls.filter(([url]) => String(url).includes("/api/sessions/new")).length, 0);
+
+    releaseRestore();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.strictEqual(fetchCalls.filter(([url]) => String(url).includes("/api/sessions/new")).length, 1);
+    assert.ok(fetchCalls.some(([url]) => String(url).includes("/api/chat")));
+    assert.ok(env.state._sessionTabs.includes("restored-session"));
+    streams[0].onmessage({ data: JSON.stringify({ type: "done", text: "完成", sessionId: "restored-session" }) });
+  });
+
   it("草稿标签首次发送会升级为真实会话", async () => {
     env.state.M = [];
     env.state._sessionTabs = ["draft:test"];

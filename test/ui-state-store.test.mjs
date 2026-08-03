@@ -304,4 +304,40 @@ describe("UiStateStore", () => {
     assert.strictEqual(state.panel.closed, true, "panel closed 应恢复");
     assert.strictEqual(state.panel.width, 200);
   });
+
+  it("并发 saveNow 串行写入，并最终保存最新标签快照", async () => {
+    const requests = [];
+    let releaseFirst;
+    const firstPut = new Promise((resolve) => { releaseFirst = resolve; });
+    global.fetch = async (url, init) => {
+      if (String(url).includes("/api/ui-state") && init?.method === "PUT") {
+        requests.push(JSON.parse(init.body));
+        if (requests.length === 1) await firstPut;
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          schemaVersion: 2,
+          workspacePath: "/save-race",
+          activeView: { type: "chat" },
+          tabs: { items: [], activeId: null },
+          panel: { active: "explorer", closed: false, width: 260 },
+          recent: { sessions: {} },
+        }),
+      };
+    };
+
+    await store().hydrate();
+    store().syncTabs([{ id: "old", kind: "session", title: "old", order: 0 }], "old");
+    const first = store().saveNow();
+    store().syncTabs([{ id: "new", kind: "session", title: "new", order: 0 }], "new");
+    const second = store().saveNow();
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    assert.strictEqual(requests.length, 2, "新快照应在旧 PUT 完成后补写一次");
+    assert.deepStrictEqual(requests.at(-1).tabs.items.map((tab) => tab.id), ["new"]);
+    assert.strictEqual(requests.at(-1).tabs.activeId, "new");
+  });
 });

@@ -409,6 +409,24 @@ describe("session ui state", () => {
     win.__state._fileTabs = [];
   });
 
+  it("刷新恢复时丢弃空草稿，不把幽灵新会话带回标签栏", async () => {
+    const draftId = "draft:stale-after-refresh";
+    uiState.tabs.items = [
+      { kind: "chat", id: draftId, title: "新会话", draftId, order: 0 },
+      { kind: "session", id: "sess-restored", title: "旧会话", sessionId: "sess-restored", order: 1 },
+    ];
+    uiState.tabs.activeId = "sess-restored";
+    uiState.activeView = { type: "session", id: "sess-restored" };
+    win.__state._sessionTabs = [];
+    win.__state._activeSessionTabId = null;
+
+    await win.App.Session.restoreSessionTabs();
+
+    assert.deepStrictEqual(win.__state._sessionTabs, ["sess-restored"]);
+    assert.strictEqual(win.__state._activeSessionTabId, "sess-restored");
+    assert.deepStrictEqual(uiState.tabs.items.map((tab) => tab.id), ["sess-restored"]);
+  });
+
   it("重命名标题优先于新会话默认标题", async () => {
     store["session-tabs"] = JSON.stringify(["sess-new-empty"]);
     store["session-tab-labels"] = JSON.stringify({ "sess-new-empty": "新会话" });
