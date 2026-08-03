@@ -472,6 +472,101 @@ describe("chat ui state", () => {
     assert.ok(!fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/delete") && method === "POST"));
   });
 
+  it("创建真实会话后即使草稿绑定入口暂时不可用也不会丢失当前会话", async () => {
+    env.state.M = [];
+    env.state._sessionTabs = [];
+    env.state._activeSessionTabId = null;
+    const originalEnsureDraft = env.win.ensureDraftSessionTab;
+    const originalAppEnsureDraft = env.win.App.Session.ensureDraftSessionTab;
+    // 模拟实机启动竞态：发送流程能创建 session，但草稿 tab 入口尚未可用。
+    env.win.ensureDraftSessionTab = undefined;
+    env.win.App.Session.ensureDraftSessionTab = undefined;
+
+    const streams = [];
+    class MockEventSource {
+      constructor() { this.onmessage = null; this.onerror = null; attachEventListeners(this); streams.push(this); }
+      close() {}
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+    const fetchCalls = [];
+    let created = 0;
+    global.fetch = async (url, init = {}) => {
+      const href = String(url);
+      fetchCalls.push([href, init.method || "GET", init]);
+      if (href.includes("/api/sessions/new")) {
+        created += 1;
+        return { ok: true, json: async () => ({ ok: true, id: `session-${created}` }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+    env.win.fetch = global.fetch;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "第一轮";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    streams[0].onmessage({ data: JSON.stringify({ type: "done", text: "完成一", sessionId: "session-1" }) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // 修复后首次创建的 session 必须已经成为当前 tab，第二轮不能再次 /new。
+    assert.deepStrictEqual(env.state._sessionTabs, ["session-1"]);
+
+    input.value = "第二轮";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.strictEqual(created, 1, "连续两轮交互只能创建一个真实 session");
+    assert.ok(fetchCalls.filter(([url, method]) => url.includes("/api/chat") && method === "POST").length >= 2);
+
+    env.win.ensureDraftSessionTab = originalEnsureDraft;
+    env.win.App.Session.ensureDraftSessionTab = originalAppEnsureDraft;
+  });
+
+  it("发送时以 TabStore 可见的已有 session tab 为准，不因旧兼容入口为空而新建会话", async () => {
+    env.state.M = [];
+    env.state._sessionTabs = ["existing-session"];
+    env.state._activeSessionTabId = "existing-session";
+    const originalGetActive = env.win.getActiveSessionTabId;
+    const originalAppGetActive = env.win.App.Session.getActiveSessionTabId;
+    const originalTabsGetActive = env.win.App.Tabs.getActiveSessionTabId;
+    // 模拟旧兼容投影暂时为空，但标签栏和 TabStore 已经有真实 active session。
+    env.win.getActiveSessionTabId = () => null;
+    env.win.App.Session.getActiveSessionTabId = () => null;
+    env.win.App.Tabs.getActiveSessionTabId = () => null;
+
+    const streams = [];
+    class MockEventSource {
+      constructor() { this.onmessage = null; this.onerror = null; attachEventListeners(this); streams.push(this); }
+      close() {}
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+    const fetchCalls = [];
+    global.fetch = async (url, init = {}) => {
+      const href = String(url);
+      fetchCalls.push([href, init.method || "GET"]);
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+    env.win.fetch = global.fetch;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "继续当前会话";
+    env.doc.getElementById("cs").click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.strictEqual(fetchCalls.filter(([url, method]) => url.includes("/api/sessions/new") && method === "POST").length, 0);
+    assert.ok(fetchCalls.some(([url, method]) => url.includes("/api/chat") && method === "POST"));
+    assert.deepStrictEqual(env.state._sessionTabs, ["existing-session"]);
+
+    env.win.getActiveSessionTabId = originalGetActive;
+    env.win.App.Session.getActiveSessionTabId = originalAppGetActive;
+    env.win.App.Tabs.getActiveSessionTabId = originalTabsGetActive;
+    streams[0]?.onmessage?.({ data: JSON.stringify({ type: "done", text: "完成", sessionId: "existing-session" }) });
+  });
+
   it("done 后为默认标题的持久会话自动生成标题", async () => {
     env.state.M = [];
     env.state._sessionTabs = ["draft:auto-title"];

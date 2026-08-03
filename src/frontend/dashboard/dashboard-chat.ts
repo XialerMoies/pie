@@ -15,7 +15,12 @@ let activeSendContext: ChatSendContext | null = null;
 
 function chatGetActiveSessionTabId(): string | null {
   const fn = (window as any).getActiveSessionTabId;
-  if (typeof fn === 'function') return fn();
+  if (typeof fn === 'function') {
+    const legacyId = fn();
+    if (legacyId) return legacyId;
+  }
+  const activeTab = App.Tabs?.getActiveTab?.();
+  if (activeTab && (activeTab.kind === 'session' || activeTab.kind === 'chat')) return activeTab.id;
   return App.Tabs?.getActiveSessionTabId?.() || null;
 }
 
@@ -57,6 +62,30 @@ function chatCommitSessionTab(oldId: string, newId: string): void {
   chatSetActiveSessionTabId(newId);
 }
 
+function chatCreateFallbackDraftTab(): string | null {
+  const tabs = App.Tabs;
+  if (!tabs?.openTab || !tabs.activateTab) return null;
+  const id = `draft:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  tabs.openTab({ kind: 'chat', id, title: '新会话', draftId: id });
+  tabs.activateTab(id);
+  return id;
+}
+
+function chatBindCreatedSession(sessionId: string, draftId?: string): string | undefined {
+  if (!sessionId) return undefined;
+  let sourceDraftId = draftId && chatIsDraftSessionId(draftId) ? draftId : undefined;
+  const activeId = chatGetActiveSessionTabId();
+  if (!sourceDraftId && activeId && chatIsDraftSessionId(activeId)) sourceDraftId = activeId;
+  if (!sourceDraftId) sourceDraftId = chatCreateFallbackDraftTab() || undefined;
+  if (sourceDraftId) chatCommitSessionTab(sourceDraftId, sessionId);
+  else {
+    const tabs = App.Tabs;
+    if (tabs?.openTab) tabs.openTab({ kind: 'session', id: sessionId, title: '新会话', sessionId });
+    chatSetActiveSessionTabId(sessionId);
+  }
+  return sessionId;
+}
+
 async function ensureSessionForSend(): Promise<ChatSendContext> {
   const waitForRestore = (window as any).whenSessionRestoreReady
     || (window as any).App?.Session?.whenReady;
@@ -82,9 +111,8 @@ async function ensureSessionForSend(): Promise<ChatSendContext> {
     });
     const data = await response.json().catch(() => ({} as { id?: string }));
     const sessionId = typeof data.id === 'string' ? data.id : '';
-    if (activeTabId && chatIsDraftSessionId(activeTabId) && sessionId) {
-      chatCommitSessionTab(activeTabId, sessionId);
-      chatSetActiveSessionTabId(sessionId);
+    if (sessionId) {
+      chatBindCreatedSession(sessionId, activeTabId || undefined);
       return { sessionId, persistent: true, draftId: activeTabId };
     }
     return { sessionId, persistent: Boolean(sessionId), draftId: activeTabId && chatIsDraftSessionId(activeTabId) ? activeTabId : undefined };
