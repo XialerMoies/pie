@@ -10,7 +10,11 @@ import {
 } from "../src/server/permission-service.ts";
 import { FilePermissionAuditStore } from "../src/server/permission-audit-store.ts";
 import { FileWorkspacePermissionRuleStore } from "../src/server/permission-rule-store.ts";
-import { createPermissionConfirmCallback } from "../src/server/permission-confirmation.ts";
+import { AppEventHub } from "../src/server/app-events.ts";
+import {
+  cancelPermissionConfirmationsForResponse,
+  createPermissionConfirmCallback,
+} from "../src/server/permission-confirmation.ts";
 import { handleDashboard } from "../src/server/routes/dashboard.ts";
 import { handleExplorer } from "../src/server/routes/explorer.ts";
 import { handlePermissions } from "../src/server/routes/permissions.ts";
@@ -36,7 +40,7 @@ function routeCtx(root, permissionService) {
       getActiveSession: () => null,
     },
     chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" },
-    sseClients: [],
+    appEvents: new AppEventHub(),
     permissionService,
     paths: {
       APP_ROOT: root,
@@ -580,9 +584,12 @@ describe("server permission service", () => {
   it("emits route permission confirmations over the desktop events stream", async () => {
     const root = makeTempRoot("server-perm-event-");
     try {
-      const eventRes = makeResWithEvents();
-      const sseClients = [eventRes];
-      const confirmPermission = createPermissionConfirmCallback(sseClients, { timeoutMs: 1000 });
+      const appEvents = new AppEventHub();
+      const firstEventRes = makeResWithEvents();
+      const secondEventRes = makeResWithEvents();
+      appEvents.addClient(firstEventRes);
+      appEvents.addClient(secondEventRes);
+      const confirmPermission = createPermissionConfirmCallback(appEvents, { timeoutMs: 1000 });
       const pending = confirmPermission({
         source: "file.write",
         operation: "write",
@@ -593,15 +600,18 @@ describe("server permission service", () => {
         permissionSuggestions: [],
       });
 
-      const line = eventRes._body.split("\n").find((part) => part.startsWith("data: "));
-      assert.ok(line, "permission_confirm event should be written");
+      const lines = firstEventRes._body.split("\n").filter((part) => part.startsWith("data: "));
+      assert.strictEqual(lines.length, 1, "permission.confirm should be written once per client");
+      assert.strictEqual(secondEventRes._body, firstEventRes._body);
+      const line = lines[0];
       const event = JSON.parse(line.slice("data: ".length));
-      assert.strictEqual(event.type, "permission_confirm");
-      assert.strictEqual(event.source, "file.write");
-      assert.strictEqual(event.operation, "write");
+      assert.strictEqual(event.type, "permission.confirm");
+      assert.strictEqual(event.revision, 1);
+      assert.strictEqual(event.payload.source, "file.write");
+      assert.strictEqual(event.payload.operation, "write");
 
       const res = makeRes();
-      await handlePermissions(makeReq("POST", "/api/permissions/confirm", { id: event.id, allow: true, scope: "once" }), res, routeCtx(root, undefined));
+      await handlePermissions(makeReq("POST", "/api/permissions/confirm", { id: event.payload.id, allow: true, scope: "once" }), res, routeCtx(root, undefined));
       assert.strictEqual(res._status, 200);
       assert.deepStrictEqual(JSON.parse(res._body), { ok: true });
       assert.deepStrictEqual(await pending, { allow: true, scope: "once" });
@@ -613,8 +623,10 @@ describe("server permission service", () => {
   it("times out route permission confirmations fail-closed", async () => {
     const root = makeTempRoot("server-perm-timeout-");
     try {
+      const appEvents = new AppEventHub();
       const eventRes = makeResWithEvents();
-      const confirmPermission = createPermissionConfirmCallback([eventRes], { timeoutMs: 5 });
+      appEvents.addClient(eventRes);
+      const confirmPermission = createPermissionConfirmCallback(appEvents, { timeoutMs: 5 });
       const result = await confirmPermission({
         source: "file.write",
         operation: "write",
@@ -627,6 +639,49 @@ describe("server permission service", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("fails route permission confirmations closed when the event hub has no client", async () => {
+    const appEvents = new AppEventHub();
+    const confirmPermission = createPermissionConfirmCallback(appEvents, { timeoutMs: 1000 });
+
+    const result = await confirmPermission({
+      source: "file.write",
+      operation: "write",
+      root: process.cwd(),
+      path: resolve(process.cwd(), "outside.txt"),
+      reason: "Write path requires confirmation",
+      permissionSuggestions: [],
+    });
+
+    assert.deepStrictEqual(result, { allow: false });
+    assert.strictEqual(appEvents.revision(), 0);
+  });
+
+  it("fails route permission confirmations closed after the final response is cancelled", async () => {
+    const appEvents = new AppEventHub();
+    const firstEventRes = makeResWithEvents();
+    const secondEventRes = makeResWithEvents();
+    appEvents.addClient(firstEventRes);
+    appEvents.addClient(secondEventRes);
+    const confirmPermission = createPermissionConfirmCallback(appEvents, { timeoutMs: 1000 });
+    const pending = confirmPermission({
+      source: "file.write",
+      operation: "write",
+      root: process.cwd(),
+      path: resolve(process.cwd(), "outside.txt"),
+      reason: "Write path requires confirmation",
+      permissionSuggestions: [],
+    });
+    let settled = false;
+    void pending.then(() => { settled = true; });
+
+    cancelPermissionConfirmationsForResponse(firstEventRes);
+    await Promise.resolve();
+    assert.strictEqual(settled, false);
+
+    cancelPermissionConfirmationsForResponse(secondEventRes);
+    assert.deepStrictEqual(await pending, { allow: false });
   });
 
   it("authorizes external tool execution through confirmation and audit", async () => {

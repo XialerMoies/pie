@@ -28,14 +28,22 @@ function currentTabsState(): TabsState {
   };
 }
 
-(window as any).App = {
-  Constants: { WS_KEY: 'workspace_path' } as Record<string, string>,
-  UI: {} as Record<string, Function>,
-  Chat: {} as Record<string, Function>,
-  File: {} as Record<string, Function>,
-  Session: {} as Record<string, Function>,
-  Settings: {} as Record<string, Function>,
-  Tabs: {
+const existingApp = (window as any).App || {};
+const existingConstants = existingApp.Constants || {};
+const existingUI = existingApp.UI || {};
+const existingChat = existingApp.Chat || {};
+const existingFile = existingApp.File || {};
+const existingSession = existingApp.Session || {};
+const existingSettings = existingApp.Settings || {};
+const existingTabs = existingApp.Tabs || {};
+Object.assign(existingApp, {
+  Constants: Object.assign(existingConstants, { WS_KEY: 'workspace_path' }) as Record<string, string>,
+  UI: Object.assign(existingUI, {}) as Record<string, Function>,
+  Chat: Object.assign(existingChat, {}) as Record<string, Function>,
+  File: Object.assign(existingFile, {}) as Record<string, Function>,
+  Session: Object.assign(existingSession, {}) as Record<string, Function>,
+  Settings: Object.assign(existingSettings, {}) as Record<string, Function>,
+  Tabs: Object.assign(existingTabs, {
     _attachStore(store: TabStoreAPI): void { attachedTabStore = store; },
     getState(): TabsState { return currentTabsState(); },
     getTabs(): AppTab[] { return currentTabsState().items; },
@@ -141,8 +149,9 @@ function currentTabsState(): TabsState {
       if (tab && tab.kind !== 'file') return;
       (window as any).tabContextMenu?.(e, id);
     },
-  },
-};
+  }),
+});
+(window as any).App = existingApp;
 
 // ═══════════════════════════════════════════════════════════════════
 //  Helpers

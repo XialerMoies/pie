@@ -5,7 +5,7 @@ async function startDashboard(): Promise<void> {
 
   void (async () => {
     try {
-      await (window as any).ExplorerService?.startEvents?.();
+      await App.Events.start();
     } catch (error) {
       console.warn("[dashboard-startup] event channel unavailable", error);
     }

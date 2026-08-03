@@ -8,7 +8,7 @@
  *   PI_DESKTOP_SESSIONS - 会话目录
  */
 import { initAgent, type AgentRuntime } from "../agent/index.js";
-import { createServer } from "http";
+import { createServer, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from "http";
 import { resolve, dirname } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { appendFileSync, readFileSync, writeFileSync, existsSync, statSync, watch } from "fs";
@@ -29,6 +29,7 @@ import { contentTypeForStaticAsset, resolveStaticAssetPath } from "./static-asse
 import { RootRegistry } from "./root-registry.js";
 import { createPermissionModeController } from "./permission-mode.js";
 import { writeChatEvent } from "./chat-stream.js";
+import { AppEventHub } from "./app-events.js";
 
 export type SessionWriteAuthorizer = (sessionFile: string, source: string) => void;
 
@@ -37,6 +38,25 @@ export interface SessionPersistenceOptions {
   force?: boolean;
   minIntervalMs?: number;
   authorizeSessionWrite?: SessionWriteAuthorizer;
+}
+
+export function openAppEventStream(
+  req: IncomingMessage,
+  res: ServerResponse,
+  appEvents: AppEventHub,
+  cors: OutgoingHttpHeaders,
+): void {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    ...cors,
+  });
+  res.write(`data: ${JSON.stringify({ type: "connected", revision: appEvents.revision() })}\n\n`);
+  appEvents.addClient(res);
+  req.on("close", () => {
+    appEvents.removeClient(res);
+  });
 }
 
 // 不再移动活跃 session 文件——只在 header 标记 workspace
@@ -639,7 +659,8 @@ async function main() {
 
   // ─── 共享可变状态 ────────────────────────────────────────────
   const chatStream: ChatStreamState = { textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "", response: null, turnId: "", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0, eventSeq: 0, eventHistory: [] };
-  const sseClients: import("http").ServerResponse[] = [];
+  const appEvents = new AppEventHub();
+  appEvents.subscribeClientRemoved(cancelPermissionConfirmationsForResponse);
   const sessionPermissionState = createSessionPermissionState();
   let runtime: AgentRuntime;
   const security = createDesktopSecurityConfig();
@@ -649,7 +670,7 @@ async function main() {
     sessionPermissionState,
     workspaceRootProvider: () => runtime?.currentWorkspace || APP_ROOT,
     rootRegistry,
-    confirmPermission: createPermissionConfirmCallback(sseClients),
+    confirmPermission: createPermissionConfirmCallback(appEvents),
     auditStore: new FilePermissionAuditStore(resolve(PI_CONFIG_DIR, "permission-audit.json"), { maxEntries: 2000 }),
     permissionRuleStore: new FileWorkspacePermissionRuleStore(resolve(PI_CONFIG_DIR, "permission-rules.json")),
   });
@@ -700,7 +721,7 @@ async function main() {
   const baseCtx: ServerContext = {
     runtime,
     chatStream,
-    sseClients,
+    appEvents,
     security,
     permissionService,
     permissionMode,
@@ -854,19 +875,7 @@ async function main() {
 
     // SSE: 文件变更事件
     if (url === "/api/events" && req.method === "GET") {
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        ...cors,
-      });
-      res.write("data: {\"type\":\"connected\"}\n\n");
-      sseClients.push(res);
-      req.on("close", () => {
-        const idx = sseClients.indexOf(res);
-        if (idx !== -1) sseClients.splice(idx, 1);
-        cancelPermissionConfirmationsForResponse(res);
-      });
+      openAppEventStream(req, res, appEvents, cors);
       return;
     }
 
@@ -900,10 +909,7 @@ async function main() {
         if (normalized.startsWith("data/") || normalized.startsWith("node_modules/") || normalized.startsWith(".git/") || normalized.startsWith(".claude/") || normalized.startsWith("dist/") || normalized.startsWith("example/") || normalized.startsWith("src/frontend/gen/")) return;
         if (watchTimer) clearTimeout(watchTimer);
         watchTimer = setTimeout(() => {
-          const msg = `data: ${JSON.stringify({ type: "refresh", file: filename })}\n\n`;
-          for (const client of sseClients) {
-            try { client.write(msg); } catch { /* ignore */ }
-          }
+          appEvents.publish("explorer.changed", { file: filename });
         }, 500);
       });
       console.log("[watcher] watching " + APP_ROOT);

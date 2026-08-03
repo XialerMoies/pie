@@ -110,6 +110,7 @@ const bundlePrev = existsSync(bundleOut) ? readFileSync(bundleOut, "utf-8") : nu
 
 // 与 dashboard.html 原 script 顺序一致（已移除 problems/index 和 pane/problems）
 const bundleOrder = [
+  "gen/services/app-events.js",
   "gen/dashboard/dashboard-helpers.js",
   "gen/services/ui-state-store.js",
   "gen/services/preferences.js",

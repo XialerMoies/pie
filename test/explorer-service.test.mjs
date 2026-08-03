@@ -16,6 +16,21 @@ global.localStorage = {
   removeItem: (key) => { delete store[key]; },
 };
 let workspacePath = "";
+const eventSubscriptions = new Map();
+const subscriptionRecords = [];
+let eventSourceConstructed = 0;
+const appEvents = {
+  subscribe: (type, handler) => {
+    let handlers = eventSubscriptions.get(type);
+    if (!handlers) eventSubscriptions.set(type, handlers = new Set());
+    handlers.add(handler);
+    const unsubscribe = () => handlers.delete(handler);
+    subscriptionRecords.push({ type, handler, unsubscribe });
+    return unsubscribe;
+  },
+  start: async () => {},
+  stop: () => {},
+};
 global.App = {
   State: {
     getWorkspacePath: () => workspacePath,
@@ -28,8 +43,12 @@ global.App = {
     },
     setBoolean: (key, value) => { store[key] = Boolean(value); },
   },
+  Events: appEvents,
 };
 global.window = global;
+global.EventSource = class {
+  constructor() { eventSourceConstructed += 1; }
+};
 global.AbortController = class {
   constructor() { this.signal = {}; }
   abort() {}
@@ -44,6 +63,10 @@ global.document = { createElement: () => ({ textContent: "", innerHTML: "" }), }
 
 describe("ExplorerService", () => {
   let ExplorerService;
+
+  function emitAppEvent(event) {
+    for (const handler of eventSubscriptions.get(event.type) || []) handler(event);
+  }
 
   before(async () => {
     const mod = await import("../src/frontend/service/explorer-service.ts");
@@ -179,60 +202,49 @@ describe("ExplorerService", () => {
     });
   });
 
-  describe("events permission confirmation", () => {
-    function createMockEventSource(onCreate) {
-      return class {
-        constructor(url) {
-          this.url = url;
-          this.closed = false;
-          this.listeners = new Map();
-          onCreate(this);
-        }
-        addEventListener(type, listener) {
-          this.listeners.set(type, listener);
-        }
-        removeEventListener(type, listener) {
-          if (this.listeners.get(type) === listener) this.listeners.delete(type);
-        }
-        emit(type, event = {}) {
-          this.listeners.get(type)?.(event);
-        }
-        close() {
-          this.closed = true;
-        }
-      };
-    }
+  describe("shared events", () => {
+    it("does not construct an EventSource when Explorer is imported", () => {
+      assert.strictEqual(eventSourceConstructed, 0);
+      assert.strictEqual(typeof ExplorerService.startEvents, "undefined");
+    });
 
-    it("does not connect until startEvents is called", async () => {
-      let eventSource;
-      const oldEventSource = global.EventSource;
+    it("refreshes the mounted tree on explorer.changed", async () => {
+      const refreshes = [];
+      const originalRefresh = ExplorerService.refreshTree;
+      ExplorerService.refreshTree = async () => { refreshes.push("refresh"); };
       try {
-        global.EventSource = createMockEventSource((source) => { eventSource = source; });
-
-        await import(`../src/frontend/service/explorer-service.ts?event-gate=${Date.now()}`);
-        assert.equal(eventSource, undefined);
-        const ready = ExplorerService.startEvents();
-        assert.ok(eventSource, "EventSource should be created after authentication");
-        assert.strictEqual(eventSource.url, "/api/events");
-        assert.strictEqual(typeof eventSource.listeners.get("open"), "function");
-        eventSource.emit("open");
-        await ready;
+        ExplorerService._setTree({});
+        emitAppEvent({ type: "explorer.changed", revision: 1, payload: { file: "a.ts" } });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        assert.deepStrictEqual(refreshes, ["refresh"]);
       } finally {
-        ExplorerService.stopEvents();
-        global.EventSource = oldEventSource;
+        ExplorerService._setTree(null);
+        ExplorerService.refreshTree = originalRefresh;
+      }
+    });
+
+    it("refreshes the mounted tree on resync", async () => {
+      const refreshes = [];
+      const originalRefresh = ExplorerService.refreshTree;
+      ExplorerService.refreshTree = async () => { refreshes.push("refresh"); };
+      try {
+        ExplorerService._setTree({});
+        emitAppEvent({ type: "resync", revision: 0 });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        assert.deepStrictEqual(refreshes, ["refresh"]);
+      } finally {
+        ExplorerService._setTree(null);
+        ExplorerService.refreshTree = originalRefresh;
       }
     });
 
     it("POSTs permission confirmation decisions back to the server", async () => {
-      let eventSource;
       const calls = [];
-      const oldEventSource = global.EventSource;
       const oldConfirmPermissionAsync = global.confirmPermissionAsync;
       const oldConfirmAsync = global.confirmAsync;
       const oldFetch = global.fetch;
       const oldRefreshPermissionsPanel = global.refreshPermissionsPanel;
       try {
-        global.EventSource = createMockEventSource((source) => { eventSource = source; });
         global.confirmPermissionAsync = async (input) => {
           calls.push({ type: "confirm", input });
           return "workspace";
@@ -246,15 +258,10 @@ describe("ExplorerService", () => {
           return { ok: true, json: async () => ({ ok: true }) };
         };
 
-        const ready = ExplorerService.startEvents();
-        assert.ok(eventSource, "EventSource should be created");
-        assert.strictEqual(eventSource.url, "/api/events");
-        eventSource.emit("open");
-        await ready;
-
-        eventSource.emit("message", {
-          data: JSON.stringify({
-            type: "permission_confirm",
+        emitAppEvent({
+          type: "permission.confirm",
+          revision: 2,
+          payload: {
             id: "perm-test",
             source: "file.write",
             operation: "write",
@@ -262,7 +269,7 @@ describe("ExplorerService", () => {
             path: "E:\\\\outside\\\\file.txt",
             reason: "Write path is outside workspace/authorized roots",
             permissionSuggestions: [{ type: "addPathRule", rule: { ruleContent: "Write(E:\\\\outside\\\\**)" } }],
-          }),
+          },
         });
 
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -282,8 +289,6 @@ describe("ExplorerService", () => {
         });
         assert.ok(calls.some((call) => call.type === "refreshPermissionsPanel"));
       } finally {
-        ExplorerService.stopEvents();
-        global.EventSource = oldEventSource;
         global.confirmPermissionAsync = oldConfirmPermissionAsync;
         global.confirmAsync = oldConfirmAsync;
         global.fetch = oldFetch;
@@ -291,66 +296,168 @@ describe("ExplorerService", () => {
       }
     });
 
-    it("detaches stopped listeners and ignores stale events after restart", async () => {
-      const streams = [];
-      const oldEventSource = global.EventSource;
-      const oldFetch = global.fetch;
+    it("does not let a stale tree unsubscribe the current tree", async () => {
+      const firstTree = {};
+      const secondTree = {};
+      const refreshes = [];
+      const originalRefresh = ExplorerService.refreshTree;
+      ExplorerService.refreshTree = async () => { refreshes.push(ExplorerService._getTree()); };
       try {
-        global.EventSource = createMockEventSource((source) => { streams.push(source); });
-        const refreshes = [];
-        const originalRefresh = ExplorerService.refreshTree;
-        ExplorerService.refreshTree = async () => { refreshes.push("refresh"); };
-        global.fetch = async () => ({ ok: true, json: async () => ({ ok: true }) });
-
-        const firstReady = ExplorerService.startEvents();
-        streams[0].emit("open");
-        await firstReady;
-        const staleMessage = streams[0].listeners.get("message");
-
-        ExplorerService.stopEvents();
-        assert.equal(streams[0].closed, true);
-        assert.equal(streams[0].listeners.size, 0);
-
-        const secondReady = ExplorerService.startEvents();
-        streams[1].emit("open");
-        await secondReady;
-        staleMessage?.({ data: JSON.stringify({ type: "refresh" }) });
-        streams[1].emit("message", { data: JSON.stringify({ type: "refresh" }) });
+        ExplorerService._setTree(firstTree);
+        const staleUnsubscribe = subscriptionRecords.at(-1).unsubscribe;
+        ExplorerService._setTree(secondTree);
+        staleUnsubscribe?.();
+        emitAppEvent({ type: "explorer.changed", revision: 3, payload: {} });
         await new Promise((resolve) => setTimeout(resolve, 0));
-
-        assert.deepStrictEqual(refreshes, ["refresh"]);
-        ExplorerService.refreshTree = originalRefresh;
+        assert.deepStrictEqual(refreshes, [secondTree]);
       } finally {
-        ExplorerService.stopEvents();
-        global.EventSource = oldEventSource;
-        global.fetch = oldFetch;
+        ExplorerService._setTree(null);
+        ExplorerService.refreshTree = originalRefresh;
       }
     });
 
-    it("disposes listeners after a startup error and permits a clean retry", async () => {
-      const streams = [];
-      const oldEventSource = global.EventSource;
+    it("ignores a stale resync callback after dispose and remount", async () => {
+      const firstTree = {};
+      const secondTree = {};
+      const refreshes = [];
+      const originalRefresh = ExplorerService.refreshTree;
+      ExplorerService.refreshTree = async () => { refreshes.push(ExplorerService._getTree()); };
       try {
-        global.EventSource = createMockEventSource((source) => { streams.push(source); });
+        ExplorerService._setTree(firstTree);
+        const staleSubscription = subscriptionRecords.findLast((record) => record.type === "resync");
+        assert.ok(staleSubscription, "resync should be subscribed for the mounted tree");
+        ExplorerService._setTree(null);
+        ExplorerService._setTree(secondTree);
 
-        const failed = ExplorerService.startEvents();
-        streams[0].emit("error");
-        await assert.rejects(failed, /event channel failed/);
-        assert.equal(streams[0].closed, true);
-        assert.equal(streams[0].listeners.size, 0);
+        staleSubscription.handler({ type: "resync", revision: 0 });
+        emitAppEvent({ type: "resync", revision: 0 });
+        await new Promise((resolve) => setTimeout(resolve, 0));
 
-        const retried = ExplorerService.startEvents();
-        streams[1].emit("open");
-        await retried;
-        assert.equal(ExplorerService._eventSource, streams[1]);
+        assert.deepStrictEqual(refreshes, [secondTree]);
       } finally {
-        ExplorerService.stopEvents();
-        global.EventSource = oldEventSource;
+        ExplorerService._setTree(null);
+        ExplorerService.refreshTree = originalRefresh;
       }
     });
   });
 
   describe("refreshTree", () => {
+    it("does not apply an old refresh after remounting a new tree", async () => {
+      let resolveOldFetch;
+      const oldTreeWrites = [];
+      const newTreeWrites = [];
+      global.fetch = () => new Promise((resolve) => { resolveOldFetch = resolve; });
+      ExplorerService.setWorkspacePath("/workspace");
+      ExplorerService._setTree({
+        clearChildCache: () => {},
+        setData: (data) => oldTreeWrites.push(data),
+      });
+
+      const pending = ExplorerService.refreshTree();
+      ExplorerService._setTree({
+        clearChildCache: () => {},
+        setData: (data) => newTreeWrites.push(data),
+      });
+      resolveOldFetch({
+        ok: true,
+        json: async () => ({ items: [], rootDir: "/workspace", relativePath: "" }),
+      });
+      await pending;
+
+      assert.deepStrictEqual(oldTreeWrites, []);
+      assert.deepStrictEqual(newTreeWrites, []);
+      ExplorerService._setTree(null);
+    });
+
+    it("does not apply an old refresh after switching workspace", async () => {
+      let resolveOldFetch;
+      const writes = [];
+      global.fetch = () => new Promise((resolve) => { resolveOldFetch = resolve; });
+      ExplorerService.setWorkspacePath("/old-workspace");
+      ExplorerService._setTree({
+        clearChildCache: () => {},
+        setData: (data) => writes.push(data),
+      });
+
+      const pending = ExplorerService.refreshTree();
+      ExplorerService.setWorkspacePath("/new-workspace");
+      resolveOldFetch({
+        ok: true,
+        json: async () => ({ items: [], rootDir: "/old-workspace", relativePath: "" }),
+      });
+      await pending;
+
+      assert.deepStrictEqual(writes, []);
+      ExplorerService._setTree(null);
+    });
+
+    it("does not apply an old refresh after remounting the same tree instance", async () => {
+      let resolveOldFetch;
+      const writes = [];
+      const tree = {
+        clearChildCache: () => {},
+        setData: (data) => writes.push(data),
+      };
+      global.fetch = () => new Promise((resolve) => { resolveOldFetch = resolve; });
+      ExplorerService.setWorkspacePath("/workspace");
+      ExplorerService._setTree(tree);
+
+      const pending = ExplorerService.refreshTree();
+      ExplorerService._setTree(null);
+      ExplorerService._setTree(tree);
+      resolveOldFetch({
+        ok: true,
+        json: async () => ({ items: [], rootDir: "/workspace", relativePath: "" }),
+      });
+      await pending;
+
+      assert.deepStrictEqual(writes, []);
+      ExplorerService._setTree(null);
+    });
+
+    it("coalesces concurrent changed and resync events into one trailing refresh", async () => {
+      const deferredFetches = [];
+      const writes = [];
+      global.fetch = () => new Promise((resolve) => { deferredFetches.push(resolve); });
+      ExplorerService.setWorkspacePath("/test");
+      ExplorerService._setTree({
+        clearChildCache: () => {},
+        setData: (data) => writes.push(data),
+      });
+
+      const pending = ExplorerService.refreshTree();
+      emitAppEvent({ type: "explorer.changed", revision: 4, payload: { file: "old.ts" } });
+      emitAppEvent({ type: "resync", revision: 0 });
+      assert.strictEqual(deferredFetches.length, 1);
+
+      deferredFetches[0]({
+        ok: true,
+        json: async () => ({
+          items: [{ path: "old.ts", name: "old.ts", isDir: false }],
+          rootDir: "/test",
+          relativePath: "",
+        }),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.strictEqual(deferredFetches.length, 2);
+      assert.deepStrictEqual(writes, []);
+
+      deferredFetches[1]({
+        ok: true,
+        json: async () => ({
+          items: [{ path: "latest.ts", name: "latest.ts", isDir: false }],
+          rootDir: "/test",
+          relativePath: "",
+        }),
+      });
+      await pending;
+
+      assert.strictEqual(deferredFetches.length, 2);
+      assert.strictEqual(writes.length, 1);
+      assert.strictEqual(writes[0][0].id, "latest.ts");
+      ExplorerService._setTree(null);
+    });
+
     it("快照未变化时跳过整棵树重绘", async () => {
       const calls = [];
       global.document = {

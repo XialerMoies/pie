@@ -5,14 +5,6 @@ export class ExplorerService {
   static _filterEnabled = true;
   static _lastRefreshKey = '';
   static _pendingDeletedPaths = new Set<string>();
-  static _eventsStarted = false;
-  static _eventSource: EventSource | null = null;
-  static _eventsReady: Promise<void> | null = null;
-  static _eventReadyTimer: ReturnType<typeof setTimeout> | null = null;
-  static _eventGeneration = 0;
-  static _eventCleanup: (() => void) | null = null;
-  static startEvents(): Promise<void> { return Promise.resolve(); }
-  static stopEvents(): void {}
 
   static _makeRefreshKey(items: TreeNode[], workspacePath?: string): string {
     const ws = workspacePath ?? ExplorerService.getWorkspacePath();
@@ -228,148 +220,150 @@ if (!App.Preferences.getBoolean('explorer-filter', true)) ExplorerService._filte
 // 暴露到全局（供 inline onclick 使用）
 (window as any).ExplorerService = ExplorerService;
 
-// 当前 explorer 的 Tree 实例引用（SSE 刷新时不重建）
+// 当前 explorer 的 Tree 实例引用（事件刷新时不重建）
 let _explorerTree: Tree | null = null;
+let _treeSubscriptionVersion = 0;
+let _eventUnsubscribe: (() => void) | null = null;
+let _refreshRequestSequence = 0;
+let _refreshQueued = false;
+let _refreshInFlight: Promise<void> | null = null;
+
+function releaseExplorerEvents(): void {
+  _treeSubscriptionVersion++;
+  _eventUnsubscribe?.();
+  _eventUnsubscribe = null;
+}
+
+function handlePermissionConfirm(event: AppEvent): void {
+  const payload = event.payload && typeof event.payload === 'object'
+    ? event.payload as Record<string, unknown>
+    : event as unknown as Record<string, unknown>;
+  const id = typeof payload.id === 'string' ? payload.id : '';
+  if (!id) return;
+
+  const input = {
+    source: payload.source || '',
+    operation: payload.operation || '',
+    toolName: payload.toolName || '',
+    toolOperations: Array.isArray(payload.toolOperations) ? payload.toolOperations : [],
+    riskLevel: payload.riskLevel || '',
+    workspaceBounded: typeof payload.workspaceBounded === 'boolean' ? payload.workspaceBounded : undefined,
+    permissionRequired: typeof payload.permissionRequired === 'boolean' ? payload.permissionRequired : undefined,
+    root: payload.root || '',
+    path: payload.path || '',
+    relativePath: payload.relativePath || '',
+    reason: payload.reason || '路径访问需要确认',
+    permissionSuggestions: payload.permissionSuggestions || [],
+  };
+  void (async () => {
+    const choice = typeof confirmPermissionAsync === 'function'
+      ? await confirmPermissionAsync(input)
+      : (await confirmAsync(`
+        <div style="font-weight:700;margin-bottom:8px">确认路径访问</div>
+        <div style="font-size:.76rem;color:var(--ts);margin-bottom:10px">${E(input.reason || '路径访问需要确认')}</div>
+        <pre style="margin:0;max-width:560px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.18);border:1px solid var(--bd);border-radius:7px;padding:10px;font-family:var(--fm);font-size:.74rem;color:var(--tx)">${E(input.path || '')}</pre>
+      `) ? 'session' : 'deny');
+    await fetch('/api/permissions/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id,
+        allow: choice !== 'deny',
+        scope: choice === 'workspace'
+          ? 'workspace'
+          : choice === 'session' ? 'session' : 'once',
+      }),
+    }).catch(() => undefined);
+    void (window as any).refreshPermissionsPanel?.();
+  })();
+}
+
+function subscribeExplorerEvents(): void {
+  const version = ++_treeSubscriptionVersion;
+  const refreshMountedTree = () => {
+    if (version !== _treeSubscriptionVersion) return;
+    void ExplorerService.refreshTree();
+  };
+  const unsubscribeChanged = App.Events.subscribe('explorer.changed', refreshMountedTree);
+  const unsubscribeResync = App.Events.subscribe('resync', refreshMountedTree);
+  let active = true;
+  const unsubscribe = () => {
+    if (!active) return;
+    active = false;
+    unsubscribeChanged();
+    unsubscribeResync();
+    if (_eventUnsubscribe === unsubscribe) _eventUnsubscribe = null;
+  };
+  _eventUnsubscribe = unsubscribe;
+}
+
 ExplorerService._setTree = (t: Tree | null) => {
   _explorerTree = t;
   ExplorerService._lastRefreshKey = '';
+  releaseExplorerEvents();
+  if (t) subscribeExplorerEvents();
 };
 ExplorerService._getTree = ((): Tree | null => _explorerTree) as typeof ExplorerService._getTree;
 
-/** 软刷新：重新加载根目录，保留展开状态 */
-ExplorerService.refreshTree = async function (): Promise<void> {
-  if (!_explorerTree) return;
+function isCurrentRefresh(
+  tree: Tree,
+  workspace: string,
+  mountVersion: number,
+  sequence: number,
+): boolean {
+  return tree === _explorerTree
+    && workspace === ExplorerService.getWorkspacePath()
+    && mountVersion === _treeSubscriptionVersion
+    && sequence === _refreshRequestSequence;
+}
+
+async function refreshExplorerOnce(sequence: number): Promise<void> {
+  const tree = _explorerTree;
+  if (!tree) return;
   const ws = ExplorerService.getWorkspacePath();
   if (!ws) return;
+  const mountVersion = _treeSubscriptionVersion;
   // 正在编辑中时跳过刷新（否则会销毁输入框）
-  if ((_explorerTree as any)._editingNode) return;
+  if ((tree as any)._editingNode) return;
   try {
     const d = await ExplorerService.fetchDir(ws, '');
+    if (!isCurrentRefresh(tree, ws, mountVersion, sequence) || (tree as any)._editingNode) return;
     const items = ExplorerService.reconcilePendingDeletes('', ExplorerService.toTreeNodes(d.items));
     const refreshKey = ExplorerService._makeRefreshKey(items, ws);
     if (refreshKey === ExplorerService._lastRefreshKey) {
       setExplorerStatus(`目录已刷新 · ${items.length} 项`, 'ready');
       return;
     }
-    _explorerTree.clearChildCache?.();
-    _explorerTree.setData(items);
+    tree.clearChildCache?.();
+    tree.setData(items);
     ExplorerService._lastRefreshKey = refreshKey;
     setExplorerStatus(`目录已刷新 · ${items.length} 项`, 'ready');
   } catch {
-    setExplorerStatus('目录刷新失败', 'error');
-  }
-};
-
-// ─── 文件变更自动刷新（SSE）────────────────────────────────
-ExplorerService.startEvents = function (): Promise<void> {
-  if (ExplorerService._eventsReady) return ExplorerService._eventsReady;
-  ExplorerService._eventsStarted = true;
-  const generation = ++ExplorerService._eventGeneration;
-  const pending = new Promise<void>((resolve, reject) => {
-    try {
-      const es = new EventSource('/api/events');
-      ExplorerService._eventSource = es;
-      let ready = false;
-      const isCurrent = () => ExplorerService._eventGeneration === generation
-        && ExplorerService._eventSource === es;
-      const finishReady = () => {
-        if (ready || !isCurrent()) return;
-        ready = true;
-        if (ExplorerService._eventReadyTimer) clearTimeout(ExplorerService._eventReadyTimer);
-        ExplorerService._eventReadyTimer = null;
-        resolve();
-      };
-      ExplorerService._eventReadyTimer = setTimeout(() => {
-        if (!isCurrent()) return;
-        es.close();
-        reject(new Error('Permission event channel timed out'));
-      }, 5000);
-      const handleOpen = () => finishReady();
-      const handleMessage = (e: MessageEvent) => {
-      if (!isCurrent()) return;
-      try {
-        const d = JSON.parse(e.data);
-        if (d.type === 'permission_confirm') {
-          if (!d.id) return;
-          const input = {
-            source: d.source || '',
-            operation: d.operation || '',
-            toolName: d.toolName || '',
-            toolOperations: Array.isArray(d.toolOperations) ? d.toolOperations : [],
-            riskLevel: d.riskLevel || '',
-            workspaceBounded: typeof d.workspaceBounded === 'boolean' ? d.workspaceBounded : undefined,
-            permissionRequired: typeof d.permissionRequired === 'boolean' ? d.permissionRequired : undefined,
-            root: d.root || '',
-            path: d.path || '',
-            relativePath: d.relativePath || '',
-            reason: d.reason || '路径访问需要确认',
-            permissionSuggestions: d.permissionSuggestions || [],
-          };
-          void (async () => {
-            const choice = typeof confirmPermissionAsync === 'function'
-              ? await confirmPermissionAsync(input)
-              : (await confirmAsync(`
-                <div style="font-weight:700;margin-bottom:8px">确认路径访问</div>
-                <div style="font-size:.76rem;color:var(--ts);margin-bottom:10px">${E(input.reason || '路径访问需要确认')}</div>
-                <pre style="margin:0;max-width:560px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.18);border:1px solid var(--bd);border-radius:7px;padding:10px;font-family:var(--fm);font-size:.74rem;color:var(--tx)">${E(input.path || '')}</pre>
-              `) ? 'session' : 'deny');
-            await fetch('/api/permissions/confirm', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                id: d.id,
-                allow: choice !== 'deny',
-                scope: choice === 'workspace'
-                  ? 'workspace'
-                  : choice === 'session' ? 'session' : 'once',
-              }),
-            }).catch(() => undefined);
-            void (window as any).refreshPermissionsPanel?.();
-          })();
-          return;
-        }
-        if (d.type === 'refresh') {
-          ExplorerService.refreshTree();
-        }
-      } catch { /* ignore */ }
-      };
-      const handleError = () => {
-        if (isCurrent() && !ready) reject(new Error('Permission event channel failed'));
-      };
-      es.addEventListener('open', handleOpen);
-      es.addEventListener('message', handleMessage);
-      es.addEventListener('error', handleError);
-      ExplorerService._eventCleanup = () => {
-        es.removeEventListener('open', handleOpen);
-        es.removeEventListener('message', handleMessage);
-        es.removeEventListener('error', handleError);
-        es.close();
-      };
-    } catch (error) {
-      reject(error);
+    if (isCurrentRefresh(tree, ws, mountVersion, sequence)) {
+      setExplorerStatus('目录刷新失败', 'error');
     }
-  });
-  ExplorerService._eventsReady = pending.catch((error) => {
-    if (ExplorerService._eventGeneration !== generation) throw error;
-    if (ExplorerService._eventReadyTimer) clearTimeout(ExplorerService._eventReadyTimer);
-    ExplorerService._eventReadyTimer = null;
-    ExplorerService._eventsStarted = false;
-    ExplorerService._eventCleanup?.();
-    ExplorerService._eventCleanup = null;
-    ExplorerService._eventSource = null;
-    ExplorerService._eventsReady = null;
-    throw error;
-  });
-  return ExplorerService._eventsReady;
+  }
+}
+
+/** 软刷新：重新加载根目录，保留展开状态 */
+ExplorerService.refreshTree = function (): Promise<void> {
+  _refreshRequestSequence++;
+  _refreshQueued = true;
+  if (_refreshInFlight) return _refreshInFlight;
+
+  _refreshInFlight = (async () => {
+    try {
+      while (_refreshQueued) {
+        _refreshQueued = false;
+        await refreshExplorerOnce(_refreshRequestSequence);
+      }
+    } finally {
+      _refreshInFlight = null;
+    }
+  })();
+  return _refreshInFlight;
 };
 
-ExplorerService.stopEvents = function (): void {
-  ExplorerService._eventGeneration++;
-  if (ExplorerService._eventReadyTimer) clearTimeout(ExplorerService._eventReadyTimer);
-  ExplorerService._eventReadyTimer = null;
-  ExplorerService._eventCleanup?.();
-  ExplorerService._eventCleanup = null;
-  ExplorerService._eventSource = null;
-  ExplorerService._eventsStarted = false;
-  ExplorerService._eventsReady = null;
-};
+// ─── 文件变更自动刷新（共享事件总线）────────────────────────
+App.Events.subscribe('permission.confirm', handlePermissionConfirm);
+subscribeExplorerEvents();

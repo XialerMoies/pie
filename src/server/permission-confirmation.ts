@@ -1,5 +1,6 @@
 import type { ServerResponse } from "http";
 import type { CommandConfirmationResult } from "../agent/types.js";
+import type { AppEventHub } from "./app-events.js";
 import type { ServerPermissionConfirmationRequest } from "./permission-service.js";
 
 const PERMISSION_CONFIRM_TIMEOUT_MS = 120_000;
@@ -17,12 +18,12 @@ function permissionConfirmationId(): string {
 }
 
 export function createPermissionConfirmCallback(
-  sseClients: ServerResponse[],
+  appEvents: AppEventHub,
   options: { timeoutMs?: number } = {},
 ) {
   const timeoutMs = options.timeoutMs ?? PERMISSION_CONFIRM_TIMEOUT_MS;
   return async (request: ServerPermissionConfirmationRequest): Promise<CommandConfirmationResult> => {
-    const clients = sseClients.filter((client) => !client.destroyed && !client.writableEnded);
+    const clients = appEvents.clientsSnapshot();
     if (clients.length === 0) return { allow: false };
 
     const id = permissionConfirmationId();
@@ -43,24 +44,19 @@ export function createPermissionConfirmCallback(
         timeout,
       });
 
-      const payload = `data: ${JSON.stringify({
-        type: "permission_confirm",
+      appEvents.sendTo(clients, "permission.confirm", {
         id,
         ...request,
-      })}\n\n`;
+      });
 
-      let sent = false;
-      for (const client of clients) {
-        try {
-          client.write(payload);
-          sent = true;
-        } catch {
-          const pending = pendingPermissionConfirmations.get(id);
-          pending?.responses.delete(client);
-        }
+      const activeClients = new Set(appEvents.clientsSnapshot());
+      const pending = pendingPermissionConfirmations.get(id);
+      if (!pending) return;
+      for (const client of pending.responses) {
+        if (!activeClients.has(client)) pending.responses.delete(client);
       }
 
-      if (!sent) finish({ allow: false });
+      if (pending.responses.size === 0) finish({ allow: false });
     });
   };
 }
@@ -82,4 +78,3 @@ export function cancelPermissionConfirmationsForResponse(response: ServerRespons
     pending.resolve({ allow: false });
   }
 }
-

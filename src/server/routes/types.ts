@@ -8,6 +8,7 @@ import type { DesktopSecurityConfig } from "../security.js";
 import type { ServerPermissionService } from "../permission-service.js";
 import type { RootRegistry } from "../root-registry.js";
 import type { PermissionModeController } from "../permission-mode.js";
+import type { AppEventHub } from "../app-events.js";
 
 // ─── Trace Event 类型 ────────────────────────────────────
 
@@ -67,7 +68,7 @@ export interface ChatStreamState {
 export interface ServerContext {
   runtime: AgentRuntime;
   chatStream: ChatStreamState;
-  sseClients: ServerResponse[];
+  appEvents: AppEventHub;
   tsServer?: TsserverManager;
   security?: DesktopSecurityConfig;
   permissionService?: ServerPermissionService;

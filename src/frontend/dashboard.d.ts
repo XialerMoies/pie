@@ -169,6 +169,19 @@ interface AppChatStream {
   isCurrent(generation: number): boolean;
   isOpen(): boolean;
 }
+type AppEventType = 'dashboard.changed' | 'usage.changed' | 'mcp.changed' | 'explorer.changed' | 'permission.confirm';
+interface AppEvent<T = unknown> {
+  type: AppEventType | 'resync';
+  revision: number;
+  payload?: T;
+}
+type AppEventHandler = (event: AppEvent) => void;
+interface AppEvents {
+  start(): Promise<void>;
+  stop(): void;
+  subscribe(type: AppEventType | 'resync', handler: AppEventHandler): () => void;
+  resync(): void;
+}
 interface AppFile {
   toggleFileMenu(ev: MouseEvent, trigger?: HTMLElement): void;
   closeFM(): void;
@@ -341,6 +354,7 @@ interface AppNamespace {
   ChatState: AppChatState;
   ChatTimeline: AppChatTimeline;
   ChatStream: AppChatStream;
+  Events: AppEvents;
   File: AppFile;
   Session: AppSession;
   SessionActivation: AppSessionActivation;
@@ -584,6 +598,4 @@ declare class ExplorerService {
   static _setTree(t: Tree | null): void;
   static _getTree(): Tree | null;
   static refreshTree(): Promise<void>;
-  static startEvents(): Promise<void>;
-  static stopEvents(): void;
 }

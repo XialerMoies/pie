@@ -48,7 +48,7 @@ bootstrapApi().then(() => {
 
   void (async () => {
     try {
-      await window.ExplorerService?.startEvents?.();
+      await App.Events.start();
     } catch (error) {
       console.warn('[dashboard-startup] event channel unavailable', error);
     }
