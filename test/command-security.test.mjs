@@ -42,6 +42,7 @@ import {
   shellDialectForCommand,
 } from "../src/agent/tools/command.ts"
 import { isDangerousCommand as isDangerousCommandDirect } from "../src/agent/tools/command/dangerous-command.ts"
+import { extractCommandPathArgs } from "../src/agent/tools/command/path-extractors.ts"
 import { validateCommandPaths } from "../src/agent/tools/command/path-validation.ts"
 import { isCommandReadOnly } from "../src/agent/tools/command/read-only.ts"
 import {
@@ -60,6 +61,15 @@ function tempWorkspace() {
   mkdirSync(workspace, { recursive: true })
   return { root, workspace }
 }
+
+describe("path extractor module boundary", () => {
+  it("exposes structured read and write operations for command arguments", () => {
+    deepEqual(extractCommandPathArgs("cp", ["src/input.txt", "../output.txt"]), [
+      { token: "src/input.txt", operation: "read", source: "cp source" },
+      { token: "../output.txt", operation: "write", source: "cp destination" },
+    ])
+  })
+})
 
 function expectPathAsk(result, operation, suggestionType) {
   equal(result.allowed, false)
