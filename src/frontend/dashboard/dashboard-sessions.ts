@@ -56,7 +56,7 @@ function createDraftSessionId(): string {
 }
 
 function ensureDraftSessionTab(): string {
-  const activeId = getActiveSessionTabId();
+  const activeId = App.Tabs.getActiveSessionTabId();
   if (activeId) return activeId;
   const id = createDraftSessionId();
   rememberSessionTab(id);
@@ -102,17 +102,6 @@ function writeSessionTabIds(ids: string[]): void {
   }
   // TabStore._syncToState 已处理 items → UiStateStore.tabs, 仅触发保存
   if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
-}
-
-let _getActiveSessionTabIdDepth = 0;
-function getActiveSessionTabId(): string | null {
-  // 递归防护（TabStore 初始化时序可能产生循环调用）
-  if (_getActiveSessionTabIdDepth > 5) { _getActiveSessionTabIdDepth = 0; return null; }
-  _getActiveSessionTabIdDepth++;
-  try {
-    const tabs = App.Tabs;
-    return tabs?.getActiveSessionTabId ? tabs.getActiveSessionTabId() : null;
-  } finally { _getActiveSessionTabIdDepth--; }
 }
 
 function setActiveSessionTabId(id: string | null): void {
@@ -381,7 +370,7 @@ function renderSessionTabs(activeId?: string): void {
 function saveUiState(): void {
   const tabs = App.Tabs;
   if (tabs) { tabs.getState(); } // 确保初始化
-  const activeId = getActiveSessionTabId();
+  const activeId = App.Tabs.getActiveSessionTabId();
   const activePanel = App.State.getSnapshot().panel.active || 'explorer';
   App.State.updatePanel({ active: activePanel });
   if (activeId) App.State.touchSession(activeId);
@@ -635,7 +624,7 @@ function closeSessionTab(id: string): void {
     if (handler?.close) { handler.close(tab); return; }
   }
   // 降级
-  const wasActive = getActiveSessionTabId() === id;
+  const wasActive = App.Tabs.getActiveSessionTabId() === id;
   const nextSessionId = forgetSessionTab(id);
   if (wasActive) {
     // 优先切换到其他会话标签
@@ -670,7 +659,7 @@ function closeSessionTab(id: string): void {
     saveUiState();
     return;
   }
-  renderSessionTabs(getActiveSessionTabId() || undefined);
+  renderSessionTabs(App.Tabs.getActiveSessionTabId() || undefined);
   saveUiState();
 }
 
@@ -839,7 +828,7 @@ function fetchSessionIndex(): Promise<void> {
       const others = data.other || [];
       _sessionDataCache = { sessions, others };
       indexSessionTabs(sessions, others);
-      const activeId = getActiveSessionTabId() || '';
+      const activeId = App.Tabs.getActiveSessionTabId() || '';
       renderSessionTabs(activeId);
     });
   // 注意：错误由调用方处理（loadSessions UI 路径 / 后台路径各自决定是否吞错）
@@ -856,7 +845,7 @@ function renderSessionPanel(): void {
   if (!_sessionDataCache) { loadSessions(); return; }
 
   const { sessions, others } = _sessionDataCache;
-  const activeId = getActiveSessionTabId() || '';
+  const activeId = App.Tabs.getActiveSessionTabId() || '';
   const openSessionIds = readOpenRealSessionIds();
 
   const renderKey = buildSessionRenderKey(sessions, others, openSessionIds);
@@ -1166,7 +1155,7 @@ window.branchSession = branchSession as any;
 (window as any).toggleOtherSessions = toggleOtherSessions;
 (window as any).commitSessionTab = commitSessionTab;
 (window as any).maybeAutoTitleSession = maybeAutoTitleSession;
-(window as any).getActiveSessionTabId = getActiveSessionTabId;
+(window as any).getActiveSessionTabId = () => App.Tabs.getActiveSessionTabId();
 (window as any).setActiveSessionTabId = setActiveSessionTabId;
 (window as any).ensureDraftSessionTab = ensureDraftSessionTab;
 (window as any).whenSessionRestoreReady = whenSessionRestoreReady;
@@ -1187,7 +1176,7 @@ if (AppSess) {
   AppSess.branchSession = branchSession;
   AppSess.commitSessionTab = commitSessionTab;
   AppSess.maybeAutoTitleSession = maybeAutoTitleSession;
-  AppSess.getActiveSessionTabId = getActiveSessionTabId;
+  AppSess.getActiveSessionTabId = () => App.Tabs.getActiveSessionTabId();
   AppSess.setActiveSessionTabId = setActiveSessionTabId;
   AppSess.ensureDraftSessionTab = ensureDraftSessionTab;
   AppSess.whenReady = whenSessionRestoreReady;
@@ -1241,13 +1230,12 @@ function _sessionActivate(tab: AppTab, options?: ApplySessionMessagesOptions): v
 
 function _sessionClose(tab: AppTab): void {
   // 必须在 forgetSessionTab 之前捕获 activeId（TabStore 会在 closeTab 后更新 activeId）
-  // 用 TabStore 底层 activeId 判定"是否激活标签"（不经 getActiveSessionTabId 的
-  // 递归深度守卫——它触发时返回 null 会让 wasActive 误判为 false，导致关闭不切换）
+  // 直接读取 TabStore 的权威 activeId，避免兼容入口参与关闭判定。
   const wasActive = App.Tabs.getActiveTab?.()?.id === tab.id;
   forgetSessionTab(tab.id);
   if (!wasActive) {
     // 关闭的是非激活会话：保持当前 active，仅刷新标签栏
-    renderSessionTabs(getActiveSessionTabId() || undefined);
+    renderSessionTabs(App.Tabs.getActiveSessionTabId() || undefined);
     saveUiState();
     return;
   }

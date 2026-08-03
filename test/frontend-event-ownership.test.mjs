@@ -38,6 +38,14 @@ describe("frontend state ownership", () => {
       assert.doesNotMatch(source, /(?:window|\(window as any\))\.__(?:state|tabs)\b/, `${file} must use an App facade`);
     }
   });
+
+  it("reads the active session directly from the TabStore facade", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-sessions.ts"), "utf8");
+    assert.doesNotMatch(source, /_getActiveSessionTabIdDepth/);
+    assert.doesNotMatch(source, /function getActiveSessionTabId\s*\(/);
+    assert.doesNotMatch(source, /(?<![\w.])getActiveSessionTabId\(\)/);
+    assert.match(source, /App\.Tabs\.getActiveSessionTabId\(\)/);
+  });
 });
 
 describe("non-Markdown HTML boundaries", () => {
