@@ -108,6 +108,7 @@ interface AppUI {
   layout(): void;
   togglePanel(name: string): void;
   renderPanel(name: string, pc?: HTMLElement | null): void;
+  restorePanel(name: string): void;
   sinfoHTML(): string;
   refreshSinfo(): void;
   renderTabs(): void;
@@ -189,6 +190,42 @@ interface AppSession {
   ensureDraftSessionTab(): string;
   whenReady(): Promise<void>;
   renderSessionTabs(activeId?: string): void;
+  restoreSessionTabs(): Promise<void>;
+  saveUiState(): void;
+}
+interface SessionRestoreOptions {
+  onActiveSession(sessionId: string): Promise<void> | void;
+  prefetchSessionIndex(): Promise<void> | void;
+}
+interface AppSessionTabs {
+  isDraftSessionId(id: string | null | undefined): boolean;
+  readSessionTabIds(): string[];
+  writeSessionTabIds(ids: string[]): void;
+  setActiveSessionTabId(id: string | null): void;
+  renderSessionTabs(activeId?: string): void;
+  saveUiState(): void;
+}
+interface AppSessionRestore {
+  init(options: SessionRestoreOptions): void;
+  restoreSessionTabs(): Promise<void>;
+  whenReady(): Promise<void>;
+  markUserInteraction(): void;
+  hasUserInteracted(): boolean;
+}
+interface SessionActivationCallbacks {
+  rememberSessionTab(id: string): void;
+  loadSessions(): void;
+  setupDraftSession(id: string): void;
+}
+interface AppSessionActivation {
+  init(options: SessionActivationCallbacks): void;
+  activate(tab: AppTab, options?: SessionActivationOptions): Promise<void>;
+  activateById(id: string, options?: SessionActivationOptions): Promise<void>;
+  switchSession(id: string, options?: SessionActivationOptions): void;
+  onceActivated(cb: SessionActivatedCallback): CancelSessionActivationSubscription;
+  onceActivated(sessionId: string, cb: SessionActivatedCallback): CancelSessionActivationSubscription;
+  emitActivated(sessionId: string): void;
+  invalidate(): void;
 }
 interface AppSettings {
   openSettingsModal(): void;
@@ -213,6 +250,8 @@ interface AppSettings {
 interface SessionActivationOptions {
   scroll?: 'bottom' | 'none';
   refreshSessions?: boolean;
+  silent?: boolean;
+  skipTabState?: boolean;
 }
 
 interface TabBehavior {
@@ -304,6 +343,9 @@ interface AppNamespace {
   ChatStream: AppChatStream;
   File: AppFile;
   Session: AppSession;
+  SessionActivation: AppSessionActivation;
+  SessionTabs: AppSessionTabs;
+  SessionRestore: AppSessionRestore;
   Settings: AppSettings;
   Git: AppGit;
   McpState: AppMcpState;

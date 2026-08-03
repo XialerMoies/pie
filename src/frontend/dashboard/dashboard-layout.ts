@@ -400,7 +400,7 @@ function restoreActiveTab(): void {
   try {
     // 用户已手动激活过标签 → 跳过恢复（restoreFileTabs 的异步 fetch 可能晚到，
     // 不得把 activeView 快照回持久化会话覆盖用户当前操作）
-    if ((window as any).hasUserInteractedWithTabs?.()) return;
+    if (App.SessionRestore.hasUserInteracted()) return;
     // UiStateStore.activeView 是权威恢复源
     const activeView = App.State.getSnapshot().activeView;
 

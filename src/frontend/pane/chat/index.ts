@@ -83,7 +83,7 @@ function shortRelTime(iso: string): string {
   return new Date(iso).toLocaleDateString("zh-CN");
 }
 
-function isActiveSession(sessionId: string): boolean {
+function _isActiveSession(sessionId: string): boolean {
   const activeTab = App.Tabs.getActiveTab();
   if (activeTab?.id === sessionId) return true;
   return App.Session.getActiveSessionTabId() === sessionId;
@@ -150,7 +150,7 @@ function openConvMatch(sessionId: string, msgIndex?: number, matchOrdinal?: numb
   };
 
   const scrollOnce = (behavior: ScrollBehavior): boolean => {
-    if (settled || seq !== _convClickSeq || !isActiveSession(sessionId)) return false;
+    if (settled || seq !== _convClickSeq || !_isActiveSession(sessionId)) return false;
     const msgsEl = document.getElementById("ms");
     if (!msgsEl) return false;
     const msgs = msgsEl.querySelectorAll(".m");

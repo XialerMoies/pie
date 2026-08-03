@@ -83,7 +83,10 @@ describe("file tab render before Monaco", { concurrency: false }, () => {
     await import(`../src/frontend/services/tab-store.ts?f2=${Date.now()}`);
     global.placeContextMenu = win.placeContextMenu;
     await import("../src/frontend/dashboard/layout-tabs.ts");
-    await import(`../src/frontend/dashboard/dashboard-sessions.ts?f2=${Date.now()}`);
+    const sessionNonce = Date.now();
+    await import(`../src/frontend/dashboard/session-restore.ts?f2=${sessionNonce}`);
+    await import(`../src/frontend/dashboard/session-activation.ts?f2=${sessionNonce}`);
+    await import(`../src/frontend/dashboard/dashboard-sessions.ts?f2=${sessionNonce}`);
     await import("../src/frontend/dashboard/dashboard-layout.ts");
     global.App = win.App;
   });

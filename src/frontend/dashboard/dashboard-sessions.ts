@@ -34,9 +34,16 @@ interface SessionDataCache {
 let _sessionDataCache: SessionDataCache | null = null;
 
 let _sessionListSeq = 0;
-const DRAFT_SESSION_PREFIX = 'draft:';
 let _sessionTabLookup = new Map<string, SessionInfo>();
-let _sessionRestorePromise: Promise<void> | null = null;
+
+const {
+  isDraftSessionId,
+  readSessionTabIds,
+  writeSessionTabIds,
+  setActiveSessionTabId,
+  renderSessionTabs,
+  saveUiState,
+} = App.SessionTabs;
 
 function bumpSessionListSeq(): number {
   _sessionListSeq += 1;
@@ -47,12 +54,8 @@ function isCurrentSessionListSeq(seq: number): boolean {
   return seq === _sessionListSeq;
 }
 
-function isDraftSessionId(id: string | null | undefined): boolean {
-  return typeof id === 'string' && id.startsWith(DRAFT_SESSION_PREFIX);
-}
-
 function createDraftSessionId(): string {
-  return DRAFT_SESSION_PREFIX + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  return 'draft:' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 }
 
 function ensureDraftSessionTab(): string {
@@ -63,53 +66,6 @@ function ensureDraftSessionTab(): string {
   setActiveSessionTabId(id);
   renderSessionTabs(id);
   return id;
-}
-
-function normalizeSessionTabIds(ids: unknown[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const id of ids) {
-    if (typeof id !== 'string' || !id || seen.has(id)) continue;
-    seen.add(id);
-    result.push(id);
-  }
-  return result;
-}
-
-function readSessionTabIds(): string[] {
-  const tabs = App.Tabs;
-  return tabs?.getSessionTabIds ? tabs.getSessionTabIds() : [];
-}
-
-function writeSessionTabIds(ids: string[]): void {
-  const next = normalizeSessionTabIds(ids);
-  // 同步到 TabStore（作为 adapter 写入）
-  const tabs = App.Tabs;
-  if (tabs) {
-    const existing = tabs.getSessionTabIds();
-    for (const id of next) {
-      if (!existing.includes(id)) {
-        const isDraft = id.startsWith('draft:');
-        tabs.openTab({
-          kind: isDraft ? 'chat' : 'session',
-          id,
-          title: '新会话',
-          ...(isDraft ? { draftId: id } : { sessionId: id }),
-        });
-      }
-    }
-    for (const id of existing) { if (!next.includes(id)) tabs.closeTab(id); }
-  }
-  // TabStore._syncToState 已处理 items → UiStateStore.tabs, 仅触发保存
-  if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
-}
-
-function setActiveSessionTabId(id: string | null): void {
-  // 同步到 TabStore（_syncToState 已处理 activeView → UiStateStore）
-  const tabs = App.Tabs;
-  if (tabs) tabs.activateTab(id);
-  // TabStore 不可用时回退触发保存
-  if (!tabs && typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
 }
 
 function readOpenRealSessionIds(): Set<string> {
@@ -353,12 +309,6 @@ function focusChatView(): void {
   // no-op: _syncMainArea 根据 TabStore.activeId 自动切换主区显示
 }
 
-/** Session tab 渲染（已合并到 renderTabs，此函数仅触发 renderTabs） */
-function renderSessionTabs(activeId?: string): void {
-  // 确保旧字段 activeId 同步（renderTabs fallback 需要）
-  if (typeof (window as any).renderTabs === 'function') (window as any).renderTabs();
-}
-
 /** UiStateStore 保存快捷通道——通过 store 的 saveNow 写服务端 */
 (window as any)._uiStateSave = function _uiStateSave(): void {
   const activeView = App.State.getSnapshot().activeView;
@@ -366,231 +316,9 @@ function renderSessionTabs(activeId?: string): void {
   void App.State.saveNow();
 };
 
-/** 保存 UI 状态到服务端（不受随机端口影响） */
-function saveUiState(): void {
-  const tabs = App.Tabs;
-  if (tabs) { tabs.getState(); } // 确保初始化
-  const activeId = App.Tabs.getActiveSessionTabId();
-  const activePanel = App.State.getSnapshot().panel.active || 'explorer';
-  App.State.updatePanel({ active: activePanel });
-  if (activeId) App.State.touchSession(activeId);
-  void App.State.saveNow();
-}
+const restoreSessionTabs = (): Promise<void> => App.SessionRestore.restoreSessionTabs();
+const whenSessionRestoreReady = (): Promise<void> => App.SessionRestore.whenReady();
 
-/** 启动时恢复完整 UI 状态：会话标签 + 活跃 session 消息 + 面板 */
-async function restoreSessionTabsImpl(): Promise<void> {
-  // 先拉取会话元数据索引，确保顶部标签尽早显示正确标题
-  fetchSessionIndex().catch(() => {});
-
-  const store = await App.State.hydrate();
-  // 用户已手动激活过标签（hydrate 慢，恢复流程晚到）→ 跳过恢复，避免把 activeId/
-  // 标签列表快照回持久化状态覆盖用户正在进行的操作。
-  if ((window as any).hasUserInteractedWithTabs?.()) {
-    const appUI = (window as any).App?.UI;
-    if (appUI?.restorePanel) appUI.restorePanel(store.panel.active || 'explorer');
-    return;
-  }
-  const items = store.tabs.items || [];
-  // 草稿没有独立的 session 文件，刷新后无法恢复其内容；持久化空草稿会
-  // 把一次启动/发送竞态变成永久的“新会话”标签。真实 session 标签照常恢复。
-  const restoredItems = items.filter(tab => !(tab.kind === 'chat' && isDraftSessionId(tab.id)));
-  const persistedActiveId = store.tabs.activeId || (store.activeView.type !== 'chat' ? store.activeView.id : null);
-  const preferredActiveId = persistedActiveId && !isDraftSessionId(persistedActiveId)
-    ? persistedActiveId
-    : null;
-  const activeId = preferredActiveId && restoredItems.some(tab => tab.id === preferredActiveId)
-    ? preferredActiveId
-    : restoredItems.find(tab => tab.kind === 'session')?.id || null;
-  App.Tabs?.restoreTabs?.(restoredItems, activeId);
-  // restoreTabs 是内存操作；同步一次 canonical 快照，确保清理的 draft
-  // 不会在随后 saveUiState 时又从 UiStateStore 旧快照写回来。
-  App.State.syncTabs?.(restoredItems, activeId);
-  // hydrate 后立即恢复文件标签（确保 UiStateStore.tabs.items 可用，避免独立定时器的竞态）
-  if (typeof (window as any).restoreFileTabs === 'function') (window as any).restoreFileTabs();
-  const ids = restoredItems.filter(tab => tab.kind === 'session' || tab.kind === 'chat').map(tab => tab.id);
-  const activePanel = store.panel.active || 'explorer';
-
-  if (!activeId && ids.length === 0 && readSessionTabIds().length === 0) {
-    if (restoredItems.length !== items.length) saveUiState();
-    return; // 无历史状态
-  }
-
-  // 更新旧字段投影，持久化仍由 TabStore/App.State 负责。
-  writeSessionTabIds(ids);
-  if (activeId) setActiveSessionTabId(activeId);
-  renderSessionTabs(activeId || '');
-
-  // 恢复左侧面板
-  const appUI = (window as any).App?.UI;
-  if (appUI?.restorePanel) appUI.restorePanel(activePanel);
-
-  // 激活会话：加载消息
-  if (activeId && !isDraftSessionId(activeId)) {
-    try {
-      const ws = App.State.getWorkspacePath();
-      const r = await fetch('/api/sessions/activate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: activeId, workspace: ws }),
-      });
-      const data = await r.json() as {
-        ok: boolean; messages?: Array<{ role: string; content: string; thinking?: string }>;
-      };
-      if (data.ok && Array.isArray(data.messages)) {
-        App.ChatStream.close();
-        App.ChatState.setBusy(false);
-        App.Chat?.resetMsgKeys?.();
-        App.ChatState.replaceMessages(data.messages.map(m => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-          thinking: m.thinking || '',
-          streaming: false,
-          _compacted: (m as any)._compacted || false,
-          turnId: (m as any).turnId || undefined,
-          blocks: (m as any).blocks || undefined,
-        })));
-        if ((window as any).focusChatView) (window as any).focusChatView();
-        const msgsEl = document.getElementById('ms');
-        if (msgsEl) {
-          msgsEl.innerHTML = App.ChatState.getMessages().length > 0
-            ? (window.msgs ? window.msgs() : '')
-            : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
-        }
-        App.ChatTimeline?.sync();
-      }
-    } catch { /* 静默降级 */ }
-  }
-  saveUiState();
-}
-
-/** 启动恢复只允许有一个实例，发送流程可以等待同一个 Promise。 */
-function restoreSessionTabs(): Promise<void> {
-  if (!_sessionRestorePromise) {
-    _sessionRestorePromise = restoreSessionTabsImpl().catch((error) => {
-      // 恢复失败不能让后续发送永久卡在 rejected Promise 上；发送流程仍可
-      // 在当前空状态创建并绑定一个新的草稿会话。
-      console.warn('[session-restore] failed', error);
-    });
-  }
-  return _sessionRestorePromise;
-}
-
-function whenSessionRestoreReady(): Promise<void> {
-  return _sessionRestorePromise || Promise.resolve();
-}
-
-/** 关闭当前 SSE 连接 + 重置忙状态 */
-function _disposeActiveStream(): void {
-  App.ChatStream.close();
-  App.ChatState.setBusy(false);
-}
-
-/** 将 API 响应映射为 Message 数组 */
-function _mapMessages(raw: any[]): Message[] {
-  return (raw || []).map(m => ({
-    role: m.role as 'user' | 'assistant',
-    content: m.content,
-    thinking: m.thinking || '',
-    streaming: false,
-    _compacted: (m as any)._compacted || false,
-    turnId: (m as any).turnId || undefined,
-    blocks: (m as any).blocks || undefined,
-  }));
-}
-
-/** 会话激活选项 */
-interface ApplySessionMessagesOptions {
-  scroll?: 'bottom' | 'none';
-  refreshSessions?: boolean;
-}
-
-/** 设置消息列表 + 刷新 UI + 记住会话 + 保存状态 */
-function _applySessionMessages(
-  data: { activeSessionId?: string; messages?: any[] },
-  fallbackId: string,
-  options?: ApplySessionMessagesOptions,
-): void {
-  App.Chat?.resetMsgKeys?.();
-  App.ChatState.replaceMessages(_mapMessages(data.messages));
-  focusChatView();
-  const opts = options || {};
-  const msgsEl = $('ms');
-  if (msgsEl) {
-    msgsEl.innerHTML = App.ChatState.getMessages().length > 0
-      ? (window.msgs ? window.msgs() : '')
-      : '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
-    if (opts.scroll !== 'none') {
-      setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50);
-    }
-  }
-  App.ChatTimeline?.sync();
-  const activeId = data.activeSessionId || fallbackId;
-  if (activeId) { rememberSessionTab(activeId); setActiveSessionTabId(activeId); renderSessionTabs(activeId); }
-  if (opts.refreshSessions !== false) loadSessions();
-  saveUiState();
-  // 通知订阅者（仅消费匹配目标 session 的订阅）
-  if (activeId) emitSessionActivated(activeId);
-}
-
-// ─── 会话激活通知系统（session-aware，只消费匹配的订阅）──
-interface _ActivationSub {
-  sessionId: string | null; // null = 匹配任意 session
-  cb: (sessionId: string) => void;
-  active: boolean;
-}
-let _activationSubs: _ActivationSub[] = [];
-
-/** 订阅下次会话激活（只触发一次，匹配目标 session 后清理） */
-function onceSessionActivated(cb: _ActivationSub['cb']): (() => void);
-function onceSessionActivated(sessionId: string, cb: _ActivationSub['cb']): (() => void);
-function onceSessionActivated(sessionIdOrCb: string | _ActivationSub['cb'], cb?: _ActivationSub['cb']): (() => void) {
-  if (typeof sessionIdOrCb !== 'function' && !cb) return () => {};
-  const sub: _ActivationSub = typeof sessionIdOrCb === 'function'
-    ? { sessionId: null, cb: sessionIdOrCb, active: true }
-    : { sessionId: sessionIdOrCb, cb: cb as _ActivationSub['cb'], active: true };
-  _activationSubs.push(sub);
-  // 返回取消函数
-  return () => {
-    sub.active = false;
-    const idx = _activationSubs.indexOf(sub);
-    if (idx >= 0) _activationSubs.splice(idx, 1);
-  };
-}
-/** 触发全部待处理的激活订阅（仅消费匹配的，不匹配的保留） */
-function emitSessionActivated(sessionId: string): void {
-  const snapshot = _activationSubs.slice();
-  const remaining: _ActivationSub[] = [];
-  for (const sub of snapshot) {
-    if (!sub.active) continue;
-    if (sub.sessionId === null || sub.sessionId === sessionId) {
-      sub.active = false;
-      try { sub.cb(sessionId); } catch {}
-    } else {
-      remaining.push(sub);
-    }
-  }
-  _activationSubs = remaining.filter(sub => sub.active);
-}
-window.onceSessionActivated = onceSessionActivated;
-window.emitSessionActivated = emitSessionActivated;
-
-/** 让所有在途的会话激活请求过期（文件/其他标签激活时调用——统一竞态防护） */
-window.invalidateSessionActivation = (): void => { _sessionActivationSeq++; _markUserTabInteraction(); };
-
-/** 激活失败时的状态回滚 */
-function _activateFailReset(): void {
-  App.Chat?.resetMsgKeys?.();
-  setActiveSessionTabId(null);
-  App.ChatState.clearMessages();
-  App.ChatState.setBusy(false);
-  App.ChatStream.close();
-  const ci = $('ci') as HTMLTextAreaElement | null;
-  const cs = $('cs') as HTMLButtonElement | null;
-  if (ci) { ci.disabled = false; ci.style.height = 'auto'; }
-  if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = window.S('iup', 16); }
-}
-
-/** 新草稿/空会话 */
 function _setupDraftSession(id: string): void {
   rememberSessionTab(id);
   setActiveSessionTabId(id);
@@ -598,7 +326,7 @@ function _setupDraftSession(id: string): void {
   App.ChatState.clearMessages();
   App.ChatState.setBusy(false);
   App.Chat?.clearAttachments?.();
-  _disposeActiveStream();
+  App.ChatStream.close();
   focusChatView();
   const ci = $('ci') as HTMLTextAreaElement | null;
   if (ci) { ci.value = ''; ci.style.height = 'auto'; }
@@ -609,12 +337,22 @@ function _setupDraftSession(id: string): void {
   loadSessions();
 }
 
-/** 保留向后兼容入口 */
-function activateDraftSession(id: string): void {
-  _setupDraftSession(id);
-}
+/** 会话激活与启动恢复接线 */
+App.SessionActivation.init({
+  rememberSessionTab,
+  loadSessions,
+  setupDraftSession: _setupDraftSession,
+});
 
-/** App.Tabs.close 的降级入口 */
+App.SessionRestore.init({
+  prefetchSessionIndex: () => fetchSessionIndex(),
+  onActiveSession: id => App.SessionActivation.activateById(id, {
+    silent: true,
+    skipTabState: true,
+    refreshSessions: false,
+  }),
+});
+
 function closeSessionTab(id: string): void {
   const T = (window as any).App?.Tabs;
   const ts = App.Tabs;
@@ -1070,36 +808,11 @@ function branchSession(id: string): void {
   }).catch(() => toast('创建分支失败', 'error'));
 }
 
-/** App.Tabs.activate 的降级入口（当 handler/fallback 调用时保留完整逻辑） */
-function switchSession(id: string, options?: ApplySessionMessagesOptions): void {
-  const T = (window as any).App?.Tabs;
-  const ts = App.Tabs;
-  const tab = ts?.getTab?.(id);
-  if (tab && (tab.kind === 'session' || tab.kind === 'chat')) {
-    const handler = ts?.getTabBehavior?.(tab.kind);
-    if (handler?.activate) { handler.activate(tab, options); return; }
-  }
-  // 降级：TabStore 无此 tab 时直接执行（兼容测试/未迁移场景）
-  // 兜底路径同样参与 seq 竞态防护：旧请求晚到不得重开已关闭标签/覆盖当前内容
-  _markUserTabInteraction();
-  if (isDraftSessionId(id)) { _sessionActivationSeq++; _setupDraftSession(id); return; }
-  const seq = ++_sessionActivationSeq;
-  const ws = App.State.getWorkspacePath();
-  fetch('/api/sessions/activate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, workspace: ws }) })
-    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-    .then((data: any) => {
-      if (seq !== _sessionActivationSeq) return; // 已被更新的激活取代 → 丢弃
-      if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
-      _disposeActiveStream();
-      _applySessionMessages(data, id, options);
-      toast('已切换到会话 (' + App.ChatState.getMessages().length + ' 条消息)');
-    }).catch(() => {
-      if (seq !== _sessionActivationSeq) return; // 过期失败不重置当前标签
-      _activateFailReset(); toast('会话已失效'); loadSessions();
-    });
+/** App.Tabs.activate 的向后兼容入口 */
+function switchSession(id: string, options?: SessionActivationOptions): void {
+  App.SessionActivation.switchSession(id, options);
 }
 
-// ─── 会话列表事件委托（替代 inline onclick）────────────────
 let _boundSessionListEl: HTMLElement | null = null;
 
 function setupSessionListHandler(): void {
@@ -1186,48 +899,7 @@ if (AppSess) {
   AppSess.switchSession = switchSession;
 }
 
-// ─── Session/Chat handler（Phase 2：真实行为入口）────────
-
-// 会话激活请求序号。每次 _sessionActivate 递增；回调只在序号仍是当前值时生效。
-// 防止异步竞态：关闭/切换后，旧会话的迟到响应重新打开已关闭标签并覆盖当前内容。
-// （只丢弃旧响应，不改变激活时机——区别于按 tab.id 比对 activeId 的做法）
-let _sessionActivationSeq = 0;
-
-// 用户是否已手动激活过标签（会话/文件/草稿）。用于阻止启动恢复流程（异步 hydrate /
-// 文件内容 fetch）晚到时覆盖用户正在进行的操作（把 activeId 快照回持久化的会话）。
-let _userInteractedWithTabs = false;
-(window as any).hasUserInteractedWithTabs = () => _userInteractedWithTabs;
-function _markUserTabInteraction(): void { _userInteractedWithTabs = true; }
-
-function _sessionActivate(tab: AppTab, options?: ApplySessionMessagesOptions): void {
-  _markUserTabInteraction();
-  if (tab.kind === 'chat' || isDraftSessionId(tab.id)) {
-    // 切到草稿同样使在途的会话请求过期，避免旧响应晚到覆盖草稿页
-    _sessionActivationSeq++;
-    _setupDraftSession(tab.id);
-    return;
-  }
-  const seq = ++_sessionActivationSeq;
-  const ws = App.State.getWorkspacePath();
-  fetch('/api/sessions/activate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: tab.id, workspace: ws }),
-  }).then(r => {
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.json();
-  }).then((data: { ok: boolean; activeSessionId?: string; messages?: any[]; error?: string }) => {
-    if (seq !== _sessionActivationSeq) return; // 已被更新的激活取代 → 丢弃
-    if (!data.ok || data.error) { toast('加载失败: ' + (data.error || '')); return; }
-    _disposeActiveStream();
-    _applySessionMessages(data, tab.id, options);
-    toast('已切换到会话 (' + App.ChatState.getMessages().length + ' 条消息)');
-  }).catch(() => {
-    if (seq !== _sessionActivationSeq) return; // 过期失败不重置当前标签
-    _activateFailReset(); toast('会话已失效'); loadSessions();
-  });
-}
-
+// ─── Session/Chat 标签行为 ───
 function _sessionClose(tab: AppTab): void {
   // 必须在 forgetSessionTab 之前捕获 activeId（TabStore 会在 closeTab 后更新 activeId）
   // 直接读取 TabStore 的权威 activeId，避免兼容入口参与关闭判定。
@@ -1280,11 +952,11 @@ function _sessionClose(tab: AppTab): void {
 { const tabs = App.Tabs;
   if (tabs?.registerTabBehavior) {
     tabs.registerTabBehavior('chat', {
-      activate(tab: AppTab, options?: ApplySessionMessagesOptions) { _sessionActivate(tab, options); },
+      activate(tab: AppTab, options?: SessionActivationOptions) { void App.SessionActivation.activate(tab, options); },
       close(tab: AppTab) { _sessionClose(tab); },
     });
     tabs.registerTabBehavior('session', {
-      activate(tab: AppTab, options?: ApplySessionMessagesOptions) { _sessionActivate(tab, options); },
+      activate(tab: AppTab, options?: SessionActivationOptions) { void App.SessionActivation.activate(tab, options); },
       close(tab: AppTab) { _sessionClose(tab); },
     });
   }

@@ -52,7 +52,7 @@ let _notRepo = false;
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
-function el(id: string): HTMLElement | null {
+function gitEl(id: string): HTMLElement | null {
   return document.getElementById(id);
 }
 
@@ -108,7 +108,7 @@ async function fetchLog(root: string, count = 10): Promise<GitLogResponse> {
 // ─── Render ─────────────────────────────────────────────────────
 
 function renderGit(): void {
-  const container = el("git-container");
+  const container = gitEl("git-container");
   if (!container) return;
 
   if (_notRepo) {
@@ -276,8 +276,8 @@ function _svg(name: string, size = 16): string {
 // ─── Commit / Push / Pull ──────────────────────────────────────
 
 async function commit(): Promise<void> {
-  const btn = el("git-commit-btn") as HTMLButtonElement | null;
-  const input = el("git-commit-msg") as HTMLTextAreaElement | null;
+  const btn = gitEl("git-commit-btn") as HTMLButtonElement | null;
+  const input = gitEl("git-commit-msg") as HTMLTextAreaElement | null;
   if (!input || !btn) return;
   const msg = input.value.trim();
   if (!msg) { toast("请输入提交信息", "error"); return; }
@@ -374,7 +374,7 @@ function gitPaneRender(container: HTMLElement): void {
 
 // ─── App bindings ─────────────────────────────────────────────
 
-function addAppBindings(): void {
+function gitAddAppBindings(): void {
   const App = (window as any).App;
   if (App) {
     App.Git = App.Git || {};
@@ -385,6 +385,6 @@ function addAppBindings(): void {
     App.Git.pull = pull;
   }
 }
-addAppBindings();
+gitAddAppBindings();
 
 registerPane("git", gitPaneRender);

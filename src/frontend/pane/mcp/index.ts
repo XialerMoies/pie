@@ -37,7 +37,7 @@ let _activeMcpTab: "installed" | "explore" = "installed";
 
 function mcpPaneRender(container: HTMLElement): void {
   container.innerHTML = `<div id="${MCP_PANEL_ID}">${renderMcpPanel()}</div>`;
-  switchTab("installed");
+  switchMcpTab("installed");
 
   clearInterval(_mcpRefreshTimer!);
   _mcpRefreshTimer = setInterval(() => {
@@ -66,7 +66,7 @@ function renderMcpPanel(): string {
 
 // ─── 标签切换 ──────────────────────────────────
 
-function switchTab(tab: "installed" | "explore"): void {
+function switchMcpTab(tab: "installed" | "explore"): void {
   _activeMcpTab = tab;
   const content = document.getElementById("mcp-content");
   if (!content) return;
@@ -341,7 +341,7 @@ function bindInstallEvents(container: HTMLElement): void {
 
 document.addEventListener("click", (e) => {
   const tab = (e.target as HTMLElement)?.closest?.(".mcp-tab") as HTMLElement;
-  if (tab?.dataset?.tab) switchTab(tab.dataset.tab as "installed" | "explore");
+  if (tab?.dataset?.tab) switchMcpTab(tab.dataset.tab as "installed" | "explore");
 });
 
 registerPane("mcp", mcpPaneRender);

@@ -174,7 +174,7 @@ function ensureTabsFormat(state: WorkspaceUiState): void {
 // ─── 公开 API ──────────────────────────────────────────
 
 function isHydrated(): boolean { return _hydrated; }
-function getState(): WorkspaceUiState { return _state; }
+function getUiState(): WorkspaceUiState { return _state; }
 function getSnapshot(): WorkspaceUiState {
   return {
     ..._state,
@@ -369,7 +369,7 @@ function _notify(): void {
 // ─── 挂载到 window ────────────────────────────────────
 
 (window as any).__uiStateStore = {
-  hydrate, getState, patchState, subscribe, saveNow,
+  hydrate, getState: getUiState, patchState, subscribe, saveNow,
   isHydrated, getSnapshot, getWorkspacePath, setWorkspacePath, resetWorkspace,
   syncTabs, updateSessionMetadata, updatePanel, setChatOpen, touchSession,
   /** 直接引用 _state 供已有代码同步（迁移期过渡用） */

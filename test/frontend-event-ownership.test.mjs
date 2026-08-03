@@ -46,6 +46,43 @@ describe("frontend state ownership", () => {
     assert.doesNotMatch(source, /(?<![\w.])getActiveSessionTabId\(\)/);
     assert.match(source, /App\.Tabs\.getActiveSessionTabId\(\)/);
   });
+
+  it("owns startup restoration outside dashboard-sessions", () => {
+    const sessions = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-sessions.ts"), "utf8");
+    const layout = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-layout.ts"), "utf8");
+    const compiler = readFileSync(resolve(process.cwd(), "scripts/compile-frontend-ts.mjs"), "utf8");
+
+    assert.doesNotMatch(sessions, /function restoreSessionTabsImpl\s*\(/);
+    assert.doesNotMatch(sessions, /hasUserInteractedWithTabs/);
+    assert.doesNotMatch(sessions, /_markUserTabInteraction/);
+    assert.doesNotMatch(layout, /hasUserInteractedWithTabs/);
+    assert.match(sessions, /App\.SessionRestore\.init\s*\(/);
+    assert.match(layout, /App\.SessionRestore\.hasUserInteracted\s*\(\)/);
+
+    const restoreIndex = compiler.indexOf('"gen/dashboard/session-restore.js"');
+    const sessionsIndex = compiler.indexOf('"gen/dashboard/dashboard-sessions.js"');
+    assert.notStrictEqual(restoreIndex, -1, "session restore must be included in the dashboard bundle");
+    assert.ok(restoreIndex < sessionsIndex, "session restore must load before dashboard sessions");
+  });
+
+  it("owns message activation outside dashboard-sessions", () => {
+    const sessions = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-sessions.ts"), "utf8");
+    const activation = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/session-activation.ts"), "utf8");
+    const compiler = readFileSync(resolve(process.cwd(), "scripts/compile-frontend-ts.mjs"), "utf8");
+
+    assert.doesNotMatch(sessions, /function _sessionActivate\s*\(/);
+    assert.doesNotMatch(sessions, /function _applySessionMessages\s*\(/);
+    assert.doesNotMatch(sessions, /let _sessionActivationSeq\b/);
+    assert.match(sessions, /App\.SessionActivation\.init\s*\(/);
+    assert.match(activation, /let sessionActivationSeq\s*=\s*0/);
+    assert.match(activation, /if \(seq !== sessionActivationSeq\) return/);
+
+    const restoreIndex = compiler.indexOf('"gen/dashboard/session-restore.js"');
+    const activationIndex = compiler.indexOf('"gen/dashboard/session-activation.js"');
+    const sessionsIndex = compiler.indexOf('"gen/dashboard/dashboard-sessions.js"');
+    assert.ok(restoreIndex < activationIndex, "session restore must load before activation");
+    assert.ok(activationIndex < sessionsIndex, "session activation must load before dashboard sessions");
+  });
 });
 
 describe("non-Markdown HTML boundaries", () => {

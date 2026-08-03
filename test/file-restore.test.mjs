@@ -60,6 +60,7 @@ describe("File tab restore", () => {
         resetWorkspace: () => {},
       },
       UI: {}, Chat: {}, File: {}, Session: {}, Settings: {}, Git: {},
+      SessionRestore: { hasUserInteracted: () => false },
     };
     win.App.Tabs = {
       activate(id) { activateCalls.push(id); },

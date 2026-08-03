@@ -9,6 +9,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "fs";
 import { resolve, dirname, relative, join, sep } from "path";
 import { fileURLToPath } from "url";
+import { Script } from "node:vm";
 import * as esbuild from "esbuild";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -130,6 +131,8 @@ const bundleOrder = [
   "gen/ui/tree.js",
   "gen/ui/tree-render.js",
   "gen/ui/tree-events.js",
+  "gen/dashboard/session-restore.js",
+  "gen/dashboard/session-activation.js",
   "gen/dashboard/dashboard-sessions.js",
   "gen/pane/explorer/index.js",
   "gen/pane/chat/index.js",
@@ -148,6 +151,14 @@ if (bundleOrder.length > 0) {
     return readFileSync(fullPath, "utf-8");
   });
   const code = parts.join("\n");
+  // 编译期校验拼接产物：生产 bundle 是单作用域原生拼接，跨模块同名顶层
+  // 声明（function/const/let）会触发 SyntaxError，dev（Vite 模块化）不炸，
+  // 只有生产打包才暴露。这里用 vm.Script 提前解析，冲突在编译期就报。
+  try {
+    new Script(code);
+  } catch (err) {
+    throw new Error(`bundle 拼接产物存在重复顶层标识符（生产构建将无法加载）: ${err instanceof Error ? err.message : String(err)}`);
+  }
   if (code !== bundlePrev) {
     writeFileSync(bundleOut, code, "utf-8");
     console.log(`  [bundle] gen/dashboard.js (${bundleOrder.length} files, ${(code.length / 1024).toFixed(0)} KB)`);

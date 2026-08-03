@@ -20,6 +20,13 @@ global.document = win.document;
 global.self = win;
 global.MouseEvent = win.MouseEvent;
 
+async function loadDashboardSessions() {
+  const nonce = Date.now() + Math.random();
+  await import(`../src/frontend/dashboard/session-restore.ts?t=${nonce}`);
+  await import(`../src/frontend/dashboard/session-activation.ts?t=${nonce}`);
+  await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${nonce}`);
+}
+
 function cssBlocks(css, selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const matches = [...css.matchAll(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, "g"))].map((m) => m[1]);
@@ -375,7 +382,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   // ─── 关闭最后一个会话标签 → 自动激活下一个文件标签 ────────
 
   it("关闭最后一个会话标签时，自动激活下一个文件标签（加载其内容）", async () => {
-    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    await loadDashboardSessions();
     const ts = win.App.Tabs;
     const activated = [];
     ts.registerTabBehavior("file", {
@@ -396,7 +403,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   it("删除最后一个会话（列表操作）→ 自动激活下一个文件标签", async () => {
-    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    await loadDashboardSessions();
     const ts = win.App.Tabs;
     const activated = [];
     ts.registerTabBehavior("file", {
@@ -427,7 +434,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   it("会话↔会话切换：激活 B 后 activeId 与消息都切到 B", async () => {
-    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    await loadDashboardSessions();
     const ts = win.App.Tabs;
     const mk = (draft, sess) => {
       ts.openTab({ kind: "chat", id: draft, title: "新会话", draftId: draft });
@@ -460,7 +467,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   it("关闭会话 B 时 B 的旧激活请求晚到应丢弃，不能重开 B 或覆盖 A 内容", async () => {
-    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    await loadDashboardSessions();
     const ts = win.App.Tabs;
     const mk = (draft, sess) => {
       ts.openTab({ kind: "chat", id: draft, title: "新会话", draftId: draft });
@@ -506,7 +513,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   it("关闭会话的 next-active 规则：右邻优先 / 无右邻选左 / 无左邻选右", async () => {
-    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    await loadDashboardSessions();
     const ts = win.App.Tabs;
     const mk = (draft, sess) => {
       ts.openTab({ kind: "chat", id: draft, title: "新会话", draftId: draft });
@@ -567,7 +574,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   it("列表路径(switchSession 兜底)快速点 A→B：B 生效，A 旧响应被丢弃", async () => {
-    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    await loadDashboardSessions();
     const ts = win.App.Tabs;
     const pendings = new Map();
     const prevFetch = global.fetch;
@@ -597,12 +604,12 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   });
 
   it("用户已交互时启动恢复不覆盖当前激活标签（hydrate/文件 fetch 晚到竞态）", async () => {
-    await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${Date.now()}`);
+    await loadDashboardSessions();
     const ts = win.App.Tabs;
     ts.openTab({ kind: "session", id: "sess-a", title: "A", sessionId: "sess-a" });
     ts.openTab({ kind: "session", id: "sess-b", title: "B", sessionId: "sess-b" });
     ts.activateTab("sess-b");
-    assert.strictEqual(win.hasUserInteractedWithTabs?.(), false, "初始未交互");
+    assert.strictEqual(win.App.SessionRestore.hasUserInteracted(), false, "初始未交互");
 
     const prevFetch = global.fetch;
     // mock 回显请求的 id（用于检测恢复是否会重新激活 sess-a）
@@ -613,7 +620,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     try {
       win.App.Tabs.activate("sess-b"); // 用户点 B → 标记交互
       await new Promise((r) => setTimeout(r, 10));
-      assert.strictEqual(win.hasUserInteractedWithTabs?.(), true, "激活后已交互");
+      assert.strictEqual(win.App.SessionRestore.hasUserInteracted(), true, "激活后已交互");
     } finally {
       global.fetch = prevFetch;
     }
@@ -669,7 +676,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
 
   it("真实链路：commitSessionTab 升级 + App.Tabs.close 关闭", async () => {
     // 需要 dashboard-sessions 模块提供 commitSessionTab 和真实 handler
-    await import("../src/frontend/dashboard/dashboard-sessions.ts?t=" + Date.now());
+    await loadDashboardSessions();
 
     const ts = win.App.Tabs;
     const beforeLen = ts.getTabs().length;
