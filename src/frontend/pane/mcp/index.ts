@@ -29,25 +29,42 @@ interface CatalogEntry {
 
 // ─── 状态 ──────────────────────────────────────
 
-let _mcpRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const MCP_PANEL_ID = "mcp-panel-root";
 let _activeMcpTab: "installed" | "explore" = "installed";
+let _mcpDirty = true;
+let _mcpUpdateUnsubscribers: Array<() => void> = [];
+
+function stopMcpUpdates(): void {
+  for (const unsubscribe of _mcpUpdateUnsubscribers) unsubscribe();
+  _mcpUpdateUnsubscribers = [];
+}
+
+function refreshMcpIfVisible(): void {
+  if (!document.getElementById(MCP_PANEL_ID) || _activeMcpTab !== "installed") return;
+  if (!_mcpDirty) return;
+  _mcpDirty = false;
+  void fetchMcpServers();
+}
+
+function handleMcpInvalidation(): void {
+  _mcpDirty = true;
+  refreshMcpIfVisible();
+}
+
+function startMcpUpdates(): void {
+  stopMcpUpdates();
+  _mcpUpdateUnsubscribers = [
+    App.Events.subscribe('mcp.changed', handleMcpInvalidation),
+    App.Events.subscribe('resync', handleMcpInvalidation),
+  ];
+}
 
 // ─── 面板入口 ──────────────────────────────────
 
 function mcpPaneRender(container: HTMLElement): void {
   container.innerHTML = `<div id="${MCP_PANEL_ID}">${renderMcpPanel()}</div>`;
+  startMcpUpdates();
   switchMcpTab("installed");
-
-  clearInterval(_mcpRefreshTimer!);
-  _mcpRefreshTimer = setInterval(() => {
-    if (!document.getElementById(MCP_PANEL_ID)) {
-      clearInterval(_mcpRefreshTimer!);
-      _mcpRefreshTimer = null;
-      return;
-    }
-    if (_activeMcpTab === "installed") fetchMcpServers();
-  }, 6000);
 }
 
 function renderMcpPanel(): string {
@@ -77,9 +94,10 @@ function switchMcpTab(tab: "installed" | "explore"): void {
 
   if (tab === "installed") {
     content.innerHTML = `<div class="mcp-empty">加载中…</div>`;
-    fetchMcpServers();
+    _mcpDirty = true;
+    refreshMcpIfVisible();
   } else {
-    renderExploreTab(content);
+    void renderExploreTab(content);
   }
 }
 

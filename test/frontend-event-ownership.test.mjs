@@ -110,6 +110,16 @@ describe("token usage event refresh ownership", () => {
   });
 });
 
+describe("MCP pane event refresh ownership", () => {
+  it("does not retain the MCP refresh timer", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/frontend/pane/mcp/index.ts"), "utf8");
+    assert.doesNotMatch(source, /\b_mcpRefreshTimer\b/);
+    assert.doesNotMatch(source, /setInterval\s*\(/);
+    assert.match(source, /App\.Events\.subscribe\(['"]mcp\.changed['"]/);
+    assert.match(source, /App\.Events\.subscribe\(['"]resync['"]/);
+  });
+});
+
 describe("non-Markdown HTML boundaries", () => {
   it("escapes server session ids before placing them in data attributes", () => {
     const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-sessions.ts"), "utf8");

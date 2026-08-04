@@ -122,6 +122,98 @@ async function createTokenUpdatesHarness() {
   return { context, subscriptions, requests, usageResolvers, intervals };
 }
 
+async function createMcpPaneHarness() {
+  const subscriptions = new Map();
+  const requests = [];
+  const intervals = [];
+  const nodes = new Map();
+  let renderPane = null;
+
+  function fakeNode() {
+    return {
+      innerHTML: "",
+      textContent: "",
+      classList: { toggle: () => {} },
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    };
+  }
+
+  const context = {
+    window: {
+      App: {
+        Events: {
+          subscribe(type, handler) {
+            const handlers = subscriptions.get(type) || new Set();
+            handlers.add(handler);
+            subscriptions.set(type, handlers);
+            return () => handlers.delete(handler);
+          },
+        },
+        McpState: { normalize: () => "connected", label: () => "connected" },
+      },
+    },
+    App: null,
+    document: {
+      getElementById: (id) => nodes.get(id) || null,
+      querySelectorAll: () => [],
+      addEventListener: () => {},
+    },
+    console,
+    setInterval: (callback, delay) => {
+      intervals.push({ callback, delay });
+      return intervals.length;
+    },
+    clearInterval: () => {},
+    setTimeout,
+    clearTimeout,
+    fetch: async (url) => {
+      requests.push(url);
+      if (url === "/api/mcp/servers") return { ok: true, json: async () => [] };
+      if (url === "/api/mcp/catalog") return { ok: true, json: async () => [] };
+      return { ok: true, json: async () => ({ ok: true }) };
+    },
+    E: (value) => String(value),
+    toast: () => {},
+    confirm: () => true,
+    registerPane(name, render) {
+      if (name === "mcp") renderPane = render;
+    },
+  };
+  context.App = context.window.App;
+
+  const paneScript = await compileClassicScript("src/frontend/pane/mcp/index.ts");
+  new Script(paneScript, { filename: "mcp-pane.js" }).runInNewContext(context);
+
+  function mount() {
+    const container = fakeNode();
+    Object.defineProperty(container, "innerHTML", {
+      configurable: true,
+      get() { return this._innerHTML || ""; },
+      set(value) {
+        this._innerHTML = value;
+        nodes.set("mcp-panel-root", fakeNode());
+        nodes.set("mcp-content", fakeNode());
+      },
+    });
+    renderPane(container);
+    return container;
+  }
+
+  function unmount() {
+    nodes.delete("mcp-panel-root");
+    nodes.delete("mcp-content");
+  }
+
+  function emit(type) {
+    for (const handler of subscriptions.get(type) || []) {
+      handler({ type, revision: 1 });
+    }
+  }
+
+  return { context, requests, intervals, mount, unmount, emit };
+}
+
 function resetWindow() {
   global.window = { App: {} };
 }
@@ -671,6 +763,39 @@ describe("App.Events frontend event bus", () => {
 
     usageResolvers.shift()();
     await new Promise((resolve) => setImmediate(resolve));
+  });
+
+  it("refreshes the mounted MCP installed pane from application events without polling", async () => {
+    const { context, requests, intervals, mount, unmount, emit } = await createMcpPaneHarness();
+
+    mount();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(requests.filter((url) => url === "/api/mcp/servers").length, 1);
+    assert.deepStrictEqual(intervals, []);
+
+    emit("mcp.changed");
+    emit("resync");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(requests.filter((url) => url === "/api/mcp/servers").length, 3);
+
+    context.switchMcpTab("explore");
+    await new Promise((resolve) => setImmediate(resolve));
+    emit("mcp.changed");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(requests.filter((url) => url === "/api/mcp/servers").length, 3);
+
+    unmount();
+    emit("resync");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(requests.filter((url) => url === "/api/mcp/servers").length, 3);
+
+    mount();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(requests.filter((url) => url === "/api/mcp/servers").length, 4);
+
+    emit("mcp.changed");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(requests.filter((url) => url === "/api/mcp/servers").length, 5);
   });
 
   it("keeps the development HTML startup on the shared bus", () => {
