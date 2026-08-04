@@ -47,6 +47,74 @@ export type McpStatusChangeListener = (snapshot: McpServerStatus[]) => void
 const _statusListeners = new Set<McpStatusChangeListener>()
 let _lastVisibleSnapshot = "[]"
 let _trustStore: TrustStore | undefined
+
+type CloneAttempt<T> = { ok: true; value: T } | { ok: false }
+
+function tryStructuredClone<T>(value: T): CloneAttempt<T> {
+  const clone = globalThis.structuredClone
+  if (typeof clone !== "function") return { ok: false }
+  try {
+    return { ok: true, value: clone(value) }
+  } catch {
+    return { ok: false }
+  }
+}
+
+function cloneStringArray(value: unknown): string[] {
+  const attempt = tryStructuredClone(value)
+  const source = attempt.ok ? attempt.value : value
+  return Array.isArray(source) ? source.filter((item): item is string => typeof item === "string") : []
+}
+
+function cloneStringRecord(value: unknown): Record<string, string> | undefined {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  )
+}
+
+function cloneConfigFallback(config: McpServerConfig): McpServerConfig {
+  const source = config as Record<string, unknown>
+  const result: McpServerConfig = {}
+  const copyString = (key: "command" | "url" | "cwd" | "transport"): void => {
+    if (!Object.hasOwn(source, key)) return
+    const value = source[key]
+    if (value === undefined || typeof value === "string") (result as Record<string, unknown>)[key] = value
+  }
+
+  copyString("command")
+  copyString("url")
+  copyString("cwd")
+  copyString("transport")
+  if (Object.hasOwn(source, "enabled") && (source.enabled === undefined || typeof source.enabled === "boolean")) {
+    result.enabled = source.enabled as boolean | undefined
+  }
+  if (Object.hasOwn(source, "args")) {
+    result.args = source.args === undefined ? undefined : cloneStringArray(source.args)
+  }
+  if (Object.hasOwn(source, "env")) result.env = cloneStringRecord(source.env)
+  if (Object.hasOwn(source, "headers")) result.headers = cloneStringRecord(source.headers)
+  return result
+}
+
+function cloneConfig(config: McpServerConfig): McpServerConfig {
+  const attempt = tryStructuredClone(config)
+  return attempt.ok ? attempt.value : cloneConfigFallback(config)
+}
+
+function cloneStatuses(statuses: McpServerStatus[]): McpServerStatus[] {
+  const attempt = tryStructuredClone(statuses)
+  if (attempt.ok) return attempt.value
+  return statuses.map((status) => ({
+    name: status.name,
+    config: status.config === undefined ? status.config : cloneConfig(status.config),
+    state: status.state,
+    tools: cloneStringArray(status.tools),
+    error: status.error,
+  }))
+}
+
 let _mcpGen = 0  // connectAll 生成号，stale 连接跳过写入全局状态
 
 function getTrustStore(): TrustStore {
@@ -219,11 +287,17 @@ export function _setStatus(
   tools?: string[],
 ): void {
   const existing = _statusMap.get(name)
+  const nextConfig = config !== undefined
+    ? cloneConfig(config)
+    : existing?.config ? cloneConfig(existing.config) : undefined
+  const nextTools = tools !== undefined
+    ? cloneStringArray(tools)
+    : existing?.tools ? cloneStringArray(existing.tools) : []
   _statusMap.set(name, {
     name,
-    config: config ?? existing?.config as McpServerConfig,
+    config: nextConfig as McpServerConfig,
     state,
-    tools: tools ?? existing?.tools ?? [],
+    tools: nextTools,
     // state 切换为 connected 时清空旧错误文案
     error: state === "connected" ? undefined : (error ?? existing?.error),
   })
@@ -260,13 +334,9 @@ function _notifyStatusChanges(): void {
   const nextSnapshot = _visibleSnapshotKey()
   if (nextSnapshot === _lastVisibleSnapshot) return
   _lastVisibleSnapshot = nextSnapshot
-  const snapshot = getServersStatus().map((status) => ({
-    ...status,
-    config: { ...status.config },
-    tools: [...status.tools],
-  }))
+  const snapshot = getServersStatus()
   for (const listener of [..._statusListeners]) {
-    try { listener(snapshot) } catch {}
+    try { listener(cloneStatuses(snapshot)) } catch {}
   }
 }
 
@@ -283,7 +353,7 @@ export function subscribeStatusChanges(listener: McpStatusChangeListener): () =>
 
 /** 获取所有 MCP server 的当前状态 */
 export function getServersStatus(): McpServerStatus[] {
-  return [..._statusMap.values()]
+  return cloneStatuses([..._statusMap.values()])
 }
 
 /** 同步版本——给 _saveAndDispose / dispose 等同步上下文用（不 await close） */

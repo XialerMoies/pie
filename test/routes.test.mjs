@@ -441,14 +441,31 @@ describe("dashboard routes", () => {
       assert.ok(Array.isArray(data), "返回数组");
     });
 
-    it("不泄露 env / 敏感字段", async () => {
-      const { status, body } = await callHandler(handleDashboard, "GET", "/api/mcp/servers");
-      assert.strictEqual(status, 200);
-      const data = parseJSON(body);
-      for (const s of data) {
-        if (s.config) {
-          assert.ok(!("env" in s.config), `env 已被脱敏: ${s.name}`);
-        }
+    it("不泄露实际 server 配置中的 env / headers 敏感字段", async () => {
+      const dir = mkdtempSync(resolve(tmpdir(), "mcp-redaction-"));
+      try {
+        writeFileSync(resolve(dir, ".mcp.json"), JSON.stringify({
+          servers: {
+            secretServer: {
+              command: "node",
+              args: ["server.js"],
+              env: { API_TOKEN: "env-secret-value" },
+              headers: { Authorization: "Bearer header-secret-value" },
+            },
+          },
+        }));
+        const ctx = mockContext({ runtime: { ...mockRuntime(), currentWorkspace: dir }, paths: { APP_ROOT: dir } });
+        const { status, body } = await callHandler(handleDashboard, "GET", "/api/mcp/servers", undefined, ctx);
+        assert.strictEqual(status, 200);
+        const data = parseJSON(body);
+        const server = data.find((entry) => entry.name === "secretServer");
+        assert.ok(server);
+        assert.ok(!("env" in server.config));
+        assert.ok(!("headers" in server.config));
+        assert.strictEqual(body.includes("env-secret-value"), false);
+        assert.strictEqual(body.includes("header-secret-value"), false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
       }
     });
 

@@ -80,7 +80,18 @@ export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraCo
   }
 }
 
-export type SessionEventCallback = (event: any) => void
+export type SessionEventCallback = (event: any, sourceSession?: AgentSession) => void
+
+interface SessionEventSubscription {
+  cb: SessionEventCallback
+  currentUnsub?: () => void
+  active: boolean
+}
+
+interface SessionToolTraceEmitter {
+  emit: (event: any) => void
+  bindSource: (sourceSession: AgentSession) => void
+}
 
 export class AgentRuntime {
   session!: AgentSession
@@ -89,7 +100,7 @@ export class AgentRuntime {
   sessionManager!: SessionManager
   config!: RuntimeConfig
   currentWorkspace!: string
-  private _eventCallbacks: SessionEventCallback[] = []
+  private _eventSubscriptions: SessionEventSubscription[] = []
 
   private constructor() {}
 
@@ -116,7 +127,7 @@ export class AgentRuntime {
     console.log(`[runtime] Switching workspace: "${this.currentWorkspace}" → "${workspace}"`)
 
     const prevWs = this.currentWorkspace
-    const callbacks = await this._saveAndDispose(false)
+    const subscriptions = await this._saveAndDispose(false)
 
     // 不续写旧文件：workspace 切换意味着项目切换，新项目应有自己的 session 文件
     this.currentWorkspace = workspace // 先设 workspace 再 initSession，使 prompt 读到新项目 AGENT.md
@@ -128,7 +139,7 @@ export class AgentRuntime {
       throw e
     }
 
-    this._rebindEvents(callbacks)
+    this._rebindEvents(subscriptions)
     console.log(`[runtime] ✅ Switched to "${workspace}"`)
   }
 
@@ -168,9 +179,9 @@ export class AgentRuntime {
     // 先设 workspace 再 _initSession，使 resolveSystemPrompt 读到新路径
     this.currentWorkspace = workspace
     try {
-      const callbacks = await this._saveAndDispose(sameWs)
+      const subscriptions = await this._saveAndDispose(sameWs)
       await this._initSession(workspace, sessionFile)
-      this._rebindEvents(callbacks)
+      this._rebindEvents(subscriptions)
     } catch (e) {
       // 失败时恢复旧 workspace，避免状态错乱
       this.currentWorkspace = prevWs
@@ -187,10 +198,10 @@ export class AgentRuntime {
     console.log(`[runtime] Creating new session`)
     this.resetSessionPermissions()
 
-    const callbacks = await this._saveAndDispose(true)
+    const subscriptions = await this._saveAndDispose(true)
     await this._initSession(this.currentWorkspace, undefined, true /* forceNew */)
 
-    this._rebindEvents(callbacks)
+    this._rebindEvents(subscriptions)
     const id = this.session.sessionManager?.getSessionId?.() || ""
     console.log(`[runtime] ✅ New session created: ${id}`)
     return id
@@ -228,26 +239,48 @@ export class AgentRuntime {
 
   /** 绑定 session 事件 */
   onEvent(cb: SessionEventCallback): () => void {
-    this._eventCallbacks.push(cb)
-    const unsub = this.session.subscribe(cb)
+    const subscription: SessionEventSubscription = { cb, active: true }
+    this._eventSubscriptions.push(subscription)
+    this._bindEventSubscription(subscription, this.session)
     return () => {
-      const idx = this._eventCallbacks.indexOf(cb)
-      if (idx >= 0) this._eventCallbacks.splice(idx, 1)
-      unsub()
+      if (!subscription.active) return
+      subscription.active = false
+      const idx = this._eventSubscriptions.indexOf(subscription)
+      if (idx >= 0) this._eventSubscriptions.splice(idx, 1)
+      const currentUnsub = subscription.currentUnsub
+      subscription.currentUnsub = undefined
+      try { currentUnsub?.() } catch {}
     }
   }
 
   /** 清理 */
   dispose(): void {
+    for (const subscription of this._eventSubscriptions) {
+      subscription.active = false
+      try { subscription.currentUnsub?.() } catch {}
+      subscription.currentUnsub = undefined
+    }
+    this._eventSubscriptions = []
     try { this.session.dispose() } catch {}
     disconnectMcp()
-    this._eventCallbacks = []
   }
 
   /** 自定义工具事件兜底：复用 PI 的事件订阅通道 */
-  emitEvent(event: any): void {
-    for (const cb of this._eventCallbacks) {
-      try { cb(event) } catch {}
+  emitEvent(event: any, sourceSession?: AgentSession): void {
+    const source = sourceSession ?? this.session
+    for (const subscription of this._eventSubscriptions) {
+      if (!subscription.active) continue
+      try { subscription.cb(event, source) } catch {}
+    }
+  }
+
+  private _createToolTraceEmitter(): SessionToolTraceEmitter {
+    let sourceSession: AgentSession | undefined
+    return {
+      emit: (event) => {
+        if (sourceSession) this.emitEvent(event, sourceSession)
+      },
+      bindSource: (session) => { sourceSession = session },
     }
   }
 
@@ -270,21 +303,43 @@ export class AgentRuntime {
   }
 
   /** 中止并清理旧 session，返回事件回调列表 */
-  private async _saveAndDispose(keepMcp: boolean): Promise<SessionEventCallback[]> {
+  private async _saveAndDispose(keepMcp: boolean): Promise<SessionEventSubscription[]> {
     try { this.session?.abort() } catch {}
-    const callbacks = [...this._eventCallbacks]
-    this._eventCallbacks = []
+    const subscriptions = this._eventSubscriptions.filter((subscription) => subscription.active)
+    this._eventSubscriptions = []
+    for (const subscription of subscriptions) {
+      const currentUnsub = subscription.currentUnsub
+      subscription.currentUnsub = undefined
+      try { currentUnsub?.() } catch {}
+    }
     try { this.session?.dispose() } catch {}
     if (!keepMcp) await disconnectMcp()
-    return callbacks
+    return subscriptions
   }
 
   /** 重新绑定事件回调 */
-  private _rebindEvents(callbacks: SessionEventCallback[]): void {
-    for (const cb of callbacks) {
-      this.session?.subscribe(cb)
-      this._eventCallbacks.push(cb)
+  private _rebindEvents(subscriptions: SessionEventSubscription[]): void {
+    const sourceSession = this.session
+    for (const subscription of subscriptions) {
+      if (!subscription.active) continue
+      this._bindEventSubscription(subscription, sourceSession)
+      if (!this._eventSubscriptions.includes(subscription)) this._eventSubscriptions.push(subscription)
     }
+  }
+
+  private _bindEventSubscription(subscription: SessionEventSubscription, sourceSession: AgentSession): void {
+    const currentUnsub = subscription.currentUnsub
+    subscription.currentUnsub = undefined
+    try { currentUnsub?.() } catch {}
+    if (!subscription.active) return
+    const nextUnsub = sourceSession.subscribe((event) => {
+      if (subscription.active) subscription.cb(event, sourceSession)
+    })
+    if (!subscription.active) {
+      try { nextUnsub() } catch {}
+      return
+    }
+    subscription.currentUnsub = nextUnsub
   }
 
   private async _initSession(cwd: string, existingSessionFile?: string, forceNew?: boolean): Promise<void> {
@@ -320,9 +375,10 @@ export class AgentRuntime {
         this.sessionManager = SessionManager.create(cwd, wsSessionsDir)
       }
     }
+    const toolTrace = this._createToolTraceEmitter()
     const customTools = await getCustomToolsAsync(
       cwd,
-      (event) => this.emitEvent(event),
+      toolTrace.emit,
       buildToolContextExtra(this.config),
     )
 
@@ -339,6 +395,7 @@ export class AgentRuntime {
       excludeTools: ["bash", "edit", "write"],
     })
 
+    toolTrace.bindSource(session)
     this.session = session
   }
 }

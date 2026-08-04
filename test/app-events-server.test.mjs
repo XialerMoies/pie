@@ -1,6 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 
 import { AppEventHub } from "../src/server/app-events.ts";
 import {
@@ -381,6 +383,340 @@ describe("server lifecycle publishers", () => {
     await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
     assert.deepStrictEqual(published, ["dashboard.changed", "usage.changed"]);
     assert.strictEqual(session.isStreaming, false);
+  });
+
+  it("publishes the end state when waitForIdle rejects", async () => {
+    let eventHandler;
+    let rejectIdle;
+    const session = {
+      sessionFile: "",
+      sessionManager: { getSessionId: () => "session-reject" },
+      isStreaming: true,
+      agent: {
+        waitForIdle() {
+          return new Promise((_, reject) => {
+            rejectIdle = () => {
+              session.isStreaming = false;
+              reject(new Error("idle failed"));
+            };
+          });
+        },
+      },
+    };
+    const runtime = {
+      session,
+      onEvent(handler) { eventHandler = handler; return () => {}; },
+    };
+    const published = [];
+    attachSessionEvents(runtime, { textBuffer: "", thinkingBuffer: "", response: null, turnId: "" }, {
+      appEvents: { publish(type) { published.push({ type, isStreaming: session.isStreaming }); } },
+    });
+
+    eventHandler({ type: "agent_end", messages: [] });
+    assert.deepStrictEqual(published, []);
+    rejectIdle();
+    await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
+
+    assert.deepStrictEqual(published.map((event) => event.type), ["dashboard.changed", "usage.changed"]);
+    assert.deepStrictEqual(published.map((event) => event.isStreaming), [false, false]);
+  });
+
+  it("publishes the end state when waitForIdle throws synchronously", async () => {
+    let eventHandler;
+    const session = {
+      sessionFile: "",
+      sessionManager: { getSessionId: () => "session-throw" },
+      isStreaming: false,
+      agent: { waitForIdle() { throw new Error("idle threw"); } },
+    };
+    const runtime = {
+      session,
+      onEvent(handler) { eventHandler = handler; return () => {}; },
+    };
+    const published = [];
+    attachSessionEvents(runtime, { textBuffer: "", thinkingBuffer: "", response: null, turnId: "" }, {
+      appEvents: { publish(type) { published.push(type); } },
+    });
+
+    eventHandler({ type: "agent_end", messages: [] });
+    assert.deepStrictEqual(published, []);
+    await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
+    assert.deepStrictEqual(published, ["dashboard.changed", "usage.changed"]);
+  });
+
+  it("does not publish an old session end after the runtime switches sessions", async () => {
+    let eventHandler;
+    let resolveIdle;
+    const oldSession = {
+      sessionFile: "old.jsonl",
+      sessionManager: { getSessionId: () => "old-session" },
+      agent: {
+        waitForIdle() {
+          return new Promise((resolve) => { resolveIdle = resolve; });
+        },
+      },
+    };
+    const nextSession = {
+      sessionFile: "new.jsonl",
+      sessionManager: { getSessionId: () => "new-session" },
+      agent: { waitForIdle: async () => {} },
+    };
+    const runtime = {
+      session: oldSession,
+      onEvent(handler) { eventHandler = handler; return () => {}; },
+    };
+    const published = [];
+    attachSessionEvents(runtime, { textBuffer: "", thinkingBuffer: "", response: null, turnId: "" }, {
+      appEvents: { publish(type) { published.push(type); } },
+    });
+
+    eventHandler({ type: "agent_end", messages: [] });
+    runtime.session = nextSession;
+    resolveIdle();
+    await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
+
+    assert.deepStrictEqual(published, []);
+  });
+
+  it("ignores an old agent_end delivered after switching and still publishes the new session", async () => {
+    let eventHandler;
+    const oldSession = {
+      sessionFile: "old.jsonl",
+      sessionManager: { getSessionId: () => "old-session" },
+      agent: { waitForIdle: async () => {} },
+    };
+    const newSession = {
+      sessionFile: "new.jsonl",
+      sessionManager: { getSessionId: () => "new-session" },
+      agent: { waitForIdle: async () => {} },
+    };
+    const runtime = {
+      session: oldSession,
+      onEvent(handler) { eventHandler = handler; return () => {}; },
+    };
+    const published = [];
+    attachSessionEvents(runtime, { textBuffer: "", thinkingBuffer: "", response: null, turnId: "" }, {
+      appEvents: { publish(type) { published.push(type); } },
+    });
+
+    runtime.session = newSession;
+    eventHandler({ type: "agent_end", messages: [] }, oldSession);
+    await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
+    assert.deepStrictEqual(published, []);
+
+    eventHandler({ type: "agent_end", messages: [] }, newSession);
+    await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
+    assert.deepStrictEqual(published, ["dashboard.changed", "usage.changed"]);
+  });
+
+  it("drops every delayed old-session event before touching lifecycle or chat state", async () => {
+    let eventHandler;
+    const oldSession = {
+      sessionFile: "old.jsonl",
+      sessionManager: { getSessionId: () => "old-session" },
+      isCompacting: true,
+    };
+    const currentSession = {
+      sessionFile: "",
+      sessionManager: { getSessionId: () => "current-session" },
+      isCompacting: true,
+    };
+    const runtime = {
+      session: currentSession,
+      onEvent(handler) { eventHandler = handler; return () => {}; },
+    };
+    const chatStream = {
+      textBuffer: "",
+      thinkingBuffer: "",
+      currentTextSnapshot: "",
+      currentThinkingSnapshot: "",
+      response: null,
+      turnId: "turn-current",
+      traceSeq: 0,
+      emittedTraces: new Set(),
+      blocks: [],
+      blockSeq: 0,
+      eventSeq: 0,
+      eventHistory: [],
+      currentWorkspace: "",
+    };
+    const published = [];
+    attachSessionEvents(runtime, chatStream, {
+      appEvents: { publish(type) { published.push(type); } },
+    });
+
+    eventHandler({ type: "agent_start" }, oldSession);
+    eventHandler({ type: "compaction_start", reason: "threshold" }, oldSession);
+    eventHandler({ type: "compaction_end", reason: "threshold" }, oldSession);
+    eventHandler({
+      type: "tool_execution_start",
+      toolCallId: "old-tool",
+      toolName: "old_tool",
+      args: { value: "old" },
+    }, oldSession);
+    eventHandler({ type: "message_start", message: { role: "assistant" } }, oldSession);
+    eventHandler({ type: "turn_end", turnIndex: 1 }, oldSession);
+    await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
+
+    assert.deepStrictEqual(published, []);
+    assert.strictEqual(chatStream.messageSeq, undefined);
+    assert.strictEqual(chatStream.emittedTraces.size, 0);
+    assert.deepStrictEqual(chatStream.blocks, []);
+    assert.deepStrictEqual(chatStream.eventHistory, []);
+
+    eventHandler({ type: "agent_start" }, currentSession);
+    eventHandler({ type: "compaction_start", reason: "threshold" }, currentSession);
+    eventHandler({ type: "tool_execution_start", toolCallId: "current-tool", toolName: "current_tool", args: {} }, currentSession);
+    eventHandler({ type: "message_start", message: { role: "assistant" } }, currentSession);
+    await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
+
+    assert.ok(published.includes("dashboard.changed"));
+    assert.ok(published.includes("usage.changed"));
+    assert.strictEqual(chatStream.messageSeq, 1);
+    assert.strictEqual(chatStream.emittedTraces.size, 1);
+    assert.strictEqual(chatStream.blocks.length, 1);
+    assert.ok(chatStream.eventHistory.length > 0);
+  });
+
+  it("drops a delayed custom-tool trace bound to the session that created it", async () => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const oldSession = { id: "old", subscribe() { return () => {}; } };
+    const currentSession = { id: "current", sessionFile: "", subscribe() { return () => {}; } };
+    const runtime = Object.create(AgentRuntime.prototype);
+    runtime.session = oldSession;
+    runtime._eventSubscriptions = [];
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: null, turnId: "turn-current", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0,
+      eventSeq: 0, eventHistory: [], currentWorkspace: "",
+    };
+    const published = [];
+    attachSessionEvents(runtime, chatStream, { appEvents: { publish(type) { published.push(type); } } });
+    const oldToolTrace = runtime._createToolTraceEmitter();
+    oldToolTrace.bindSource(oldSession);
+
+    runtime.session = currentSession;
+    oldToolTrace.emit({
+      type: "tool_execution_update",
+      toolCallId: "late-old-tool",
+      toolName: "old_tool",
+      args: { secret: "old" },
+      partialResult: "late update",
+    });
+    oldToolTrace.emit({
+      type: "tool_execution_end",
+      toolCallId: "late-old-tool",
+      toolName: "old_tool",
+      result: "late result",
+      isError: false,
+    });
+
+    assert.deepStrictEqual(published, []);
+    assert.strictEqual(chatStream.emittedTraces.size, 0);
+    assert.deepStrictEqual(chatStream.blocks, []);
+    assert.deepStrictEqual(chatStream.eventHistory, []);
+  });
+
+  it("rebinds cached MCP tools to each created or opened session without reconnecting", async () => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const tools = await import("../src/agent/tools/index.ts");
+    const workspace = mkdtempSync(resolve(tmpdir(), "mcp-session-trace-"));
+    const sessionFile = (name) => resolve(workspace, `${name}.jsonl`);
+    const makeSession = (id) => ({
+      id,
+      sessionFile: sessionFile(id),
+      sessionManager: { flushed: true, getSessionId: () => id },
+      subscribe() { return () => {}; },
+      abort() {},
+      dispose() {},
+    });
+    const readRecords = (session) => readFileSync(session.sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+
+    try {
+      await tools.disconnectMcp();
+      const generation = mcpService.currentGeneration();
+      const rawMcpTool = {
+        name: "mcp__cached__echo",
+        description: "cached MCP test tool",
+        parameters: { type: "object", properties: { value: { type: "string" } } },
+        isReadOnly: true,
+        needsPermission: false,
+        operations: ["read"],
+        riskLevel: "low",
+        workspaceBounded: false,
+        execute: async ({ value }) => ({ text: `echo:${value}` }),
+      };
+      tools._setMcpCache(workspace, [rawMcpTool]);
+
+      const oldSession = makeSession("old");
+      const createdSession = makeSession("created");
+      const openedSession = makeSession("opened");
+      for (const session of [oldSession, createdSession, openedSession]) {
+        writeFileSync(session.sessionFile, JSON.stringify({ type: "session", id: session.id }) + "\n");
+      }
+
+      const runtime = Object.create(AgentRuntime.prototype);
+      runtime.config = {};
+      runtime.currentWorkspace = workspace;
+      runtime.session = oldSession;
+      runtime._eventSubscriptions = [];
+      const chatStream = {
+        textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+        response: null, turnId: "turn-current", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0,
+        eventSeq: 0, eventHistory: [], currentWorkspace: workspace,
+      };
+      attachSessionEvents(runtime, chatStream);
+
+      const bindTools = async (session) => {
+        const toolTrace = runtime._createToolTraceEmitter();
+        const sessionTools = await tools.getCustomToolsAsync(workspace, toolTrace.emit);
+        toolTrace.bindSource(session);
+        return sessionTools;
+      };
+      const oldTools = await bindTools(oldSession);
+      const wrappers = [];
+      const pendingSessions = [createdSession, openedSession];
+      runtime._initSession = async () => {
+        const nextSession = pendingSessions.shift();
+        wrappers.push(await bindTools(nextSession));
+        runtime.session = nextSession;
+      };
+
+      await runtime.createNewSession();
+      const createdTool = wrappers[0].find((tool) => tool.name === rawMcpTool.name);
+      await createdTool.execute("call-created", { value: "created-value" });
+
+      await runtime.openSession(openedSession.sessionFile, workspace);
+      const openedTool = wrappers[1].find((tool) => tool.name === rawMcpTool.name);
+      await openedTool.execute("call-opened", { value: "opened-value" });
+
+      const oldTool = oldTools.find((tool) => tool.name === rawMcpTool.name);
+      const blockCount = chatStream.blocks.length;
+      const eventCount = chatStream.eventHistory.length;
+      await oldTool.execute("call-stale", { value: "stale-value" });
+
+      assert.notStrictEqual(createdTool, oldTool, "create must rebuild the cached MCP PI wrapper");
+      assert.notStrictEqual(openedTool, createdTool, "open must rebuild the cached MCP PI wrapper");
+      assert.strictEqual(mcpService.currentGeneration(), generation, "same-workspace transitions must not reconnect MCP");
+      assert.strictEqual(tools._getMcpCacheLen(), 1, "raw MCP discovery cache must be reused");
+      assert.strictEqual(chatStream.blocks.length, blockCount, "stale wrapper events must still be dropped");
+      assert.strictEqual(chatStream.eventHistory.length, eventCount, "stale wrapper events must not enter SSE history");
+
+      const createdRecords = readRecords(createdSession);
+      const openedRecords = readRecords(openedSession);
+      assert.ok(createdRecords.some((entry) => entry.type === "trace" && entry.event?.output === "echo:created-value"));
+      assert.ok(createdRecords.some((entry) => entry.type === "assistant_block" && entry.block?.output === "echo:created-value"));
+      assert.ok(openedRecords.some((entry) => entry.type === "trace" && entry.event?.output === "echo:opened-value"));
+      assert.ok(openedRecords.some((entry) => entry.type === "assistant_block" && entry.block?.output === "echo:opened-value"));
+      assert.ok(!readFileSync(openedSession.sessionFile, "utf8").includes("stale-value"));
+    } finally {
+      await tools.disconnectMcp();
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it("publishes compaction usage changes after busy state starts and after every reset path", async () => {

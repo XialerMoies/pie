@@ -94,9 +94,9 @@ export function agentToolToPiTool(
   return agentToolToPIToolDefinition(tool, workspace, emitTrace, extraCtx)
 }
 
-// ─── MCP 工具缓存（后台连接，不阻塞工具注册）─────────────
+// ─── MCP 原始工具缓存（后台连接，不阻塞工具注册）─────────────
 let _mcpWorkspace = ""
-let _mcpCache: ReturnType<typeof toolRegistry.toPITools> = []
+let _mcpCache: AgentTool[] = []
 let _mcpConnecting = false
 
 /** 断开 MCP 连接，清空缓存（随 workspace 切换或 dispose 调用） */
@@ -118,8 +118,8 @@ export async function disconnectMcp(): Promise<void> {
  */
 /** @internal 测试用：返回当前 MCP cache 长度 */
 export function _getMcpCacheLen(): number { return _mcpCache.length }
-/** @internal 测试用：注入已知 MCP cache，验证命中分支 */
-export function _setMcpCache(workspace: string, tools: any[]): void {
+/** @internal 测试用：注入已知 MCP AgentTool cache，验证命中分支 */
+export function _setMcpCache(workspace: string, tools: AgentTool[]): void {
   _mcpWorkspace = workspace
   _mcpCache = tools
 }
@@ -140,7 +140,7 @@ async function _connectMcpInBackground(workspace: string, emitTrace?: ToolTraceE
   try {
     const mcpTools = await connectAll(workspace ?? "", emitTrace)
     if (gen === currentGeneration()) {
-      _mcpCache = mcpTools.map((t) => agentToolToPiTool(t, workspace, emitTrace, extraCtx))
+      _mcpCache = mcpTools
       _mcpWorkspace = workspace ?? ""
       console.log(`[tools] MCP ${_mcpCache.length} 个工具已就绪`)
     } else {
@@ -172,7 +172,8 @@ export async function getCustomToolsAsync(
   // 2. MCP 工具：缓存命中或 workspace 未变直接使用
   const ws = workspace ?? ""
   if (_mcpCache.length > 0 && _mcpWorkspace === ws) {
-    return [...builtin, ..._mcpCache]
+    const mcpTools = _mcpCache.map((tool) => agentToolToPiTool(tool, workspace, emitTrace, extraCtx))
+    return [...builtin, ...mcpTools]
   }
 
   // 3. 后台连接 MCP，本次先返回内置工具

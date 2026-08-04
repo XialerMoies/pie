@@ -258,7 +258,7 @@ describe("switchWorkspace rollback behavior", () => {
     const runtime = Object.create(AgentRuntime.prototype);
     runtime.currentWorkspace = "/original";
     runtime.session = null;
-    runtime._eventCallbacks = [];
+    runtime._eventSubscriptions = [];
     runtime._saveAndDispose = async () => [];
     runtime._initSession = async () => { throw new Error("模拟初始化失败"); };
     runtime._rebindEvents = () => {};
@@ -285,7 +285,7 @@ describe("switchWorkspace rollback behavior", () => {
     const runtime = Object.create(AgentRuntime.prototype);
     runtime.currentWorkspace = "/original";
     runtime.session = null;
-    runtime._eventCallbacks = [];
+    runtime._eventSubscriptions = [];
     runtime._saveAndDispose = async () => [];
     runtime._initSession = async () => { throw new Error("会话初始化失败"); };
     runtime._rebindEvents = () => {};
@@ -304,5 +304,100 @@ describe("switchWorkspace rollback behavior", () => {
     assert.strictEqual(runtime.currentWorkspace, "/original",
       "_doOpenSession 失败后 currentWorkspace 应恢复原值");
     setCurrentRuntime(null);
+  });
+});
+
+describe("runtime event source binding", () => {
+  const makeSession = (id) => {
+    const listeners = new Set();
+    return {
+      id,
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      emit(event) {
+        for (const listener of [...listeners]) listener(event);
+      },
+    };
+  };
+
+  it("updates the active unsubscribe on rebind and never revives an inactive subscription", async () => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const oldSession = makeSession("old");
+    const newSession = makeSession("new");
+    const thirdSession = makeSession("third");
+    const runtime = Object.create(AgentRuntime.prototype);
+    runtime.session = oldSession;
+    runtime._eventSubscriptions = [];
+    const seen = [];
+    const callback = (event, sourceSession) => {
+      seen.push({ type: event.type, source: sourceSession?.id });
+    };
+
+    const unsubscribe = runtime.onEvent(callback);
+    const subscriptions = [...runtime._eventSubscriptions];
+    runtime.session = newSession;
+    runtime._rebindEvents(subscriptions);
+    runtime._rebindEvents(subscriptions);
+
+    oldSession.emit({ type: "detached-old" });
+    newSession.emit({ type: "new-session" });
+    unsubscribe();
+    newSession.emit({ type: "after-unsubscribe" });
+
+    runtime.session = thirdSession;
+    runtime._rebindEvents(subscriptions);
+    thirdSession.emit({ type: "must-not-return" });
+
+    assert.deepStrictEqual(seen, [
+      { type: "new-session", source: "new" },
+    ]);
+  });
+
+  it("treats duplicate callback registrations as independent subscriptions", async () => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const oldSession = makeSession("old");
+    const newSession = makeSession("new");
+    const runtime = Object.create(AgentRuntime.prototype);
+    runtime.session = oldSession;
+    runtime._eventSubscriptions = [];
+    const seen = [];
+    const callback = (event, sourceSession) => seen.push(`${event.type}:${sourceSession?.id}`);
+
+    const unsubscribeFirst = runtime.onEvent(callback);
+    runtime.onEvent(callback);
+    oldSession.emit({ type: "twice" });
+    unsubscribeFirst();
+    oldSession.emit({ type: "once" });
+
+    const subscriptions = [...runtime._eventSubscriptions];
+    runtime.session = newSession;
+    runtime._rebindEvents(subscriptions);
+    oldSession.emit({ type: "old-detached" });
+    newSession.emit({ type: "new-once" });
+
+    assert.deepStrictEqual(seen, [
+      "twice:old",
+      "twice:old",
+      "once:old",
+      "new-once:new",
+    ]);
+  });
+
+  it("emitEvent accepts an explicit source session while preserving one-argument calls", async () => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const oldSession = makeSession("old");
+    const currentSession = makeSession("current");
+    const runtime = Object.create(AgentRuntime.prototype);
+    runtime.session = currentSession;
+    runtime._eventSubscriptions = [];
+    const seen = [];
+    runtime.onEvent((event, sourceSession) => seen.push(`${event.type}:${sourceSession?.id}`));
+
+    runtime.emitEvent({ type: "stale-tool" }, oldSession);
+    runtime.emitEvent({ type: "current-tool" });
+
+    assert.deepStrictEqual(seen, ["stale-tool:old", "current-tool:current"]);
   });
 });

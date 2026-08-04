@@ -332,15 +332,44 @@ export function attachSessionEvents(
     try { ctx?.appEvents.publish("dashboard.changed"); } catch {}
     publishUsageChanged();
   };
-  const publishLifecycleAfterIdle = (): void => {
+  const publishLifecycleAfterIdle = (sourceSession?: AgentRuntime["session"]): void => {
+    const sessionAtEnd = sourceSession ?? runtime.session;
+    let sessionIdAtEnd: string | undefined;
+    try { sessionIdAtEnd = sessionAtEnd?.sessionManager?.getSessionId?.() || undefined; } catch {}
+    const isCurrentSession = (): boolean => {
+      if (runtime.session !== sessionAtEnd) return false;
+      if (!sessionIdAtEnd) return true;
+      try { return runtime.session?.sessionManager?.getSessionId?.() === sessionIdAtEnd; } catch { return false; }
+    };
+    const publishForCurrentSession = (): void => {
+      if (isCurrentSession()) publishLifecycleChanged();
+    };
+    const recordIdleError = (error: unknown): void => {
+      try {
+        console.warn(`[server] waitForIdle failed: ${error instanceof Error ? error.message : String(error)}`);
+      } catch {}
+    };
+    const fallbackPublish = (error?: unknown): void => {
+      if (error !== undefined) recordIdleError(error);
+      queueMicrotask(publishForCurrentSession);
+    };
+
     try {
-      const agent = runtime.session?.agent;
+      const agent = sessionAtEnd?.agent;
       if (typeof agent?.waitForIdle !== "function") {
-        queueMicrotask(publishLifecycleChanged);
+        fallbackPublish();
         return;
       }
-      void Promise.resolve(agent.waitForIdle()).then(publishLifecycleChanged, () => {});
-    } catch {}
+      void Promise.resolve(agent.waitForIdle()).then(
+        publishForCurrentSession,
+        (error) => {
+          recordIdleError(error);
+          publishForCurrentSession();
+        },
+      );
+    } catch (error) {
+      fallbackPublish(error);
+    }
   };
   const authorizeSessionWrite: SessionWriteAuthorizer | undefined = ctx?.permissionService
     ? (sessionFile, source) => {
@@ -348,7 +377,8 @@ export function attachSessionEvents(
     }
     : undefined;
 
-  runtime.onEvent((event: any) => {
+  runtime.onEvent((event: any, sourceSession) => {
+    if (sourceSession && runtime.session !== sourceSession) return;
     if (event.type === "agent_start") publishLifecycleChanged();
     if (event.type === "compaction_start") {
       if ((runtime.session as any).isCompacting) publishUsageChanged();
@@ -356,7 +386,7 @@ export function attachSessionEvents(
     }
     if (event.type === "compaction_end") queueMicrotask(publishUsageChanged);
     if (event.type === "agent_end" && !chatStream.turnId) {
-      publishLifecycleAfterIdle();
+      publishLifecycleAfterIdle(sourceSession);
       return;
     }
 
@@ -693,7 +723,7 @@ export function attachSessionEvents(
       chatStream.blockSeq = 0;
       chatStream.textSegments = [];
       chatStream.currentWorkspace = "";
-      publishLifecycleAfterIdle();
+      publishLifecycleAfterIdle(sourceSession);
     }
   });
 }

@@ -89,6 +89,153 @@ describe("基础行为", () => {
   it("getServersStatus 初始返回空", () => {
     assert.strictEqual(service.getServersStatus().length, 0);
   });
+
+  it("隔离 listener 和 getter 对嵌套 snapshot 的修改", () => {
+    service._setStatus("nested", "connected", undefined, {
+      command: "node",
+      args: ["--safe"],
+      env: { TOKEN: "secret" },
+      headers: { Authorization: "secret" },
+      enabled: true,
+    }, ["mcp__nested__read"]);
+
+    let nextListenerSnapshot;
+    const unsubscribeMutator = service.subscribeStatusChanges((snapshot) => {
+      snapshot[0].tools.push("listener-tool");
+      snapshot[0].config.args?.push("listener-arg");
+      if (snapshot[0].config.env) snapshot[0].config.env.TOKEN = "listener-env";
+      if (snapshot[0].config.headers) snapshot[0].config.headers.Authorization = "listener-header";
+    });
+    const unsubscribeObserver = service.subscribeStatusChanges((snapshot) => {
+      nextListenerSnapshot = snapshot;
+    });
+
+    try {
+      service._setStatus("nested", "error", "changed", undefined, undefined);
+      assert.deepStrictEqual(nextListenerSnapshot?.[0], {
+        name: "nested",
+        state: "error",
+        tools: ["mcp__nested__read"],
+        error: "changed",
+        config: {
+          command: "node",
+          args: ["--safe"],
+          env: { TOKEN: "secret" },
+          headers: { Authorization: "secret" },
+          enabled: true,
+        },
+      });
+
+      const getterSnapshot = service.getServersStatus();
+      getterSnapshot[0].tools.push("getter-tool");
+      getterSnapshot[0].config.args?.push("getter-arg");
+      const internalSnapshot = service.getServersStatus();
+      assert.deepStrictEqual(internalSnapshot[0].tools, ["mcp__nested__read"]);
+      assert.deepStrictEqual(internalSnapshot[0].config.args, ["--safe"]);
+      assert.deepStrictEqual(internalSnapshot[0].config.env, { TOKEN: "secret" });
+      assert.deepStrictEqual(internalSnapshot[0].config.headers, { Authorization: "secret" });
+    } finally {
+      unsubscribeMutator();
+      unsubscribeObserver();
+    }
+  });
+
+  it("structuredClone 缺失时使用 JSON-like fallback 并保留 undefined", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "structuredClone");
+    Object.defineProperty(globalThis, "structuredClone", {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+    const snapshots = [];
+    const unsubscribe = service.subscribeStatusChanges((snapshot) => snapshots.push(snapshot));
+    try {
+      assert.doesNotThrow(() => {
+        service._setStatus("fallback", "connected", undefined, {
+          command: "node",
+          args: undefined,
+          env: { TOKEN: "secret" },
+        }, ["mcp__fallback__read"]);
+      });
+      const status = service.getServersStatus()[0];
+      assert.strictEqual(Object.hasOwn(status.config, "args"), true);
+      assert.strictEqual(status.config.args, undefined);
+      assert.deepStrictEqual(status.config.env, { TOKEN: "secret" });
+      assert.deepStrictEqual(snapshots.at(-1)[0].tools, ["mcp__fallback__read"]);
+    } finally {
+      unsubscribe();
+      if (descriptor) Object.defineProperty(globalThis, "structuredClone", descriptor);
+      else delete globalThis.structuredClone;
+    }
+  });
+
+  it("不可克隆扩展值不会破坏状态写入、getter 或 listener fan-out", () => {
+    const config = {
+      command: "node",
+      args: ["--safe"],
+      env: { TOKEN: "secret" },
+      extensionFn: () => "ignored",
+      extensionSymbol: Symbol("ignored"),
+    };
+    const tools = ["mcp__uncloneable__read", () => "ignored", Symbol("ignored")];
+    const observed = [];
+    const unsubscribeFirst = service.subscribeStatusChanges((snapshot) => observed.push(snapshot));
+    const unsubscribeSecond = service.subscribeStatusChanges((snapshot) => observed.push(snapshot));
+    try {
+      assert.doesNotThrow(() => {
+        service._setStatus("uncloneable", "connected", undefined, config, tools);
+      });
+      assert.doesNotThrow(() => service.getServersStatus());
+      assert.strictEqual(observed.length, 2);
+      assert.deepStrictEqual(observed[0][0].tools, ["mcp__uncloneable__read"]);
+      assert.deepStrictEqual(observed[1][0].tools, ["mcp__uncloneable__read"]);
+      assert.deepStrictEqual(service.getServersStatus()[0].config, {
+        command: "node",
+        args: ["--safe"],
+        env: { TOKEN: "secret" },
+      });
+    } finally {
+      unsubscribeFirst();
+      unsubscribeSecond();
+    }
+  });
+
+  it("circular config 在 clone fallback 下不抛出、泄漏扩展值或污染其他快照", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "structuredClone");
+    Object.defineProperty(globalThis, "structuredClone", {
+      value() { throw new TypeError("clone unavailable"); },
+      configurable: true,
+      writable: true,
+    });
+    const config = {
+      command: "node",
+      args: ["--safe"],
+      env: { TOKEN: "internal-secret" },
+    };
+    config.circular = config;
+    const snapshots = [];
+    const unsubscribeMutator = service.subscribeStatusChanges((snapshot) => {
+      snapshot[0].config.args.push("mutated");
+      snapshot[0].config.env.TOKEN = "mutated";
+    });
+    const unsubscribeObserver = service.subscribeStatusChanges((snapshot) => snapshots.push(snapshot));
+    try {
+      assert.doesNotThrow(() => service._setStatus("circular", "connected", undefined, config, ["safe-tool"]));
+      assert.deepStrictEqual(snapshots[0][0].config, {
+        command: "node",
+        args: ["--safe"],
+        env: { TOKEN: "internal-secret" },
+      });
+      assert.strictEqual("circular" in snapshots[0][0].config, false);
+      assert.deepStrictEqual(service.getServersStatus()[0].config.args, ["--safe"]);
+      assert.deepStrictEqual(service.getServersStatus()[0].config.env, { TOKEN: "internal-secret" });
+    } finally {
+      unsubscribeMutator();
+      unsubscribeObserver();
+      if (descriptor) Object.defineProperty(globalThis, "structuredClone", descriptor);
+      else delete globalThis.structuredClone;
+    }
+  });
 });
 
 // ─── 无配置 ────────────────────────────────────
