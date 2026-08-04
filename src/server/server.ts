@@ -30,6 +30,7 @@ import { RootRegistry } from "./root-registry.js";
 import { createPermissionModeController } from "./permission-mode.js";
 import { writeChatEvent } from "./chat-stream.js";
 import { AppEventHub } from "./app-events.js";
+import { getServersStatus, subscribeStatusChanges } from "../agent/mcp/MCPClientService.js";
 
 export type SessionWriteAuthorizer = (sessionFile: string, source: string) => void;
 
@@ -56,6 +57,23 @@ export function openAppEventStream(
   appEvents.addClient(res);
   req.on("close", () => {
     appEvents.removeClient(res);
+  });
+}
+
+export function attachMcpEvents(appEvents: Pick<AppEventHub, "publish">): () => void {
+  const toolsKey = (snapshot: ReturnType<typeof getServersStatus>): string => JSON.stringify(
+    snapshot
+      .map((status) => ({ name: status.name, tools: status.tools }))
+      .sort((left, right) => left.name.localeCompare(right.name)),
+  );
+  let previousTools = toolsKey(getServersStatus());
+  return subscribeStatusChanges((snapshot) => {
+    try { appEvents.publish("mcp.changed"); } catch {}
+    const nextTools = toolsKey(snapshot);
+    if (nextTools !== previousTools) {
+      previousTools = nextTools;
+      try { appEvents.publish("dashboard.changed"); } catch {}
+    }
   });
 }
 
@@ -307,6 +325,23 @@ export function attachSessionEvents(
   chatStream: ChatStreamState,
   ctx?: ServerContext,
 ): void {
+  const publishUsageChanged = (): void => {
+    try { ctx?.appEvents.publish("usage.changed"); } catch {}
+  };
+  const publishLifecycleChanged = (): void => {
+    try { ctx?.appEvents.publish("dashboard.changed"); } catch {}
+    publishUsageChanged();
+  };
+  const publishLifecycleAfterIdle = (): void => {
+    try {
+      const agent = runtime.session?.agent;
+      if (typeof agent?.waitForIdle !== "function") {
+        queueMicrotask(publishLifecycleChanged);
+        return;
+      }
+      void Promise.resolve(agent.waitForIdle()).then(publishLifecycleChanged, () => {});
+    } catch {}
+  };
   const authorizeSessionWrite: SessionWriteAuthorizer | undefined = ctx?.permissionService
     ? (sessionFile, source) => {
       ctx.permissionService!.authorizePathSync(ctx.paths.SESSIONS_DIR, sessionFile, "write", source);
@@ -314,7 +349,16 @@ export function attachSessionEvents(
     : undefined;
 
   runtime.onEvent((event: any) => {
-    if (event.type === "agent_end" && !chatStream.turnId) return;
+    if (event.type === "agent_start") publishLifecycleChanged();
+    if (event.type === "compaction_start") {
+      if ((runtime.session as any).isCompacting) publishUsageChanged();
+      else queueMicrotask(publishUsageChanged);
+    }
+    if (event.type === "compaction_end") queueMicrotask(publishUsageChanged);
+    if (event.type === "agent_end" && !chatStream.turnId) {
+      publishLifecycleAfterIdle();
+      return;
+    }
 
     const turnId = chatStream.turnId || (event.turnIndex !== undefined ? `turn-${event.turnIndex}` : "");
     const tid = (event.toolCallId || event.id || event.type) + "@" + turnId;
@@ -649,6 +693,7 @@ export function attachSessionEvents(
       chatStream.blockSeq = 0;
       chatStream.textSegments = [];
       chatStream.currentWorkspace = "";
+      publishLifecycleAfterIdle();
     }
   });
 }
@@ -661,6 +706,7 @@ async function main() {
   const chatStream: ChatStreamState = { textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "", response: null, turnId: "", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0, eventSeq: 0, eventHistory: [] };
   const appEvents = new AppEventHub();
   appEvents.subscribeClientRemoved(cancelPermissionConfirmationsForResponse);
+  attachMcpEvents(appEvents);
   const sessionPermissionState = createSessionPermissionState();
   let runtime: AgentRuntime;
   const security = createDesktopSecurityConfig();

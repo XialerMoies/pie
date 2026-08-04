@@ -18,13 +18,13 @@ let resolveReadiness: (() => void) | null = null;
 let rejectReadiness: ((reason?: unknown) => void) | null = null;
 let readinessState: "idle" | "pending" | "ready" | "timed_out" = "idle";
 
-function clearHandshakeTimer(): void {
+function appEventsClearHandshakeTimer(): void {
   if (handshakeTimer === null) return;
   clearTimeout(handshakeTimer);
   handshakeTimer = null;
 }
 
-function notify(type: AppEventSubscriptionType, event: AppEvent): void {
+function appEventsNotify(type: AppEventSubscriptionType, event: AppEvent): void {
   for (const handler of [...(subscriptions.get(type) || [])]) {
     try {
       handler(event);
@@ -34,11 +34,11 @@ function notify(type: AppEventSubscriptionType, event: AppEvent): void {
   }
 }
 
-function resync(): void {
-  notify("resync", { type: "resync", revision: 0 });
+function appEventsResync(): void {
+  appEventsNotify("resync", { type: "resync", revision: 0 });
 }
 
-function start(): Promise<void> {
+function appEventsStart(): Promise<void> {
   if (eventSource && readiness) return readiness;
 
   const sourceGeneration = ++generation;
@@ -66,7 +66,7 @@ function start(): Promise<void> {
 
   source.onopen = () => {
     if (!isCurrent()) return;
-    clearHandshakeTimer();
+    appEventsClearHandshakeTimer();
     if (readinessState === "pending") {
       readinessState = "ready";
       resolveReadiness?.();
@@ -76,7 +76,7 @@ function start(): Promise<void> {
       readinessState = "ready";
       readiness = Promise.resolve();
     }
-    resync();
+    appEventsResync();
   };
 
   source.onmessage = (message) => {
@@ -90,7 +90,7 @@ function start(): Promise<void> {
     if (!parsed || typeof parsed !== "object") return;
     const event = parsed as AppEvent;
     if (!eventTypes.has(event.type as AppEventType)) return;
-    notify(event.type, event);
+    appEventsNotify(event.type, event);
   };
 
   source.onerror = () => {
@@ -101,7 +101,7 @@ function start(): Promise<void> {
   handshakeTimer = setTimeout(() => {
     if (!isCurrent() || readinessState !== "pending") return;
     readinessState = "timed_out";
-    clearHandshakeTimer();
+    appEventsClearHandshakeTimer();
     console.error("[App.Events] event channel handshake timed out");
     rejectReadiness?.(new Error("event channel handshake timed out"));
     resolveReadiness = null;
@@ -111,11 +111,11 @@ function start(): Promise<void> {
   return readiness;
 }
 
-function stop(): void {
+function appEventsStop(): void {
   const source = eventSource;
   eventSource = null;
   generation += 1;
-  clearHandshakeTimer();
+  appEventsClearHandshakeTimer();
 
   if (readinessState === "pending") {
     rejectReadiness?.(new Error("event channel stopped"));
@@ -132,7 +132,7 @@ function stop(): void {
   source.close();
 }
 
-function subscribe(type: AppEventSubscriptionType, handler: AppEventHandler): () => void {
+function appEventsSubscribe(type: AppEventSubscriptionType, handler: AppEventHandler): () => void {
   let handlers = subscriptions.get(type);
   if (!handlers) {
     handlers = new Set();
@@ -145,5 +145,10 @@ function subscribe(type: AppEventSubscriptionType, handler: AppEventHandler): ()
   };
 }
 
-const appEvents: AppEvents = { start, stop, subscribe, resync };
+const appEvents: AppEvents = {
+  start: appEventsStart,
+  stop: appEventsStop,
+  subscribe: appEventsSubscribe,
+  resync: appEventsResync,
+};
 appEventsNamespace.Events = appEvents;

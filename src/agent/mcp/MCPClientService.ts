@@ -43,6 +43,9 @@ interface ConnectionRecord {
 
 const _connections = new Map<string, ConnectionRecord>()
 const _statusMap = new Map<string, McpServerStatus>()
+export type McpStatusChangeListener = (snapshot: McpServerStatus[]) => void
+const _statusListeners = new Set<McpStatusChangeListener>()
+let _lastVisibleSnapshot = "[]"
 let _trustStore: TrustStore | undefined
 let _mcpGen = 0  // connectAll 生成号，stale 连接跳过写入全局状态
 
@@ -79,7 +82,7 @@ export async function connectAll(
   const enabled = getEnabledServers(result)
 
   // 清空旧 status，避免跨 workspace 残留
-  _statusMap.clear()
+  _clearStatuses()
 
   for (const source of enabled) {
     if (gen !== _mcpGen) {
@@ -202,13 +205,13 @@ export async function disconnectAll(): Promise<void> {
     closePromises.push(safeClose(conn.client))
   }
   _connections.clear()
-  _statusMap.clear()
+  _clearStatuses()
   await Promise.all(closePromises)
 }
 
 // ─── 状态查询（Phase 2 用） ─────────────────────────
 
-function _setStatus(
+export function _setStatus(
   name: string,
   state: McpConnectionState,
   error?: string,
@@ -224,6 +227,58 @@ function _setStatus(
     // state 切换为 connected 时清空旧错误文案
     error: state === "connected" ? undefined : (error ?? existing?.error),
   })
+  _notifyStatusChanges()
+}
+
+function _visibleSnapshotKey(): string {
+  const sortedRecord = (record?: Record<string, string>): Record<string, string> | undefined => record
+    ? Object.fromEntries(Object.entries(record).sort(([left], [right]) => left.localeCompare(right)))
+    : undefined
+  const snapshot = [..._statusMap.values()]
+    .map((status) => ({
+      name: status.name,
+      state: status.state,
+      tools: [...status.tools],
+      error: status.error ?? null,
+      enabled: status.config?.enabled ?? true,
+      config: status.config ? {
+        command: status.config.command,
+        args: status.config.args ? [...status.config.args] : undefined,
+        url: status.config.url,
+        headers: sortedRecord(status.config.headers),
+        env: sortedRecord(status.config.env),
+        cwd: status.config.cwd,
+        transport: status.config.transport ?? "stdio",
+        enabled: status.config.enabled ?? true,
+      } : null,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  return JSON.stringify(snapshot)
+}
+
+function _notifyStatusChanges(): void {
+  const nextSnapshot = _visibleSnapshotKey()
+  if (nextSnapshot === _lastVisibleSnapshot) return
+  _lastVisibleSnapshot = nextSnapshot
+  const snapshot = getServersStatus().map((status) => ({
+    ...status,
+    config: { ...status.config },
+    tools: [...status.tools],
+  }))
+  for (const listener of [..._statusListeners]) {
+    try { listener(snapshot) } catch {}
+  }
+}
+
+function _clearStatuses(): void {
+  if (_statusMap.size === 0) return
+  _statusMap.clear()
+  _notifyStatusChanges()
+}
+
+export function subscribeStatusChanges(listener: McpStatusChangeListener): () => void {
+  _statusListeners.add(listener)
+  return () => { _statusListeners.delete(listener) }
 }
 
 /** 获取所有 MCP server 的当前状态 */
@@ -237,12 +292,14 @@ export function disconnectAllSync(): void {
     try { conn.client.close() } catch {}
   }
   _connections.clear()
-  _statusMap.clear()
+  _clearStatuses()
 }
 
 /** 重置所有状态（测试用） */
 export function reset(): void {
   _connections.clear()
-  _statusMap.clear()
+  _clearStatuses()
+  _statusListeners.clear()
+  _lastVisibleSnapshot = "[]"
   _trustStore = undefined
 }

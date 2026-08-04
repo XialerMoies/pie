@@ -14,6 +14,10 @@ import { TrustStore, hashServerCommand, defaultTrustStorePath } from "../../agen
 import { authorizeRoutePath, isServerPermissionError, ServerPermissionError, writeServerPermissionError } from "../permission-service.js";
 import { writePathGuardError } from "./path-guard.js";
 
+function publishMcpChanged(ctx: ServerContext): void {
+  try { ctx.appEvents.publish("mcp.changed"); } catch {}
+}
+
 export const handleDashboard: RouteHandler = (req, res, ctx) => {
   const { url, method } = req;
   const cors = { "Access-Control-Allow-Origin": "*" };
@@ -332,6 +336,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         const newEnabled = current === false ? true : false;
         content.servers[name].enabled = newEnabled;
         writeFileSync(filePath, JSON.stringify(content, null, 2) + "\n", "utf-8");
+        publishMcpChanged(ctx);
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, name, enabled: newEnabled, restartNeeded: true, message: "请重启会话以应用更改" }));
@@ -360,6 +365,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         const trustStore = await createAuthorizedTrustStore(ctx, "mcp.trust");
         const hash = hashServerCommand(source.config);
         trustStore.addTrust(workspace, hash, source.name);
+        publishMcpChanged(ctx);
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, name, restartNeeded: true, message: `已信任 ${name}，请重启会话以加载工具` }));
@@ -407,6 +413,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
           const store = await createAuthorizedTrustStore(ctx, "mcp.install.custom.trust");
           store.addTrust(workspace, hashServerCommand({ command, args: args || [], transport: "stdio" }), name);
         } catch {}
+        publishMcpChanged(ctx);
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, name, isGlobal: true, restartNeeded: true, message: `已全局安装 ${name}，在项目 MCP 面板中启用即可使用` }));
@@ -457,6 +464,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
           const hash = hashServerCommand(srvConfig);
           trustStore.addTrust(workspace, hash, entry.name);
         } catch {}
+        publishMcpChanged(ctx);
 
         const hint = entry.postInstallHint ? `提示: ${entry.postInstallHint}` : "";
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
@@ -500,6 +508,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
         if (config.servers?.[name]) {
           delete config.servers[name];
           writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+          publishMcpChanged(ctx);
         }
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });

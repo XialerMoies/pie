@@ -68,6 +68,15 @@ function mockRuntime(overrides) {
   };
 }
 
+function mockAppEvents(overrides) {
+  const published = [];
+  return {
+    published,
+    publish(type, payload) { published.push({ type, payload }); },
+    ...overrides,
+  };
+}
+
 function mockPaths() {
   const tmpDir = mkdtempSync(resolve(tmpdir(), "pi-test-"));
   return {
@@ -88,7 +97,7 @@ function mockContext(overrides) {
   return {
     runtime: mockRuntime(),
     chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" },
-    sseClients: [],
+    appEvents: mockAppEvents(),
     paths,
     ...overrides,
   };
@@ -290,8 +299,8 @@ describe("dashboard routes", () => {
       const { status, body } = await callHandler(handleDashboard, "POST", "/api/compact", { focus: "keep bugs" }, ctx);
       assert.strictEqual(status, 200);
       const data = parseJSON(body);
-      assert.ok(data.ok);
-      assert.strictEqual(data.compacted, true);
+      assert.deepStrictEqual(data, { ok: true, compacted: true, message: "Compaction completed" });
+      assert.deepStrictEqual(ctx.appEvents.published, [], "the REST route must not duplicate session lifecycle events");
       assert.strictEqual(compactCalledWith, "keep bugs", "focus 传入 compact()");
     });
 
@@ -310,6 +319,35 @@ describe("dashboard routes", () => {
       assert.ok(data.ok);
       assert.strictEqual(data.compacted, false);
       assert.ok(data.message.includes("Nothing to compact"));
+      assert.deepStrictEqual(ctx.appEvents.published, []);
+    });
+
+    it("does not duplicate lifecycle events when compaction fails", async () => {
+      const ctx = mockContext({
+        runtime: {
+          session: {
+            ...mockSession(),
+            compact: async () => { throw new Error("compact exploded"); },
+          },
+        },
+      });
+      const { status, body } = await callHandler(handleDashboard, "POST", "/api/compact", {}, ctx);
+      assert.strictEqual(status, 500);
+      assert.deepStrictEqual(parseJSON(body), { ok: false, error: "compact exploded" });
+      assert.deepStrictEqual(ctx.appEvents.published, []);
+    });
+
+    it("keeps the exact compaction response when the UI publisher throws", async () => {
+      const session = mockSession({ compact: async () => ({ summary: "compacted" }) });
+      const ctx = mockContext({
+        runtime: { session },
+        appEvents: mockAppEvents({ publish() { throw new Error("UI unavailable"); } }),
+      });
+
+      const { status, body } = await callHandler(handleDashboard, "POST", "/api/compact", {}, ctx);
+
+      assert.strictEqual(status, 200);
+      assert.deepStrictEqual(parseJSON(body), { ok: true, compacted: true, message: "Compaction completed" });
     });
 
     it("Already compacted 返回 compacted:false", async () => {
@@ -451,6 +489,7 @@ describe("dashboard routes", () => {
         const data = parseJSON(body);
         assert.strictEqual(data.enabled, true, "已被启用");
         const file = JSON.parse(readFileSync(resolve(dir, ".mcp.json"), "utf-8"));
+        assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["mcp.changed"]);
         assert.strictEqual(file.servers.myServer.enabled, true, "文件内容已变更");
       } finally { rmSync(dir, { recursive: true, force: true }); }
     });
@@ -468,6 +507,35 @@ describe("dashboard routes", () => {
         assert.strictEqual(data.name, "my server", "名称已 decode");
         assert.strictEqual(data.enabled, false, "已被禁用");
       } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it("keeps the MCP config response when the UI publisher throws", async () => {
+      const dir = mkdtempSync(resolve(tmpdir(), "mcp-publisher-fail-"));
+      try {
+        writeFileSync(resolve(dir, ".mcp.json"), JSON.stringify({
+          servers: { myServer: { command: "node", enabled: false } },
+        }));
+        const ctx = mockContext({
+          runtime: { ...mockRuntime(), currentWorkspace: dir },
+          paths: { APP_ROOT: dir },
+          appEvents: mockAppEvents({ publish() { throw new Error("UI unavailable"); } }),
+        });
+
+        const { status, body } = await callHandler(handleDashboard, "POST", "/api/mcp/servers/myServer/toggle", undefined, ctx);
+
+        assert.strictEqual(status, 200);
+        assert.deepStrictEqual(parseJSON(body), {
+          ok: true,
+          name: "myServer",
+          enabled: true,
+          restartNeeded: true,
+          message: "请重启会话以应用更改",
+        });
+        const config = JSON.parse(readFileSync(resolve(dir, ".mcp.json"), "utf-8"));
+        assert.strictEqual(config.servers.myServer.enabled, true);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -488,6 +556,7 @@ describe("dashboard routes", () => {
         const data = parseJSON(body);
         assert.strictEqual(data.ok, true, "信任成功");
         assert.strictEqual(data.name, "test-srv");
+        assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["mcp.changed"]);
       } finally {
         process.env.HOME = origHome;
         process.env.USERPROFILE = origProfile;
@@ -523,6 +592,7 @@ describe("dashboard routes", () => {
         // 断言配置写入了全局路径，而非项目路径
         const globalPath = resolve(dir, ".pi", "agent", "mcp.json");
         const config = JSON.parse(readFileSync(globalPath, "utf-8"));
+        assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["mcp.changed"]);
         assert.ok(config.servers.filesystem, "以 id 为 key 写入全局配置");
         assert.strictEqual(config.servers.filesystem.enabled, false, "安装后默认禁用");
         // 项目目录不应有 .mcp.json
@@ -573,6 +643,7 @@ describe("dashboard routes", () => {
         assert.strictEqual(data.ok, true);
         // 验证 .vscode/mcp.json 中已删除
         const config = JSON.parse(readFileSync(resolve(dir, ".vscode", "mcp.json"), "utf-8"));
+        assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["mcp.changed"]);
         assert.ok(!config.servers["not-local"], "已从 .vscode/mcp.json 删除");
       } finally { rmSync(dir, { recursive: true, force: true }); }
     });
@@ -590,7 +661,9 @@ describe("chat routes", () => {
   it("POST /api/workspace/switch 切换工作区", async () => {
     // workspace switch 在 req.on('end') 回调中异步写响应
     // 用真实 HTTP server 测试
-    const ctx = mockContext();
+    const ctx = mockContext({
+      runtime: mockRuntime({ currentWorkspace: ROOT }),
+    });
     ctx.runtime.session._cwd = "/tmp/fake-path";
     const server = createServer(async (req, res) => {
       const handled = await handleChat(req, res, ctx);
@@ -603,11 +676,66 @@ describe("chat routes", () => {
       const r = await fetch(`http://127.0.0.1:${port}/api/workspace/switch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspace: ROOT }),
+        body: JSON.stringify({ workspace: resolve(ROOT, "src") }),
       });
       assert.strictEqual(r.status, 200);
       const data = await r.json();
-      assert.ok(data.ok);
+      assert.deepStrictEqual(data, { ok: true, workspace: resolve(ROOT, "src"), switched: true });
+      assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["dashboard.changed", "usage.changed"]);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("POST /api/workspace/switch does not publish when switching fails", async () => {
+    const ctx = mockContext({
+      runtime: mockRuntime({
+        currentWorkspace: ROOT,
+        switchWorkspace: async () => { throw new Error("switch failed"); },
+      }),
+    });
+    const server = createServer(async (req, res) => {
+      const handled = await handleChat(req, res, ctx);
+      if (!handled) { res.writeHead(404); res.end("Not found"); }
+    });
+    const addr = server.listen(0, "127.0.0.1");
+    await new Promise((resolveListening) => addr.on("listening", resolveListening));
+    const port = addr.address().port;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/workspace/switch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace: resolve(ROOT, "src") }),
+      });
+      assert.strictEqual(response.status, 400);
+      assert.deepStrictEqual(await response.json(), { error: "switch failed" });
+      assert.deepStrictEqual(ctx.appEvents.published, []);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("keeps the workspace switch response when the UI publisher throws", async () => {
+    const workspace = resolve(ROOT, "src");
+    const ctx = mockContext({
+      runtime: mockRuntime({ currentWorkspace: ROOT }),
+      appEvents: mockAppEvents({ publish() { throw new Error("UI unavailable"); } }),
+    });
+    const server = createServer(async (req, res) => {
+      const handled = await handleChat(req, res, ctx);
+      if (!handled) { res.writeHead(404); res.end("Not found"); }
+    });
+    const addr = server.listen(0, "127.0.0.1");
+    await new Promise((resolveListening) => addr.on("listening", resolveListening));
+    const port = addr.address().port;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/workspace/switch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace }),
+      });
+      assert.strictEqual(response.status, 200);
+      assert.deepStrictEqual(await response.json(), { ok: true, workspace, switched: true });
     } finally {
       server.close();
     }
@@ -615,6 +743,86 @@ describe("chat routes", () => {
 });
 
 describe("settings routes", () => {
+  it("publishes dashboard changes after model and thinking mutations without changing responses", async () => {
+    const model = mockModel({ provider: "openai", id: "gpt-test" });
+    const session = mockSession({
+      thinkingLevel: "off",
+      setThinkingLevel(level) { this.thinkingLevel = level; },
+      getAvailableThinkingLevels: () => ["low", "high"],
+      supportsThinking: () => true,
+      setModel: async () => {},
+    });
+    const ctx = mockContext({
+      runtime: mockRuntime({
+        session,
+        modelRegistry: { find: (provider, id) => provider === model.provider && id === model.id ? model : undefined },
+      }),
+    });
+    try {
+      mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+      const thinking = await callHandler(handleSettings, "POST", "/api/thinking-level", { level: "high" }, ctx);
+      assert.strictEqual(thinking.status, 200);
+      assert.deepStrictEqual(parseJSON(thinking.body), {
+        ok: true,
+        level: "high",
+        availableLevels: ["off", "low", "high"],
+        supportsThinking: true,
+      });
+
+      const switched = await callHandler(handleSettings, "POST", "/api/model/switch", { provider: "openai", modelId: "gpt-test" }, ctx);
+      assert.strictEqual(switched.status, 200);
+      assert.deepStrictEqual(parseJSON(switched.body), { ok: true });
+      assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["dashboard.changed", "dashboard.changed"]);
+    } finally {
+      rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not publish failed settings mutations and ignores publisher errors", async () => {
+    const failedCtx = mockContext({
+      runtime: mockRuntime({
+        session: mockSession({ setThinkingLevel: () => { throw new Error("thinking failed"); } }),
+      }),
+    });
+    const failed = await callHandler(handleSettings, "POST", "/api/thinking-level", { level: "high" }, failedCtx);
+    assert.strictEqual(failed.status, 400);
+    assert.deepStrictEqual(parseJSON(failed.body), { error: "thinking failed" });
+    assert.deepStrictEqual(failedCtx.appEvents.published, []);
+
+    const model = mockModel({ provider: "openai", id: "gpt-rejected" });
+    const rejectedModelCtx = mockContext({
+      runtime: mockRuntime({
+        session: mockSession({ setModel: async () => { throw new Error("model rejected"); } }),
+        modelRegistry: { find: () => model },
+      }),
+    });
+    mkdirSync(rejectedModelCtx.paths.PI_CONFIG_DIR, { recursive: true });
+    try {
+      const rejected = await callHandler(handleSettings, "POST", "/api/model/switch", {
+        provider: model.provider,
+        modelId: model.id,
+      }, rejectedModelCtx);
+      assert.strictEqual(rejected.status, 400);
+      assert.deepStrictEqual(parseJSON(rejected.body), { error: "model rejected" });
+      assert.deepStrictEqual(rejectedModelCtx.appEvents.published, []);
+    } finally {
+      rmSync(rejectedModelCtx.paths._tmpDir, { recursive: true, force: true });
+    }
+
+    const failOpenCtx = mockContext({
+      runtime: mockRuntime({
+        session: mockSession({
+          thinkingLevel: "off",
+          setThinkingLevel(level) { this.thinkingLevel = level; },
+        }),
+      }),
+      appEvents: mockAppEvents({ publish() { throw new Error("UI unavailable"); } }),
+    });
+    const succeeded = await callHandler(handleSettings, "POST", "/api/thinking-level", { level: "low" }, failOpenCtx);
+    assert.strictEqual(succeeded.status, 200);
+    assert.strictEqual(parseJSON(succeeded.body).level, "low");
+  });
+
   it("GET /api/auth redacts stored provider keys", async () => {
     const ctx = mockContext();
     try {
@@ -651,12 +859,172 @@ describe("sessions routes", () => {
   });
 
   it("POST /api/sessions/new 创建会话", async () => {
-    const ctx = mockContext();
+    const ctx = mockContext({ runtime: mockRuntime({ createNewSession: async () => "sess-created" }) });
     const { status, body } = await callHandler(handleSessions, "POST", "/api/sessions/new", { workspace: ROOT }, ctx);
     assert.strictEqual(status, 200);
     const data = parseJSON(body);
-    assert.ok(data.ok);
-    assert.ok(data.id);
+    assert.deepStrictEqual(data, { ok: true, id: "sess-created" });
+    assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["dashboard.changed", "usage.changed"]);
+  });
+
+  it("keeps the new-session response when the UI publisher throws", async () => {
+    const ctx = mockContext({
+      runtime: mockRuntime({ createNewSession: async () => "sess-created" }),
+      appEvents: mockAppEvents({ publish() { throw new Error("UI unavailable"); } }),
+    });
+    const { status, body } = await callHandler(handleSessions, "POST", "/api/sessions/new", { workspace: ROOT }, ctx);
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(parseJSON(body), { ok: true, id: "sess-created" });
+  });
+
+  it("does not publish when session creation fails", async () => {
+    const ctx = mockContext({
+      runtime: mockRuntime({ createNewSession: async () => { throw new Error("create failed"); } }),
+    });
+    const { status, body } = await callHandler(handleSessions, "POST", "/api/sessions/new", { workspace: ROOT }, ctx);
+    assert.strictEqual(status, 400);
+    assert.deepStrictEqual(parseJSON(body), { error: "create failed" });
+    assert.deepStrictEqual(ctx.appEvents.published, []);
+  });
+
+  it("publishes dashboard and usage changes after activating a session", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "session-activate-events-"));
+    const workspace = resolve(root, "workspace");
+    const sessionsDir = resolve(root, "sessions");
+    const sessionDir = resolve(sessionsDir, "by-project", "workspace");
+    const sessionFile = resolve(sessionDir, "activate-me.jsonl");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "activate-me", workspace }) + "\n");
+    const runtime = mockRuntime({
+      currentWorkspace: workspace,
+      openSession: async () => {},
+      getActiveSession: () => ({ id: "activate-me", file: sessionFile }),
+    });
+    const ctx = mockContext({
+      runtime,
+      paths: {
+        ...mockPaths(),
+        APP_ROOT: workspace,
+        DATA_DIR: root,
+        PI_CONFIG_DIR: resolve(root, "pi"),
+        SESSIONS_DIR: sessionsDir,
+      },
+    });
+    try {
+      const { status, body } = await callHandler(handleSessions, "POST", "/api/sessions/activate", { id: "activate-me", workspace }, ctx);
+      assert.strictEqual(status, 200);
+      assert.deepStrictEqual(parseJSON(body), { ok: true, activeSessionId: "activate-me", messages: [] });
+      assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["dashboard.changed", "usage.changed"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes after branching opens a new active session", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "session-branch-events-"));
+    const workspace = resolve(root, "workspace");
+    const sessionsDir = resolve(root, "sessions");
+    const sessionDir = resolve(sessionsDir, "by-project", "workspace");
+    const sourceFile = resolve(sessionDir, "source.jsonl");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(sourceFile, JSON.stringify({ type: "session", id: "source", workspace }) + "\n");
+    let openedFile = "";
+    const runtime = mockRuntime({
+      currentWorkspace: workspace,
+      openSession: async (file) => { openedFile = file; },
+      getActiveSession: () => openedFile ? { id: openedFile.split(/[\\/]/).at(-1).replace(/\.jsonl$/, ""), file: openedFile } : null,
+    });
+    const ctx = mockContext({
+      runtime,
+      paths: {
+        ...mockPaths(),
+        APP_ROOT: workspace,
+        DATA_DIR: root,
+        PI_CONFIG_DIR: resolve(root, "pi"),
+        SESSIONS_DIR: sessionsDir,
+      },
+    });
+    try {
+      const { status, body } = await callHandler(handleSessions, "POST", "/api/sessions/branch", { id: "source", workspace, name: "Branch" }, ctx);
+      const data = parseJSON(body);
+      assert.strictEqual(status, 200);
+      assert.strictEqual(data.ok, true);
+      assert.strictEqual(data.activeSessionId, data.id);
+      assert.ok(openedFile.endsWith(`${data.id}.jsonl`));
+      assert.ok(Array.isArray(data.messages));
+      assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["dashboard.changed", "usage.changed"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not publish when session activation fails", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "session-activate-fail-events-"));
+    const workspace = resolve(root, "workspace");
+    const sessionsDir = resolve(root, "sessions");
+    const sessionDir = resolve(sessionsDir, "by-project", "workspace");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(resolve(sessionDir, "activate-me.jsonl"), JSON.stringify({ type: "session", id: "activate-me", workspace }) + "\n");
+    const ctx = mockContext({
+      runtime: mockRuntime({
+        currentWorkspace: workspace,
+        openSession: async () => { throw new Error("open failed"); },
+        getActiveSession: () => null,
+      }),
+      paths: {
+        ...mockPaths(),
+        APP_ROOT: workspace,
+        DATA_DIR: root,
+        PI_CONFIG_DIR: resolve(root, "pi"),
+        SESSIONS_DIR: sessionsDir,
+      },
+    });
+    try {
+      const { status, body } = await callHandler(handleSessions, "POST", "/api/sessions/activate", { id: "activate-me", workspace }, ctx);
+      assert.strictEqual(status, 400);
+      assert.deepStrictEqual(parseJSON(body), { error: "open failed" });
+      assert.deepStrictEqual(ctx.appEvents.published, []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not publish when opening a branched session fails", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "session-branch-fail-events-"));
+    const workspace = resolve(root, "workspace");
+    const sessionsDir = resolve(root, "sessions");
+    const sessionDir = resolve(sessionsDir, "by-project", "workspace");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(resolve(sessionDir, "source.jsonl"), JSON.stringify({ type: "session", id: "source", workspace }) + "\n");
+    const ctx = mockContext({
+      runtime: mockRuntime({
+        currentWorkspace: workspace,
+        openSession: async () => { throw new Error("branch open failed"); },
+      }),
+      paths: {
+        ...mockPaths(),
+        APP_ROOT: workspace,
+        DATA_DIR: root,
+        PI_CONFIG_DIR: resolve(root, "pi"),
+        SESSIONS_DIR: sessionsDir,
+      },
+    });
+    try {
+      const { status, body } = await callHandler(handleSessions, "POST", "/api/sessions/branch", { id: "source", workspace }, ctx);
+      assert.strictEqual(status, 400);
+      assert.deepStrictEqual(parseJSON(body), { error: "branch open failed" });
+      assert.deepStrictEqual(ctx.appEvents.published, []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("POST /api/sessions/rename 不存在的 ID 仍返回 ok", async () => {

@@ -9,6 +9,10 @@ import { authorizeRoutePath, writeServerPermissionError } from "../permission-se
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
+function publishDashboardChanged(ctx: Parameters<RouteHandler>[2]): void {
+  try { ctx.appEvents.publish("dashboard.changed"); } catch {}
+}
+
 export const handleSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
   const { runtime, paths: p } = ctx;
@@ -137,6 +141,7 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
       const extended = (session as any).getAvailableThinkingLevels?.() ?? ["low", "medium", "high"];
       const available = ["off", ...extended.filter((l: string) => l !== "off")];
       const supportsThinking = (session as any).supportsThinking?.() ?? available.some((item: string) => item !== "off");
+      publishDashboardChanged(ctx);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({
         ok: true,
@@ -172,6 +177,7 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
       writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
       // Hot switch
       await session.setModel(model);
+      publishDashboardChanged(ctx);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {

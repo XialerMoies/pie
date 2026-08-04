@@ -19,6 +19,11 @@ interface WorkspaceSwitchState {
 
 const workspaceSwitchStates = new WeakMap<object, WorkspaceSwitchState>();
 
+function publishWorkspaceChanged(ctx: ServerContext): void {
+  try { ctx.appEvents.publish("dashboard.changed"); } catch {}
+  try { ctx.appEvents.publish("usage.changed"); } catch {}
+}
+
 function workspacePathKey(workspace: string): string {
   return normalizePermissionPath(workspace);
 }
@@ -87,6 +92,7 @@ export function switchAuthorizedWorkspace(
     }
 
     await ctx.runtime.switchWorkspace(authorizedWorkspace);
+    publishWorkspaceChanged(ctx);
     console.log(`📂 Switched workspace: "${latestWorkspace}" → "${authorizedWorkspace}"`);
     return { workspace: authorizedWorkspace, previousWorkspace: latestWorkspace, switched: true };
   });

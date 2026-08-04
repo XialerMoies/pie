@@ -16,6 +16,11 @@ export { wsKey, wsDir } from "./session-dir.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
+function publishActiveSessionChanged(ctx: ServerContext): void {
+  try { ctx.appEvents.publish("dashboard.changed"); } catch {}
+  try { ctx.appEvents.publish("usage.changed"); } catch {}
+}
+
 /** 迁移会话: 从 sessions/ 根目录按 workspace 分类移入 by-project/ */
 async function migrateOldSessions(ctx: ServerContext): Promise<void> {
   const baseDir = ctx.paths.SESSIONS_DIR;
@@ -637,6 +642,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
         await runtime.switchWorkspace(workspace);
       }
       const id = await runtime.createNewSession();
+      publishActiveSessionChanged(ctx);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true, id }));
     } catch (err: unknown) {
@@ -750,6 +756,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       });
       writeFileSync(targetFile, [JSON.stringify(branchHeader), branchInfo, ...sourceLines.slice(1)].join("\n") + "\n");
       await runtime.openSession(targetFile, workspace || runtime.currentWorkspace);
+      publishActiveSessionChanged(ctx);
       const readableTarget = await authorizeSessionPath(ctx, targetFile, "read", "sessions.branch.result");
       const messages = parseSessionMessages(readFileSync(readableTarget, "utf-8"));
       const activeSessionId = runtime.getActiveSession?.()?.id || newId;
@@ -785,6 +792,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       // openSession 会重建 session，同 workspace 下切换不同 session 文件
       const authorizedFile = await authorizeSessionPath(ctx, sessionFile, "read", "sessions.activate");
       await runtime.openSession(authorizedFile, workspace || runtime.currentWorkspace);
+      publishActiveSessionChanged(ctx);
       const content = readFileSync(authorizedFile, "utf-8");
       const messages = parseSessionMessages(content);
       const activeSessionId = runtime.getActiveSession?.()?.id || "";
