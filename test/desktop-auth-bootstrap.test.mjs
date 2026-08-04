@@ -56,12 +56,11 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
     const html = readFileSync(new URL("../src/frontend/dashboard.html", import.meta.url), "utf8");
     const startup = readFileSync(new URL("../src/frontend/dashboard/dashboard-startup.ts", import.meta.url), "utf8");
 
-    for (const [name, source] of [["development", html], ["packaged", startup]]) {
-      const layout = source.indexOf("layout()");
-      const sync = source.indexOf("syncStartupWorkspace()", layout);
-      assert.ok(layout >= 0, `${name} startup should render the shell`);
-      assert.ok(sync > layout, `${name} startup should recover the workspace after rendering`);
-    }
+    assert.match(html, /<script\s+src=["']\.\/gen\/dashboard\/dashboard-startup\.js["']><\/script>/);
+    const layout = startup.indexOf("layout()");
+    const sync = startup.indexOf("syncStartupWorkspace()", layout);
+    assert.ok(layout >= 0, "canonical startup should render the shell");
+    assert.ok(sync > layout, "canonical startup should recover the workspace after rendering");
 
     assert.match(startup, /catch[\s\S]*App\.State\.resetWorkspace\(""\)/);
   });

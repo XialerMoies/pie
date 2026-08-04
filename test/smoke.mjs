@@ -50,6 +50,8 @@ if (existsSync(htmlDistPath)) {
   check(html.includes("dashboard"), "HTML 包含 dashboard 相关内容");
   check(html.includes("</html>"), "HTML 标签闭合完整");
   check(html.includes("marked.umd.js"), "marked.umd.js 引用存在");
+  check(!html.includes("gen/dashboard"), "生产 HTML 不引用开发模式 gen/dashboard 脚本");
+  check(!html.includes("dashboard-startup.js"), "生产 HTML 不单独引用 dashboard-startup.js");
 }
 
 // 2. JS 产物
@@ -65,6 +67,7 @@ if (existsSync(appBundlePath)) {
   check(statSync(appBundlePath).size > 100 * 1024, `js/dashboard.js size looks reasonable (${sizeKB} KB)`);
   check(!appBundle.includes("monaco-editor"), "dashboard bundle leaves Monaco in the dedicated browser ESM entry");
   check(appBundle.includes("[dashboard-startup]"), "dashboard bundle contains the production startup entry");
+  check((appBundle.match(/void startDashboard\(\)\.catch/g) || []).length === 1, "dashboard bundle starts the app exactly once");
   if (existsSync(htmlDistPath)) {
     const html = readFileSync(htmlDistPath, "utf-8");
     check(html.includes("./js/dashboard.js"), "HTML references js/dashboard.js");

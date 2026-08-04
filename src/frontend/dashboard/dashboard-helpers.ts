@@ -215,6 +215,8 @@ function toast(msg: string, type?: 'info' | 'error' | 'success'): void {
 // ═══════════════════════════════════════════════════════════════════
 
 let _bootstrapPromise: Promise<void> | null = null;
+let _dashboardRefreshInFlight: Promise<void> | null = null;
+let _dashboardRefreshQueued = false;
 
 export function bootstrapApi(): Promise<void> {
   if (!_bootstrapPromise) {
@@ -256,14 +258,29 @@ export async function syncStartupWorkspace(): Promise<void> {
 }
 
 async function getD(): Promise<void> {
-  try {
-    await bootstrapApi();
-    const r = await fetch('/api/dashboard', { credentials: 'include' });
-    App.ChatState.setDashboard(await r.json());
-    // Sync model name to input bar
-    const fn = (window as any).App?.Chat?.updateModelName;
-    if (fn) fn(); else { const mn = $('fi-model-name'); if (mn && App.ChatState.getDashboard()?.modelId) mn.textContent = App.ChatState.getDashboard()!.modelId; }
-  } catch { /* ignore */ }
+  if (_dashboardRefreshInFlight) {
+    _dashboardRefreshQueued = true;
+    return _dashboardRefreshInFlight;
+  }
+
+  _dashboardRefreshInFlight = (async () => {
+    do {
+      _dashboardRefreshQueued = false;
+      try {
+        await bootstrapApi();
+        const r = await fetch('/api/dashboard', { credentials: 'include' });
+        const data = await r.json() as DashboardData;
+        App.ChatState.setDashboard(data);
+        // Sync model name to the input bar without replacing the mounted side pane.
+        const fn = (window as any).App?.Chat?.updateModelName;
+        if (fn) fn(); else { const mn = $('fi-model-name'); if (mn && App.ChatState.getDashboard()?.modelId) mn.textContent = App.ChatState.getDashboard()!.modelId; }
+      } catch { /* ignore */ }
+    } while (_dashboardRefreshQueued);
+  })().finally(() => {
+    _dashboardRefreshInFlight = null;
+  });
+
+  return _dashboardRefreshInFlight;
 }
 
 async function refresh(): Promise<void> {

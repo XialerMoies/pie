@@ -142,7 +142,8 @@ async function restoreSessionTabsImpl(): Promise<void> {
   _renderSessionTabs(activeId || '');
   _restorePanel(store.panel.active || 'explorer');
 
-  if (activeId && !_isDraftSessionId(activeId)) {
+  const activeTab = activeId ? restoredItems.find(tab => tab.id === activeId) : undefined;
+  if (activeTab?.kind === 'session') {
     await options.onActiveSession(activeId);
   }
   _saveUiState();

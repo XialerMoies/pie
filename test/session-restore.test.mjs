@@ -109,6 +109,28 @@ describe("session restore", () => {
     assert.strictEqual(snapshot.tabs.activeId, "sess-a");
   });
 
+  it("restores an active file without activating it as a session", async () => {
+    snapshot.tabs.items.unshift({
+      kind: "file",
+      id: "data/inside.txt",
+      title: "inside.txt",
+      path: "data/inside.txt",
+      order: 0,
+    });
+    snapshot.tabs.activeId = "data/inside.txt";
+    snapshot.activeView = { type: "file", id: "data/inside.txt" };
+    const { restore } = await loadSubject();
+    restore.init({
+      prefetchSessionIndex: () => {},
+      onActiveSession: id => calls.push(["active", id]),
+    });
+
+    await restore.restoreSessionTabs();
+
+    assert.strictEqual(snapshot.tabs.activeId, "data/inside.txt");
+    assert.strictEqual(calls.some(call => call[0] === "active"), false);
+  });
+
   it("does not overwrite tabs when the user interacts during hydration", async () => {
     let resolveHydrate;
     hydrateImpl = () => new Promise(resolve => { resolveHydrate = resolve; });

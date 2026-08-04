@@ -1,7 +1,9 @@
+App.Events.subscribe('dashboard.changed', () => { void getD(); });
+App.Events.subscribe('resync', () => { void getD(); });
+
 async function startDashboard(): Promise<void> {
   await bootstrapApi();
   layout();
-  setInterval(refresh, 3000);
 
   void (async () => {
     try {

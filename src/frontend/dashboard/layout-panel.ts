@@ -98,49 +98,13 @@ function renderPanel(name: string, pc?: HTMLElement | null): void {
   pc.innerHTML = `<div class="sg-item dim">面板 "${E(name)}" 未注册</div>`;
 }
 
-function sinfoHTML(): string {
-  const stD = App.ChatState.getDashboard();
-  if (!stD) return '<div class="sg" style="padding:12px;font-size:.7rem;color:var(--tm)">加载中...</div>';
-  const ts = (stD.tools || ['read','write','edit','bash']).slice(0, 18);
-  const act = (stD.activeTools || stD.tools || []).length;
-  return `<div class="sg"><div class="sg-t">模型</div>
-    <div class="sg-r" data-model="provider"><span class="l">提供商</span><span class="v">${E(stD.modelProvider||'N/A')}</span></div>
-    <div class="sg-r" data-model="id"><span class="l">模型</span><span class="v" title="${E(stD.modelId||'')}">${E((stD.modelId||'').split('/').pop()||'N/A')}</span></div>
-    <div class="sg-r"><span class="l">上下文</span><span class="v">${E(stD.modelContextWindow||'N/A')}</span></div>
-    <div class="sg-r"><span class="l">输出上限</span><span class="v">${E(stD.modelMaxTokens||'N/A')}</span></div>
-    <div class="sg-r"><span class="l">思考</span><span class="v p">${E(stD.thinkingLevel||'off')}</span></div></div>
-    <div class="sg"><div class="sg-t">会话</div>
-    <div class="sg-r"><span class="l">运行</span><span class="v">${F(stD.runtime||0)}</span></div>
-    <div class="sg-r"><span class="l">消息</span><span class="v">${stD.messagesCount||0}</span></div>
-    <div class="sg-r"><span class="l">状态</span><span class="v p">${stD.isIdle===false?'响应中':'空闲'}</span></div></div>
-    <div class="sg"><div class="sg-t">工具 (${act})</div>
-    ${ts.map((t: string)=>'<span class="sg-tag">'+E(t)+'</span>').join('')}${ts.length<act?'<span class="sg-tag" style="opacity:.5">+'
-    +(act-ts.length)+'</span>':''}</div>
-    <div class="sg"><div class="sg-t">存储</div><div class="sg-p">${E(stD.dataDir||'data/')}</div></div>`;
-}
-
-function refreshSinfo(): void {
-  const si = $('si');
-  if (si) si.innerHTML = sinfoHTML();
-  const modelEls = si?.querySelectorAll('.sg-r[data-model]');
-  if (modelEls) modelEls.forEach(el => {
-    const modelEl = el as HTMLElement;
-    modelEl.style.cursor = 'pointer';
-    modelEl.addEventListener('click', (window as any).showModelPicker as EventListener);
-  });
-}
-
 // ─── window 别名 ──────────────────────────────────
 window.togglePanel = togglePanel;
 window.renderPanel = renderPanel;
-window.sinfoHTML = sinfoHTML;
-(window as any).refreshSinfo = refreshSinfo;
 
 // ─── App 绑定 ──────────────────────────────────────
 { const U = (window as any).App?.UI; if (U) {
   U.togglePanel = togglePanel;
   U.renderPanel = renderPanel;
-  U.sinfoHTML = sinfoHTML;
-  U.refreshSinfo = refreshSinfo;
   U.restorePanel = restorePanel;
 } }

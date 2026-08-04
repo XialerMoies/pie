@@ -85,6 +85,18 @@ describe("frontend state ownership", () => {
   });
 });
 
+describe("dashboard event refresh ownership", () => {
+  it("does not install a Dashboard polling interval", () => {
+    for (const file of [
+      "src/frontend/dashboard/dashboard-startup.ts",
+      "src/frontend/dashboard.html",
+    ]) {
+      const source = readFileSync(resolve(process.cwd(), file), "utf8");
+      assert.doesNotMatch(source, /setInterval\s*\(\s*refresh\s*,\s*3000\s*\)/, `${file} must use application events`);
+    }
+  });
+});
+
 describe("non-Markdown HTML boundaries", () => {
   it("escapes server session ids before placing them in data attributes", () => {
     const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-sessions.ts"), "utf8");

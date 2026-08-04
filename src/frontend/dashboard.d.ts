@@ -109,8 +109,6 @@ interface AppUI {
   togglePanel(name: string): void;
   renderPanel(name: string, pc?: HTMLElement | null): void;
   restorePanel(name: string): void;
-  sinfoHTML(): string;
-  refreshSinfo(): void;
   renderTabs(): void;
   renderSessionTabs(activeId?: string): void;
   closeChatTab(): void;
@@ -442,8 +440,6 @@ declare function winCtrl(action: string): void;
 declare function layout(): void;
 declare function togglePanel(name: string): void;
 declare function renderPanel(name: string, pc?: HTMLElement | null): void;
-declare function sinfoHTML(): string;
-declare function refreshSinfo(): void;
 declare function renderSessionTabs(activeId?: string): void;
 declare function closeChatTab(): void;
 declare function msgs(): string;

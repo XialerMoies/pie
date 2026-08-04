@@ -434,13 +434,14 @@ describe("App.Events frontend event bus", () => {
   it("executes the dashboard startup with one shared EventSource", async () => {
     const { FakeEventSource, instances } = createEventSourceMock();
     const calls = [];
+    const intervals = [];
     const context = {
       window: { App: {} },
       EventSource: FakeEventSource,
       console,
       setTimeout,
       clearTimeout,
-      setInterval: () => 1,
+      setInterval: (callback, delay) => { intervals.push({ callback, delay }); return 1; },
       bootstrapApi: async () => { calls.push("bootstrap"); },
       layout: () => { calls.push("layout"); },
       refresh: () => {},
@@ -465,10 +466,11 @@ describe("App.Events frontend event bus", () => {
 
     assert.strictEqual(startCalls, 1);
     assert.strictEqual(instances.length, 1);
+    assert.deepStrictEqual(intervals, []);
     assert.strictEqual(instances[0].url, "/api/events");
     instances[0].onopen?.(new Event("open"));
     await new Promise((resolve) => setImmediate(resolve));
-    assert.deepStrictEqual(calls, ["bootstrap", "layout", "workspace", "dashboard", "sessions"]);
+    assert.deepStrictEqual(calls, ["bootstrap", "layout", "dashboard", "workspace", "dashboard", "sessions"]);
     context.App.Events.stop();
   });
 
@@ -477,7 +479,7 @@ describe("App.Events frontend event bus", () => {
     const context = {
       window: {},
       console: { ...console, warn: () => {} },
-      setInterval: () => 1,
+      setInterval: () => { throw new Error("Dashboard polling should not be installed"); },
       bootstrapApi: async () => { calls.push("bootstrap"); },
       layout: () => { calls.push("layout"); },
       refresh: () => {},
@@ -486,7 +488,10 @@ describe("App.Events frontend event bus", () => {
       loadSessions: () => { calls.push("sessions"); },
       toast: () => {},
       App: {
-        Events: { start: async () => { calls.push("events"); throw new Error("offline"); } },
+        Events: {
+          subscribe: () => () => {},
+          start: async () => { calls.push("events"); throw new Error("offline"); },
+        },
         State: { resetWorkspace: () => { calls.push("reset"); } },
       },
     };
@@ -499,10 +504,75 @@ describe("App.Events frontend event bus", () => {
     assert.deepStrictEqual(calls, ["bootstrap", "layout", "events", "workspace", "dashboard", "sessions"]);
   });
 
+  it("coalesces dashboard events into one follow-up request without stale overwrite", async () => {
+    const { FakeEventSource, instances } = createEventSourceMock();
+    const dashboardRequests = [];
+    const dashboardData = [
+      { modelId: "first", runtime: 10 },
+      { modelId: "second", runtime: 20 },
+    ];
+    const dashboardResolvers = [];
+    const context = {
+      window: {
+        App: {
+          State: { getWorkspacePath: () => "" },
+          Chat: { updateModelName: () => {} },
+          ChatState: { setDashboard: (data) => dashboardRequests.push({ type: "state", data }), getDashboard: () => null },
+        },
+        electronAPI: { getDesktopSessionToken: async () => "desktop-token" },
+      },
+      EventSource: FakeEventSource,
+      console: { ...console, warn: () => {} },
+      setTimeout,
+      clearTimeout,
+      fetch: async (url) => {
+        if (url === "/api/bootstrap") return { ok: true };
+        if (url !== "/api/dashboard") return { ok: true, json: async () => ({}) };
+        const index = dashboardRequests.filter((entry) => entry.type === "request").length;
+        dashboardRequests.push({ type: "request", index });
+        return new Promise((resolve) => dashboardResolvers.push(() => resolve({ ok: true, json: async () => dashboardData[index] })));
+      },
+      bootstrapApi: undefined,
+      layout: () => {},
+      syncStartupWorkspace: async () => {},
+      loadSessions: () => {},
+      toast: () => {},
+    };
+    context.App = context.window.App;
+
+    const appEventsScript = await compileClassicScript("src/frontend/services/app-events.ts");
+    const helpersScript = await compileClassicScript("src/frontend/dashboard/dashboard-helpers.ts");
+    const startupScript = await compileClassicScript("src/frontend/dashboard/dashboard-startup.ts");
+    new Script(`${appEventsScript}\n${helpersScript}\n${startupScript}`, { filename: "dashboard.js" }).runInNewContext(context);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    instances[0].onopen?.(new Event("open"));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(dashboardRequests.filter((entry) => entry.type === "request").length, 1);
+
+    instances[0].onmessage?.({ data: JSON.stringify({ type: "dashboard.changed", revision: 1 }) });
+    instances[0].onmessage?.({ data: JSON.stringify({ type: "dashboard.changed", revision: 2 }) });
+    assert.strictEqual(dashboardRequests.filter((entry) => entry.type === "request").length, 1);
+
+    dashboardResolvers.shift()();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(dashboardRequests.filter((entry) => entry.type === "request").length, 2);
+
+    dashboardResolvers.shift()();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepStrictEqual(
+      dashboardRequests.filter((entry) => entry.type === "state").map((entry) => entry.data.modelId),
+      ["first", "second"],
+    );
+    context.App.Events.stop();
+  });
+
   it("keeps the development HTML startup on the shared bus", () => {
     const html = readFileSync(resolve(process.cwd(), "src/frontend/dashboard.html"), "utf8");
-    assert.ok(html.includes("setInterval(refresh, 3000)"));
-    assert.strictEqual((html.match(/App\.Events\.start\(\)/g) || []).length, 1);
+    assert.doesNotMatch(html, /setInterval\(refresh,\s*3000\)/);
+    assert.match(html, /<script\s+src=["']\.\/gen\/dashboard\.js["']><\/script>/);
+    assert.match(html, /<script\s+src=["']\.\/gen\/dashboard\/dashboard-startup\.js["']><\/script>/);
+    assert.strictEqual((html.match(/App\.Events\.start\(\)/g) || []).length, 0);
     assert.ok(!html.includes("ExplorerService?.startEvents"));
   });
 });

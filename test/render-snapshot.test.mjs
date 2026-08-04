@@ -2,7 +2,7 @@
  * 前端渲染快照测试
  *
  * 直接测试 HTML 生成函数的输出结构。
- * msgs() 和 sinfoHTML() 已添加 export，可直接 import。
+ * 覆盖消息渲染与真实 Dashboard 布局的关键 DOM 约束。
  *
  * 运行：npx tsx --test test/render-snapshot.test.mjs
  */
@@ -56,6 +56,10 @@ globalThis.clearTimeout = clearTimeout;
 globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
 globalThis.AbortController = class { constructor() { this.signal = {}; } abort() {} };
 globalThis.localStorage = store;
+
+// Explorer subscribes to the shared application event bus during module load.
+win.App = win.App || {};
+win.App.Events = win.App.Events || { subscribe: () => () => {} };
 
 // App state
 const state = {
@@ -597,24 +601,64 @@ describe("shortcut modal", () => {
   });
 });
 
-describe("sinfoHTML() 渲染", () => {
-  it("无数据时返回非空字符串", () => {
-    state.D = null;
-    const html = win.sinfoHTML();
-    assert.ok(typeof html === "string" && html.length > 0);
-  });
+describe("dashboard refresh", () => {
+  it("preserves the mounted side panel and resize handle", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalWindowFetch = win.fetch;
+    const originalElectronApi = win.electronAPI;
+    const originalInitResizeHandle = globalThis.initResizeHandle;
+    const originalRenderPanel = globalThis.renderPanel;
+    const originalBind = globalThis.bind;
+    const originalGetPane = globalThis.getPane;
+    const response = (body = {}) => ({
+      ok: true,
+      json: async () => body,
+      text: async () => "",
+    });
 
-  it("显示模型信息", () => {
-    state.D = {
-      modelProvider: "deepseek", modelId: "deepseek-v4",
-      modelContextWindow: "200000", modelMaxTokens: "4096",
-      thinkingLevel: "high", runtime: 3600, messagesCount: 42,
-      isIdle: true, tools: ["read", "write"], activeTools: ["read"],
-      dataDir: "/data",
+    win.electronAPI = { getDesktopSessionToken: async () => "test-token" };
+    const fetchStub = async (input) => {
+      const url = String(input);
+      if (url === "/api/dashboard") {
+        return response({ modelId: "test-model", runtime: 12, isIdle: true });
+      }
+      if (url === "/api/permissions/mode") return response({ mode: "standard" });
+      return response();
     };
-    const html = win.sinfoHTML();
-    assert.ok(html.includes("deepseek"));
-    assert.ok(html.includes("deepseek-v4"));
-    assert.ok(html.includes("42"));
+    globalThis.fetch = fetchStub;
+    win.fetch = fetchStub;
+    // Production concatenates these scripts into one global scope; bridge that scope in ESM tests.
+    globalThis.initResizeHandle = () => {};
+    globalThis.renderPanel = (...args) => win.renderPanel(...args);
+    globalThis.bind = () => {};
+    globalThis.getPane = (...args) => win.App.UI.getPane(...args);
+
+    try {
+      win.App.UI.registerPane("refresh-regression", (container) => {
+        container.innerHTML = '<div id="refresh-regression-pane">mounted</div>';
+      });
+      win.App.State.updatePanel({ active: "refresh-regression", closed: false, width: 260 });
+      win.layout();
+
+      const panelContent = doc.getElementById("pc");
+      const resizeHandle = doc.getElementById("si-handle");
+      assert.ok(panelContent);
+      assert.ok(resizeHandle);
+      assert.ok(doc.getElementById("refresh-regression-pane"));
+
+      await win.App.UI.getD();
+
+      assert.strictEqual(doc.getElementById("pc"), panelContent);
+      assert.strictEqual(doc.getElementById("si-handle"), resizeHandle);
+      assert.ok(doc.getElementById("refresh-regression-pane"));
+    } finally {
+      globalThis.fetch = originalFetch;
+      win.fetch = originalWindowFetch;
+      win.electronAPI = originalElectronApi;
+      globalThis.initResizeHandle = originalInitResizeHandle;
+      globalThis.renderPanel = originalRenderPanel;
+      globalThis.bind = originalBind;
+      globalThis.getPane = originalGetPane;
+    }
   });
 });
