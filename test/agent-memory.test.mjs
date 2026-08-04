@@ -259,7 +259,7 @@ describe("switchWorkspace rollback behavior", () => {
     runtime.currentWorkspace = "/original";
     runtime.session = null;
     runtime._eventSubscriptions = [];
-    runtime._saveAndDispose = async () => [];
+    runtime._saveAndDispose = async () => ({ workspace: "/original" });
     runtime._initSession = async () => { throw new Error("模拟初始化失败"); };
     runtime._rebindEvents = () => {};
 
@@ -286,7 +286,7 @@ describe("switchWorkspace rollback behavior", () => {
     runtime.currentWorkspace = "/original";
     runtime.session = null;
     runtime._eventSubscriptions = [];
-    runtime._saveAndDispose = async () => [];
+    runtime._saveAndDispose = async () => ({ workspace: "/original" });
     runtime._initSession = async () => { throw new Error("会话初始化失败"); };
     runtime._rebindEvents = () => {};
 
@@ -307,20 +307,376 @@ describe("switchWorkspace rollback behavior", () => {
   });
 });
 
-describe("runtime event source binding", () => {
-  const makeSession = (id) => {
+describe("runtime session transition serialization", () => {
+  // 构造可手动放行的异步门，稳定观察并发 transition 的进入顺序。
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((done) => { resolve = done; });
+    return { promise, resolve };
+  };
+
+  // 等待 promise queue 推进一个事件循环，避免依赖计时器延迟。
+  const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
+
+  // 构造可观测订阅和释放状态的最小会话。
+  const makeSession = (id, sessionFile = `/${id}.jsonl`) => {
     const listeners = new Set();
+    let subscribeCalls = 0;
     return {
       id,
+      sessionFile,
+      sessionManager: { getSessionId: () => id },
+      abort() {},
+      dispose() { listeners.clear(); },
       subscribe(listener) {
+        subscribeCalls += 1;
         listeners.add(listener);
         return () => { listeners.delete(listener); };
       },
       emit(event) {
         for (const listener of [...listeners]) listener(event);
       },
+      get listenerCount() { return listeners.size; },
+      get subscribeCalls() { return subscribeCalls; },
     };
   };
+
+  // 使用真实 public API，仅替换昂贵的 session 初始化边界。
+  const makeRuntime = async (workspace, id) => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const runtime = Object.create(AgentRuntime.prototype);
+    runtime.config = {};
+    runtime.currentWorkspace = workspace;
+    runtime.session = makeSession(id);
+    runtime._eventSubscriptions = [];
+    return runtime;
+  };
+
+  it("serializes concurrent opens with different keys and leaves one final subscription", async () => {
+    const runtime = await makeRuntime("/workspace", "old");
+    const firstGate = deferred();
+    const entered = [];
+    const sessions = [];
+    let activeInitializations = 0;
+    let maxActiveInitializations = 0;
+    runtime.onEvent(() => {});
+    runtime._initSession = async (_workspace, sessionFile) => {
+      entered.push(sessionFile);
+      activeInitializations += 1;
+      maxActiveInitializations = Math.max(maxActiveInitializations, activeInitializations);
+      if (sessionFile === "/first.jsonl") await firstGate.promise;
+      const session = makeSession(sessionFile.includes("first") ? "first" : "second", sessionFile);
+      sessions.push(session);
+      runtime.session = session;
+      activeInitializations -= 1;
+    };
+
+    const firstOpen = runtime.openSession("/first.jsonl", "/workspace");
+    await nextTurn();
+    const secondOpen = runtime.openSession("/second.jsonl", "/workspace");
+    await nextTurn();
+
+    assert.deepStrictEqual(entered, ["/first.jsonl"]);
+    firstGate.resolve();
+    await Promise.all([firstOpen, secondOpen]);
+
+    assert.deepStrictEqual(entered, ["/first.jsonl", "/second.jsonl"]);
+    assert.strictEqual(maxActiveInitializations, 1);
+    assert.strictEqual(runtime.session.id, "second");
+    assert.strictEqual(sessions[0].listenerCount, 0);
+    assert.strictEqual(sessions[1].listenerCount, 1);
+    assert.strictEqual(sessions[1].subscribeCalls, 1);
+  });
+
+  it("deduplicates concurrent opens with the same key within one runtime", async () => {
+    const runtime = await makeRuntime("/workspace", "old");
+    const initGate = deferred();
+    let initCalls = 0;
+    runtime._initSession = async () => {
+      initCalls += 1;
+      await initGate.promise;
+      runtime.session = makeSession("opened", "/same.jsonl");
+    };
+
+    const firstOpen = runtime.openSession("/same.jsonl", "/workspace");
+    await nextTurn();
+    const duplicateOpen = runtime.openSession("/same.jsonl", "/workspace");
+    await nextTurn();
+
+    assert.strictEqual(initCalls, 1);
+    initGate.resolve();
+    await Promise.all([firstOpen, duplicateOpen]);
+    assert.strictEqual(initCalls, 1);
+    assert.strictEqual(runtime.session.id, "opened");
+  });
+
+  it("serializes switchWorkspace followed by createNewSession in invocation order", async () => {
+    const runtime = await makeRuntime("/original", "old");
+    const switchGate = deferred();
+    const switchEntered = deferred();
+    const initCalls = [];
+    let activeInitializations = 0;
+    let maxActiveInitializations = 0;
+    runtime._initSession = async (workspace, sessionFile, forceNew) => {
+      initCalls.push({ workspace, sessionFile, forceNew });
+      activeInitializations += 1;
+      maxActiveInitializations = Math.max(maxActiveInitializations, activeInitializations);
+      if (initCalls.length === 1) {
+        switchEntered.resolve();
+        await switchGate.promise;
+      }
+      runtime.session = makeSession(forceNew ? "created" : "switched");
+      activeInitializations -= 1;
+    };
+
+    const switching = runtime.switchWorkspace("/next");
+    await switchEntered.promise;
+    const creating = runtime.createNewSession();
+    await nextTurn();
+
+    assert.strictEqual(initCalls.length, 1);
+    switchGate.resolve();
+    const [, createdId] = await Promise.all([switching, creating]);
+
+    assert.deepStrictEqual(initCalls, [
+      { workspace: "/next", sessionFile: undefined, forceNew: undefined },
+      { workspace: "/next", sessionFile: undefined, forceNew: true },
+    ]);
+    assert.strictEqual(maxActiveInitializations, 1);
+    assert.strictEqual(runtime.currentWorkspace, "/next");
+    assert.strictEqual(runtime.session.id, "created");
+    assert.strictEqual(createdId, "created");
+  });
+
+  it("does not deduplicate the same open key across runtime instances", async () => {
+    const firstRuntime = await makeRuntime("/workspace", "first-old");
+    const secondRuntime = await makeRuntime("/workspace", "second-old");
+    const firstGate = deferred();
+    let firstCalls = 0;
+    let secondCalls = 0;
+    firstRuntime._initSession = async () => {
+      firstCalls += 1;
+      await firstGate.promise;
+      firstRuntime.session = makeSession("first-opened", "/shared.jsonl");
+    };
+    secondRuntime._initSession = async () => {
+      secondCalls += 1;
+      secondRuntime.session = makeSession("second-opened", "/shared.jsonl");
+    };
+
+    const firstOpen = firstRuntime.openSession("/shared.jsonl", "/workspace");
+    await nextTurn();
+    const secondOpen = secondRuntime.openSession("/shared.jsonl", "/workspace");
+    await nextTurn();
+
+    assert.strictEqual(firstCalls, 1);
+    assert.strictEqual(secondCalls, 1);
+    assert.strictEqual(secondRuntime.session.id, "second-opened");
+    firstGate.resolve();
+    await Promise.all([firstOpen, secondOpen]);
+  });
+});
+
+describe("runtime event source binding", () => {
+  // 构造可观测 dispose、订阅次数和事件来源的最小会话桩。
+  const makeSession = (id, { disposeThrows = false } = {}) => {
+    const listeners = new Set();
+    let disposed = false;
+    let subscribeCalls = 0;
+    return {
+      id,
+      sessionFile: `/${id}.jsonl`,
+      sessionManager: { getSessionId: () => id },
+      abort() {},
+      dispose() {
+        disposed = true;
+        listeners.clear();
+        if (disposeThrows) throw new Error(`cannot dispose ${id}`);
+      },
+      subscribe(listener) {
+        if (disposed) throw new Error(`session ${id} is disposed`);
+        subscribeCalls += 1;
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      emit(event) {
+        for (const listener of [...listeners]) listener(event);
+      },
+      get listenerCount() { return listeners.size; },
+      get subscribeCalls() { return subscribeCalls; },
+      get disposed() { return disposed; },
+    };
+  };
+
+  it("reinitializes the disposed old session after switchWorkspace initialization fails", async () => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const oldSession = makeSession("old");
+    const restoredSession = makeSession("restored");
+    const runtime = Object.create(AgentRuntime.prototype);
+    runtime.config = {};
+    runtime.currentWorkspace = "/original";
+    runtime.session = oldSession;
+    runtime._eventSubscriptions = [];
+    const seen = [];
+    runtime.onEvent((event, sourceSession) => seen.push(`${event.type}:${sourceSession?.id}`));
+    const initCalls = [];
+    const mcpWorkspaceInitCalls = [];
+    runtime._initSession = async (workspace, sessionFile, forceNew) => {
+      initCalls.push({ workspace, sessionFile, forceNew });
+      // 真实 _initSession 会把同一 workspace 传给 getCustomToolsAsync，恢复 MCP/cache。
+      mcpWorkspaceInitCalls.push(workspace);
+      if (initCalls.length === 1) throw new Error("switch init failed");
+      runtime.session = restoredSession;
+    };
+
+    await assert.rejects(runtime.switchWorkspace("/next"), /switch init failed/);
+
+    assert.deepStrictEqual(initCalls, [
+      { workspace: "/next", sessionFile: undefined, forceNew: undefined },
+      { workspace: "/original", sessionFile: "/old.jsonl", forceNew: undefined },
+    ]);
+    assert.deepStrictEqual(mcpWorkspaceInitCalls, ["/next", "/original"]);
+    assert.strictEqual(oldSession.disposed, true);
+    assert.strictEqual(runtime.currentWorkspace, "/original");
+    assert.strictEqual(runtime.session, restoredSession);
+    assert.strictEqual(restoredSession.subscribeCalls, 1);
+    restoredSession.emit({ type: "after-rollback" });
+    assert.deepStrictEqual(seen, ["after-rollback:restored"]);
+  });
+
+  it("uses the same rollback path when same-workspace openSession initialization fails", async () => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const oldSession = makeSession("open-old");
+    const restoredSession = makeSession("open-restored");
+    const runtime = Object.create(AgentRuntime.prototype);
+    runtime.config = {};
+    runtime.currentWorkspace = "/workspace";
+    runtime.session = oldSession;
+    runtime._eventSubscriptions = [];
+    const initCalls = [];
+    runtime._initSession = async (workspace, sessionFile, forceNew) => {
+      initCalls.push({ workspace, sessionFile, forceNew });
+      if (initCalls.length === 1) throw new Error("open init failed");
+      runtime.session = restoredSession;
+    };
+
+    await assert.rejects(
+      runtime.openSession("/target.jsonl", "/workspace"),
+      /open init failed/,
+    );
+
+    assert.deepStrictEqual(initCalls, [
+      { workspace: "/workspace", sessionFile: "/target.jsonl", forceNew: undefined },
+      { workspace: "/workspace", sessionFile: "/open-old.jsonl", forceNew: undefined },
+    ]);
+    assert.strictEqual(oldSession.disposed, true);
+    assert.strictEqual(runtime.session, restoredSession);
+  });
+
+  it("reinitializes rollback after dispose throws with partial side effects", async () => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const oldSession = makeSession("old", { disposeThrows: true });
+    const restoredSession = makeSession("restored");
+    const runtime = Object.create(AgentRuntime.prototype);
+    runtime.config = {};
+    runtime.currentWorkspace = "/original";
+    runtime.session = oldSession;
+    runtime._eventSubscriptions = [];
+    const seen = [];
+    runtime.onEvent((event, sourceSession) => seen.push(`${event.type}:${sourceSession?.id}`));
+    const initCalls = [];
+    runtime._initSession = async (workspace, sessionFile, forceNew) => {
+      initCalls.push({ workspace, sessionFile, forceNew });
+      if (initCalls.length === 1) throw new Error("switch init failed");
+      runtime.session = restoredSession;
+    };
+
+    await assert.rejects(
+      runtime.switchWorkspace("/next"),
+      /switch init failed/,
+    );
+
+    assert.strictEqual(runtime.currentWorkspace, "/original");
+    assert.strictEqual(runtime.session, restoredSession);
+    assert.notStrictEqual(runtime.session, oldSession);
+    assert.deepStrictEqual(initCalls, [
+      { workspace: "/next", sessionFile: undefined, forceNew: undefined },
+      { workspace: "/original", sessionFile: "/old.jsonl", forceNew: undefined },
+    ]);
+    assert.strictEqual(runtime._eventSubscriptions.length, 1);
+    assert.strictEqual(oldSession.disposed, true);
+    assert.strictEqual(oldSession.listenerCount, 0);
+    oldSession.emit({ type: "after-failure" });
+    restoredSession.emit({ type: "after-rollback" });
+    assert.deepStrictEqual(seen, ["after-rollback:restored"]);
+  });
+
+  it("exposes no disposed session after double failure and binds once on the next successful create", async () => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const oldSession = makeSession("old");
+    const newSession = makeSession("new");
+    const runtime = Object.create(AgentRuntime.prototype);
+    runtime.config = {};
+    runtime.currentWorkspace = "/original";
+    runtime.session = oldSession;
+    runtime._eventSubscriptions = [];
+    const seen = [];
+    runtime.onEvent((event, sourceSession) => seen.push(`${event.type}:${sourceSession?.id}`));
+    const initCalls = [];
+    runtime._initSession = async (workspace, sessionFile, forceNew) => {
+      initCalls.push({ workspace, sessionFile, forceNew });
+      if (initCalls.length === 1) throw new Error("create init failed");
+      if (initCalls.length === 2) throw new Error("rollback init failed");
+      runtime.session = newSession;
+    };
+
+    await assert.rejects(runtime.createNewSession(), /create init failed/);
+    assert.strictEqual(runtime.currentWorkspace, "/original");
+    assert.strictEqual(runtime._eventSubscriptions.length, 1);
+    assert.strictEqual(oldSession.listenerCount, 0);
+    assert.strictEqual(oldSession.disposed, true);
+    assert.throws(() => runtime.session, /没有可用的 Agent session/);
+    assert.strictEqual(runtime.getActiveSession(), null);
+
+    await runtime.createNewSession();
+    newSession.emit({ type: "ready" });
+    assert.deepStrictEqual(initCalls, [
+      { workspace: "/original", sessionFile: undefined, forceNew: true },
+      { workspace: "/original", sessionFile: "/old.jsonl", forceNew: undefined },
+      { workspace: "/original", sessionFile: undefined, forceNew: true },
+    ]);
+    assert.strictEqual(newSession.subscribeCalls, 1);
+    assert.deepStrictEqual(seen, ["ready:new"]);
+  });
+
+  it("does not revive a subscription unsubscribed after initialization failure", async () => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const oldSession = makeSession("old");
+    const newSession = makeSession("new");
+    const runtime = Object.create(AgentRuntime.prototype);
+    runtime.config = {};
+    runtime.currentWorkspace = "/workspace";
+    runtime.session = oldSession;
+    runtime._eventSubscriptions = [];
+    const seen = [];
+    const unsubscribe = runtime.onEvent((event) => seen.push(event.type));
+    let attempts = 0;
+    runtime._initSession = async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("create failed");
+      runtime.session = attempts === 2 ? makeSession("recovered") : newSession;
+    };
+
+    await assert.rejects(runtime.createNewSession(), /create failed/);
+    assert.strictEqual(runtime._eventSubscriptions.length, 1);
+    unsubscribe();
+    await runtime.createNewSession();
+    newSession.emit({ type: "must-not-return" });
+
+    assert.strictEqual(runtime._eventSubscriptions.length, 0);
+    assert.strictEqual(newSession.subscribeCalls, 0);
+    assert.deepStrictEqual(seen, []);
+  });
 
   it("updates the active unsubscribe on rebind and never revives an inactive subscription", async () => {
     const { AgentRuntime } = await import("../src/agent/runtime.ts");
@@ -336,10 +692,10 @@ describe("runtime event source binding", () => {
     };
 
     const unsubscribe = runtime.onEvent(callback);
-    const subscriptions = [...runtime._eventSubscriptions];
+    await runtime._saveAndDispose(true);
     runtime.session = newSession;
-    runtime._rebindEvents(subscriptions);
-    runtime._rebindEvents(subscriptions);
+    runtime._rebindEvents();
+    runtime._rebindEvents();
 
     oldSession.emit({ type: "detached-old" });
     newSession.emit({ type: "new-session" });
@@ -347,7 +703,7 @@ describe("runtime event source binding", () => {
     newSession.emit({ type: "after-unsubscribe" });
 
     runtime.session = thirdSession;
-    runtime._rebindEvents(subscriptions);
+    runtime._rebindEvents();
     thirdSession.emit({ type: "must-not-return" });
 
     assert.deepStrictEqual(seen, [
@@ -371,9 +727,9 @@ describe("runtime event source binding", () => {
     unsubscribeFirst();
     oldSession.emit({ type: "once" });
 
-    const subscriptions = [...runtime._eventSubscriptions];
+    await runtime._saveAndDispose(true);
     runtime.session = newSession;
-    runtime._rebindEvents(subscriptions);
+    runtime._rebindEvents();
     oldSession.emit({ type: "old-detached" });
     newSession.emit({ type: "new-once" });
 

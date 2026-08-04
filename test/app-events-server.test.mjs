@@ -719,6 +719,100 @@ describe("server lifecycle publishers", () => {
     }
   });
 
+  it("reuses an initialized empty MCP cache across created and opened sessions", async () => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const tools = await import("../src/agent/tools/index.ts");
+    const workspace = mkdtempSync(resolve(tmpdir(), "empty-mcp-session-cache-"));
+    const makeSession = (id) => ({
+      id,
+      sessionFile: resolve(workspace, `${id}.jsonl`),
+      sessionManager: { flushed: true, getSessionId: () => id },
+      subscribe() { return () => {}; },
+      abort() {},
+      dispose() {},
+    });
+    const probeName = "empty_mcp_cache_context_probe";
+    tools.registerTool({
+      name: probeName,
+      description: "reports the session-bound test context",
+      parameters: { type: "object", properties: {} },
+      isReadOnly: true,
+      needsPermission: false,
+      operations: ["read"],
+      riskLevel: "low",
+      workspaceBounded: true,
+      execute: async (_args, ctx) => ({ text: ctx.desktopApiToken || "missing" }),
+    });
+
+    const originalLog = console.log;
+    let discoveryStarts = 0;
+    console.log = (...args) => {
+      if (String(args[0] ?? "").startsWith("[tools] MCP 后台连接中")) discoveryStarts += 1;
+      else originalLog(...args);
+    };
+
+    try {
+      await tools.disconnectMcp();
+      tools._setMcpCache(workspace, []);
+
+      const oldSession = makeSession("empty-old");
+      const createdSession = makeSession("empty-created");
+      const openedSession = makeSession("empty-opened");
+      for (const session of [oldSession, createdSession, openedSession]) {
+        writeFileSync(session.sessionFile, JSON.stringify({ type: "session", id: session.id }) + "\n");
+      }
+
+      const runtime = Object.create(AgentRuntime.prototype);
+      runtime.config = {};
+      runtime.currentWorkspace = workspace;
+      runtime.session = oldSession;
+      runtime._eventSubscriptions = [];
+      const chatStream = {
+        textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+        response: null, turnId: "turn-empty-cache", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0,
+        eventSeq: 0, eventHistory: [], currentWorkspace: workspace,
+      };
+      attachSessionEvents(runtime, chatStream);
+
+      const wrappers = [];
+      const pendingSessions = [createdSession, openedSession];
+      runtime._initSession = async () => {
+        const nextSession = pendingSessions.shift();
+        const toolTrace = runtime._createToolTraceEmitter();
+        wrappers.push(await tools.getCustomToolsAsync(workspace, toolTrace.emit, {
+          desktopApiToken: nextSession.id,
+        }));
+        toolTrace.bindSource(nextSession);
+        runtime.session = nextSession;
+      };
+
+      await runtime.createNewSession();
+      const createdProbe = wrappers[0].find((tool) => tool.name === probeName);
+      const createdResult = await createdProbe.execute("empty-created-call", {});
+
+      await runtime.openSession(openedSession.sessionFile, workspace);
+      const openedProbe = wrappers[1].find((tool) => tool.name === probeName);
+      const openedResult = await openedProbe.execute("empty-opened-call", {});
+
+      assert.strictEqual(discoveryStarts, 0, "an initialized empty cache must not start discovery again");
+      assert.notStrictEqual(openedProbe, createdProbe, "each session must receive a fresh PI wrapper");
+      assert.strictEqual(createdResult.content[0].text, createdSession.id);
+      assert.strictEqual(openedResult.content[0].text, openedSession.id);
+      assert.ok(chatStream.blocks.some((block) => block.name === probeName && block.output === createdSession.id));
+      assert.ok(chatStream.blocks.some((block) => block.name === probeName && block.output === openedSession.id));
+      const createdContents = readFileSync(createdSession.sessionFile, "utf8");
+      const openedContents = readFileSync(openedSession.sessionFile, "utf8");
+      assert.ok(createdContents.includes('"type":"trace"') && createdContents.includes('"output":"empty-created"'));
+      assert.ok(createdContents.includes('"type":"assistant_block"') && createdContents.includes('"output":"empty-created"'));
+      assert.ok(openedContents.includes('"type":"trace"') && openedContents.includes('"output":"empty-opened"'));
+      assert.ok(openedContents.includes('"type":"assistant_block"') && openedContents.includes('"output":"empty-opened"'));
+    } finally {
+      console.log = originalLog;
+      await tools.disconnectMcp();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("publishes compaction usage changes after busy state starts and after every reset path", async () => {
     let eventHandler;
     const session = {

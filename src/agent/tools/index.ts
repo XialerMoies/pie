@@ -97,14 +97,110 @@ export function agentToolToPiTool(
 // ─── MCP 原始工具缓存（后台连接，不阻塞工具注册）─────────────
 let _mcpWorkspace = ""
 let _mcpCache: AgentTool[] = []
-let _mcpConnecting = false
+let _mcpCacheInitialized = false
+let _mcpRequestEpoch = 0
+let _mcpInFlight: { workspace: string; epoch: number; promise: Promise<void> } | undefined
+
+type McpService = typeof import("../mcp/MCPClientService.js")
+type McpServiceGeneration = { service: McpService; generation: number }
+
+function _isCurrentMcpRequest(workspace: string, epoch: number): boolean {
+  return _mcpRequestEpoch === epoch && _mcpWorkspace === workspace
+}
+
+function _clearMcpCache(workspace: string): void {
+  _mcpCache = []
+  _mcpWorkspace = workspace
+  _mcpCacheInitialized = false
+}
+
+async function _invalidateMcpService(): Promise<McpServiceGeneration | undefined> {
+  try {
+    const service = await import("../mcp/MCPClientService.js")
+    const generation = service.bumpGeneration()
+    await service.disconnectAll()
+    return { service, generation }
+  } catch {
+    return undefined
+  }
+}
+
+function _startMcpDiscovery(
+  workspace: string,
+  epoch: number,
+  emitTrace?: ToolTraceEmitter,
+  invalidation?: Promise<McpServiceGeneration | undefined>,
+): { workspace: string; epoch: number; promise: Promise<void> } {
+  let inFlight: { workspace: string; epoch: number; promise: Promise<void> }
+  const promise = (async () => {
+    let serviceState: McpServiceGeneration | undefined
+    try {
+      serviceState = invalidation
+        ? await invalidation
+        : await import("../mcp/MCPClientService.js").then((service) => ({
+            service,
+            generation: service.currentGeneration(),
+          }))
+      if (!serviceState) return
+
+      const { service, generation } = serviceState
+      if (!_isCurrentMcpRequest(workspace, epoch) || generation !== service.currentGeneration()) return
+
+      const report = await service.connectAllWithReport(workspace, emitTrace)
+      if (
+        _isCurrentMcpRequest(workspace, epoch)
+        && generation === service.currentGeneration()
+      ) {
+        _mcpCache = report.tools
+        _mcpCacheInitialized = report.complete
+        if (_mcpCacheInitialized) {
+          console.log(`[tools] MCP ${_mcpCache.length} 个工具已就绪`)
+        } else {
+          const configErrorCount = report.configErrors.length
+          const detail = configErrorCount > 0 ? `（${configErrorCount} 个配置错误）` : ""
+          console.log(`[tools] MCP 本轮 discovery 不完整${detail}，下次请求将重试`)
+        }
+      } else {
+        console.log(`[tools] MCP 跳过过期连接 (gen=${generation}, current=${service.currentGeneration()})`)
+      }
+    } catch (e) {
+      if (
+        serviceState
+        && _isCurrentMcpRequest(workspace, epoch)
+        && serviceState.generation === serviceState.service.currentGeneration()
+      ) {
+        console.log(`[tools] MCP 加载失败: ${e}`)
+      }
+    }
+  })()
+
+  inFlight = { workspace, epoch, promise }
+  _mcpInFlight = inFlight
+  void promise.finally(() => {
+    if (_mcpInFlight === inFlight) _mcpInFlight = undefined
+  })
+  return inFlight
+}
+
+async function _transitionMcpWorkspace(
+  workspace: string,
+  emitTrace?: ToolTraceEmitter,
+): Promise<void> {
+  const epoch = ++_mcpRequestEpoch
+  // disconnectAll 会关闭 raw tool 绑定的 client，必须先让 cache 对新 session 不可见。
+  _clearMcpCache(workspace)
+  _mcpInFlight = undefined
+
+  const invalidation = _invalidateMcpService()
+  _startMcpDiscovery(workspace, epoch, emitTrace, invalidation)
+  await invalidation
+}
 
 /** 断开 MCP 连接，清空缓存（随 workspace 切换或 dispose 调用） */
 export async function disconnectMcp(): Promise<void> {
-  _mcpCache = []
-  _mcpWorkspace = ""
-  _mcpConnecting = false
-  // _mcpGen bumped inside MCPClientService.bumpGeneration()
+  ++_mcpRequestEpoch
+  _clearMcpCache("")
+  _mcpInFlight = undefined
   try {
     const { disconnectAll, bumpGeneration } = await import("../mcp/MCPClientService.js")
     bumpGeneration()
@@ -113,8 +209,8 @@ export async function disconnectMcp(): Promise<void> {
 }
 
 /**
- * 后台刷新 MCP 连接（同 workspace 切 session 时调用，保持缓存不丢）
- * 等待旧后台连接完成，再发起新连接
+ * 后台刷新 MCP 连接（同 workspace 切 session 时调用）。
+ * 断开旧 client 前立即失效 raw tool cache，连接完成后再发布新工具。
  */
 /** @internal 测试用：返回当前 MCP cache 长度 */
 export function _getMcpCacheLen(): number { return _mcpCache.length }
@@ -122,38 +218,17 @@ export function _getMcpCacheLen(): number { return _mcpCache.length }
 export function _setMcpCache(workspace: string, tools: AgentTool[]): void {
   _mcpWorkspace = workspace
   _mcpCache = tools
+  _mcpCacheInitialized = true
 }
 
 export async function reconnectMcp(workspace: string, emitTrace?: ToolTraceEmitter, extraCtx?: ExtraCtx): Promise<void> {
-  // 等已有的后台连接完成
-  while (_mcpConnecting) {
-    await new Promise((r) => setTimeout(r, 10))
+  const ws = workspace ?? ""
+  const current = _mcpInFlight
+  if (current && current.workspace === ws && current.epoch === _mcpRequestEpoch) {
+    await current.promise
+    return
   }
-  _connectMcpInBackground(workspace, emitTrace, extraCtx)
-}
-
-async function _connectMcpInBackground(workspace: string, emitTrace?: ToolTraceEmitter, extraCtx?: ExtraCtx): Promise<void> {
-  if (_mcpConnecting) return
-  _mcpConnecting = true
-  const { connectAll, currentGeneration } = await import("../mcp/MCPClientService.js")
-  const gen = currentGeneration()
-  try {
-    const mcpTools = await connectAll(workspace ?? "", emitTrace)
-    if (gen === currentGeneration()) {
-      _mcpCache = mcpTools
-      _mcpWorkspace = workspace ?? ""
-      console.log(`[tools] MCP ${_mcpCache.length} 个工具已就绪`)
-    } else {
-      // stale：不写 cache，静默丢弃（避免误杀当前 workspace 连接）
-      console.log(`[tools] MCP 跳过过期连接 (gen=${gen}, current=${currentGeneration()})`)
-    }
-  } catch (e) {
-    if (gen === currentGeneration()) {
-      console.log(`[tools] MCP 加载失败: ${e}`)
-    }
-  } finally {
-    if (gen === currentGeneration()) _mcpConnecting = false
-  }
+  await _transitionMcpWorkspace(ws, emitTrace)
 }
 
 /**
@@ -171,14 +246,27 @@ export async function getCustomToolsAsync(
 
   // 2. MCP 工具：缓存命中或 workspace 未变直接使用
   const ws = workspace ?? ""
-  if (_mcpCache.length > 0 && _mcpWorkspace === ws) {
+  if (_mcpCacheInitialized && _mcpWorkspace === ws) {
     const mcpTools = _mcpCache.map((tool) => agentToolToPiTool(tool, workspace, emitTrace, extraCtx))
     return [...builtin, ...mcpTools]
   }
 
+  if (_mcpWorkspace !== ws) {
+    console.log(`[tools] MCP 后台连接中...`)
+    await _transitionMcpWorkspace(ws, emitTrace)
+    return builtin
+  }
+
+  // incomplete cache 中的健康 raw tools 仍按当前 session 上下文重新包装并提供。
+  const cachedMcpTools = _mcpCache.map((tool) => agentToolToPiTool(tool, workspace, emitTrace, extraCtx))
+  const available = [...builtin, ...cachedMcpTools]
+
+  const current = _mcpInFlight
+  if (current && current.workspace === ws && current.epoch === _mcpRequestEpoch) return available
+
   // 3. 后台连接 MCP，本次先返回内置工具
   console.log(`[tools] MCP 后台连接中...`)
-  _connectMcpInBackground(ws, emitTrace, extraCtx)
+  _startMcpDiscovery(ws, _mcpRequestEpoch, emitTrace)
 
-  return builtin
+  return available
 }

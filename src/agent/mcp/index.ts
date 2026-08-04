@@ -47,8 +47,11 @@ export type { McpToolAdapterOptions } from "./MCPToolAdapter.js"
 
 export {
   connectAll,
+  connectAllWithReport,
   disconnectAll,
   disconnectAllSync,
   getServersStatus,
   reset as resetMcpService,
 } from "./MCPClientService.js"
+
+export type { McpDiscoveryReport } from "./MCPClientService.js"

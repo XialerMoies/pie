@@ -14,8 +14,6 @@ import type { SessionPermissionState, ToolContext } from "./types.js"
 import { applySessionPermissionSuggestions, resetSessionPermissionState } from "./permissions.js"
 import { wsDir } from "../server/routes/session-dir.js"
 
-const _pendingOpens = new Map<string, Promise<void>>()
-
 import { setCurrentRuntime as _setGlobalRuntime, getCurrentRuntime as _getGlobalRuntime } from "./globals.js";
 // 重导出供 tools 使用，实际实现在 globals.ts（零依赖，防循环）
 export const getCurrentRuntime = _getGlobalRuntime;
@@ -93,16 +91,34 @@ interface SessionToolTraceEmitter {
   bindSource: (sourceSession: AgentSession) => void
 }
 
+interface SessionRecoveryPoint {
+  workspace: string
+  sessionFile?: string
+}
+
 export class AgentRuntime {
-  session!: AgentSession
+  private _session?: AgentSession
   modelRegistry!: ModelRegistry
   authStorage!: AuthStorage
   sessionManager!: SessionManager
   config!: RuntimeConfig
   currentWorkspace!: string
   private _eventSubscriptions: SessionEventSubscription[] = []
+  private _transitionTail: Promise<void> = Promise.resolve()
+  private _pendingOpens = new Map<string, Promise<void>>()
 
   private constructor() {}
+
+  /** 返回当前可用会话；恢复失败时明确阻止调用已释放对象。 */
+  get session(): AgentSession {
+    if (!this._session) throw new Error("[runtime] 当前没有可用的 Agent session")
+    return this._session
+  }
+
+  /** 仅在会话完整初始化后更新对外可见对象。 */
+  set session(session: AgentSession) {
+    this._session = session
+  }
 
   private resetSessionPermissions(): void {
     const state = this.config?.sessionPermissionState
@@ -121,26 +137,16 @@ export class AgentRuntime {
 
   /** 切换 workspace（重建整个 session）—— 不续写旧文件，新 workspace 独立 session */
   async switchWorkspace(workspace: string): Promise<void> {
-    if (workspace === this.currentWorkspace) return
-    this.resetSessionPermissions()
+    await this._enqueueSessionTransition(async () => {
+      if (workspace === this.currentWorkspace && this._session) return
+      this.resetSessionPermissions()
 
-    console.log(`[runtime] Switching workspace: "${this.currentWorkspace}" → "${workspace}"`)
+      console.log(`[runtime] Switching workspace: "${this.currentWorkspace}" → "${workspace}"`)
 
-    const prevWs = this.currentWorkspace
-    const subscriptions = await this._saveAndDispose(false)
-
-    // 不续写旧文件：workspace 切换意味着项目切换，新项目应有自己的 session 文件
-    this.currentWorkspace = workspace // 先设 workspace 再 initSession，使 prompt 读到新项目 AGENT.md
-    try {
-      await this._initSession(workspace)
-    } catch (e) {
-      // 失败时恢复旧 workspace，避免状态错乱
-      this.currentWorkspace = prevWs
-      throw e
-    }
-
-    this._rebindEvents(subscriptions)
-    console.log(`[runtime] ✅ Switched to "${workspace}"`)
+      // 不续写旧文件：workspace 切换意味着项目切换，新项目应有自己的 session 文件
+      await this._replaceSessionWithRollback(workspace, false)
+      console.log(`[runtime] ✅ Switched to "${workspace}"`)
+    })
   }
 
   /**
@@ -149,44 +155,36 @@ export class AgentRuntime {
    * 同 workspace 不断 MCP，保持缓存有效。
    */
   async openSession(sessionFile: string, workspace: string): Promise<void> {
-    // 避免重复打开同一个 session 文件（含并发：相同参数复用同一个 Promise）
+    // 相同参数在本 runtime 内复用同一个排队任务，不影响其他 runtime 实例。
     const key = sessionFile + "::" + workspace
-    if (this.session?.sessionFile === sessionFile && this.currentWorkspace === workspace) {
-      console.log(`[runtime] ⏭ Skipping duplicate openSession: "${sessionFile}"`)
-      return
-    }
-    const inFlight = _pendingOpens.get(key)
+    const pendingOpens = this._pendingOpens ??= new Map<string, Promise<void>>()
+    const inFlight = pendingOpens.get(key)
     if (inFlight) {
       console.log(`[runtime] ⏭ In-flight dedup openSession: "${sessionFile}"`)
-      return inFlight
+      await inFlight
+      return
     }
 
-    const promise = this._doOpenSession(sessionFile, workspace)
-    _pendingOpens.set(key, promise)
+    const promise = this._enqueueSessionTransition(() => this._doOpenSession(sessionFile, workspace))
+    pendingOpens.set(key, promise)
     try {
-      return await promise
+      await promise
     } finally {
-      _pendingOpens.delete(key)
+      if (pendingOpens.get(key) === promise) pendingOpens.delete(key)
     }
   }
 
+  /** 在串行队列中打开 session，执行时再判断最终 runtime 状态。 */
   private async _doOpenSession(sessionFile: string, workspace: string): Promise<void> {
+    if (this._session?.sessionFile === sessionFile && this.currentWorkspace === workspace) {
+      console.log(`[runtime] ⏭ Skipping duplicate openSession: "${sessionFile}"`)
+      return
+    }
     console.log(`[runtime] Opening session: "${sessionFile}"`)
     this.resetSessionPermissions()
     // 记录是否同 workspace（在更新 currentWorkspace 之前判断）
     const sameWs = workspace === this.currentWorkspace
-    const prevWs = this.currentWorkspace
-    // 先设 workspace 再 _initSession，使 resolveSystemPrompt 读到新路径
-    this.currentWorkspace = workspace
-    try {
-      const subscriptions = await this._saveAndDispose(sameWs)
-      await this._initSession(workspace, sessionFile)
-      this._rebindEvents(subscriptions)
-    } catch (e) {
-      // 失败时恢复旧 workspace，避免状态错乱
-      this.currentWorkspace = prevWs
-      throw e
-    }
+    await this._replaceSessionWithRollback(workspace, sameWs, sessionFile)
     console.log(`[runtime] ✅ Session opened: "${sessionFile}"`)
   }
 
@@ -195,16 +193,20 @@ export class AgentRuntime {
    * 返回新 session ID。
    */
   async createNewSession(): Promise<string> {
-    console.log(`[runtime] Creating new session`)
-    this.resetSessionPermissions()
+    return this._enqueueSessionTransition(async () => {
+      console.log(`[runtime] Creating new session`)
+      this.resetSessionPermissions()
 
-    const subscriptions = await this._saveAndDispose(true)
-    await this._initSession(this.currentWorkspace, undefined, true /* forceNew */)
-
-    this._rebindEvents(subscriptions)
-    const id = this.session.sessionManager?.getSessionId?.() || ""
-    console.log(`[runtime] ✅ New session created: ${id}`)
-    return id
+      await this._replaceSessionWithRollback(
+        this.currentWorkspace,
+        true,
+        undefined,
+        true /* forceNew */,
+      )
+      const id = this.session.sessionManager?.getSessionId?.() || ""
+      console.log(`[runtime] ✅ New session created: ${id}`)
+      return id
+    })
   }
 
   /** 强制刷新 system prompt（从 sections 重新 resolve 并注入 session） */
@@ -241,7 +243,7 @@ export class AgentRuntime {
   onEvent(cb: SessionEventCallback): () => void {
     const subscription: SessionEventSubscription = { cb, active: true }
     this._eventSubscriptions.push(subscription)
-    this._bindEventSubscription(subscription, this.session)
+    if (this._session) this._bindEventSubscription(subscription, this._session)
     return () => {
       if (!subscription.active) return
       subscription.active = false
@@ -261,7 +263,9 @@ export class AgentRuntime {
       subscription.currentUnsub = undefined
     }
     this._eventSubscriptions = []
-    try { this.session.dispose() } catch {}
+    const session = this._session
+    this._session = undefined
+    try { session?.dispose() } catch {}
     disconnectMcp()
   }
 
@@ -286,6 +290,20 @@ export class AgentRuntime {
 
   // ─── 私有 ──────────────────────────────────────────
 
+  /** 将 public session transition 按调用顺序串行化；前序失败不阻塞后续任务。 */
+  private _enqueueSessionTransition<T>(transition: () => Promise<T>): Promise<T> {
+    const previous = this._transitionTail ?? Promise.resolve()
+    const result = previous.then(
+      () => transition(),
+      () => transition(),
+    )
+    this._transitionTail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
   /** 获取 workspace 对应的 session 目录（与 routes 共用 wsDir） */
   private wsSessionDir(workspace: string): string {
     return wsDir(this.config.sessionsDir, workspace)
@@ -302,28 +320,76 @@ export class AgentRuntime {
     return resolve(dir, files[0])
   }
 
-  /** 中止并清理旧 session，返回事件回调列表 */
-  private async _saveAndDispose(keepMcp: boolean): Promise<SessionEventSubscription[]> {
-    try { this.session?.abort() } catch {}
-    const subscriptions = this._eventSubscriptions.filter((subscription) => subscription.active)
-    this._eventSubscriptions = []
-    for (const subscription of subscriptions) {
+  /** 中止并清理旧 session；dispose 前保留可用于重建的 workspace 和文件。 */
+  private async _saveAndDispose(keepMcp: boolean): Promise<SessionRecoveryPoint> {
+    const previousSession = this._session
+    const recoveryPoint: SessionRecoveryPoint = {
+      workspace: this.currentWorkspace,
+      sessionFile: previousSession?.sessionFile,
+    }
+    this._session = undefined
+    try { previousSession?.abort() } catch {}
+    this._eventSubscriptions = this._eventSubscriptions.filter((subscription) => subscription.active)
+    for (const subscription of this._eventSubscriptions) {
       const currentUnsub = subscription.currentUnsub
       subscription.currentUnsub = undefined
       try { currentUnsub?.() } catch {}
     }
-    try { this.session?.dispose() } catch {}
+    try {
+      previousSession?.dispose()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[runtime] 旧 session 释放失败，仍按不可用处理：${message}`)
+    }
     if (!keepMcp) await disconnectMcp()
-    return subscriptions
+    return recoveryPoint
+  }
+
+  /** 所有 create/open/switch 共用目标初始化与旧会话回滚事务。 */
+  private async _replaceSessionWithRollback(
+    workspace: string,
+    keepMcp: boolean,
+    sessionFile?: string,
+    forceNew?: boolean,
+  ): Promise<void> {
+    const recoveryPoint = await this._saveAndDispose(keepMcp)
+    this.currentWorkspace = workspace
+    try {
+      await this._initSession(workspace, sessionFile, forceNew)
+    } catch (error) {
+      await this._restoreSession(recoveryPoint)
+      throw error
+    }
+    this._rebindEvents()
   }
 
   /** 重新绑定事件回调 */
-  private _rebindEvents(subscriptions: SessionEventSubscription[]): void {
-    const sourceSession = this.session
-    for (const subscription of subscriptions) {
-      if (!subscription.active) continue
+  private _rebindEvents(): void {
+    const sourceSession = this._session
+    if (!sourceSession) return
+    for (const subscription of this._eventSubscriptions) {
+      if (!subscription.active || subscription.currentUnsub) continue
       this._bindEventSubscription(subscription, sourceSession)
-      if (!this._eventSubscriptions.includes(subscription)) this._eventSubscriptions.push(subscription)
+    }
+  }
+
+  /** 按旧 workspace/file 创建全新会话；任何已执行 dispose 的对象都不复用。 */
+  private async _restoreSession(recoveryPoint?: SessionRecoveryPoint): Promise<void> {
+    if (!recoveryPoint) {
+      this._session = undefined
+      return
+    }
+
+    this.currentWorkspace = recoveryPoint.workspace
+    this._session = undefined
+
+    try {
+      await this._initSession(recoveryPoint.workspace, recoveryPoint.sessionFile)
+      this._rebindEvents()
+    } catch (rollbackError) {
+      this._session = undefined
+      const message = rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+      console.error(`[runtime] 回滚旧 session 失败：${message}`)
     }
   }
 

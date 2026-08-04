@@ -15,7 +15,7 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 
-let service, TrustStore, hashServerCommand;
+let service, toolsModule, Client, TrustStore, hashServerCommand;
 let _origHome, _origProfile, _isolatedHome;
 
 before(async () => {
@@ -29,6 +29,8 @@ before(async () => {
   mkdirSync(resolve(_isolatedHome, ".pi", "agent"), { recursive: true });
 
   service = await import("../src/agent/mcp/MCPClientService.ts");
+  toolsModule = await import("../src/agent/tools/index.ts");
+  ({ Client } = await import("@modelcontextprotocol/sdk/client/index.js"));
   const trust = await import("../src/agent/mcp/trust-store.ts");
   TrustStore = trust.TrustStore;
   hashServerCommand = trust.hashServerCommand;
@@ -69,6 +71,85 @@ function addTrustForConfig(tempDir, name, config) {
   const hash = hashServerCommand(config);
   const store = new TrustStore();
   store.addTrust(tempDir, hash, name);
+}
+
+function deferred() {
+  let resolvePromise;
+  let rejectPromise;
+  const promise = new Promise((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
+}
+
+async function waitFor(predicate, message) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  }
+  assert.fail(message);
+}
+
+function createTrustedWorkspace(root, name) {
+  const workspace = resolve(root, name);
+  mkdirSync(workspace, { recursive: true });
+  const config = { command: `mock-${name}` };
+  writeConfig(workspace, { [name]: config });
+  addTrustForConfig(workspace, name, config);
+  return workspace;
+}
+
+function installDeferredMcpClients(scripts) {
+  const original = {
+    connect: Client.prototype.connect,
+    listTools: Client.prototype.listTools,
+    callTool: Client.prototype.callTool,
+    close: Client.prototype.close,
+  };
+  const attempts = [];
+  const scriptByClient = new WeakMap();
+
+  Client.prototype.connect = function () {
+    const script = scripts[attempts.length];
+    assert.ok(script, `unexpected MCP connection attempt ${attempts.length + 1}`);
+    const gate = deferred();
+    const attempt = { ...script, gate, client: this, closed: false, calls: [] };
+    attempts.push(attempt);
+    scriptByClient.set(this, attempt);
+    return gate.promise;
+  };
+  Client.prototype.listTools = async function () {
+    const script = scriptByClient.get(this);
+    return {
+      tools: (script?.tools ?? []).map((name) => ({
+        name,
+        description: `${name} test tool`,
+        inputSchema: { type: "object", properties: {} },
+      })),
+    };
+  };
+  Client.prototype.callTool = async function (request) {
+    const script = scriptByClient.get(this);
+    assert.ok(script, "MCP callTool 必须绑定到已登记的测试 client");
+    assert.strictEqual(script.closed, false, "已关闭的 MCP client 不应再接收调用");
+    script.calls.push(request);
+    return { content: [{ type: "text", text: `${script?.name}:${request.name}` }] };
+  };
+  Client.prototype.close = async function () {
+    const script = scriptByClient.get(this);
+    if (script) script.closed = true;
+  };
+
+  return {
+    attempts,
+    restore() {
+      Client.prototype.connect = original.connect;
+      Client.prototype.listTools = original.listTools;
+      Client.prototype.callTool = original.callTool;
+      Client.prototype.close = original.close;
+    },
+  };
 }
 
 // ─── 基础行为 ──────────────────────────────────
@@ -447,6 +528,341 @@ describe("状态管理不变式", () => {
     } finally {
       Client.prototype.connect = originalConnect;
       rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("tools MCP discovery concurrency", () => {
+  async function setup(scripts, workspaceNames) {
+    const root = mkdtempSync(resolve(tmpdir(), "mcp-tools-discovery-"));
+    await toolsModule.disconnectMcp();
+    service.reset();
+    withTrust(root);
+    const workspaces = Object.fromEntries(
+      workspaceNames.map((name) => [name, createTrustedWorkspace(root, name)]),
+    );
+    const clients = installDeferredMcpClients(scripts);
+    return { root, workspaces, clients };
+  }
+
+  async function cleanup(state) {
+    for (const attempt of state.clients.attempts) attempt.gate.resolve();
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+    await toolsModule.disconnectMcp();
+    state.clients.restore();
+    service.reset();
+    delete process.env.PI_CONFIG_DIR;
+    rmSync(state.root, { recursive: true, force: true });
+  }
+
+  it("coalesces same-workspace discovery and caches an empty result", async () => {
+    const state = await setup([{ name: "same", tools: [] }], ["same"]);
+    try {
+      const generationBeforeWorkspace = service.currentGeneration();
+      await Promise.all([
+        toolsModule.getCustomToolsAsync(state.workspaces.same),
+        toolsModule.getCustomToolsAsync(state.workspaces.same),
+      ]);
+      await waitFor(() => state.clients.attempts.length === 1, "same workspace should start one discovery");
+      assert.ok(service.currentGeneration() > generationBeforeWorkspace, "workspace activation must advance generation");
+
+      state.clients.attempts[0].gate.resolve();
+      await waitFor(
+        () => service.getServersStatus()[0]?.state === "connected",
+        "empty discovery should still complete and publish connection status",
+      );
+      const settledGeneration = service.currentGeneration();
+      await toolsModule.getCustomToolsAsync(state.workspaces.same);
+      await toolsModule.getCustomToolsAsync(state.workspaces.same);
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+      assert.strictEqual(state.clients.attempts.length, 1, "initialized [] must be a valid cache hit");
+      assert.strictEqual(toolsModule._getMcpCacheLen(), 0);
+      assert.strictEqual(service.currentGeneration(), settledGeneration, "same workspace cache hits must keep generation");
+    } finally {
+      await cleanup(state);
+    }
+  });
+
+  it("retries config discovery after a malformed config is repaired", async () => {
+    const state = await setup([{ name: "config-repaired", tools: ["echo"] }], ["config"]);
+    try {
+      writeFileSync(resolve(state.workspaces.config, ".mcp.json"), "{ invalid json", "utf-8");
+
+      await toolsModule.getCustomToolsAsync(state.workspaces.config);
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+      assert.strictEqual(state.clients.attempts.length, 0, "invalid config must not connect a server");
+
+      const failedReport = await service.connectAllWithReport(state.workspaces.config);
+      assert.strictEqual(failedReport.complete, false);
+      assert.strictEqual(failedReport.tools.length, 0);
+      assert.ok(failedReport.configErrors.length > 0, "report must retain this call's config errors");
+
+      writeConfig(state.workspaces.config, { config: { command: "mock-config" } });
+      await toolsModule.getCustomToolsAsync(state.workspaces.config);
+      await waitFor(() => state.clients.attempts.length === 1, "repaired config must be retried");
+      state.clients.attempts[0].gate.resolve();
+      await waitFor(
+        () => service.getServersStatus()[0]?.state === "connected",
+        "repaired config discovery did not complete",
+      );
+
+      const currentTools = await toolsModule.getCustomToolsAsync(state.workspaces.config);
+      assert.ok(currentTools.some((tool) => tool.name === "mcp__config__echo"));
+      await toolsModule.getCustomToolsAsync(state.workspaces.config);
+      assert.strictEqual(state.clients.attempts.length, 1, "successful retry must initialize the empty-cache state");
+    } finally {
+      await cleanup(state);
+    }
+  });
+
+  it("retries a transient failed discovery instead of caching an empty result", async () => {
+    const state = await setup([
+      { name: "retry-failed", tools: ["echo"] },
+      { name: "retry-success", tools: ["echo"] },
+    ], ["retry"]);
+    try {
+      await toolsModule.getCustomToolsAsync(state.workspaces.retry);
+      await waitFor(() => state.clients.attempts.length === 1, "first discovery did not start");
+      state.clients.attempts[0].gate.reject(new Error("temporary MCP failure"));
+      await waitFor(
+        () => service.getServersStatus()[0]?.state === "error",
+        "failed discovery did not publish error status",
+      );
+
+      await toolsModule.getCustomToolsAsync(state.workspaces.retry);
+      await waitFor(() => state.clients.attempts.length === 2, "failed discovery must be retried");
+      state.clients.attempts[1].gate.resolve();
+      await waitFor(
+        () => service.getServersStatus()[0]?.state === "connected",
+        "retry did not publish connected status",
+      );
+
+      const currentTools = await toolsModule.getCustomToolsAsync(state.workspaces.retry);
+      assert.ok(currentTools.some((tool) => tool.name === "mcp__retry__echo"));
+    } finally {
+      await cleanup(state);
+    }
+  });
+
+  it("keeps partial tools but retries while any enabled server failed", async () => {
+    const state = await setup([
+      { name: "healthy-first", tools: ["healthy_tool"] },
+      { name: "flaky-failed", tools: ["flaky_tool"] },
+      { name: "healthy-retry", tools: ["healthy_tool"] },
+      { name: "flaky-retry", tools: ["flaky_tool"] },
+    ], ["mixed"]);
+    try {
+      const healthyConfig = { command: "mock-healthy" };
+      const flakyConfig = { command: "mock-flaky" };
+      writeConfig(state.workspaces.mixed, { healthy: healthyConfig, flaky: flakyConfig });
+      addTrustForConfig(state.workspaces.mixed, "healthy", healthyConfig);
+      addTrustForConfig(state.workspaces.mixed, "flaky", flakyConfig);
+
+      await toolsModule.getCustomToolsAsync(state.workspaces.mixed);
+      await waitFor(() => state.clients.attempts.length === 1, "healthy server did not start");
+      state.clients.attempts[0].gate.resolve();
+      await waitFor(() => state.clients.attempts.length === 2, "flaky server did not start");
+      state.clients.attempts[1].gate.reject(new Error("temporary flaky failure"));
+      await waitFor(
+        () => service.getServersStatus().some((status) => status.state === "error"),
+        "partial discovery did not publish error status",
+      );
+      await waitFor(() => toolsModule._getMcpCacheLen() === 1, "successful partial tool was not retained");
+
+      const allowTool = { authorizeTool: async () => ({ allow: true }) };
+      const [partialSessionA, partialSessionB] = await Promise.all([
+        toolsModule.getCustomToolsAsync(state.workspaces.mixed, undefined, allowTool),
+        toolsModule.getCustomToolsAsync(state.workspaces.mixed, undefined, allowTool),
+      ]);
+      await waitFor(() => state.clients.attempts.length === 3, "partial discovery must be retried");
+      assert.strictEqual(state.clients.attempts.length, 3, "same-key partial retry must be single-flight");
+      const partialToolA = partialSessionA.find((tool) => tool.name === "mcp__healthy__healthy_tool");
+      const partialToolB = partialSessionB.find((tool) => tool.name === "mcp__healthy__healthy_tool");
+      assert.ok(partialToolA, "healthy partial tool must be returned through getCustomToolsAsync");
+      assert.ok(partialToolB, "each session must receive the healthy partial tool");
+      assert.notStrictEqual(partialToolA, partialToolB, "partial raw tools must be wrapped per session");
+      assert.ok(!partialSessionA.some((tool) => tool.name === "mcp__flaky__flaky_tool"));
+      await partialToolA.execute("partial-call", {});
+      assert.strictEqual(state.clients.attempts[0].calls.length, 1, "partial tool must remain callable during retry");
+
+      state.clients.attempts[2].gate.resolve();
+      await waitFor(() => state.clients.attempts.length === 4, "retry did not continue to flaky server");
+      state.clients.attempts[3].gate.resolve();
+      await waitFor(
+        () => service.getServersStatus().length === 2
+          && service.getServersStatus().every((status) => status.state === "connected"),
+        "partial retry did not complete successfully",
+      );
+
+      const currentTools = await toolsModule.getCustomToolsAsync(state.workspaces.mixed);
+      assert.ok(currentTools.some((tool) => tool.name === "mcp__healthy__healthy_tool"));
+      assert.ok(currentTools.some((tool) => tool.name === "mcp__flaky__flaky_tool"));
+      assert.strictEqual(state.clients.attempts[0].closed, true, "replaced partial client must be closed");
+    } finally {
+      await cleanup(state);
+    }
+  });
+
+  it("starts workspace B while A is pending and rejects A's late completion", async () => {
+    const state = await setup([
+      { name: "a", tools: ["tool_a"] },
+      { name: "b", tools: ["tool_b"] },
+    ], ["a", "b"]);
+    try {
+      await toolsModule.getCustomToolsAsync(state.workspaces.a);
+      await waitFor(() => state.clients.attempts.length === 1, "workspace A discovery did not start");
+      const generationA = service.currentGeneration();
+
+      await toolsModule.getCustomToolsAsync(state.workspaces.b);
+      await waitFor(() => state.clients.attempts.length === 2, "workspace B must start while A is pending");
+      assert.ok(service.currentGeneration() > generationA, "workspace B must receive a new generation");
+
+      state.clients.attempts[1].gate.resolve();
+      await waitFor(
+        () => service.getServersStatus()[0]?.name === "b" && service.getServersStatus()[0]?.state === "connected",
+        "workspace B connection did not become current",
+      );
+      state.clients.attempts[0].gate.resolve();
+      await waitFor(() => state.clients.attempts[0].closed, "stale workspace A client must be closed");
+
+      const currentTools = await toolsModule.getCustomToolsAsync(state.workspaces.b);
+      assert.ok(currentTools.some((tool) => tool.name === "mcp__b__tool_b"));
+      assert.ok(!currentTools.some((tool) => tool.name === "mcp__a__tool_a"));
+      assert.deepStrictEqual(service.getServersStatus().map((status) => status.name), ["b"]);
+      assert.strictEqual(state.clients.attempts[1].closed, false, "current workspace B connection must remain open");
+    } finally {
+      await cleanup(state);
+    }
+  });
+
+  it("invalidates a pending discovery on disconnect and allows a fresh discovery", async () => {
+    const state = await setup([
+      { name: "stale", tools: ["stale_tool"] },
+      { name: "fresh", tools: ["fresh_tool"] },
+    ], ["stale"]);
+    try {
+      await toolsModule.getCustomToolsAsync(state.workspaces.stale);
+      await waitFor(() => state.clients.attempts.length === 1, "initial discovery did not start");
+      const pendingGeneration = service.currentGeneration();
+
+      await toolsModule.disconnectMcp();
+      assert.ok(service.currentGeneration() > pendingGeneration, "disconnect must advance generation first");
+      state.clients.attempts[0].gate.resolve();
+      await waitFor(() => state.clients.attempts[0].closed, "invalidated client must close on late completion");
+      assert.strictEqual(toolsModule._getMcpCacheLen(), 0);
+      assert.deepStrictEqual(service.getServersStatus(), []);
+
+      await toolsModule.getCustomToolsAsync(state.workspaces.stale);
+      await waitFor(() => state.clients.attempts.length === 2, "a fresh discovery must start after disconnect");
+      state.clients.attempts[1].gate.resolve();
+      await waitFor(
+        () => service.getServersStatus()[0]?.state === "connected",
+        "fresh discovery did not complete",
+      );
+      const currentTools = await toolsModule.getCustomToolsAsync(state.workspaces.stale);
+      assert.ok(currentTools.some((tool) => tool.name === "mcp__stale__fresh_tool"));
+      assert.ok(!currentTools.some((tool) => tool.name === "mcp__stale__stale_tool"));
+    } finally {
+      await cleanup(state);
+    }
+  });
+
+  it("rewraps cached raw tools with each call's current emitter and context", async () => {
+    const state = await setup([{ name: "session", tools: ["echo"] }], ["session"]);
+    try {
+      await toolsModule.getCustomToolsAsync(state.workspaces.session);
+      await waitFor(() => state.clients.attempts.length === 1, "discovery did not start");
+      state.clients.attempts[0].gate.resolve();
+      await waitFor(
+        () => service.getServersStatus()[0]?.state === "connected",
+        "discovery did not complete",
+      );
+
+      const tracesA = [];
+      const tracesB = [];
+      const authorizationsA = [];
+      const authorizationsB = [];
+      const sessionA = await toolsModule.getCustomToolsAsync(
+        state.workspaces.session,
+        (event) => tracesA.push(event),
+        { authorizeTool: async (request) => { authorizationsA.push(request); return { allow: true }; } },
+      );
+      const sessionB = await toolsModule.getCustomToolsAsync(
+        state.workspaces.session,
+        (event) => tracesB.push(event),
+        { authorizeTool: async (request) => { authorizationsB.push(request); return { allow: true }; } },
+      );
+      const toolA = sessionA.find((tool) => tool.name === "mcp__session__echo");
+      const toolB = sessionB.find((tool) => tool.name === "mcp__session__echo");
+
+      assert.notStrictEqual(toolA, toolB);
+      await toolA.execute("call-a", {});
+      assert.strictEqual(authorizationsA.length, 1);
+      assert.strictEqual(authorizationsB.length, 0);
+      assert.deepStrictEqual(tracesA.map((event) => event.toolCallId), ["call-a", "call-a"]);
+      assert.deepStrictEqual(tracesB, []);
+
+      await toolB.execute("call-b", {});
+      assert.strictEqual(authorizationsB.length, 1);
+      assert.deepStrictEqual(tracesB.map((event) => event.toolCallId), ["call-b", "call-b"]);
+    } finally {
+      await cleanup(state);
+    }
+  });
+
+  it("invalidates cached wrappers before reconnecting the same workspace", async () => {
+    const state = await setup([
+      { name: "old-client", tools: ["echo"] },
+      { name: "new-client", tools: ["echo"] },
+    ], ["refresh"]);
+    try {
+      await toolsModule.getCustomToolsAsync(state.workspaces.refresh);
+      await waitFor(() => state.clients.attempts.length === 1, "initial discovery did not start");
+      state.clients.attempts[0].gate.resolve();
+      await waitFor(
+        () => service.getServersStatus()[0]?.state === "connected",
+        "initial discovery did not complete",
+      );
+
+      const allowTool = { authorizeTool: async () => ({ allow: true }) };
+      const beforeRefresh = await toolsModule.getCustomToolsAsync(
+        state.workspaces.refresh,
+        undefined,
+        allowTool,
+      );
+      const oldWrapper = beforeRefresh.find((tool) => tool.name === "mcp__refresh__echo");
+      assert.ok(oldWrapper, "initial wrapper should be available");
+      await oldWrapper.execute("old-call", {});
+      assert.strictEqual(state.clients.attempts[0].calls.length, 1);
+
+      await toolsModule.reconnectMcp(state.workspaces.refresh);
+      assert.strictEqual(state.clients.attempts[0].closed, true, "reconnect must close the old client");
+      const duringRefresh = await toolsModule.getCustomToolsAsync(state.workspaces.refresh);
+      assert.ok(
+        !duringRefresh.some((tool) => tool.name === "mcp__refresh__echo"),
+        "new sessions must not receive a wrapper bound to the closed client",
+      );
+      assert.strictEqual(state.clients.attempts[0].calls.length, 1, "closed client must not receive another call");
+
+      await waitFor(() => state.clients.attempts.length === 2, "refresh discovery did not start");
+      state.clients.attempts[1].gate.resolve();
+      await waitFor(
+        () => service.getServersStatus()[0]?.state === "connected",
+        "refresh discovery did not complete",
+      );
+      const afterRefresh = await toolsModule.getCustomToolsAsync(
+        state.workspaces.refresh,
+        undefined,
+        allowTool,
+      );
+      const newWrapper = afterRefresh.find((tool) => tool.name === "mcp__refresh__echo");
+      assert.ok(newWrapper, "refreshed wrapper should be available");
+      await newWrapper.execute("new-call", {});
+      assert.strictEqual(state.clients.attempts[0].calls.length, 1);
+      assert.strictEqual(state.clients.attempts[1].calls.length, 1);
+    } finally {
+      await cleanup(state);
     }
   });
 });

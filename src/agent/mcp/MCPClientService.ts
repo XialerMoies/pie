@@ -21,7 +21,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import type { AgentTool, ToolTraceEmitter } from "../types.js"
-import { loadMcpConfig, getEnabledServers } from "./config.js"
+import { loadMcpConfig, getEnabledServers, type McpLoadResult } from "./config.js"
 import { TrustStore, hashServerCommand } from "./trust-store.js"
 import { createMcpToolAdapter } from "./MCPToolAdapter.js"
 import type { McpServerConfig, McpServerStatus, McpConnectionState } from "./types.js"
@@ -132,22 +132,30 @@ export function currentGeneration(): number {
   return _mcpGen
 }
 
+/** 单次 MCP discovery 的工具与健康结果，不依赖全局 status 快照。 */
+export interface McpDiscoveryReport {
+  tools: AgentTool[]
+  complete: boolean
+  configErrors: McpLoadResult["errors"]
+}
+
 /**
  * 连接指定 workspace 的所有 enabled MCP server，
- * 返回包装后的 AgentTool 列表。
+ * 返回与本次调用绑定的工具和完整性报告。
  *
  * 调用前清空旧 status——确保 status 只反映当前 workspace。
  * 每个 server 独立连接，失败只影响自身。
  * 内置 generation 检查：如果 _mcpGen 在连接过程中变化，跳过后续写入。
  */
-export async function connectAll(
+export async function connectAllWithReport(
   workspace: string,
   emitTrace?: ToolTraceEmitter,
-): Promise<AgentTool[]> {
+): Promise<McpDiscoveryReport> {
   const tools: AgentTool[] = []
   const gen = _mcpGen
   const result = loadMcpConfig({ projectRoot: workspace })
   const enabled = getEnabledServers(result)
+  let complete = result.errors.length === 0
 
   // 清空旧 status，避免跨 workspace 残留
   _clearStatuses()
@@ -155,7 +163,8 @@ export async function connectAll(
   for (const source of enabled) {
     if (gen !== _mcpGen) {
       console.log(`[mcp] ⏭ connectAll 跳过过期 server: ${source.name}`)
-      continue
+      complete = false
+      break
     }
     const hash = hashServerCommand(source.config)
     const trustStore = getTrustStore()
@@ -163,6 +172,7 @@ export async function connectAll(
     if (!trustStore.isTrusted(workspace, hash)) {
       console.log(`[mcp] 跳过未信任的 server: ${source.name}（在 ${source.sourcePath} 中配置）`)
       _setStatus(source.name, "error", `未信任：请确认"${source.name}"后使用`, source.config)
+      complete = false
       continue
     }
 
@@ -170,12 +180,25 @@ export async function connectAll(
       const toolList = await connectServer(source.name, source.config, source.sourcePath, emitTrace)
       tools.push(...toolList)
     } catch (err) {
+      complete = false
       const msg = err instanceof Error ? err.message : String(err)
       console.log(`[mcp] server 连接失败: ${source.name}: ${msg}`)
     }
   }
 
-  return tools
+  return {
+    tools,
+    complete: complete && gen === _mcpGen,
+    configErrors: result.errors.map((error) => ({ ...error })),
+  }
+}
+
+/** 兼容旧调用方，仅返回本轮 discovery 得到的工具列表。 */
+export async function connectAll(
+  workspace: string,
+  emitTrace?: ToolTraceEmitter,
+): Promise<AgentTool[]> {
+  return (await connectAllWithReport(workspace, emitTrace)).tools
 }
 
 /**
@@ -217,6 +240,13 @@ async function connectServer(
       return []
     }
 
+    // 部分失败后的重试会重新连接已成功 server；替换前关闭旧 client，避免连接泄漏。
+    const previous = _connections.get(name)
+    if (previous) await safeClose(previous.client)
+    if (gen !== _mcpGen) {
+      await safeClose(client)
+      return []
+    }
     _connections.set(name, { client, transport: transport as any, serverName: name, connectedAt: Date.now() })
     _setStatus(name, "connected", undefined, config, tools.map((t) => t.name))
     console.log(`[mcp] ✅ ${name}: ${tools.length} 个工具可用`)
