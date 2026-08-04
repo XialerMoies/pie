@@ -97,6 +97,19 @@ describe("dashboard event refresh ownership", () => {
   });
 });
 
+describe("token usage event refresh ownership", () => {
+  it("does not retain Token polling names or a six-second interval", () => {
+    const usage = readFileSync(resolve(process.cwd(), "src/frontend/chat/chat-token.ts"), "utf8");
+    const chat = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-chat.ts"), "utf8");
+    assert.doesNotMatch(usage, /\b(?:startTokenPoll|stopTokenPoll|pollTokenUsage|_pollTimer)\b/);
+    assert.doesNotMatch(usage, /setInterval\s*\([^,]+,\s*6000\s*\)/);
+    assert.match(usage, /App\.Events\.subscribe\(['"]usage\.changed['"]/);
+    assert.match(usage, /App\.Events\.subscribe\(['"]resync['"]/);
+    assert.match(chat, /startTokenUpdates/);
+    assert.doesNotMatch(chat, /startTokenPoll/);
+  });
+});
+
 describe("non-Markdown HTML boundaries", () => {
   it("escapes server session ids before placing them in data attributes", () => {
     const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-sessions.ts"), "utf8");

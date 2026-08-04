@@ -52,6 +52,76 @@ async function compileClassicScript(file) {
   return result.code.replace(/^export\s+/gm, "");
 }
 
+async function createTokenUpdatesHarness() {
+  const subscriptions = new Map();
+  const requests = [];
+  const usageResolvers = [];
+  const intervals = [];
+  const context = {
+    window: {
+      App: {
+        Events: {
+          subscribe(type, handler) {
+            subscriptions.set(type, handler);
+            return () => subscriptions.delete(type);
+          },
+        },
+        Tabs: { getActiveTab: () => null },
+        State: { getWorkspacePath: () => "" },
+        ChatState: { replaceMessages: () => {} },
+        Chat: {},
+      },
+      addEventListener: () => {},
+    },
+    document: {
+      getElementById: () => null,
+      querySelector: () => null,
+      createElement: () => ({ textContent: "", innerHTML: "" }),
+      body: { appendChild: () => {} },
+    },
+    console,
+    requestAnimationFrame: (callback) => callback(),
+    setInterval: (callback, delay) => {
+      intervals.push({ callback, delay });
+      return intervals.length;
+    },
+    clearInterval: () => {},
+    setTimeout,
+    clearTimeout,
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      if (url === "/api/compact") {
+        return { json: async () => ({ ok: true, compacted: true }) };
+      }
+      if (url !== "/api/usage/current") {
+        return { json: async () => ({}) };
+      }
+      return new Promise((resolve) => usageResolvers.push(() => resolve({
+        json: async () => ({
+          sessionId: "session-1",
+          provider: "test",
+          hasActiveSession: false,
+          contextUsage: null,
+          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          cacheHitRate: 0,
+          cost: 0,
+          compactCount: 0,
+          lastCompactionAt: null,
+          lastCompactionSummary: null,
+          isStreaming: false,
+          isCompacting: false,
+        }),
+      })));
+    },
+    toast: () => {},
+  };
+  context.App = context.window.App;
+
+  const tokenScript = await compileClassicScript("src/frontend/chat/chat-token.ts");
+  new Script(tokenScript, { filename: "chat-token.js" }).runInNewContext(context);
+  return { context, subscriptions, requests, usageResolvers, intervals };
+}
+
 function resetWindow() {
   global.window = { App: {} };
 }
@@ -565,6 +635,42 @@ describe("App.Events frontend event bus", () => {
       ["first", "second"],
     );
     context.App.Events.stop();
+  });
+
+  it("refreshes token usage from application events without installing a timer", async () => {
+    const { context, subscriptions, requests, usageResolvers, intervals } = await createTokenUpdatesHarness();
+
+    context.window.startTokenUpdates();
+    assert.strictEqual(requests.filter((request) => request.url === "/api/usage/current").length, 1);
+    assert.deepStrictEqual(intervals, []);
+    assert.ok(subscriptions.has("usage.changed"));
+    assert.ok(subscriptions.has("resync"));
+
+    subscriptions.get("usage.changed")({ type: "usage.changed", revision: 1 });
+    subscriptions.get("resync")({ type: "resync", revision: 0 });
+    assert.strictEqual(requests.filter((request) => request.url === "/api/usage/current").length, 1);
+
+    usageResolvers.shift()();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(requests.filter((request) => request.url === "/api/usage/current").length, 2);
+
+    usageResolvers.shift()();
+    await new Promise((resolve) => setImmediate(resolve));
+    context.window.stopTokenUpdates();
+    assert.strictEqual(subscriptions.size, 0);
+  });
+
+  it("refreshes current token usage after compaction through the shared loader", async () => {
+    const { context, requests, usageResolvers } = await createTokenUpdatesHarness();
+
+    await context.doCompact();
+    assert.deepStrictEqual(requests.map((request) => request.url), [
+      "/api/compact",
+      "/api/usage/current",
+    ]);
+
+    usageResolvers.shift()();
+    await new Promise((resolve) => setImmediate(resolve));
   });
 
   it("keeps the development HTML startup on the shared bus", () => {

@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════
 //  Token Display — Token Rail + Usage 面板
-//  轮询 /api/usage/current，更新 Rail 和面板数据
+//  应用事件触发 /api/usage/current 刷新，更新 Rail 和面板数据
 // ═══════════════════════════════════════════════════════════════════
 
 function fmt(n: number | null | undefined): string {
@@ -316,9 +316,11 @@ function escapeHtml(s: string): string {
   return d.innerHTML;
 }
 
-// ─── Token polling ───────────────────────────────────────
+// ─── Token usage updates ─────────────────────────────────
 
-let _pollTimer: ReturnType<typeof setInterval> | null = null;
+let _tokenRefreshInFlight: Promise<void> | null = null;
+let _tokenRefreshQueued = false;
+let _tokenUpdateUnsubscribers: Array<() => void> = [];
 let _railResizeObserver: ResizeObserver | null = null;
 let _railResizeTarget: Element | null = null;
 
@@ -333,15 +335,28 @@ function offsetTopWithin(target: HTMLElement, container: HTMLElement): number {
   return target.getBoundingClientRect().top - container.getBoundingClientRect().top;
 }
 
-async function pollTokenUsage(): Promise<void> {
-  try {
-    const r = await fetch('/api/usage/current');
-    const data: UsageCurrentResponse = await r.json();
-    _lastUsageData = data;
-    updateRail(data);
-    // 如果面板开着，刷新显示
-    if (_usageModalEl) renderUsagePanel();
-  } catch { /* ignore */ }
+async function refreshTokenUsage(): Promise<void> {
+  if (_tokenRefreshInFlight) {
+    _tokenRefreshQueued = true;
+    return _tokenRefreshInFlight;
+  }
+
+  _tokenRefreshInFlight = (async () => {
+    do {
+      _tokenRefreshQueued = false;
+      try {
+        const r = await fetch('/api/usage/current');
+        const data: UsageCurrentResponse = await r.json();
+        _lastUsageData = data;
+        updateRail(data);
+        if (_usageModalEl) renderUsagePanel();
+      } catch { /* ignore */ }
+    } while (_tokenRefreshQueued);
+  })().finally(() => {
+    _tokenRefreshInFlight = null;
+  });
+
+  return _tokenRefreshInFlight;
 }
 
 /** 将 Rail 垂直位置同步到输入框顶部 */
@@ -371,18 +386,22 @@ function watchRailPosition(): void {
   _railResizeObserver.observe(fiBox);
 }
 
-function startTokenPoll(): void {
-  stopTokenPoll();
+function startTokenUpdates(): void {
+  stopTokenUpdates();
   watchRailPosition();
   requestAnimationFrame(syncRailPosition);
-  pollTokenUsage();
-  _pollTimer = setInterval(pollTokenUsage, 6000);
+  void refreshTokenUsage();
+  _tokenUpdateUnsubscribers = [
+    App.Events.subscribe('usage.changed', () => { void refreshTokenUsage(); }),
+    App.Events.subscribe('resync', () => { void refreshTokenUsage(); }),
+  ];
 }
 
 window.addEventListener('resize', () => requestAnimationFrame(syncRailPosition));
 
-function stopTokenPoll(): void {
-  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+function stopTokenUpdates(): void {
+  for (const unsubscribe of _tokenUpdateUnsubscribers) unsubscribe();
+  _tokenUpdateUnsubscribers = [];
 }
 
 // ─── Compact 弹窗 ───────────────────────────────────────
@@ -481,7 +500,7 @@ async function doCompact(): Promise<void> {
 
     // 刷新 Usage + 清除 summary 缓存（下次切 Tab 时重新拉取）
     _lastSummary = null;
-    pollTokenUsage();
+    void refreshTokenUsage();
     // 触发消息刷新（保留完整字段：turnId/blocks/error 等）
     const activeId = (window as any).getActiveSessionTabId?.();
     if (activeId && !activeId.startsWith('draft:')) {
@@ -523,9 +542,9 @@ async function doCompact(): Promise<void> {
 
 // ─── 公开 API ───────────────────────────────────────────
 
-(window as any).pollTokenUsage = pollTokenUsage;
-(window as any).startTokenPoll = startTokenPoll;
-(window as any).stopTokenPoll = stopTokenPoll;
+(window as any).refreshTokenUsage = refreshTokenUsage;
+(window as any).startTokenUpdates = startTokenUpdates;
+(window as any).stopTokenUpdates = stopTokenUpdates;
 (window as any).syncTokenRailPosition = syncRailPosition;
 (window as any).openUsagePanel = openUsagePanel;
 (window as any).closeUsagePanel = closeUsagePanel;

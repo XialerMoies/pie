@@ -486,6 +486,9 @@ declare function saveCurrentFile(): Promise<void>;
 declare function tabContextMenu(e: MouseEvent, id: string): void;
 declare function tabMoreMenu(e: MouseEvent): void;
 declare function toggleExplorerFilter(): void;
+declare function refreshTokenUsage(): Promise<void>;
+declare function startTokenUpdates(): void;
+declare function stopTokenUpdates(): void;
 
 // Tree widget
 interface TreeNode { id: string; label: string; icon: string; isDir: boolean; children?: TreeNode[]; }

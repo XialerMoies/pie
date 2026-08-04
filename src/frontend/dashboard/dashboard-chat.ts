@@ -693,8 +693,8 @@ function bind(): void {
     });
   }
 
-  // ─── Token polling (every 6s) → Token Rail + Usage 面板 ───
-  (window as any).startTokenPoll?.();
+  // ─── Token usage events → Token Rail + Usage 面板 ───
+  (window as any).startTokenUpdates?.();
 }
 
 function updateModelName(): void {
