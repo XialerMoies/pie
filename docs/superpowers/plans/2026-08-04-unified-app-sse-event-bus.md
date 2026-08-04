@@ -32,7 +32,7 @@
 - `src/frontend/dashboard.d.ts`: declare `App.Events` and the new frontend update APIs.
 - `src/frontend/service/explorer-service.ts`: remove its EventSource lifecycle and subscribe to shared events.
 - `src/frontend/chat/chat-token.ts`: replace `_pollTimer` and six-second polling with event-driven refresh and single-flight fetch.
-- `src/frontend/dashboard/dashboard-helpers.ts`: add event-driven Dashboard refresh and record the received runtime baseline.
+- `src/frontend/dashboard/dashboard-helpers.ts`: add event-driven Dashboard refresh with single-flight request coalescing.
 - `src/frontend/dashboard/dashboard-startup.ts`: register consumers before starting the shared event stream and preserve workspace-sync ordering.
 - `src/frontend/dashboard.html`: remove the development-mode Dashboard polling timer from the inline bootstrap.
 - `src/frontend/pane/mcp/index.ts`: remove `_mcpRefreshTimer`, subscribe while mounted, and retain open-panel immediate loading/dirty behavior.
@@ -52,7 +52,7 @@ Generated `src/frontend/gen/` and `dist/` output stays ignored and is regenerate
 - Modify: `src/server/routes/types.ts`
 - Test: `test/app-events-server.test.mjs`
 
-- [ ] **Step 1: Write failing Hub tests**
+- [x] **Step 1: Write failing Hub tests**
 
 Add tests for these concrete behaviors:
 
@@ -73,7 +73,7 @@ assert.equal(frameFrom(a).data, frameFrom(b).data);
 
 Also test that `removeClient` prevents future writes, a destroyed response is removed after a failed write, and `sendTo` only writes to the supplied client set. Use fake `ServerResponse` objects with `write`, `destroyed`, and `writableEnded`; do not open a network listener.
 
-- [ ] **Step 2: Run the focused test and verify it fails**
+- [x] **Step 2: Run the focused test and verify it fails**
 
 Run:
 
@@ -83,7 +83,7 @@ node scripts/tsx-test.mjs --test test/app-events-server.test.mjs
 
 Expected: FAIL because `src/server/app-events.ts` does not exist.
 
-- [ ] **Step 3: Implement the minimal Hub**
+- [x] **Step 3: Implement the minimal Hub**
 
 Export a closed event union:
 
@@ -100,7 +100,7 @@ Implement `AppEventHub` with `addClient`, `removeClient`, `clientsSnapshot`, `pu
 
 Add optional `appEvents?: AppEventHub` to `ServerContext` while the raw `sseClients` field remains during this compile-safe transition. Task 2 makes `appEvents` required and removes `sseClients` after all production wiring has moved.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -111,7 +111,7 @@ npm run typecheck
 
 Expected: all new Hub tests pass and typecheck passes.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```text
 git add src/server/app-events.ts src/server/routes/types.ts test/app-events-server.test.mjs
@@ -127,11 +127,11 @@ git commit -m "feat: add application SSE event hub"
 - Test: `test/app-events-server.test.mjs`
 - Test: `test/routes.test.mjs`
 
-- [ ] **Step 1: Extend failing tests for the HTTP-facing contract**
+- [x] **Step 1: Extend failing tests for the HTTP-facing contract**
 
 Assert that an events client receives a JSON `connected` frame, receives a revisioned `explorer.changed` frame from the file watcher publisher, and is removed after `close`. Assert that permission confirmation sends exactly one `permission.confirm` frame to each connected client and that closing the last response resolves the pending confirmation as `{ allow: false }`.
 
-- [ ] **Step 2: Implement Hub wiring**
+- [x] **Step 2: Implement Hub wiring**
 
 Construct `const appEvents = new AppEventHub()` beside `chatStream` in `main()`, pass it in `baseCtx`, and route `/api/events` as follows:
 
@@ -158,7 +158,7 @@ Change permission confirmation to use `clientsSnapshot()` and `sendTo(clients, "
 
 Make `appEvents: AppEventHub` required in `ServerContext` and delete `sseClients` from the context and production setup.
 
-- [ ] **Step 3: Run route and permission tests**
+- [x] **Step 3: Run route and permission tests**
 
 Run:
 
@@ -169,7 +169,7 @@ npm run typecheck
 
 Expected: existing permission confirmation tests remain green; no duplicate confirmation frame is emitted.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```text
 git add src/server/server.ts src/server/permission-confirmation.ts src/server/routes/types.ts test/app-events-server.test.mjs test/routes.test.mjs
@@ -184,7 +184,7 @@ git commit -m "refactor: route application events through shared SSE hub"
 - Modify: `scripts/compile-frontend-ts.mjs`
 - Test: `test/app-events-frontend.test.mjs`
 
-- [ ] **Step 1: Write failing browser-bus tests**
+- [x] **Step 1: Write failing browser-bus tests**
 
 Use a fake `EventSource` that records instances and exposes `onopen`, `onmessage`, and `onerror`. Cover:
 
@@ -195,7 +195,7 @@ Use a fake `EventSource` that records instances and exposes `onopen`, `onmessage
 - the first-open timeout rejects readiness without invoking a second EventSource;
 - unsubscribe prevents later callbacks.
 
-- [ ] **Step 2: Implement `App.Events`**
+- [x] **Step 2: Implement `App.Events`**
 
 Use a singleton with the following behavior:
 
@@ -215,7 +215,7 @@ const appEvents = {
 
 Expose it as `window.App.Events` and place `gen/services/app-events.js` first in `bundleOrder`, before `dashboard-helpers.js` and `explorer-service.js`.
 
-- [ ] **Step 3: Run focused frontend tests**
+- [x] **Step 3: Run focused frontend tests**
 
 Run:
 
@@ -226,7 +226,7 @@ npm run typecheck
 
 Expected: all browser-bus tests pass and the generated bundle order check passes.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```text
 git add src/frontend/services/app-events.ts src/frontend/dashboard.d.ts scripts/compile-frontend-ts.mjs test/app-events-frontend.test.mjs
@@ -242,11 +242,11 @@ git commit -m "feat: add shared frontend application event bus"
 - Test: `test/explorer-service.test.mjs`
 - Test: `test/app-events-frontend.test.mjs`
 
-- [ ] **Step 1: Add migration regression tests**
+- [x] **Step 1: Add migration regression tests**
 
 Assert that importing and starting Explorer does not construct an EventSource. Emit `explorer.changed` through the shared bus and assert `refreshTree()` runs. Emit `permission.confirm` and assert the existing permission dialog/POST payload is unchanged. Verify a stale unsubscribe cannot refresh a newly mounted tree.
 
-- [ ] **Step 2: Move Explorer handlers**
+- [x] **Step 2: Move Explorer handlers**
 
 Extract the current `handleMessage` branches into shared-bus handlers. Map:
 
@@ -257,11 +257,11 @@ App.Events.subscribe("permission.confirm", handlePermissionConfirm);
 
 Delete `_eventSource`, `_eventGeneration`, `_eventsReady`, `_eventReadyTimer`, `startEvents`, and `stopEvents` from Explorer. Keep tree reconciliation, editing guard, permission payload normalization and `refreshPermissionsPanel` calls.
 
-- [ ] **Step 3: Update startup ordering**
+- [x] **Step 3: Update startup ordering**
 
 Register the subscriptions during module initialization, then call `App.Events.start()` once before `syncStartupWorkspace()`. Remove the Explorer-specific `startEvents()` call. Do not start the connection from MCP, Token, or Dashboard modules.
 
-- [ ] **Step 4: Run focused tests and commit**
+- [x] **Step 4: Run focused tests and commit**
 
 Run:
 
@@ -289,7 +289,7 @@ git commit -m "refactor: move Explorer onto shared SSE events"
 - Modify: `test/routes.test.mjs`
 - Modify: `test/app-events-server.test.mjs`
 
-- [ ] **Step 1: Write publisher tests before wiring**
+- [x] **Step 1: Write publisher tests before wiring**
 
 Add route-level assertions using a fake `appEvents.publish`:
 
@@ -299,17 +299,17 @@ assert.deepEqual(published.map(e => e.type), ["dashboard.changed", "usage.change
 
 Cover model switch, thinking-level change, session create/open/activate, successful workspace switch, and compaction success/failure. Add MCP service tests that repeated `_setStatus` with the same visible state emits once, while state/error/tools changes emit once each.
 
-- [ ] **Step 2: Add server publishers at the actual mutation boundaries**
+- [x] **Step 2: Add server publishers at the actual mutation boundaries**
 
 Use `ctx.appEvents.publish(...)` only after successful mutation. In `attachSessionEvents`, publish `dashboard.changed` and `usage.changed` at the agent lifecycle boundaries; publish `usage.changed` after compaction begins/ends, including the catch/finally state reset. In settings, sessions and workspace routes publish after the runtime call or persisted mutation succeeds.
 
 Add an MCP status listener API that compares the externally visible `{ name, state, tools, error, enabled/config identity }` state before invoking listeners. The server registers one listener that publishes `mcp.changed`; MCP code must not import server code.
 
-- [ ] **Step 3: Keep event publication non-blocking**
+- [x] **Step 3: Keep event publication non-blocking**
 
 Publish calls must never delay or fail the underlying chat, session, settings or MCP operation. Wrap listener invocation in try/catch and never await UI broadcast from a route mutation.
 
-- [ ] **Step 4: Run focused server tests and commit**
+- [x] **Step 4: Run focused server tests and commit**
 
 Run:
 
@@ -336,21 +336,21 @@ git commit -m "feat: publish dashboard usage and MCP lifecycle events"
 - Test: `test/app-events-frontend.test.mjs`
 - Test: `test/frontend-event-ownership.test.mjs`
 
-- [ ] **Step 1: Add a failing single-flight refresh test**
+- [x] **Step 1: Add a failing single-flight refresh test**
 
 Call the Dashboard event handler twice while the first `/api/dashboard` request is unresolved. Assert one active request, one pending follow-up after resolution, and no stale response overwrite.
 
-- [ ] **Step 2: Implement event-driven Dashboard refresh**
+- [x] **Step 2: Implement event-driven Dashboard refresh**
 
 Remove `setInterval(refresh, 3000)` from both `dashboard-startup.ts` and the development inline bootstrap in `dashboard.html`. Keep `getD()` as the explicit REST loader used by startup and existing settings actions. Add one shared event subscription for `dashboard.changed` and `resync` that invokes the single-flight loader.
 
-In `dashboard-helpers.ts`, keep module-level `_dashboardRuntimeBase` and `_dashboardRuntimeReceivedAt`, update them after a successful response, and expose `dashboardRuntimeSeconds()`. Update `sinfoHTML()` to call that function and render `runtime + elapsedSinceReceive` without changing the REST response shape.
+The legacy system-information panel and its local runtime counter no longer exist, so no runtime baseline compensation is needed. Keep the existing REST response shape unchanged and route event-triggered refreshes through the same single-flight Dashboard loader.
 
-- [ ] **Step 3: Verify no duplicate startup loop**
+- [x] **Step 3: Verify no duplicate startup loop**
 
 The source startup module and inline `dashboard.html` bootstrap must have one canonical startup path. Remove only the active `setInterval`; do not leave a second generated/inline timer. Add a source architecture assertion that no Dashboard polling interval remains.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 Run:
 
@@ -373,19 +373,19 @@ git commit -m "refactor: update dashboard state from application events"
 - Test: `test/app-events-frontend.test.mjs`
 - Test: `test/frontend-event-ownership.test.mjs`
 
-- [ ] **Step 1: Add failing Token event tests**
+- [x] **Step 1: Add failing Token event tests**
 
 Assert that startup performs one `/api/usage/current` request, `usage.changed` triggers one refresh, two events during an unresolved request produce only one follow-up, and no six-second timer is created. Assert the compact action still refreshes the current usage after completion.
 
-- [ ] **Step 2: Replace the timer with an event subscription**
+- [x] **Step 2: Replace the timer with an event subscription**
 
 Replace `startTokenPoll`/`stopTokenPoll` with `startTokenUpdates`/`stopTokenUpdates` and update every caller and declaration; do not retain polling-named compatibility aliases. `startTokenUpdates()` must stop any previous subscription, perform an immediate fetch, subscribe to `usage.changed`, and subscribe to `resync`. Remove `_pollTimer` and `setInterval` entirely. Keep rail positioning `ResizeObserver` and window resize behavior unchanged.
 
-- [ ] **Step 3: Update existing callers**
+- [x] **Step 3: Update existing callers**
 
 Change `dashboard-chat.ts` startup wiring from `startTokenPoll()` to the event-driven entry point. Keep the explicit refresh after `/api/compact`, but route it through the same single-flight loader.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 Run:
 
@@ -407,15 +407,15 @@ git commit -m "refactor: refresh token usage from application events"
 - Test: `test/app-events-frontend.test.mjs`
 - Test: `test/frontend-event-ownership.test.mjs`
 
-- [ ] **Step 1: Add failing MCP lifecycle tests**
+- [x] **Step 1: Add failing MCP lifecycle tests**
 
 Assert that mounting the MCP pane creates no interval, opening the installed tab performs one immediate fetch, an `mcp.changed` event refreshes only when the pane is mounted on the installed tab, and events while unmounted are reflected by the next mount fetch.
 
-- [ ] **Step 2: Implement mounted subscription and dirty state**
+- [x] **Step 2: Implement mounted subscription and dirty state**
 
 Remove `_mcpRefreshTimer` and its `setInterval`. Subscribe on pane mount and unsubscribe when the pane is replaced/disposed. Keep `_activeMcpTab`, immediate fetch on installed-tab selection, and all existing toggle/trust/remove handlers. A closed pane only records dirty; it does not fetch.
 
-- [ ] **Step 3: Run tests and commit**
+- [x] **Step 3: Run tests and commit**
 
 Run:
 
@@ -437,13 +437,13 @@ git commit -m "refactor: update MCP pane from application events"
 - Modify: `test/frontend-event-ownership.test.mjs`
 - Modify: `docs/desktop-capability.md`
 
-- [ ] **Step 1: Add architecture assertions**
+- [x] **Step 1: Add architecture assertions**
 
 Assert source text has exactly one `new EventSource('/api/events')` owner in `src/frontend/services/app-events.ts`, no `new EventSource` in `explorer-service.ts`, and no `setInterval` in Dashboard startup, Token usage, or MCP pane. Do not flag Chat SSE or Monaco diagnostics.
 
 Add `test/app-events-server.test.mjs` to `test:unit` and `test/app-events-frontend.test.mjs` to `test:frontend` in `package.json`, so `npm test` always exercises the new contracts.
 
-- [ ] **Step 2: Rebuild the frontend**
+- [x] **Step 2: Rebuild the frontend**
 
 Run:
 
@@ -453,11 +453,11 @@ npm run build:vite
 
 Expected: `src/frontend/gen/dashboard.js` is generated successfully, `app-events.js` appears before `explorer-service.js`, and no bundle syntax collision occurs.
 
-- [ ] **Step 3: Update capability documentation**
+- [x] **Step 3: Update capability documentation**
 
 Move unified SSE from “remaining” to “completed” and describe the actual Phase 1 boundary: Dashboard/Token/MCP plus Explorer; Monaco diagnostics remains a separate follow-up.
 
-- [ ] **Step 4: Run the full verification gate**
+- [x] **Step 4: Run the full verification gate**
 
 Run:
 
@@ -470,7 +470,7 @@ git status --short
 
 Expected: all tests and type checks pass, diff check is clean, and only intended source/tests/docs remain changed. Generated output remains ignored.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```text
 git add scripts/compile-frontend-ts.mjs package.json test/frontend-event-ownership.test.mjs docs/desktop-capability.md

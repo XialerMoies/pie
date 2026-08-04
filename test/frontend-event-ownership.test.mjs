@@ -11,6 +11,47 @@ function frontendTypeScriptFiles(dir) {
   });
 }
 
+function relativeFrontendPath(file) {
+  return file.slice(resolve(process.cwd(), "src/frontend").length + 1).replaceAll("\\", "/");
+}
+
+describe("application event stream ownership", () => {
+  it("has exactly one /api/events EventSource owner", () => {
+    const root = resolve(process.cwd(), "src/frontend");
+    const owners = [];
+    for (const file of frontendTypeScriptFiles(root)) {
+      const source = readFileSync(file, "utf8");
+      const count = (source.match(/new\s+EventSource\s*\(\s*["']\/api\/events["']\s*\)/g) || []).length;
+      for (let index = 0; index < count; index += 1) owners.push(relativeFrontendPath(file));
+    }
+
+    assert.deepStrictEqual(owners, ["services/app-events.ts"]);
+    const explorer = readFileSync(resolve(root, "service/explorer-service.ts"), "utf8");
+    assert.doesNotMatch(explorer, /new\s+EventSource\s*\(/);
+  });
+
+  it("keeps the event bus before every application-event consumer in the bundle", () => {
+    const compiler = readFileSync(resolve(process.cwd(), "scripts/compile-frontend-ts.mjs"), "utf8");
+    const eventsIndex = compiler.indexOf('"gen/services/app-events.js"');
+    assert.notStrictEqual(eventsIndex, -1);
+    for (const consumer of [
+      '"gen/service/explorer-service.js"',
+      '"gen/chat/chat-token.js"',
+      '"gen/pane/mcp/index.js"',
+    ]) {
+      const consumerIndex = compiler.indexOf(consumer);
+      assert.notStrictEqual(consumerIndex, -1, `${consumer} must be bundled`);
+      assert.ok(eventsIndex < consumerIndex, `app-events.js must load before ${consumer}`);
+    }
+  });
+
+  it("keeps the application event contracts in the normal test suites", () => {
+    const pkg = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf8"));
+    assert.match(pkg.scripts["test:unit"], /test\/app-events-server\.test\.mjs/);
+    assert.match(pkg.scripts["test:frontend"], /test\/app-events-frontend\.test\.mjs/);
+  });
+});
+
 describe("dashboard DOM event ownership", () => {
   it("binds dynamic dashboard controls through event listeners", () => {
     for (const file of [
@@ -92,7 +133,7 @@ describe("dashboard event refresh ownership", () => {
       "src/frontend/dashboard.html",
     ]) {
       const source = readFileSync(resolve(process.cwd(), file), "utf8");
-      assert.doesNotMatch(source, /setInterval\s*\(\s*refresh\s*,\s*3000\s*\)/, `${file} must use application events`);
+      assert.doesNotMatch(source, /setInterval\s*\(/, `${file} must use application events`);
     }
   });
 });
