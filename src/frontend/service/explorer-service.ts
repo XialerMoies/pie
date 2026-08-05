@@ -331,6 +331,8 @@ async function refreshExplorerOnce(sequence: number): Promise<void> {
     const items = ExplorerService.reconcilePendingDeletes('', ExplorerService.toTreeNodes(d.items));
     const refreshKey = ExplorerService._makeRefreshKey(items, ws);
     if (refreshKey === ExplorerService._lastRefreshKey) {
+      await tree.refreshExpandedChildren?.();
+      if (!isCurrentRefresh(tree, ws, mountVersion, sequence)) return;
       setExplorerStatus(`目录已刷新 · ${items.length} 项`, 'ready');
       return;
     }

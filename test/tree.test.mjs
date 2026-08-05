@@ -124,6 +124,27 @@ describe("Tree 内部状态", () => {
     assert.ok(tree._expanded.has("src"), "clearChildCache 不应清除展开状态");
   });
 
+  it("refreshExpandedChildren reloads expanded directory caches", async () => {
+    const tree = new Tree(mockContainer());
+    tree.setData([{ id: "data", label: "data", icon: "", isDir: true }]);
+    tree._expanded.add("data");
+    tree._childCache.set("data", [
+      { id: "data/old.txt", label: "old.txt", icon: "", isDir: false },
+    ]);
+    let renders = 0;
+    tree.render = () => { renders += 1; };
+    tree.onExpand = (node, cb) => {
+      assert.strictEqual(node.id, "data");
+      cb([{ id: "data/new.txt", label: "new.txt", icon: "", isDir: false }]);
+    };
+
+    await tree.refreshExpandedChildren();
+
+    assert.deepStrictEqual(tree._childCache.get("data").map((node) => node.id), ["data/new.txt"]);
+    assert.strictEqual(tree._expanded.has("data"), true);
+    assert.strictEqual(renders, 1);
+  });
+
   it("重复 setChildren 覆盖缓存", () => {
     const tree = new Tree(mockContainer());
     tree.setChildren("src", [{ id: "src/a.ts", label: "a.ts", icon: "", isDir: false }]);

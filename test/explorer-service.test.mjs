@@ -460,6 +460,7 @@ describe("ExplorerService", () => {
 
     it("快照未变化时跳过整棵树重绘", async () => {
       const calls = [];
+      let expandedRefreshes = 0;
       global.document = {
         createElement: () => ({ textContent: "", innerHTML: "" }),
         getElementById: () => null,
@@ -477,6 +478,7 @@ describe("ExplorerService", () => {
       });
       ExplorerService._setTree({
         clearChildCache: () => {},
+        refreshExpandedChildren: async () => { expandedRefreshes += 1; },
         setData: (data) => calls.push(data),
         render: () => {},
         _findNodeById: () => null,
@@ -487,6 +489,7 @@ describe("ExplorerService", () => {
       await ExplorerService.refreshTree();
 
       assert.strictEqual(calls.length, 1);
+      assert.strictEqual(expandedRefreshes, 1);
     });
 
     it("刷新时过滤刚删除但被 stale fetch 拉回的节点", async () => {

@@ -505,6 +505,7 @@ declare class Tree {
   inlineCreate(parentId: string, isDir: boolean, onCreate: (name: string) => void): void;
   onDragMove: ((srcId: string, dstId: string) => void) | null;
   clearChildCache(): void;
+  refreshExpandedChildren(): Promise<void>;
 }
 
 // ─── Token / Session Stats (from API /api/token-usage) ────────

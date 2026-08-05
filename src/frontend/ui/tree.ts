@@ -245,6 +245,33 @@ export class Tree {
     this._childCache.clear();
   }
 
+  async refreshExpandedChildren(): Promise<void> {
+    const expandedIds = [...this._expanded].sort((left, right) => (
+      left.split('/').length - right.split('/').length
+    ));
+    if (expandedIds.length === 0 || !this._onExpand) return;
+
+    this._childCache.clear();
+    let refreshed = false;
+    for (const id of expandedIds) {
+      if (!this._expanded.has(id)) continue;
+      const node = this._findNodeById(id);
+      if (!node?.isDir) continue;
+      await new Promise<void>((resolveRefresh) => {
+        let settled = false;
+        const finish = (children?: TreeNode[]) => {
+          if (settled) return;
+          settled = true;
+          if (this._expanded.has(id)) this._childCache.set(id, children || []);
+          refreshed = true;
+          resolveRefresh();
+        };
+        try { this._onExpand?.(node, finish); } catch { finish([]); }
+      });
+    }
+    if (refreshed) this.render();
+  }
+
   // ─── 核心内部方法 ─────────────────────────────────────────
 
   set onExpand(fn: ((node: TreeNode, cb: (children?: TreeNode[]) => void) => void) | null) { this._onExpand = fn; }
