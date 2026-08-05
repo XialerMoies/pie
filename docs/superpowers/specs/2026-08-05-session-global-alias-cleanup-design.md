@@ -5,7 +5,7 @@
 
 ## 背景
 
-早期审查将 `dashboard-sessions.ts` 中约 50 处 `(window as any).App.*` 视为一项大型全局状态债务。经过 TabStore、SessionRestore 和 SessionActivation 重构后，这一判断已经过时：该文件目前只有两处 `(window as any).App`，主要业务代码已经通过有类型的 `App.*` facade 访问会话状态和行为。
+早期审查将 `dashboard-sessions.ts` 中约 50 处 `(window as any).App.*` 视为一项大型全局状态债务。经过 TabStore、SessionRestore 和 SessionActivation 重构后，未类型化的 `App` 访问已经大幅减少：该文件目前只有两处 `(window as any).App`。不过，`dashboard-helpers.ts` 仍用 `(window as any).App` 创建共享的 `App` 常量，导致后续代码里的 `App.*` 实际被 TypeScript 推导为 `any`，`dashboard.d.ts` 的 `AppNamespace` 还没有真正发挥类型约束作用。
 
 当前真正的遗留问题是会话 API 同时发布为两套入口：
 
@@ -19,6 +19,7 @@
 ## 目标
 
 - 会话相关跨文件调用统一通过类型化 `App.*` facade。
+- 在 `App` 初始化边界只保留一次类型收窄，消除业务代码对 `App` 的隐式 `any`。
 - 删除会话功能的旧 `window.xxx` 发布和对应类型声明。
 - 保留现有会话行为、初始化顺序、错误处理和界面表现。
 - 增加架构门禁，防止会话旧全局入口重新出现。
@@ -26,6 +27,7 @@
 ## 非目标
 
 - 不删除 `window.App`。
+- 不要求本阶段一次补齐所有非会话 facade 的历史类型缺口；只补齐被迁移调用实际需要的接口。
 - 不迁移 `dashboard.js` 拼接构建方式。
 - 不引入 ES Module、依赖注入容器或新的状态管理框架。
 - 不清理 Electron、Monaco、HTML 公共函数等非会话全局接口。
@@ -81,7 +83,7 @@
 
 会话 CRUD 的 `window.newSession`、`window.renameSession`、`window.deleteSession`、`window.pinSession` 和 `window.branchSession` 同样迁移到 `App.Session`。当前 HTML 不通过内联事件调用这些函数，前端事件使用委托或显式监听器，因此无需保留 HTML 兼容入口。
 
-`dashboard-sessions.ts` 直接使用已初始化的 `App.Session` 绑定 API，不再通过 `(window as any).App?.Session` 获取。`closeSessionTab()` 等位置直接使用 `App.Tabs`，删除无意义的 `window.App` 回退。
+`dashboard-helpers.ts` 是当前 classic-script bundle 的 App 初始化边界：它负责把已有对象挂到 `window.App`，并声明 `const App: AppNamespace = window.App`。这里允许保留一次边界类型断言，但业务模块不得再使用 `(window as any).App`。`dashboard-sessions.ts` 直接使用已初始化的 `App.Session` 绑定 API，不再通过 `(window as any).App?.Session` 获取。`closeSessionTab()` 等位置直接使用 `App.Tabs`，删除无意义的 `window.App` 回退。
 
 ## 初始化时序
 
@@ -94,7 +96,7 @@
 - 在 `AppSession` 中增加 `getTabLabel(id: string): string`。
 - 保留各 facade 当前正式方法，避免本阶段产生第二次职责迁移。
 - 从 `Window` 和全局 `declare function` 区域删除已移除的会话旧入口。
-- 业务代码不再使用 `(window as any).App`；统一使用全局类型化的 `App`。
+- `dashboard-helpers.ts` 的 App 初始化边界只允许一次 `window.App` 类型收窄；业务代码不再使用 `(window as any).App`，统一使用全局类型化的 `App`。
 
 ## 错误与降级行为
 
@@ -156,6 +158,7 @@
 
 - 生产源码不再发布或读取本设计列出的会话 `window.xxx`。
 - 会话跨模块调用统一使用类型化 `App.*`。
+- 除 App 初始化边界外，业务代码不再以 `any` 访问 `window.App`。
 - `dashboard.d.ts` 不再维护对应旧全局声明。
 - 架构门禁、前端测试、类型检查和全量测试通过。
 - 实机验收无会话行为回归。
