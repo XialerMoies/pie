@@ -21,7 +21,7 @@ async function startDashboard(): Promise<void> {
     }
 
     getD();
-    loadSessions();
+    App.Session.loadSessions();
   })();
 }
 

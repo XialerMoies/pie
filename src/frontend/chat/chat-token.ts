@@ -502,7 +502,7 @@ async function doCompact(): Promise<void> {
     _lastSummary = null;
     void refreshTokenUsage();
     // 触发消息刷新（保留完整字段：turnId/blocks/error 等）
-    const activeId = (window as any).getActiveSessionTabId?.();
+    const activeId = App.Tabs.getActiveSessionTabId();
     if (activeId && !activeId.startsWith('draft:')) {
       const ws = App.State.getWorkspacePath();
       try {

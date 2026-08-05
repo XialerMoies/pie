@@ -107,10 +107,8 @@ Object.assign(existingApp, {
       if (!tab) {
         // session/chat tab 未在 TabStore 中 → 走 switchSession 加载
         if (id.startsWith('draft:') || /^[a-f0-9-]{30,}$/i.test(id)) {
-          if (typeof (window as any).switchSession === 'function') {
-            (window as any).switchSession(id, options);
-            return;
-          }
+          App.SessionActivation.switchSession(id, options);
+          return;
         }
         if (tabs) tabs.activateTab(id);
         const ft = tabs?.getTab?.(id);

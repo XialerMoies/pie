@@ -93,6 +93,23 @@ describe("frontend state ownership", () => {
     }
   });
 
+  it("keeps session consumers off legacy global entry points", () => {
+    const root = resolve(process.cwd(), "src/frontend");
+    const legacyWindowSessionAccess = /(?:window|\(window as any\))\.(?:loadSessions|bumpSessionListSeq|isCurrentSessionListSeq|sessionTabLabel|switchSession|getActiveSessionTabId|renderSessionTabs)/;
+    const bareSessionCall = /(?<![.\w])(?:loadSessions|bumpSessionListSeq|isCurrentSessionListSeq)\s*\(/;
+    for (const file of [
+      "dashboard/dashboard-startup.ts",
+      "dashboard/dashboard-menus.ts",
+      "dashboard/dashboard-helpers.ts",
+      "chat/chat-token.ts",
+      "pane/chat/index.ts",
+    ]) {
+      const source = readFileSync(resolve(root, file), "utf8");
+      assert.doesNotMatch(source, legacyWindowSessionAccess, `${file} must not read a legacy session global`);
+      assert.doesNotMatch(source, bareSessionCall, `${file} must call session APIs through App`);
+    }
+  });
+
   it("keeps legacy window state and tab projections out of production TypeScript", () => {
     const root = resolve(process.cwd(), "src/frontend");
     for (const file of frontendTypeScriptFiles(root)) {

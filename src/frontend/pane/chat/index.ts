@@ -23,11 +23,11 @@ async function doConvSearch(): Promise<void> {
     _convCacheQuery = "";
     _convPendingQuery = "";
     _convSearching = false;
-    loadSessions();
+    App.Session.loadSessions();
     return;
   }
 
-  const seq = bumpSessionListSeq();
+  const seq = App.Session.bumpSessionListSeq();
   _convSearching = true;
   _convPendingQuery = q;
   list.classList.remove("is-loading");
@@ -40,14 +40,14 @@ async function doConvSearch(): Promise<void> {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error);
-    if (!isCurrentSessionListSeq(seq)) return;
+    if (!App.Session.isCurrentSessionListSeq(seq)) return;
     _convCache = data;
     _convCacheQuery = q;
     _convSearching = false;
     _convPendingQuery = "";
     renderConvResults(list, data);
   } catch (e: unknown) {
-    if (!isCurrentSessionListSeq(seq)) return;
+    if (!App.Session.isCurrentSessionListSeq(seq)) return;
     _convSearching = false;
     _convPendingQuery = "";
     const msg = e instanceof Error ? e.message : String(e);
@@ -201,7 +201,7 @@ function clearConvSearch(): void {
   _convSearching = false;
   if (_convTimer) clearTimeout(_convTimer);
   _convTimer = null;
-  loadSessions();
+  App.Session.loadSessions();
 }
 
 function isConversationSearchActive(): boolean {
@@ -280,7 +280,7 @@ function chatPaneRender(container: HTMLElement): void {
     const list = document.getElementById("sl");
     if (list) list.innerHTML = '<div class="search-status">搜索中…</div>';
   } else {
-    loadSessions();
+    App.Session.loadSessions();
   }
 
   // ─── 事件绑定（无 inline onclick）─────────────────────
@@ -289,7 +289,7 @@ function chatPaneRender(container: HTMLElement): void {
   const newBtn = document.getElementById("ch-new-btn");
   if (newBtn) {
     newBtn.addEventListener("click", () => {
-      (window as any).App?.Session?.newSession?.();
+      App.Session.newSession();
     });
   }
 

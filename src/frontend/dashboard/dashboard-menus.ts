@@ -69,7 +69,7 @@ function resetWorkspaceState(workspace: string): void {
   const m = (window as any).__monaco;
   if (m?.dispose) m.dispose();
   App.Tabs?.activateTab(null);
-  (window as any).renderSessionTabs?.();
+  App.SessionTabs.renderSessionTabs();
 }
 
 function workspacePathKey(path: string): string {
@@ -115,7 +115,7 @@ function fileAction(action: string): void {
       const pc = $('pc');
       if (pc) renderPanel('explorer', pc);
       // 重新加载会话列表 + 刷新 Git
-      loadSessions();
+      App.Session.loadSessions();
       const appNamespace = (window as any).App;
       if (appNamespace?.Git?.refreshGit) setTimeout(() => appNamespace.Git.refreshGit(), 300);
     }

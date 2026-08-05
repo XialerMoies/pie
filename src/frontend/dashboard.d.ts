@@ -189,6 +189,8 @@ interface AppFile {
 }
 interface AppSession {
   loadSessions(): void;
+  bumpSessionListSeq(): number;
+  isCurrentSessionListSeq(seq: number): boolean;
   newSession(): void;
   renameSession(el: HTMLElement, id: string): void;
   deleteSession(id: string): Promise<void>;
