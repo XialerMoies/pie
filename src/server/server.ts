@@ -11,7 +11,7 @@ import { initAgent, type AgentRuntime } from "../agent/index.js";
 import { createServer, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from "http";
 import { resolve, dirname } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
-import { appendFileSync, readFileSync, writeFileSync, existsSync, statSync, watch } from "fs";
+import { appendFileSync, readFileSync, writeFileSync, existsSync, statSync } from "fs";
 import { dispatchRoute } from "./routes/index.js";
 import { createCommandConfirmCallback } from "./routes/chat.js";
 import type { ServerContext, ChatStreamState, TraceEvent, AssistantBlock } from "./routes/types.js";
@@ -30,6 +30,7 @@ import { RootRegistry } from "./root-registry.js";
 import { createPermissionModeController } from "./permission-mode.js";
 import { writeChatEvent } from "./chat-stream.js";
 import { AppEventHub } from "./app-events.js";
+import { WorkspaceFileWatcher } from "./workspace-file-watcher.js";
 import { getServersStatus, subscribeStatusChanges } from "../agent/mcp/MCPClientService.js";
 
 export type SessionWriteAuthorizer = (sessionFile: string, source: string) => void;
@@ -857,6 +858,17 @@ async function main() {
     console.log(`[startup] 恢复失败: ${e}`);
   }
 
+  const workspaceWatcher = new WorkspaceFileWatcher({
+    appRoot: APP_ROOT,
+    onChange: (file) => appEvents.publish("explorer.changed", { file }),
+    onWatching: (workspace) => console.log("[watcher] watching " + workspace),
+    onError: (error) => console.log("[watcher] not available: " + error.message),
+  });
+  const unsubscribeWorkspaceWatcher = runtime.onWorkspaceChange((workspace) => {
+    workspaceWatcher.watchWorkspace(workspace);
+  });
+  workspaceWatcher.watchWorkspace(runtime.currentWorkspace || APP_ROOT);
+
   attachSessionEvents(runtime, chatStream, baseCtx);
 
   // ─── tsserver（TypeScript 语言服务，延迟启动）────────────────────
@@ -964,8 +976,6 @@ async function main() {
     res.end("Not found");
   });
 
-  let watchTimer: ReturnType<typeof setTimeout> | null = null;
-
   const devPort = parseInt(process.env.PI_DEV_PORT || "0", 10);
   server.listen(devPort || 0, "127.0.0.1", () => {
     const addr = server.address();
@@ -978,20 +988,10 @@ async function main() {
       console.log(`Pi Desktop server: http://127.0.0.1:${port}`);
     }
     // ─── 文件系统监听 ──────────────────────────────────────────
-    try {
-      watch(APP_ROOT, { recursive: true }, (eventType: string, filename: string | null) => {
-        if (!filename) return;
-        const normalized = filename.replace(/\\/g, "/");
-        if (normalized.startsWith("data/") || normalized.startsWith("node_modules/") || normalized.startsWith(".git/") || normalized.startsWith(".claude/") || normalized.startsWith("dist/") || normalized.startsWith("example/") || normalized.startsWith("src/frontend/gen/")) return;
-        if (watchTimer) clearTimeout(watchTimer);
-        watchTimer = setTimeout(() => {
-          appEvents.publish("explorer.changed", { file: filename });
-        }, 500);
-      });
-      console.log("[watcher] watching " + APP_ROOT);
-    } catch (e: unknown) { const msg = e instanceof Error ? (e as Error).message : String(e);
-      console.log("[watcher] not available: " + msg);
-    }
+  });
+  server.on("close", () => {
+    unsubscribeWorkspaceWatcher();
+    workspaceWatcher.close();
   });
 }
 

@@ -79,6 +79,7 @@ export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraCo
 }
 
 export type SessionEventCallback = (event: any, sourceSession?: AgentSession) => void
+export type WorkspaceChangeCallback = (workspace: string) => void
 
 interface SessionEventSubscription {
   cb: SessionEventCallback
@@ -104,6 +105,7 @@ export class AgentRuntime {
   config!: RuntimeConfig
   currentWorkspace!: string
   private _eventSubscriptions: SessionEventSubscription[] = []
+  private _workspaceChangeSubscriptions = new Set<WorkspaceChangeCallback>()
   private _transitionTail: Promise<void> = Promise.resolve()
   private _pendingOpens = new Map<string, Promise<void>>()
 
@@ -255,6 +257,13 @@ export class AgentRuntime {
     }
   }
 
+  /** Subscribe to successful workspace transitions. */
+  onWorkspaceChange(cb: WorkspaceChangeCallback): () => void {
+    const subscriptions = this._workspaceChangeSubscriptions ??= new Set()
+    subscriptions.add(cb)
+    return () => subscriptions.delete(cb)
+  }
+
   /** 清理 */
   dispose(): void {
     for (const subscription of this._eventSubscriptions) {
@@ -263,6 +272,7 @@ export class AgentRuntime {
       subscription.currentUnsub = undefined
     }
     this._eventSubscriptions = []
+    this._workspaceChangeSubscriptions?.clear()
     const session = this._session
     this._session = undefined
     try { session?.dispose() } catch {}
@@ -361,6 +371,13 @@ export class AgentRuntime {
       throw error
     }
     this._rebindEvents()
+    if (recoveryPoint.workspace !== workspace) this._notifyWorkspaceChange(workspace)
+  }
+
+  private _notifyWorkspaceChange(workspace: string): void {
+    for (const callback of [...(this._workspaceChangeSubscriptions ?? [])]) {
+      try { callback(workspace) } catch {}
+    }
   }
 
   /** 重新绑定事件回调 */

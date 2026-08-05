@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 import { AppEventHub } from "../src/server/app-events.ts";
+import { WorkspaceFileWatcher } from "../src/server/workspace-file-watcher.ts";
 import {
   cancelPermissionConfirmationsForResponse,
   createPermissionConfirmCallback,
@@ -198,19 +199,17 @@ describe("AppEventHub", () => {
 
   it("routes production application events exclusively through AppEventHub", () => {
     const source = readFileSync(new URL("../src/server/server.ts", import.meta.url), "utf8");
-    const watcherStart = source.indexOf("watch(APP_ROOT");
-    const watcherEnd = source.indexOf('console.log("[watcher] watching', watcherStart);
-    assert.notStrictEqual(watcherStart, -1, "watcher callback should exist");
-    assert.notStrictEqual(watcherEnd, -1, "watcher callback block should be bounded");
-    const watcherBlock = source.slice(watcherStart, watcherEnd);
 
     assert.match(source, /const appEvents = new AppEventHub\(\)/);
     assert.match(source, /appEvents\.subscribeClientRemoved\(cancelPermissionConfirmationsForResponse\)/);
     assert.doesNotMatch(source, /const sseClients:/);
     assert.doesNotMatch(source, /type: "refresh", file: filename/);
     assert.doesNotMatch(source, /function publishExplorerChanged/);
-    assert.match(watcherBlock, /appEvents\.publish\("explorer\.changed", \{ file: filename \}\)/);
-    assert.match(watcherBlock, /}, 500\);/);
+    assert.doesNotMatch(source, /watch\(APP_ROOT/);
+    assert.match(source, /new WorkspaceFileWatcher\(/);
+    assert.match(source, /runtime\.onWorkspaceChange\(\(workspace\) =>/);
+    assert.match(source, /workspaceWatcher\.watchWorkspace\(runtime\.currentWorkspace \|\| APP_ROOT\)/);
+    assert.match(source, /appEvents\.publish\("explorer\.changed", \{ file \}\)/);
   });
 
   it("opens the events stream with the current revision and removes the client on close", async () => {
@@ -274,6 +273,98 @@ describe("AppEventHub", () => {
     ]);
     if (outcome === "still-pending") cancelPermissionConfirmationsForResponse(response);
     assert.deepStrictEqual(outcome, { allow: false });
+  });
+});
+
+describe("WorkspaceFileWatcher", () => {
+  it("moves the watcher to the active workspace and ignores stale callbacks", async () => {
+    const watches = [];
+    const changes = [];
+    const watcher = new WorkspaceFileWatcher({
+      debounceMs: 0,
+      watch: (root, _options, listener) => {
+        const record = { root, listener, closed: false };
+        watches.push(record);
+        return { close: () => { record.closed = true; } };
+      },
+      onChange: (file) => changes.push(file),
+    });
+
+    watcher.watchWorkspace("C:\\workspace-a");
+    watches[0].listener("change", "first.txt");
+    await new Promise((resolveWait) => setTimeout(resolveWait, 5));
+
+    watcher.watchWorkspace("C:\\workspace-b");
+    watches[0].listener("change", "stale.txt");
+    watches[1].listener("change", "second.txt");
+    await new Promise((resolveWait) => setTimeout(resolveWait, 5));
+
+    assert.strictEqual(watches[0].closed, true);
+    assert.deepStrictEqual(watches.map((entry) => entry.root), [
+      "C:\\workspace-a",
+      "C:\\workspace-b",
+    ]);
+    assert.deepStrictEqual(changes, ["first.txt", "second.txt"]);
+  });
+
+  it("ignores generated and metadata paths", async () => {
+    let listener;
+    const changes = [];
+    const watcher = new WorkspaceFileWatcher({
+      appRoot: "C:\\workspace",
+      debounceMs: 0,
+      watch: (_root, _options, nextListener) => {
+        listener = nextListener;
+        return { close() {} };
+      },
+      onChange: (file) => changes.push(file),
+    });
+
+    watcher.watchWorkspace("C:\\workspace");
+    for (const file of [
+      "data/cache.json",
+      "node_modules/pkg/index.js",
+      ".git/index",
+      ".claude/state.json",
+      "dist/app.js",
+      "example/demo.txt",
+      "src/frontend/gen/dashboard.js",
+    ]) listener("change", file);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 5));
+
+    assert.deepStrictEqual(changes, []);
+  });
+
+  it("does not apply application-only ignores to a user workspace", async () => {
+    let listener;
+    const changes = [];
+    const watcher = new WorkspaceFileWatcher({
+      appRoot: "C:\\app-root",
+      debounceMs: 0,
+      watch: (_root, _options, nextListener) => {
+        listener = nextListener;
+        return { close() {} };
+      },
+      onChange: (file) => changes.push(file),
+    });
+
+    watcher.watchWorkspace("C:\\user-project");
+    listener("change", "data/result.json");
+    await new Promise((resolveWait) => setTimeout(resolveWait, 5));
+
+    assert.deepStrictEqual(changes, ["data/result.json"]);
+  });
+
+  it("fails without taking down the server when a workspace cannot be watched", () => {
+    const errors = [];
+    const watcher = new WorkspaceFileWatcher({
+      watch: () => { throw new Error("watch unavailable"); },
+      onChange() {},
+      onError: (error) => errors.push(error.message),
+    });
+
+    assert.doesNotThrow(() => watcher.watchWorkspace("C:\\missing"));
+    assert.deepStrictEqual(errors, ["watch unavailable"]);
   });
 });
 

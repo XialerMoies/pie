@@ -251,6 +251,26 @@ describe("agent memory authorization", () => {
 });
 
 describe("switchWorkspace rollback behavior", () => {
+  it("notifies workspace observers only after a successful switch", async () => {
+    const { AgentRuntime } = await import("../src/agent/runtime.ts");
+    const runtime = Object.create(AgentRuntime.prototype);
+    runtime.config = {};
+    runtime.currentWorkspace = "/original";
+    runtime.session = { dispose() {}, abort() {} };
+    runtime._eventSubscriptions = [];
+    runtime._saveAndDispose = async () => ({ workspace: "/original" });
+    runtime._initSession = async () => {
+      runtime.session = { dispose() {}, abort() {} };
+    };
+    runtime._rebindEvents = () => {};
+    const observed = [];
+    runtime.onWorkspaceChange((workspace) => observed.push(workspace));
+
+    await runtime.switchWorkspace("/next");
+
+    assert.deepStrictEqual(observed, ["/next"]);
+  });
+
   it("_initSession 抛出后 currentWorkspace 恢复原值", async () => {
     const { AgentRuntime, setCurrentRuntime } = await import("../src/agent/runtime.ts");
 
@@ -262,6 +282,8 @@ describe("switchWorkspace rollback behavior", () => {
     runtime._saveAndDispose = async () => ({ workspace: "/original" });
     runtime._initSession = async () => { throw new Error("模拟初始化失败"); };
     runtime._rebindEvents = () => {};
+    const observed = [];
+    runtime.onWorkspaceChange((workspace) => observed.push(workspace));
 
     setCurrentRuntime(runtime);
     assert.strictEqual(runtime.currentWorkspace, "/original");
@@ -276,6 +298,7 @@ describe("switchWorkspace rollback behavior", () => {
     // currentWorkspace 应恢复为 original
     assert.strictEqual(runtime.currentWorkspace, "/original",
       "初始化失败后 currentWorkspace 应恢复原值");
+    assert.deepStrictEqual(observed, []);
     setCurrentRuntime(null);
   });
 
