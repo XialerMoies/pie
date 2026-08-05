@@ -167,8 +167,11 @@ describe("frontend state ownership", () => {
     assert.match(layout, /App\.SessionRestore\.hasUserInteracted\s*\(\)/);
 
     const restoreIndex = compiler.indexOf('"gen/dashboard/session-restore.js"');
+    const helpersIndex = compiler.indexOf('"gen/dashboard/dashboard-helpers.js"');
     const sessionsIndex = compiler.indexOf('"gen/dashboard/dashboard-sessions.js"');
+    assert.notStrictEqual(helpersIndex, -1, "dashboard helpers must be included in the dashboard bundle");
     assert.notStrictEqual(restoreIndex, -1, "session restore must be included in the dashboard bundle");
+    assert.ok(helpersIndex < sessionsIndex, "dashboard helpers must load before dashboard sessions");
     assert.ok(restoreIndex < sessionsIndex, "session restore must load before dashboard sessions");
   });
 
