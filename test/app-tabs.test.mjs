@@ -396,7 +396,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     const draftId = "draft:last-sess-" + Date.now().toString(36);
     ts.openTab({ kind: "chat", id: draftId, title: "新会话", draftId });
     ts.activateTab(draftId);
-    win.commitSessionTab(draftId, "sess-last", "最后一个会话");
+    win.App.Session.commitSessionTab(draftId, "sess-last", "最后一个会话");
 
     win.App.Tabs.close("sess-last");
 
@@ -416,14 +416,14 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     const draftId = "draft:del-" + Date.now().toString(36);
     ts.openTab({ kind: "chat", id: draftId, title: "新会话", draftId });
     ts.activateTab(draftId);
-    win.commitSessionTab(draftId, "sess-del", "待删除");
+    win.App.Session.commitSessionTab(draftId, "sess-del", "待删除");
 
     const prevConfirm = global.confirmAsync;
     const prevFetch = global.fetch;
     global.confirmAsync = async () => true;
     global.fetch = async () => ({ ok: true, json: async () => ({ ok: true }) });
     try {
-      await win.deleteSession("sess-del");
+      await win.App.Session.deleteSession("sess-del");
     } finally {
       global.confirmAsync = prevConfirm;
       global.fetch = prevFetch;
@@ -441,7 +441,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     const mk = (draft, sess) => {
       ts.openTab({ kind: "chat", id: draft, title: "新会话", draftId: draft });
       ts.activateTab(draft);
-      win.commitSessionTab(draft, sess, sess);
+      win.App.Session.commitSessionTab(draft, sess, sess);
     };
     mk("draft:a-" + Date.now().toString(36), "sess-a");
     mk("draft:b-" + Date.now().toString(36), "sess-b");
@@ -474,7 +474,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     const mk = (draft, sess) => {
       ts.openTab({ kind: "chat", id: draft, title: "新会话", draftId: draft });
       ts.activateTab(draft);
-      win.commitSessionTab(draft, sess, sess);
+      win.App.Session.commitSessionTab(draft, sess, sess);
     };
     mk("draft:a-" + Date.now().toString(36), "sess-a");
     mk("draft:b-" + Date.now().toString(36), "sess-b");
@@ -520,7 +520,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     const mk = (draft, sess) => {
       ts.openTab({ kind: "chat", id: draft, title: "新会话", draftId: draft });
       ts.activateTab(draft);
-      win.commitSessionTab(draft, sess, sess);
+      win.App.Session.commitSessionTab(draft, sess, sess);
     };
 
     const prevFetch = global.fetch;
@@ -589,8 +589,8 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
       pendings.delete(id);
     };
     try {
-      win.switchSession("sess-a");
-      win.switchSession("sess-b");
+    win.App.SessionActivation.switchSession("sess-a");
+    win.App.SessionActivation.switchSession("sess-b");
       resolveOne("sess-a"); // A 旧响应先到 → 应被 B 取代而丢弃
       await new Promise((r) => setTimeout(r, 10));
       assert.ok(!win.App.ChatState.getMessages().some((m) => m.content === "msg-sess-a"),
@@ -690,7 +690,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
 
     // commitSessionTab 升级（chat→session）
     const sessionId = "sess-e2e-" + Date.now().toString(36);
-    win.commitSessionTab(draftId, sessionId, "e2e测试");
+    win.App.Session.commitSessionTab(draftId, sessionId, "e2e测试");
 
     // 验证升级结果
     assert.strictEqual(ts.getTab(draftId), undefined, "e2e: draft 已替换");

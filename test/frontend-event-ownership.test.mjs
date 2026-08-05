@@ -101,12 +101,40 @@ describe("frontend state ownership", () => {
       "dashboard/dashboard-startup.ts",
       "dashboard/dashboard-menus.ts",
       "dashboard/dashboard-helpers.ts",
+      "dashboard/dashboard-chat.ts",
       "chat/chat-token.ts",
       "pane/chat/index.ts",
     ]) {
       const source = readFileSync(resolve(root, file), "utf8");
       assert.doesNotMatch(source, legacyWindowSessionAccess, `${file} must not read a legacy session global`);
       assert.doesNotMatch(source, bareSessionCall, `${file} must call session APIs through App`);
+    }
+  });
+
+  it("does not publish or declare legacy session globals", () => {
+    const legacySessionGlobals = [
+      "loadSessions", "bumpSessionListSeq", "isCurrentSessionListSeq",
+      "readSessionTabIds", "writeSessionTabIds", "sessionTabLabel",
+      "commitSessionTab", "maybeAutoTitleSession", "getActiveSessionTabId",
+      "setActiveSessionTabId", "ensureDraftSessionTab", "whenSessionRestoreReady",
+      "renderSessionTabs", "migrateSessionTabLabels", "switchSession",
+      "newSession", "renameSession", "deleteSession", "pinSession", "branchSession",
+    ];
+    const root = resolve(process.cwd(), "src/frontend");
+    for (const file of frontendTypeScriptFiles(root)) {
+      const source = readFileSync(file, "utf8");
+      for (const name of legacySessionGlobals) {
+        assert.doesNotMatch(
+          source,
+          new RegExp(`(?:window|\\(window as any\\))\\.${name}\\s*(?:=|\\()`),
+          `${relativeFrontendPath(file)} must not publish or read window.${name}`,
+        );
+      }
+    }
+    const declarations = readFileSync(resolve(root, "dashboard.d.ts"), "utf8");
+    for (const name of legacySessionGlobals) {
+      assert.doesNotMatch(declarations, new RegExp(`declare function ${name}\\b`), `${name} must not be a global declaration`);
+      assert.doesNotMatch(declarations, new RegExp(`\\b${name}\\?:`), `${name} must not be a Window property`);
     }
   });
 

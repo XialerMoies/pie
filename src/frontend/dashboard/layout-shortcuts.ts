@@ -161,8 +161,7 @@ document.addEventListener('keydown', (e) => {
   if (ctrl && key === 'n') {
     e.preventDefault();
     const sess = (window as any).App?.Session;
-    if (sess?.newSession) sess.newSession();
-    else (window as any).newSession?.();
+    sess?.newSession?.();
   }
   if (ctrl && key === 'b') {
     e.preventDefault();

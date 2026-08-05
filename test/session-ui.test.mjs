@@ -282,9 +282,6 @@ before(async () => {
   await import(`../src/frontend/dashboard/session-activation.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${ts}`);
   await import(`../src/frontend/pane/chat/index.ts?t=${ts}`);
-  global.loadSessions = win.loadSessions;
-  global.bumpSessionListSeq = win.bumpSessionListSeq;
-  global.isCurrentSessionListSeq = win.isCurrentSessionListSeq;
   win.renderTabs();
 }, 10000);
 
@@ -306,7 +303,7 @@ describe("session ui state", () => {
     store["session-tabs"] = "[]";
     win.__state._sessionTabs = [];
     localStorage.setItem("workspace_path", "E:\\my-code-agent");
-    await win.loadSessions();
+    await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const sessionTabs = Array.from(doc.querySelectorAll("#main-tabs .session-tab")).map((node) => node.textContent || "");
@@ -334,7 +331,7 @@ describe("session ui state", () => {
 
   it("只有 agent 工作中的线程才显示运行中", async () => {
     sessionListState = 4;
-    await win.loadSessions();
+    await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     assert.strictEqual(doc.querySelector("#sl .thread-badge-running"), null);
@@ -345,7 +342,7 @@ describe("session ui state", () => {
     store["session-tabs"] = "[]";
     win.__state._sessionTabs = [];
     sessionListState = 0;
-    await win.loadSessions();
+    await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     sessionListState = 0;
@@ -372,7 +369,7 @@ describe("session ui state", () => {
 
     assert.strictEqual(doc.querySelectorAll("#main-tabs .session-tab").length, 0);
     sessionListState = 0;
-    await win.loadSessions();
+    await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.strictEqual(doc.querySelectorAll("#main-tabs .session-tab").length, 0);
   });
@@ -387,7 +384,7 @@ describe("session ui state", () => {
     doc.body.insertAdjacentHTML("beforeend", '<div id="file-content"></div><div id="fi"></div><div class="mc editing"></div>');
     win.__state._fileTabs = [{ id: "src/demo.ts", label: "demo.ts", content: "", lang: "ts" }];
     win.__state._activeFileTab = "src/demo.ts";
-    await win.newSession();
+    await win.App.Session.newSession();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const tab = doc.querySelector("#main-tabs .session-tab");
@@ -437,12 +434,12 @@ describe("session ui state", () => {
     store["session-tabs"] = JSON.stringify(["sess-new-empty"]);
     store["session-tab-labels"] = JSON.stringify({ "sess-new-empty": "新会话" });
     win.__state._sessionTabs = ["sess-new-empty"];
-    win.renderSessionTabs("sess-new-empty");
+    win.App.Session.renderSessionTabs("sess-new-empty");
     doc.querySelector("#sl").innerHTML = '<div class="sess-item"><span class="thread-title">新会话</span></div>';
     const button = doc.createElement("button");
     doc.querySelector("#sl .sess-item").appendChild(button);
 
-    win.renameSession(button, "sess-new-empty");
+    win.App.Session.renameSession(button, "sess-new-empty");
     const input = doc.querySelector(".sess-rename-input");
     input.value = "手动标题";
     input.blur();
@@ -457,12 +454,12 @@ describe("session ui state", () => {
     win.__state._sessionTabs = ["sess-new-empty"];
     win.__state._sessionTabLabels = {};
     win.__state._sessionTitleSources = {};
-    win.renderSessionTabs("sess-new-empty");
+    win.App.Session.renderSessionTabs("sess-new-empty");
     doc.querySelector("#sl").innerHTML = '<div class="sess-item"><span class="thread-title">新会话</span></div>';
     const button = doc.createElement("button");
     doc.querySelector("#sl .sess-item").appendChild(button);
 
-    win.renameSession(button, "sess-new-empty");
+    win.App.Session.renameSession(button, "sess-new-empty");
     const input = doc.querySelector(".sess-rename-input");
     input.value = "手动标题";
     input.blur();
@@ -474,7 +471,7 @@ describe("session ui state", () => {
       { role: "assistant", content: "已完成" },
     ]);
 
-    const title = await win.maybeAutoTitleSession("sess-new-empty", "已完成");
+    const title = await win.App.Session.maybeAutoTitleSession("sess-new-empty", "已完成");
 
     assert.strictEqual(title, null);
     assert.strictEqual(win.App.State.getSnapshot().tabs.labels?.["sess-new-empty"], "手动标题");
@@ -484,7 +481,7 @@ describe("session ui state", () => {
 
   it("线程操作按钮使用 SVG，取消固定传递布尔 false", async () => {
     sessionListState = 0;
-    await win.loadSessions();
+    await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const pinnedItem = Array.from(doc.querySelectorAll("#sl .sess-item")).find((node) => node.textContent.includes("B"));
@@ -520,7 +517,7 @@ describe("session ui state", () => {
     assertCssDecl(cssBlocks(css, ".sess-item:hover .thread-time,.sess-item:focus-within .thread-time"), "opacity", "0");
 
     sessionListState = 0;
-    await win.loadSessions();
+    await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const firstItem = doc.querySelector("#sl .sess-item");
@@ -530,7 +527,7 @@ describe("session ui state", () => {
 
   it("pinSession 会调用固定接口并刷新列表", async () => {
     sessionListState = 0;
-    await win.pinSession("sess-b", true);
+    await win.App.Session.pinSession("sess-b", true);
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     assert.ok(fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/pin") && method === "POST"));
@@ -540,7 +537,7 @@ describe("session ui state", () => {
   it("pinSession 取消固定时发送布尔 false", async () => {
     fetchCalls.length = 0;
     sessionListState = 0;
-    await win.pinSession("sess-b", false);
+    await win.App.Session.pinSession("sess-b", false);
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const pinCall = fetchCalls.find(([url, method, init]) => String(url).includes("/api/sessions/pin") && method === "POST" && init?.body);
@@ -551,7 +548,7 @@ describe("session ui state", () => {
   it("branchSession 会创建分支并切到新线程", async () => {
     const timelineCallCount = timelineCalls.length;
     sessionListState = 3;
-    await win.branchSession("sess-b");
+    await win.App.Session.branchSession("sess-b");
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     assert.ok(fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/branch") && method === "POST"));
@@ -578,7 +575,7 @@ describe("session ui state", () => {
     sessionListState = 2;
     localStorage.setItem("last-session-id", "sess-b");
 
-    await win.loadSessions();
+    await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const panel = doc.querySelector("#sl");
@@ -589,7 +586,7 @@ describe("session ui state", () => {
 
   it("相同会话快照刷新时不重绘列表 DOM", async () => {
     sessionListState = 0;
-    await win.loadSessions();
+    await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const panel = doc.querySelector("#sl");
@@ -613,7 +610,7 @@ describe("session ui state", () => {
     };
     win.fetch = global.fetch;
 
-    await win.loadSessions();
+    await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     assert.strictEqual(redraws, 0);
@@ -624,7 +621,7 @@ describe("session ui state", () => {
 
   it("面板重挂载后即使快照相同也会重绘列表", async () => {
     sessionListState = 0;
-    await win.loadSessions();
+    await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const panel = doc.querySelector("#sl");
@@ -640,7 +637,7 @@ describe("session ui state", () => {
     };
     win.fetch = global.fetch;
 
-    await win.loadSessions();
+    await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     assert.ok(panel.textContent.includes("固定线程"));
@@ -656,7 +653,7 @@ describe("session ui state", () => {
       };
       win.fetch = global.fetch;
 
-      await win.loadSessions();
+      await win.App.Session.loadSessions();
       await new Promise((resolve) => setTimeout(resolve, 20));
 
       const panel = doc.querySelector("#sl");
@@ -744,7 +741,7 @@ describe("session ui state", () => {
       assert.ok(panel.textContent.includes("needle marker"));
       assert.ok(!panel.textContent.includes("过时线程"));
 
-      win.loadSessions();
+      win.App.Session.loadSessions();
       await new Promise((resolve) => setTimeout(resolve, 20));
 
       assert.ok(panel.textContent.includes("命中线程"), "active search results survive explicit loadSessions refresh");
@@ -1015,7 +1012,7 @@ describe("session ui state", () => {
     ], "sess-b");
     win.App.State.updateSessionMetadata({}, {});
 
-    win.renderSessionTabs();
+    win.App.Session.renderSessionTabs();
 
     const tabs = Array.from(doc.querySelectorAll("#main-tabs .session-tab")).map(node => node.textContent || "");
     assert.strictEqual(tabs.length, 2);
@@ -1023,7 +1020,7 @@ describe("session ui state", () => {
 
     win.App.State.updateSessionMetadata({ "sess-a": "手动名称" }, { "sess-a": "manual" });
     win.__tabs.activateTab("sess-a");
-    win.renderSessionTabs("sess-a");
+    win.App.Session.renderSessionTabs("sess-a");
 
     const tabs2 = Array.from(doc.querySelectorAll("#main-tabs .session-tab")).map(node => node.textContent || "");
     assert.ok(tabs2.some(t => t.includes("手动名称")));
@@ -1034,7 +1031,7 @@ describe("session ui state", () => {
     store["active-session-tab"] = "sess-a";
     win.__state._sessionTabs = ["sess-a"];
     sessionListState = 0;
-    win.renderSessionTabs("sess-a");
+    win.App.Session.renderSessionTabs("sess-a");
 
     const closeBtn = doc.querySelector("#main-tabs .session-tab .tb-close");
     assert.ok(closeBtn, "session tab should have a close button");
@@ -1053,7 +1050,7 @@ describe("session ui state", () => {
     store["session-tab-labels"] = JSON.stringify({});
     win.__state._sessionTabs = ["sess-a", "sess-b"];
     win.__state._activeSessionTabId = "sess-b";
-    win.renderSessionTabs("sess-b");
+    win.App.Session.renderSessionTabs("sess-b");
 
     let tabs = Array.from(doc.querySelectorAll("#main-tabs .session-tab"));
     assert.strictEqual(tabs.length, 2);
@@ -1074,7 +1071,7 @@ describe("session ui state", () => {
     store["active-session-tab"] = "sess-b";
     win.__state._sessionTabs = ["sess-a", "sess-b", "sess-c"];
     win.__state._activeSessionTabId = "sess-b";
-    win.renderSessionTabs("sess-b");
+    win.App.Session.renderSessionTabs("sess-b");
 
     const tabsBefore = Array.from(doc.querySelectorAll("#main-tabs .session-tab"));
     assert.strictEqual(tabsBefore.length, 3);

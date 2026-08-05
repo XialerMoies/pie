@@ -598,7 +598,7 @@ describe("App.Events frontend event bus", () => {
     const calls = [];
     const intervals = [];
     const context = {
-      window: { App: {} },
+      window: { App: { Session: { loadSessions: () => calls.push("sessions") } } },
       EventSource: FakeEventSource,
       console,
       setTimeout,
@@ -609,7 +609,6 @@ describe("App.Events frontend event bus", () => {
       refresh: () => {},
       syncStartupWorkspace: async () => { calls.push("workspace"); },
       getD: () => { calls.push("dashboard"); },
-      loadSessions: () => { calls.push("sessions"); },
       toast: () => {},
     };
     context.App = context.window.App;
@@ -655,6 +654,7 @@ describe("App.Events frontend event bus", () => {
           start: async () => { calls.push("events"); throw new Error("offline"); },
         },
         State: { resetWorkspace: () => { calls.push("reset"); } },
+        Session: { loadSessions: () => { calls.push("sessions"); } },
       },
     };
     context.window.App = context.App;
@@ -680,6 +680,7 @@ describe("App.Events frontend event bus", () => {
           State: { getWorkspacePath: () => "" },
           Chat: { updateModelName: () => {} },
           ChatState: { setDashboard: (data) => dashboardRequests.push({ type: "state", data }), getDashboard: () => null },
+          Session: { loadSessions: () => {} },
         },
         electronAPI: { getDesktopSessionToken: async () => "desktop-token" },
       },
@@ -697,7 +698,6 @@ describe("App.Events frontend event bus", () => {
       bootstrapApi: undefined,
       layout: () => {},
       syncStartupWorkspace: async () => {},
-      loadSessions: () => {},
       toast: () => {},
     };
     context.App = context.window.App;

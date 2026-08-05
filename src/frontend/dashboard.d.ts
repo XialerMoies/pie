@@ -196,6 +196,7 @@ interface AppSession {
   deleteSession(id: string): Promise<void>;
   pinSession(id: string, pinned: boolean): void;
   branchSession(id: string): void;
+  toggleOtherSessions(header: HTMLElement): void;
   commitSessionTab(oldId: string, newId: string): void;
   maybeAutoTitleSession(id: string, assistantText?: string): Promise<string | null>;
   getTabLabel(id: string): string;
@@ -206,6 +207,7 @@ interface AppSession {
   renderSessionTabs(activeId?: string): void;
   restoreSessionTabs(): Promise<void>;
   saveUiState(): void;
+  migrateSessionTabLabels(): void;
 }
 interface SessionRestoreOptions {
   onActiveSession(sessionId: string): Promise<void> | void;
@@ -400,8 +402,6 @@ interface Window {
   __monaco: MonacoAPI;
   __problemsStore: ProblemsStoreAPI;
   ExplorerService: typeof ExplorerService;
-  bumpSessionListSeq?: () => number;
-  isCurrentSessionListSeq?: (seq: number) => boolean;
   isConversationSearchActive?: () => boolean;
   onceSessionActivated?: OnceSessionActivated;
   emitSessionActivated?: SessionActivatedCallback;
@@ -443,7 +443,6 @@ declare function winCtrl(action: string): void;
 declare function layout(): void;
 declare function togglePanel(name: string): void;
 declare function renderPanel(name: string, pc?: HTMLElement | null): void;
-declare function renderSessionTabs(activeId?: string): void;
 declare function closeChatTab(): void;
 declare function msgs(): string;
 declare function appendDelta(text: string): void;
@@ -468,20 +467,8 @@ declare function selectModel(provider: string, modelId: string): void;
 declare function provDragStart(ev: DragEvent, idx: number): void;
 declare function provDragOver(ev: DragEvent, idx: number): void;
 declare function provDrop(ev: DragEvent, idx: number): void;
-declare function loadSessions(): void;
-declare function bumpSessionListSeq(): number;
-declare function isCurrentSessionListSeq(seq: number): boolean;
 declare function isConversationSearchActive(): boolean;
 declare function loadMonaco(): Promise<void>;
-declare function newSession(): void;
-declare function renameSession(el: HTMLElement, id: string): void;
-declare function deleteSession(id: string): Promise<void>;
-declare function pinSession(id: string, pinned: boolean): void;
-declare function branchSession(id: string): void;
-declare function commitSessionTab(oldId: string, newId: string): void;
-declare function maybeAutoTitleSession(id: string, assistantText?: string): Promise<string | null>;
-declare function getActiveSessionTabId(): string | null;
-declare function setActiveSessionTabId(id: string | null): void;
 declare function openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video'): void;
 declare function renderTabs(): void;
 declare function registerPane(name: string, render: (container: HTMLElement) => void): void;

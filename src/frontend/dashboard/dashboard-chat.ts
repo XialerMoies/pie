@@ -64,11 +64,6 @@ function chatScrollToLatest(options: { force?: boolean; smooth?: boolean } = {})
 }
 
 function chatGetActiveSessionTabId(): string | null {
-  const fn = (window as any).getActiveSessionTabId;
-  if (typeof fn === 'function') {
-    const legacyId = fn();
-    if (legacyId) return legacyId;
-  }
   const activeTab = App.Tabs?.getActiveTab?.();
   if (activeTab && (activeTab.kind === 'session' || activeTab.kind === 'chat')) return activeTab.id;
   return App.Tabs?.getActiveSessionTabId?.() || null;
@@ -83,33 +78,16 @@ function chatReadLocalSessionTabIds(): string[] {
 }
 
 function chatWriteLocalSessionTabIds(ids: string[]): void {
-  // 仅通过 writeSessionTabIds 写入（发送消息时 sessions.ts 已加载完毕）
-  if (typeof (window as any).writeSessionTabIds === 'function') {
-    const unique = Array.from(new Set(ids.filter((id) => typeof id === 'string' && id.length > 0)));
-    (window as any).writeSessionTabIds(unique);
-  }
+  const unique = Array.from(new Set(ids.filter((id) => typeof id === 'string' && id.length > 0)));
+  App.SessionTabs.writeSessionTabIds(unique);
 }
 
 function chatSetActiveSessionTabId(id: string | null): void {
-  const fn = (window as any).setActiveSessionTabId;
-  if (typeof fn === 'function') {
-    fn(id);
-    return;
-  }
-  // TabStore._syncToState 已处理 activeId+activeView, 仅触发保存
-  if (typeof (window as any)._uiStateSave === 'function') (window as any)._uiStateSave();
+  App.SessionTabs.setActiveSessionTabId(id);
 }
 
 function chatCommitSessionTab(oldId: string, newId: string): void {
-  const fn = (window as any).commitSessionTab;
-  if (typeof fn === 'function') {
-    fn(oldId, newId);
-    return;
-  }
-  const nextIds = chatReadLocalSessionTabIds().map(id => id === oldId ? newId : id);
-  if (!nextIds.includes(newId)) nextIds.push(newId);
-  chatWriteLocalSessionTabIds(nextIds);
-  chatSetActiveSessionTabId(newId);
+  App.Session.commitSessionTab(oldId, newId);
 }
 
 function chatCreateFallbackDraftTab(): string | null {
@@ -137,16 +115,12 @@ function chatBindCreatedSession(sessionId: string, draftId?: string): string | u
 }
 
 async function ensureSessionForSend(): Promise<ChatSendContext> {
-  const waitForRestore = (window as any).whenSessionRestoreReady
-    || (window as any).App?.Session?.whenReady;
-  if (typeof waitForRestore === 'function') await waitForRestore();
+  await App.SessionRestore.whenReady();
 
   // 恢复完成后重新读取 activeId；不能使用恢复开始前的空快照。
   let activeTabId = chatGetActiveSessionTabId();
   if (!activeTabId) {
-    const ensureDraft = (window as any).ensureDraftSessionTab
-      || (window as any).App?.Session?.ensureDraftSessionTab;
-    if (typeof ensureDraft === 'function') activeTabId = ensureDraft() || null;
+    activeTabId = App.Session.ensureDraftSessionTab?.() || null;
   }
   if (activeTabId && !chatIsDraftSessionId(activeTabId)) {
     return { sessionId: activeTabId, persistent: true };
@@ -228,7 +202,7 @@ function refreshWorkspaceState(): void {
   // 切换工作区时清理 ProblemsStore，避免旧 workspace 诊断数据残留
   const pstore = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
   if (pstore) pstore.clear();
-  loadSessions();
+  App.Session.loadSessions();
   getD();
   const pc = $('pc');
   if (pc) renderPanel(App.State.getSnapshot().panel.active || 'explorer', pc);
@@ -393,9 +367,9 @@ function bind(): void {
 
     const finalizeSendContext = (context: ChatSendContext | null): void => {
       if (context && !context.persistent && context.sessionId) {
-        void deleteEphemeralSession(context.sessionId).then(() => loadSessions());
+        void deleteEphemeralSession(context.sessionId).then(() => App.Session.loadSessions());
       } else {
-        loadSessions();
+        App.Session.loadSessions();
       }
     };
 
@@ -506,13 +480,13 @@ function bind(): void {
           const sendContext = activeSendContext;
           activeSendContext = null;
           if (sendContext && !sendContext.persistent && sessionId) {
-            void deleteEphemeralSession(sessionId).then(() => loadSessions());
+            void deleteEphemeralSession(sessionId).then(() => App.Session.loadSessions());
           } else {
-            const titleFn = (window as any).maybeAutoTitleSession;
-            if (sendContext?.persistent && sessionId && typeof titleFn === 'function') {
-              void Promise.resolve(titleFn(sessionId, d.text || '')).finally(() => loadSessions());
+            if (sendContext?.persistent && sessionId) {
+              void Promise.resolve(App.Session.maybeAutoTitleSession(sessionId, d.text || ''))
+                .finally(() => App.Session.loadSessions());
             } else {
-              loadSessions();
+              App.Session.loadSessions();
             }
           }
           sb('ms');

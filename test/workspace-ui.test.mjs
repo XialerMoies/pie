@@ -62,7 +62,8 @@ global.logTiming = () => {};
     Chat: { clearAttachments: () => calls.push(["clearAttachments"]) },
     ChatTimeline: { sync: () => calls.push(["syncTimeline"]) },
     File: {},
-    Session: {},
+    Session: { loadSessions: () => calls.push(["loadSessions"]) },
+    SessionTabs: { renderSessionTabs: () => calls.push(["renderSessionTabs"]) },
     Settings: {},
     Git: { refreshGit: () => calls.push(["refreshGit"]) },
     Tabs: {
@@ -80,7 +81,6 @@ global.logTiming = () => {};
   global.toast = (message, type) => calls.push(["toast", message, type || "info"]);
   global.switchTab = (id) => calls.push(["switchTab", id]);
   global.renderPanel = (name, container) => calls.push(["renderPanel", name, Boolean(container)]);
-  global.loadSessions = () => calls.push(["loadSessions"]);
   win.msgs = () => "<div class=\"wl\">empty</div>";
 
   const fetchCalls = [];

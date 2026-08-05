@@ -189,6 +189,5 @@ sessionActivationApp.SessionActivation = sessionActivationApi;
 (window as any).onceSessionActivated = onceSessionActivated;
 (window as any).emitSessionActivated = emitSessionActivated;
 (window as any).invalidateSessionActivation = invalidateSessionActivation;
-(window as any).switchSession = _switchSession;
 
 export {};

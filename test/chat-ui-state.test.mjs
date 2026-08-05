@@ -395,8 +395,8 @@ describe("chat ui state", () => {
     env.state._activeSessionTabId = null;
     let releaseRestore;
     const restore = new Promise((resolve) => { releaseRestore = resolve; });
-    env.win.whenSessionRestoreReady = () => restore;
-    env.win.ensureDraftSessionTab = () => {
+    env.win.App.SessionRestore.whenReady = () => restore;
+    env.win.App.Session.ensureDraftSessionTab = () => {
       env.state._sessionTabs = ["draft:restored"];
       env.state._activeSessionTabId = "draft:restored";
       return "draft:restored";
@@ -447,7 +447,7 @@ describe("chat ui state", () => {
     env.win.EventSource = MockEventSource;
 
     let committed = null;
-    env.win.commitSessionTab = (oldId, newId) => {
+    env.win.App.Session.commitSessionTab = (oldId, newId) => {
       committed = [oldId, newId];
       env.state._sessionTabs = [newId];
     };
@@ -481,10 +481,8 @@ describe("chat ui state", () => {
     env.state.M = [];
     env.state._sessionTabs = [];
     env.state._activeSessionTabId = null;
-    const originalEnsureDraft = env.win.ensureDraftSessionTab;
-    const originalAppEnsureDraft = env.win.App.Session.ensureDraftSessionTab;
+    const originalEnsureDraft = env.win.App.Session.ensureDraftSessionTab;
     // 模拟实机启动竞态：发送流程能创建 session，但草稿 tab 入口尚未可用。
-    env.win.ensureDraftSessionTab = undefined;
     env.win.App.Session.ensureDraftSessionTab = undefined;
 
     const streams = [];
@@ -525,19 +523,17 @@ describe("chat ui state", () => {
     assert.strictEqual(created, 1, "连续两轮交互只能创建一个真实 session");
     assert.ok(fetchCalls.filter(([url, method]) => url.includes("/api/chat") && method === "POST").length >= 2);
 
-    env.win.ensureDraftSessionTab = originalEnsureDraft;
-    env.win.App.Session.ensureDraftSessionTab = originalAppEnsureDraft;
+    env.win.App.Session.ensureDraftSessionTab = originalEnsureDraft;
   });
 
   it("发送时以 TabStore 可见的已有 session tab 为准，不因旧兼容入口为空而新建会话", async () => {
     env.state.M = [];
     env.state._sessionTabs = ["existing-session"];
     env.state._activeSessionTabId = "existing-session";
-    const originalGetActive = env.win.getActiveSessionTabId;
     const originalAppGetActive = env.win.App.Session.getActiveSessionTabId;
     const originalTabsGetActive = env.win.App.Tabs.getActiveSessionTabId;
     // 模拟旧兼容投影暂时为空，但标签栏和 TabStore 已经有真实 active session。
-    env.win.getActiveSessionTabId = () => null;
+    env.win.getActiveSessionTabId = () => { throw new Error("legacy path used"); };
     env.win.App.Session.getActiveSessionTabId = () => null;
     env.win.App.Tabs.getActiveSessionTabId = () => null;
 
@@ -566,7 +562,6 @@ describe("chat ui state", () => {
     assert.ok(fetchCalls.some(([url, method]) => url.includes("/api/chat") && method === "POST"));
     assert.deepStrictEqual(env.state._sessionTabs, ["existing-session"]);
 
-    env.win.getActiveSessionTabId = originalGetActive;
     env.win.App.Session.getActiveSessionTabId = originalAppGetActive;
     env.win.App.Tabs.getActiveSessionTabId = originalTabsGetActive;
     streams[0]?.onmessage?.({ data: JSON.stringify({ type: "done", text: "完成", sessionId: "existing-session" }) });
@@ -625,21 +620,21 @@ describe("chat ui state", () => {
     // migrateSessionTabLabels must NOT write to localStorage
     localStorage.setItem("session-tab-labels", JSON.stringify({ "sess-old": "新会话" }));
     const before = localStorage.getItem("session-tab-labels");
-    if (typeof env.win.migrateSessionTabLabels === "function") env.win.migrateSessionTabLabels();
+    if (typeof env.win.App.Session.migrateSessionTabLabels === "function") env.win.App.Session.migrateSessionTabLabels();
     assert.strictEqual(localStorage.getItem("session-tab-labels"), before,
       "migrateSessionTabLabels 不能改写旧的 session-tab-labels");
     localStorage.removeItem("session-tab-labels"); // 恢复干净状态
 
     // setActiveSessionTabId used to write active-session-tab and last-session-id
     env.state._sessionTabs = ["sess-a"];
-    env.win.setActiveSessionTabId("sess-a");
+    env.win.App.Session.setActiveSessionTabId("sess-a");
     for (const key of LEGACY_KEYS) {
       assert.strictEqual(localStorage.getItem(key), null, `setActiveSessionTabId: ${key}`);
     }
 
     // commitSessionTab used to write session-tabs, session-tab-labels, active-session-tab, last-session-id
     env.state._sessionTabs = ["draft:regression"];
-    env.win.commitSessionTab("draft:regression", "sess-real", "手动标题");
+    env.win.App.Session.commitSessionTab("draft:regression", "sess-real", "手动标题");
     for (const key of LEGACY_KEYS) {
       assert.strictEqual(localStorage.getItem(key), null, `commitSessionTab: ${key}`);
     }

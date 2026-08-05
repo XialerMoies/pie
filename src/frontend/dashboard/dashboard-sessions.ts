@@ -354,7 +354,6 @@ App.SessionRestore.init({
 });
 
 function closeSessionTab(id: string): void {
-  const T = (window as any).App?.Tabs;
   const ts = App.Tabs;
   const tab = ts?.getTab?.(id);
   if (tab && (tab.kind === 'session' || tab.kind === 'chat')) {
@@ -853,52 +852,28 @@ function setupSessionListHandler(): void {
   });
 }
 
-// 公开 API
-window.loadSessions = loadSessions;
-(window as any).bumpSessionListSeq = bumpSessionListSeq;
-(window as any).isCurrentSessionListSeq = isCurrentSessionListSeq;
-(window as any).readSessionTabIds = readSessionTabIds;
-(window as any).writeSessionTabIds = writeSessionTabIds;
-(window as any).sessionTabLabel = sessionTabLabel;
-window.newSession = newSession;
-window.renameSession = renameSession as any;
-window.deleteSession = deleteSession;
-window.pinSession = pinSession as any;
-window.branchSession = branchSession as any;
-(window as any).toggleOtherSessions = toggleOtherSessions;
-(window as any).commitSessionTab = commitSessionTab;
-(window as any).maybeAutoTitleSession = maybeAutoTitleSession;
-(window as any).getActiveSessionTabId = () => App.Tabs.getActiveSessionTabId();
-(window as any).setActiveSessionTabId = setActiveSessionTabId;
-(window as any).ensureDraftSessionTab = ensureDraftSessionTab;
-(window as any).whenSessionRestoreReady = whenSessionRestoreReady;
-(window as any).renderSessionTabs = renderSessionTabs;
-(window as any).migrateSessionTabLabels = migrateSessionTabLabels;
-(window as any).switchSession = switchSession;
-
 // ─── App 命名空间绑定 ──────────────────────────────────────
-const AppSess = (window as any).App?.Session;
-if (AppSess) {
-  AppSess.loadSessions = loadSessions;
-  AppSess.bumpSessionListSeq = bumpSessionListSeq;
-  AppSess.isCurrentSessionListSeq = isCurrentSessionListSeq;
-  AppSess.newSession = newSession;
-  AppSess.renameSession = renameSession;
-  AppSess.deleteSession = deleteSession;
-  AppSess.pinSession = pinSession;
-  AppSess.branchSession = branchSession;
-  AppSess.commitSessionTab = commitSessionTab;
-  AppSess.maybeAutoTitleSession = maybeAutoTitleSession;
-  AppSess.getTabLabel = sessionTabLabel;
-  AppSess.getActiveSessionTabId = () => App.Tabs.getActiveSessionTabId();
-  AppSess.setActiveSessionTabId = setActiveSessionTabId;
-  AppSess.ensureDraftSessionTab = ensureDraftSessionTab;
-  AppSess.whenReady = whenSessionRestoreReady;
-  AppSess.renderSessionTabs = renderSessionTabs;
-  AppSess.restoreSessionTabs = restoreSessionTabs;
-  AppSess.saveUiState = saveUiState;
-  AppSess.switchSession = switchSession;
-}
+const AppSess = App.Session;
+AppSess.loadSessions = loadSessions;
+AppSess.bumpSessionListSeq = bumpSessionListSeq;
+AppSess.isCurrentSessionListSeq = isCurrentSessionListSeq;
+AppSess.newSession = newSession;
+AppSess.renameSession = renameSession;
+AppSess.deleteSession = deleteSession;
+AppSess.pinSession = pinSession;
+AppSess.branchSession = branchSession;
+AppSess.toggleOtherSessions = toggleOtherSessions;
+AppSess.commitSessionTab = commitSessionTab;
+AppSess.maybeAutoTitleSession = maybeAutoTitleSession;
+AppSess.getTabLabel = sessionTabLabel;
+AppSess.getActiveSessionTabId = () => App.Tabs.getActiveSessionTabId();
+AppSess.setActiveSessionTabId = setActiveSessionTabId;
+AppSess.ensureDraftSessionTab = ensureDraftSessionTab;
+AppSess.whenReady = whenSessionRestoreReady;
+AppSess.renderSessionTabs = renderSessionTabs;
+AppSess.restoreSessionTabs = restoreSessionTabs;
+AppSess.saveUiState = saveUiState;
+AppSess.migrateSessionTabLabels = migrateSessionTabLabels;
 
 // ─── Session/Chat 标签行为 ───
 function _sessionClose(tab: AppTab): void {
