@@ -41,6 +41,21 @@ describe("Preferences facade", () => {
     assert.equal(win.App.Preferences.get("bad-json", "fallback"), "fallback");
   });
 
+  it("uses the supplied fallback for unknown boolean values", async () => {
+    await import(`../src/frontend/services/preferences.ts?${Date.now()}-${Math.random()}`);
+
+    for (const value of ["corrupt", "maybe"]) {
+      win.App.Preferences.set("unknown-boolean", value);
+      assert.equal(win.App.Preferences.getBoolean("unknown-boolean", true), true);
+      assert.equal(win.App.Preferences.getBoolean("unknown-boolean", false), false);
+    }
+
+    for (const [value, expected] of [["0", false], ["false", false], ["1", true], ["true", true]]) {
+      win.App.Preferences.set("known-boolean", value);
+      assert.equal(win.App.Preferences.getBoolean("known-boolean", !expected), expected);
+    }
+  });
+
   it("loads the preference facade before modules that read it during startup", () => {
     const source = readFileSync(resolve(process.cwd(), "scripts/compile-frontend-ts.mjs"), "utf8");
     const preferenceIndex = source.indexOf('"gen/services/preferences.js"');

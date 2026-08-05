@@ -54,6 +54,18 @@ global.logTiming = () => {};
     panel: { active: "explorer", closed: false, width: 260 },
     recent: { sessions: {} },
   };
+  const preferences = new Map();
+  const scrollState = { scrollTop: 0, scrollHeight: 0, clientHeight: 0, lastScrollTo: null };
+  const messages = doc.getElementById("ms");
+  Object.defineProperties(messages, {
+    scrollTop: { configurable: true, get: () => scrollState.scrollTop, set: (value) => { scrollState.scrollTop = Number(value); } },
+    scrollHeight: { configurable: true, get: () => scrollState.scrollHeight },
+    clientHeight: { configurable: true, get: () => scrollState.clientHeight },
+  });
+  messages.scrollTo = (options) => {
+    scrollState.lastScrollTo = options;
+    scrollState.scrollTop = Number(options.top);
+  };
   win.App = {
     Constants: { WS_KEY: "workspace_path" },
     State: {
@@ -67,6 +79,25 @@ global.logTiming = () => {};
       updatePanel: (panel) => { uiState.panel = { ...uiState.panel, ...panel }; },
       setChatOpen: (open) => { uiState.tabs.chatOpen = open; },
       touchSession: () => {},
+    },
+    Preferences: {
+      get(key, fallback) {
+        return preferences.has(key) ? preferences.get(key) : fallback;
+      },
+      getBoolean(key, fallback = false) {
+        const value = preferences.has(key) ? preferences.get(key) : (fallback ? "1" : "0");
+        if (value === "1" || value === "true") return true;
+        if (value === "0" || value === "false") return false;
+        return fallback;
+      },
+      getNumber(key, fallback, min = -Infinity, max = Infinity) {
+        if (!preferences.has(key)) return fallback;
+        const raw = String(preferences.get(key));
+        if (!raw.trim()) return fallback;
+        const value = Number(raw);
+        if (!Number.isFinite(value)) return fallback;
+        return Math.max(min, Math.min(max, value));
+      },
     },
     UI: {},
     Chat: {
@@ -117,7 +148,31 @@ global.logTiming = () => {};
   win.fetch = global.fetch;
   win.msgs = () => testState.M.map((message) => `<div class="m"><div class="mt">${message.content}</div></div>`).join('');
 
-  return { win, doc, state: testState };
+  return {
+    win,
+    doc,
+    state: testState,
+    setPreference(key, value) { preferences.set(key, typeof value === "boolean" ? (value ? "1" : "0") : value); },
+    setScrollMetrics(next) {
+      if (next.scrollTop !== undefined) scrollState.scrollTop = Number(next.scrollTop);
+      if (next.scrollHeight !== undefined) scrollState.scrollHeight = Number(next.scrollHeight);
+      if (next.clientHeight !== undefined) scrollState.clientHeight = Number(next.clientHeight);
+    },
+    getScrollTop() { return scrollState.scrollTop; },
+    getLastScrollTo() { return scrollState.lastScrollTo; },
+    clearLastScrollTo() { scrollState.lastScrollTo = null; },
+  };
+}
+
+function refreshReadingSettings(env) {
+  const refresh = env.win.App.Chat.refreshReadingSettings;
+  assert.strictEqual(typeof refresh, "function", "App.Chat.refreshReadingSettings should be registered");
+  refresh();
+}
+
+function refreshReadingSettingsIfAvailable(env) {
+  const refresh = env.win.App.Chat.refreshReadingSettings;
+  if (typeof refresh === "function") refresh();
 }
 
 describe("chat ui state", () => {
@@ -704,7 +759,7 @@ describe("chat ui state", () => {
     assert.ok(panel.innerHTML.includes("编码"), "欢迎屏应有提示文字");
   });
 
-  it("用户离开底部后显示回到最新按钮，点击后平滑回到底部", () => {
+  it("用户离开底部后显示回到最新按钮，点击后平滑回到底部", async () => {
     const panel = env.doc.getElementById("ms");
     const button = env.doc.getElementById("chat-jump-latest");
     let scrollTop = 220;
@@ -739,5 +794,124 @@ describe("chat ui state", () => {
     scrollHeight = 1200;
     env.win.App.Chat.scrollToLatest({ force: false });
     assert.strictEqual(scrollTop, 1200, "auto-follow resumes after returning to latest");
+    await new Promise((resolve) => setTimeout(resolve, 130));
+  });
+
+  it("jump-to-latest button click uses the smooth preference", async () => {
+    const panel = env.doc.getElementById("ms");
+    const button = env.doc.getElementById("chat-jump-latest");
+    env.setScrollMetrics({ scrollTop: 0, scrollHeight: 1000, clientHeight: 300 });
+    panel.dispatchEvent(new env.win.Event("scroll"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.strictEqual(button.classList.contains("on"), true);
+
+    env.setPreference("chat-jump-latest-smooth", false);
+    refreshReadingSettings(env);
+
+    let scrollToCalls = 0;
+    panel.scrollTo = () => { scrollToCalls++; };
+    button.click();
+
+    assert.strictEqual(scrollToCalls, 0, "disabled smooth preference must not call scrollTo");
+    assert.strictEqual(env.getScrollTop(), 1000, "button click must scroll directly to the bottom");
+  });
+
+  it("jump-to-latest disabled hides the button after reading settings refresh", async () => {
+    const panel = env.doc.getElementById("ms");
+    const button = env.doc.getElementById("chat-jump-latest");
+    env.state._activeSessionTabId = "session-sentinel";
+    env.setScrollMetrics({ scrollTop: 0, scrollHeight: 1000, clientHeight: 300 });
+    panel.dispatchEvent(new env.win.Event("scroll"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.strictEqual(button.classList.contains("on"), true);
+
+    const activeSessionBefore = env.state._activeSessionTabId;
+    const scrollTopBefore = env.getScrollTop();
+    const messagesBefore = env.win.App.ChatState.getMessages();
+    const messageContentsBefore = messagesBefore.map((message) => message.content);
+
+    env.setPreference("chat-jump-latest-enabled", false);
+    refreshReadingSettings(env);
+
+    assert.strictEqual(env.state._activeSessionTabId, activeSessionBefore);
+    assert.strictEqual(env.getScrollTop(), scrollTopBefore);
+    assert.strictEqual(env.win.App.ChatState.getMessages(), messagesBefore);
+    assert.deepStrictEqual(messagesBefore.map((message) => message.content), messageContentsBefore);
+    assert.strictEqual(button.classList.contains("on"), false);
+    assert.strictEqual(button.getAttribute("aria-hidden"), "true");
+    assert.strictEqual(button.tabIndex, -1);
+  });
+
+  it("jump-to-latest thresholds 48, 72, and 120 control near-latest visibility and invalid values use 72", async () => {
+    const panel = env.doc.getElementById("ms");
+    const button = env.doc.getElementById("chat-jump-latest");
+    const scrollHeight = 1000;
+    const clientHeight = 300;
+    env.setScrollMetrics({ scrollHeight, clientHeight });
+
+    const cases = [
+      { value: 48, distance: 60, visible: true },
+      { value: 48, distance: 48, visible: false },
+      { value: 72, distance: 72, visible: false },
+      { value: 120, distance: 80, visible: false },
+      { value: 120, distance: 120, visible: false },
+      { value: "invalid", distance: 60, visible: false },
+      { value: "invalid", distance: 80, visible: true },
+    ];
+    const actualVisibility = cases.map((testCase) => {
+      env.setPreference("chat-jump-latest-threshold", testCase.value);
+      env.setScrollMetrics({ scrollTop: scrollHeight - clientHeight - testCase.distance });
+      refreshReadingSettingsIfAvailable(env);
+      panel.dispatchEvent(new env.win.Event("scroll"));
+      return button.classList.contains("on");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepStrictEqual(actualVisibility, cases.map((testCase) => testCase.visible), "threshold settings should control near-latest visibility");
+  });
+
+  it("jump-to-latest explicit smooth options override the persisted preference", async () => {
+    const panel = env.doc.getElementById("ms");
+    env.setScrollMetrics({ scrollTop: 0, scrollHeight: 1000, clientHeight: 300 });
+    panel.dispatchEvent(new env.win.Event("scroll"));
+
+    env.setPreference("chat-jump-latest-smooth", false);
+    refreshReadingSettings(env);
+    env.clearLastScrollTo();
+    env.win.App.Chat.scrollToLatest({ force: true, smooth: true });
+
+    assert.deepStrictEqual(env.getLastScrollTo(), { top: 1000, behavior: "smooth" });
+    await new Promise((resolve) => setTimeout(resolve, 130));
+
+    env.setPreference("chat-jump-latest-smooth", true);
+    refreshReadingSettings(env);
+    env.setScrollMetrics({ scrollTop: 0 });
+    env.clearLastScrollTo();
+    env.win.App.Chat.scrollToLatest({ force: true, smooth: false });
+
+    assert.strictEqual(env.getScrollTop(), 1000);
+    assert.strictEqual(env.getLastScrollTo(), null);
+  });
+
+  it("jump-to-latest smooth preference controls scrollToLatest without an explicit smooth option", async () => {
+    const panel = env.doc.getElementById("ms");
+    env.setScrollMetrics({ scrollTop: 700, scrollHeight: 1000, clientHeight: 300 });
+    panel.dispatchEvent(new env.win.Event("scroll"));
+
+    env.setPreference("chat-jump-latest-smooth", true);
+    refreshReadingSettingsIfAvailable(env);
+    env.setScrollMetrics({ scrollTop: 0 });
+    env.win.App.Chat.scrollToLatest();
+    const smoothScroll = env.getLastScrollTo();
+    await new Promise((resolve) => setTimeout(resolve, 130));
+
+    env.setPreference("chat-jump-latest-smooth", false);
+    refreshReadingSettings(env);
+    env.setScrollMetrics({ scrollTop: 0 });
+    env.clearLastScrollTo();
+    env.win.App.Chat.scrollToLatest();
+
+    assert.deepStrictEqual(smoothScroll, { top: 1000, behavior: "smooth" });
+    assert.strictEqual(env.getScrollTop(), 1000);
+    assert.strictEqual(env.getLastScrollTo(), null, "immediate mode must not call smooth scroll");
   });
 });

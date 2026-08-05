@@ -29,7 +29,9 @@ const preferencesApi: AppPreferences = {
   remove: preferenceRemove,
   getBoolean(key: string, fallback = false): boolean {
     const value = preferenceGet(key, fallback ? '1' : '0');
-    return value === '1' || value === 'true';
+    if (value === '1' || value === 'true') return true;
+    if (value === '0' || value === 'false') return false;
+    return fallback;
   },
   setBoolean(key: string, value: boolean): void { preferenceSet(key, value ? '1' : '0'); },
   getNumber(key: string, fallback: number, min?: number, max?: number): number {

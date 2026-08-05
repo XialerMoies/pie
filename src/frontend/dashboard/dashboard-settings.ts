@@ -6,6 +6,14 @@ let _st: string = 'model';
 let _selectedProvider: string | null = null;
 let _provKeys: Record<string, ProviderKeyInfo> = {};
 
+const CHAT_TIMELINE_WINDOW_OPTIONS = ['5', '7', '9'];
+const CHAT_JUMP_THRESHOLD_OPTIONS = ['48', '72', '120'];
+
+function getAllowedSetting(key: string, fallback: string, allowed: string[]): string {
+  const value = App.Preferences.get(key, fallback);
+  return allowed.includes(value) ? value : fallback;
+}
+
 function providerListHTML(listOrder: string[]): string {
   return listOrder.map((prov, index) => {
     const onClass = prov === _selectedProvider || (!_selectedProvider && index === 0) ? ' on' : '';
@@ -50,6 +58,7 @@ function bindSettingsModalEvents(overlay: HTMLElement): void {
     const target = event.target as HTMLElement;
     if (target.id === 'gs-autosave') toggleAutoSaveSetting();
     else if (target.matches('#gs-indent-type, #gs-tab-size, #gs-theme')) applyGeneralSetting();
+    else if (target.matches('#gs-timeline-enabled, #gs-timeline-window, #gs-jump-enabled, #gs-jump-smooth, #gs-jump-threshold')) applyReadingSetting(target);
   });
 
   overlay.addEventListener('dragstart', (event) => {
@@ -66,11 +75,13 @@ function bindSettingsModalEvents(overlay: HTMLElement): void {
   });
 }
 
-function openSettingsModal(): void { _st = 'model'; showSettingsModal(); }
+function openSettingsModal(): void {
+  if ($('settings-modal')) { closeSettingsModal(); return; }
+  _st = 'model';
+  showSettingsModal();
+}
 
 function showSettingsModal(): void {
-  const existing = $('settings-modal');
-  if (existing) { existing.remove(); return; }
   const overlay = document.createElement('div');
   overlay.id = 'settings-modal';
   overlay.className = 'modal-overlay';
@@ -81,6 +92,7 @@ function showSettingsModal(): void {
         <div class="modal-sidebar">
           <div class="ms-item on" data-st="model">模型</div>
           <div class="ms-item" data-st="general">通用</div>
+          <div class="ms-item" data-st="permissions">Permissions</div>
           <div class="ms-item" data-st="about">关于</div>
         </div>
         <div class="modal-content" id="mc-settings"></div>
@@ -93,12 +105,17 @@ function showSettingsModal(): void {
 }
 
 function closeSettingsModal(): void {
+  if (_st === 'permissions') (window as any).App?.Permissions?.unmount?.();
   const el = $('settings-modal');
   if (el) el.remove();
 }
 
 function switchSettingsModal(tab: string): void {
+  const previousTab = _st;
   _st = tab;
+  if (previousTab === 'permissions' && tab !== 'permissions') {
+    (window as any).App?.Permissions?.unmount?.();
+  }
   document.querySelectorAll('.ms-item').forEach(e => e.classList.toggle('on', (e as HTMLElement).dataset.st === tab));
   const sc = $('mc-settings');
   if (!sc) return;
@@ -143,6 +160,11 @@ function switchSettingsModal(tab: string): void {
     const tabSize = String(App.Preferences.getNumber('editor-tab-size', 2, 1, 16));
     const useTabs = App.Preferences.getBoolean('editor-use-tabs');
     const theme = App.Preferences.get('editor-theme', 'vs-dark');
+    const timelineEnabled = App.Preferences.getBoolean('chat-timeline-enabled', true);
+    const timelineWindow = getAllowedSetting('chat-timeline-window-size', '9', CHAT_TIMELINE_WINDOW_OPTIONS);
+    const jumpEnabled = App.Preferences.getBoolean('chat-jump-latest-enabled', true);
+    const jumpSmooth = App.Preferences.getBoolean('chat-jump-latest-smooth', true);
+    const jumpThreshold = getAllowedSetting('chat-jump-latest-threshold', '72', CHAT_JUMP_THRESHOLD_OPTIONS);
     sc.innerHTML = `
       <h3 class="s-title">通用设置</h3>
       <p class="s-desc">应用与编辑器偏好设置，即时生效。</p>
@@ -195,7 +217,64 @@ function switchSettingsModal(tab: string): void {
           </div>
         </div>
       </div>
+      <div class="gs-section">
+        <div class="gs-section-title">会话阅读</div>
+        <div class="gs-group">
+          <div class="gs-row">
+            <span class="gs-label">显示会话时间线</span>
+            <div class="gs-control">
+              <label class="gs-toggle"><input type="checkbox" id="gs-timeline-enabled"${timelineEnabled ? ' checked' : ''}><span class="gs-toggle-slider"></span></label>
+            </div>
+          </div>
+          <div class="gs-row">
+            <span class="gs-label">时间线条目数</span>
+            <div class="gs-control">
+              <select class="gs-select" id="gs-timeline-window">
+                <option value="5"${timelineWindow === '5' ? ' selected' : ''}>5</option>
+                <option value="7"${timelineWindow === '7' ? ' selected' : ''}>7</option>
+                <option value="9"${timelineWindow === '9' ? ' selected' : ''}>9</option>
+              </select>
+            </div>
+          </div>
+          <div class="gs-row">
+            <span class="gs-label">启用跳转到最新消息</span>
+            <div class="gs-control">
+              <label class="gs-toggle"><input type="checkbox" id="gs-jump-enabled"${jumpEnabled ? ' checked' : ''}><span class="gs-toggle-slider"></span></label>
+            </div>
+          </div>
+          <div class="gs-row">
+            <span class="gs-label">平滑滚动</span>
+            <div class="gs-control">
+              <select class="gs-select" id="gs-jump-smooth">
+                <option value="true"${jumpSmooth ? ' selected' : ''}>Smooth</option>
+                <option value="false"${jumpSmooth ? '' : ' selected'}>Immediate</option>
+              </select>
+            </div>
+          </div>
+          <div class="gs-row" style="border:none">
+            <span class="gs-label">最新消息阈值</span>
+            <div class="gs-control">
+              <select class="gs-select" id="gs-jump-threshold">
+                <option value="48"${jumpThreshold === '48' ? ' selected' : ''}>48</option>
+                <option value="72"${jumpThreshold === '72' ? ' selected' : ''}>72</option>
+                <option value="120"${jumpThreshold === '120' ? ' selected' : ''}>120</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
     `;
+    const timelineWindowEl = $('gs-timeline-window') as HTMLSelectElement | null;
+    if (timelineWindowEl) timelineWindowEl.value = timelineWindow;
+    const jumpThresholdEl = $('gs-jump-threshold') as HTMLSelectElement | null;
+    if (jumpThresholdEl) jumpThresholdEl.value = jumpThreshold;
+  } else if (tab === 'permissions') {
+    sc.innerHTML = '<div id="settings-permissions-root"></div>';
+    const root = document.getElementById('settings-permissions-root');
+    const permissions = (App as any).Permissions;
+    if (root && typeof permissions?.mount === 'function') {
+      permissions.mount(root);
+    }
   } else if (tab === 'about') {
     sc.innerHTML = `
       <h3 class="s-title">关于</h3>
@@ -322,6 +401,33 @@ function applyGeneralSetting(): void {
   if (sizeEl) App.Preferences.set('editor-tab-size', sizeEl.value);
   if (themeEl) App.Preferences.set('editor-theme', themeEl.value);
   applyEditorSettings();
+}
+
+function applyReadingSetting(target: HTMLElement): void {
+  if (target.id === 'gs-timeline-enabled') {
+    App.Preferences.setBoolean('chat-timeline-enabled', (target as HTMLInputElement).checked);
+    (App.ChatTimeline as any).refreshSettings();
+    return;
+  }
+  if (target.id === 'gs-timeline-window') {
+    App.Preferences.set('chat-timeline-window-size', (target as HTMLSelectElement).value);
+    (App.ChatTimeline as any).refreshSettings();
+    return;
+  }
+  if (target.id === 'gs-jump-enabled') {
+    App.Preferences.setBoolean('chat-jump-latest-enabled', (target as HTMLInputElement).checked);
+    (App.Chat as any).refreshReadingSettings();
+    return;
+  }
+  if (target.id === 'gs-jump-smooth') {
+    App.Preferences.setBoolean('chat-jump-latest-smooth', (target as HTMLSelectElement).value === 'true');
+    (App.Chat as any).refreshReadingSettings();
+    return;
+  }
+  if (target.id === 'gs-jump-threshold') {
+    App.Preferences.set('chat-jump-latest-threshold', (target as HTMLSelectElement).value);
+    (App.Chat as any).refreshReadingSettings();
+  }
 }
 
 function applyEditorSettings(): void {

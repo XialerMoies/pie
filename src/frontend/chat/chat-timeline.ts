@@ -5,11 +5,14 @@ type ChatTimelineItem = {
 };
 
 const CHAT_TIMELINE_MIN_ITEMS = 3;
-const CHAT_TIMELINE_WINDOW_SIZE = 9;
+const CHAT_TIMELINE_DEFAULT_WINDOW_SIZE = 9;
+const CHAT_TIMELINE_ALLOWED_WINDOW_SIZES = [5, 7, 9];
 const CHAT_TIMELINE_PROMPT_MAX_LENGTH = 12;
 
 let chatTimelineItems: ChatTimelineItem[] = [];
 let chatTimelineActiveIndex = 0;
+let chatTimelineEnabled = true;
+let chatTimelineWindowSize = CHAT_TIMELINE_DEFAULT_WINDOW_SIZE;
 let chatTimelineSignature = '';
 let chatTimelineBoundHost: HTMLElement | null = null;
 let chatTimelineScrollFrame: number | null = null;
@@ -41,11 +44,33 @@ function chatTimelineDeriveItems(messages: Message[]): ChatTimelineItem[] {
   return items;
 }
 
+function chatTimelineReadBooleanPreference(key: string, fallback = true): boolean {
+  const preferences = (App as any).Preferences;
+  if (typeof preferences?.getBoolean !== 'function') return fallback;
+  try {
+    const value = preferences.getBoolean(key, fallback);
+    return typeof value === 'boolean' ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function chatTimelineReadSettings(): void {
+  chatTimelineEnabled = chatTimelineReadBooleanPreference('chat-timeline-enabled');
+  const preferences = (App as any).Preferences;
+  const windowSize = preferences?.getNumber
+    ? preferences.getNumber('chat-timeline-window-size', CHAT_TIMELINE_DEFAULT_WINDOW_SIZE)
+    : CHAT_TIMELINE_DEFAULT_WINDOW_SIZE;
+  chatTimelineWindowSize = CHAT_TIMELINE_ALLOWED_WINDOW_SIZES.includes(windowSize)
+    ? windowSize
+    : CHAT_TIMELINE_DEFAULT_WINDOW_SIZE;
+}
+
 function chatTimelineVisibleRange(itemCount: number, activeIndex: number): { start: number; end: number } {
-  const maxStart = Math.max(0, itemCount - CHAT_TIMELINE_WINDOW_SIZE);
-  const centeredStart = activeIndex - Math.floor(CHAT_TIMELINE_WINDOW_SIZE / 2);
+  const maxStart = Math.max(0, itemCount - chatTimelineWindowSize);
+  const centeredStart = activeIndex - Math.floor(chatTimelineWindowSize / 2);
   const start = Math.min(maxStart, Math.max(0, centeredStart));
-  return { start, end: Math.min(itemCount, start + CHAT_TIMELINE_WINDOW_SIZE) };
+  return { start, end: Math.min(itemCount, start + chatTimelineWindowSize) };
 }
 
 function chatTimelinePromptPreview(prompt: string): string {
@@ -97,6 +122,14 @@ function chatTimelineRender(host: HTMLElement): void {
 function chatTimelineSync(): void {
   const host = chatTimelineHost();
   if (!host) return;
+
+  chatTimelineReadSettings();
+  if (!chatTimelineEnabled) {
+    chatTimelineItems = [];
+    chatTimelineActiveIndex = 0;
+    chatTimelineHide(host);
+    return;
+  }
 
   chatTimelineItems = chatTimelineDeriveItems(App.ChatState.getMessages());
   if (chatTimelineItems.length < CHAT_TIMELINE_MIN_ITEMS) {
@@ -197,10 +230,16 @@ function chatTimelineReset(): void {
   if (host) chatTimelineHide(host);
 }
 
+function chatTimelineRefreshSettings(): void {
+  chatTimelineSync();
+  if (chatTimelineEnabled) chatTimelineSyncActiveFromScroll();
+}
+
 const chatTimelineApp = (window as any).App || ((window as any).App = {});
 chatTimelineApp.ChatTimeline = {
   bind: chatTimelineBind,
   sync: chatTimelineSync,
+  refreshSettings: chatTimelineRefreshSettings,
   handleMessagesScroll: chatTimelineHandleMessagesScroll,
   reset: chatTimelineReset,
 };

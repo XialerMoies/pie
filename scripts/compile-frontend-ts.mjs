@@ -109,6 +109,10 @@ const bundleOut = resolve(SRC, "gen", "dashboard.js");
 const bundlePrev = existsSync(bundleOut) ? readFileSync(bundleOut, "utf-8") : null;
 
 // 与 dashboard.html 原 script 顺序一致（已移除 problems/index 和 pane/problems）
+const REQUIRED_BUNDLE_ENTRIES = [
+  "gen/pane/permissions/index.js",
+  "gen/dashboard/dashboard-settings.js",
+];
 const bundleOrder = [
   "gen/services/app-events.js",
   "gen/dashboard/dashboard-helpers.js",
@@ -144,10 +148,22 @@ const bundleOrder = [
   "gen/pane/permissions/index.js",
   "gen/dashboard/dashboard-menus.js",
   "gen/dashboard/dashboard-settings.js",
-].filter(f => existsSync(resolve(SRC, f)));
+];
 
-if (bundleOrder.length > 0) {
-  const parts = bundleOrder.map(f => {
+const missingBundleEntries = REQUIRED_BUNDLE_ENTRIES.filter(f => !existsSync(resolve(SRC, f)));
+if (missingBundleEntries.length > 0) {
+  throw new Error(`dashboard bundle 缺少必需入口: ${missingBundleEntries.join(", ")}`);
+}
+const permissionsBundleIndex = bundleOrder.indexOf("gen/pane/permissions/index.js");
+const settingsBundleIndex = bundleOrder.indexOf("gen/dashboard/dashboard-settings.js");
+if (permissionsBundleIndex === -1 || settingsBundleIndex === -1 || permissionsBundleIndex >= settingsBundleIndex) {
+  throw new Error("dashboard bundle 顺序错误: Permissions 必须位于 Settings 之前");
+}
+
+const bundleFiles = bundleOrder.filter(f => existsSync(resolve(SRC, f)));
+
+if (bundleFiles.length > 0) {
+  const parts = bundleFiles.map(f => {
     const fullPath = resolve(SRC, f);
     return readFileSync(fullPath, "utf-8");
   });
@@ -162,6 +178,6 @@ if (bundleOrder.length > 0) {
   }
   if (code !== bundlePrev) {
     writeFileSync(bundleOut, code, "utf-8");
-    console.log(`  [bundle] gen/dashboard.js (${bundleOrder.length} files, ${(code.length / 1024).toFixed(0)} KB)`);
+    console.log(`  [bundle] gen/dashboard.js (${bundleFiles.length} files, ${(code.length / 1024).toFixed(0)} KB)`);
   }
 }

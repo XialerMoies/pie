@@ -83,7 +83,6 @@ function buildSideBar(): string {
     <button class="b" data-side="search" data-layout-action="panel" title="搜索">${S('isearch',20)}</button>
     <button class="b" data-side="git" data-layout-action="panel" title="Git">${S('igit',20)}</button>
     <button class="b" data-side="mcp" data-layout-action="panel" title="MCP">${S('iatom',20)}</button>
-    <button class="b" data-side="permissions" data-layout-action="panel" title="权限">${S('ishield',20)}</button>
     <div class="mcp-bar" id="mcp-bar" title="MCP 服务器">MCP <span id="mcp-bar-count">0</span></div>
     <div class="spcr"></div>
     <div class="bb">

@@ -195,6 +195,19 @@ describe("frontend state ownership", () => {
   });
 });
 
+describe("Permissions settings bundle ownership", () => {
+  it("protects the Permissions-before-Settings bundle boundary", () => {
+    const compiler = readFileSync(resolve(process.cwd(), "scripts/compile-frontend-ts.mjs"), "utf8");
+    const permissionsIndex = compiler.indexOf('"gen/pane/permissions/index.js"');
+    const settingsIndex = compiler.indexOf('"gen/dashboard/dashboard-settings.js"');
+    assert.notStrictEqual(permissionsIndex, -1, "Permissions must be an explicit bundle entry");
+    assert.notStrictEqual(settingsIndex, -1, "Settings must be an explicit bundle entry");
+    assert.ok(permissionsIndex < settingsIndex, "Permissions must load before Settings");
+    assert.match(compiler, /REQUIRED_BUNDLE_ENTRIES/);
+    assert.match(compiler, /missingBundleEntries/);
+  });
+});
+
 describe("dashboard event refresh ownership", () => {
   it("does not install a Dashboard polling interval", () => {
     for (const file of [

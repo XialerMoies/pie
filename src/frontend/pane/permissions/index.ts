@@ -44,11 +44,47 @@ let _permissionsTab: "audit" | "rules" = "audit";
 let _permissionsAudit: PermissionAuditEntry[] = [];
 let _permissionsRules: PermissionRulesSnapshot | null = null;
 let _permissionMode: PermissionMode = "standard";
+let mountedContainer: HTMLElement | null = null;
+let mountedRoot: HTMLElement | null = null;
+let mountedGeneration = 0;
+let refreshGeneration = 0;
+let modeMutationGeneration = 0;
+let modeMutationQueue: Array<{
+  mode: PermissionMode;
+  generation: number;
+  mountedGeneration: number;
+  root: HTMLElement | null;
+}> = [];
+let modeMutationProcessing = false;
+let modeMutationQueueEpoch = 0;
+let activeRiskOverlay: HTMLElement | null = null;
+let resolveRiskConfirmation: ((allowed: boolean) => void) | null = null;
 
-function permissionsPaneRender(container: HTMLElement): void {
-  container.innerHTML = `<div id="${PERMISSION_PANEL_ID}">${renderPermissionsPanel()}</div>`;
-  bindPermissionsPanel(container);
+function mountPermissionsPanel(container: HTMLElement): void {
+  dismissRiskOverlay();
+  if (mountedContainer === container && mountedRoot?.parentElement === container && mountedRoot.isConnected) return;
+
+  invalidateModeMutationQueue();
+  mountedRoot?.remove();
+  mountedGeneration += 1;
+  const root = document.createElement("div");
+  root.id = PERMISSION_PANEL_ID;
+  root.innerHTML = renderPermissionsPanel();
+  container.replaceChildren(root);
+  mountedContainer = container;
+  mountedRoot = root;
+  bindPermissionsPanel(root);
   void refreshPermissionsPanel();
+}
+
+function unmountPermissionsPanel(): void {
+  dismissRiskOverlay();
+  invalidateModeMutationQueue();
+  mountedRoot?.remove();
+  mountedContainer = null;
+  mountedRoot = null;
+  mountedGeneration += 1;
+  refreshGeneration += 1;
 }
 
 function renderPermissionsPanel(): string {
@@ -59,7 +95,7 @@ function renderPermissionsPanel(): string {
         <select class="perm-mode-select" id="perm-mode" title="权限模式">
           ${permissionModeOptions()}
         </select>
-        <span class="perm-yes-badge${_permissionMode === "yes" ? " on" : ""}" id="perm-yes-badge">YES</span>
+        <span class="perm-yes-badge${_permissionMode === "yes" ? " on" : ""}" id="perm-yes-badge">${_permissionMode === "yes" ? "YES" : ""}</span>
         <button class="perm-icon-btn" id="perm-refresh" title="刷新" type="button">${S("irefresh", 14)}</button>
       </div>
       <div class="perm-tabs" role="tablist">
@@ -94,6 +130,11 @@ function bindPermissionsPanel(container: HTMLElement): void {
 }
 
 async function refreshPermissionsPanel(forceToast = false): Promise<void> {
+  const requestGeneration = ++refreshGeneration;
+  const requestMountedGeneration = mountedGeneration;
+  const requestRoot = mountedRoot;
+  const requestModeMutationGeneration = modeMutationGeneration;
+  const requestModeMutationPending = modeMutationProcessing;
   try {
     const [auditRes, rulesRes] = await Promise.all([
       fetch("/api/permissions/audit?limit=50"),
@@ -102,22 +143,40 @@ async function refreshPermissionsPanel(forceToast = false): Promise<void> {
     if (!auditRes.ok) throw new Error(`audit HTTP ${auditRes.status}`);
     if (!rulesRes.ok) throw new Error(`rules HTTP ${rulesRes.status}`);
     const auditBody = await auditRes.json();
+    const rulesBody = await rulesRes.json();
+    let nextPermissionMode = _permissionMode;
+    try {
+      const modeRes = await fetch("/api/permissions/mode");
+      if (modeRes.ok) {
+        const modeBody = await modeRes.json();
+        if (isPermissionMode(modeBody.mode)) nextPermissionMode = modeBody.mode;
+      }
+    } catch {
+      // Mode is informational; audit and rules can still refresh independently.
+    }
+    if (!isCurrentRefresh(requestGeneration, requestMountedGeneration, requestRoot)) return;
     _permissionsAudit = Array.isArray(auditBody.audit) ? auditBody.audit : [];
-    _permissionsRules = await rulesRes.json();
-    const modeRes = await fetch("/api/permissions/mode");
-    if (modeRes.ok) {
-      const modeBody = await modeRes.json();
-      if (isPermissionMode(modeBody.mode)) _permissionMode = modeBody.mode;
+    _permissionsRules = rulesBody;
+    if (!requestModeMutationPending && requestModeMutationGeneration === modeMutationGeneration) {
+      _permissionMode = nextPermissionMode;
     }
     updatePermissionModeBadge();
     syncPermissionsPanel();
     if (forceToast) toast("权限信息已刷新", "success");
   } catch (err) {
-    const content = document.getElementById("permissions-content");
+    if (!isCurrentRefresh(requestGeneration, requestMountedGeneration, requestRoot)) return;
+    const content = mountedRoot?.querySelector<HTMLElement>("#permissions-content");
     if (content) {
       content.innerHTML = `<div class="perm-empty perm-error">加载失败: ${E((err as Error).message)}</div>`;
     }
   }
+}
+
+function isCurrentRefresh(requestGeneration: number, requestMountedGeneration: number, requestRoot: HTMLElement | null): boolean {
+  return requestGeneration === refreshGeneration
+    && requestMountedGeneration === mountedGeneration
+    && requestRoot === mountedRoot
+    && Boolean(requestRoot && requestRoot.parentElement === mountedContainer && requestRoot.isConnected);
 }
 
 function isPermissionMode(value: unknown): value is PermissionMode {
@@ -133,11 +192,55 @@ function permissionModeOptions(): string {
   ] as const).map(([value, label]) => `<option value="${value}"${_permissionMode === value ? " selected" : ""}>${label}</option>`).join("");
 }
 
-async function requestPermissionMode(mode: PermissionMode): Promise<void> {
+function requestPermissionMode(mode: PermissionMode): void {
+  const requestModeMutationGeneration = ++modeMutationGeneration;
+  const requestMountedGeneration = mountedGeneration;
+  const requestRoot = mountedRoot;
+  if (mode !== "yes") dismissRiskOverlay();
+  modeMutationQueue.push({
+    mode,
+    generation: requestModeMutationGeneration,
+    mountedGeneration: requestMountedGeneration,
+    root: requestRoot,
+  });
+  if (!modeMutationProcessing) {
+    modeMutationProcessing = true;
+    void drainModeMutations();
+  }
+}
+
+function invalidateModeMutationQueue(): void {
+  modeMutationQueue = [];
+  modeMutationQueueEpoch += 1;
+  modeMutationProcessing = false;
+}
+
+async function drainModeMutations(): Promise<void> {
+  const queueEpoch = modeMutationQueueEpoch;
+  try {
+    while (queueEpoch === modeMutationQueueEpoch && modeMutationQueue.length > 0) {
+      const mutation = modeMutationQueue.shift()!;
+      await performPermissionMode(mutation.mode, mutation.generation, mutation.mountedGeneration, mutation.root);
+    }
+  } finally {
+    if (queueEpoch === modeMutationQueueEpoch) modeMutationProcessing = false;
+  }
+}
+
+async function performPermissionMode(
+  mode: PermissionMode,
+  requestModeMutationGeneration: number,
+  requestMountedGeneration: number,
+  requestRoot: HTMLElement | null,
+): Promise<void> {
+  if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot)) return;
   if (mode === "yes" && !(await confirmYesMode())) {
+    if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot)) return;
+    resetPermissionModeControls();
     syncPermissionsPanel();
     return;
   }
+  if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot)) return;
   try {
     const response = await fetch("/api/permissions/mode", {
       method: "POST",
@@ -146,24 +249,55 @@ async function requestPermissionMode(mode: PermissionMode): Promise<void> {
     });
     const body = await response.json();
     if (!response.ok || !body.ok) throw new Error(body.error || `HTTP ${response.status}`);
+    if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot)) return;
     _permissionMode = mode;
     updatePermissionModeBadge();
     syncPermissionsPanel();
     toast(`已切换为${mode === "yes" ? " Yes" : ""}权限模式`, "success");
   } catch (error) {
+    if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot)) return;
+    resetPermissionModeControls();
     syncPermissionsPanel();
     toast(`权限模式切换失败: ${(error as Error).message}`, "error");
   }
 }
 
+function isCurrentMountedRoot(requestMountedGeneration: number, requestRoot: HTMLElement | null): boolean {
+  return requestMountedGeneration === mountedGeneration
+    && requestRoot === mountedRoot
+    && Boolean(requestRoot && requestRoot.parentElement === mountedContainer && requestRoot.isConnected);
+}
+
+function isCurrentModeMutation(
+  requestModeMutationGeneration: number,
+  requestMountedGeneration: number,
+  requestRoot: HTMLElement | null,
+): boolean {
+  return requestModeMutationGeneration === modeMutationGeneration
+    && isCurrentMountedRoot(requestMountedGeneration, requestRoot);
+}
+
 function updatePermissionModeBadge(): void {
-  const badge = document.getElementById("permission-mode-badge");
-  if (!badge) return;
-  badge.textContent = _permissionMode === "yes" ? "YES" : "";
-  badge.classList.toggle("on", _permissionMode === "yes");
+  const isYes = _permissionMode === "yes";
+  const badges = [
+    document.getElementById("permission-mode-badge"),
+    mountedRoot?.querySelector<HTMLElement>("#perm-yes-badge"),
+  ];
+  badges.forEach((badge) => {
+    if (!badge) return;
+    badge.textContent = isYes ? "YES" : "";
+    badge.classList.toggle("on", isYes);
+  });
+  const select = mountedRoot?.querySelector<HTMLSelectElement>("#perm-mode");
+  if (select) select.value = _permissionMode;
+}
+
+function resetPermissionModeControls(): void {
+  updatePermissionModeBadge();
 }
 
 function confirmYesMode(): Promise<boolean> {
+  dismissRiskOverlay();
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay permission-risk-overlay";
@@ -174,24 +308,36 @@ function confirmYesMode(): Promise<boolean> {
         <label class="permission-risk-check"><input id="permission-risk-ack" type="checkbox"> 我理解不可逆风险</label>
         <div class="permission-risk-actions"><button type="button" data-risk-choice="cancel">取消</button><button type="button" class="danger" data-risk-choice="confirm" disabled>我已知晓并开启</button></div>
       </div>`;
+    activeRiskOverlay = overlay;
+    resolveRiskConfirmation = resolve;
     document.body.appendChild(overlay);
     const confirm = overlay.querySelector<HTMLButtonElement>('[data-risk-choice="confirm"]');
     overlay.querySelector<HTMLInputElement>("#permission-risk-ack")?.addEventListener("change", (event) => {
       if (confirm) confirm.disabled = !(event.target as HTMLInputElement).checked;
     });
     overlay.querySelectorAll<HTMLButtonElement>("[data-risk-choice]").forEach((button) => button.addEventListener("click", () => {
+      if (activeRiskOverlay !== overlay) return;
       const allowed = button.dataset.riskChoice === "confirm" && confirm?.disabled === false;
+      activeRiskOverlay = null;
+      resolveRiskConfirmation = null;
       overlay.remove();
       resolve(allowed);
     }));
   });
 }
 
-(window as any).refreshPermissionsPanel = refreshPermissionsPanel;
+function dismissRiskOverlay(): void {
+  const overlay = activeRiskOverlay;
+  const resolve = resolveRiskConfirmation;
+  activeRiskOverlay = null;
+  resolveRiskConfirmation = null;
+  overlay?.remove();
+  resolve?.(false);
+}
 
 function syncPermissionsPanel(): void {
-  const root = document.getElementById(PERMISSION_PANEL_ID);
-  const content = document.getElementById("permissions-content");
+  const root = mountedRoot;
+  const content = root?.querySelector<HTMLElement>("#permissions-content");
   if (!root || !content) return;
   root.querySelectorAll("[data-perm-tab]").forEach((button) => {
     button.classList.toggle("active", (button as HTMLElement).dataset.permTab === _permissionsTab);
@@ -317,14 +463,18 @@ function bindPermissionsContent(container: HTMLElement): void {
 }
 
 async function removePermissionRule(list: PermissionRuleList, scope: PermissionRuleScope, index: number): Promise<void> {
+  const requestMountedGeneration = mountedGeneration;
+  const requestRoot = mountedRoot;
   try {
     const res = await fetch(`/api/permissions/rules?list=${encodeURIComponent(list)}&scope=${encodeURIComponent(scope)}&index=${index}`, { method: "DELETE" });
     const body = await res.json();
     if (!res.ok || !body.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    if (!isCurrentMountedRoot(requestMountedGeneration, requestRoot)) return;
     _permissionsRules = body.rules;
     syncPermissionsPanel();
     toast(`${permissionScopeLabel(scope)}权限规则已撤销`, "success");
   } catch (err) {
+    if (!isCurrentMountedRoot(requestMountedGeneration, requestRoot)) return;
     toast(`撤销失败: ${(err as Error).message}`, "error");
   }
 }
@@ -335,4 +485,11 @@ function formatPermissionTime(value: string): string {
   return time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-registerPane("permissions", permissionsPaneRender);
+const permissionsApp = (window as any).App || ((window as any).App = {});
+permissionsApp.Permissions = {
+  ...(permissionsApp.Permissions || {}),
+  mount: mountPermissionsPanel,
+  refresh: refreshPermissionsPanel,
+  unmount: unmountPermissionsPanel,
+};
+(window as any).refreshPermissionsPanel = refreshPermissionsPanel;

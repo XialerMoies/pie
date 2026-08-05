@@ -12,20 +12,48 @@ type ChatSendContext = {
 };
 
 let activeSendContext: ChatSendContext | null = null;
-const CHAT_LATEST_THRESHOLD = 72;
+const CHAT_LATEST_DEFAULT_THRESHOLD = 72;
+const CHAT_LATEST_ALLOWED_THRESHOLDS = [48, 72, 120];
+let chatLatestEnabled = true;
+let chatLatestSmooth = true;
+let chatLatestThreshold = CHAT_LATEST_DEFAULT_THRESHOLD;
 let chatFollowLatest = true;
 let chatSmoothScrollTimer: ReturnType<typeof setTimeout> | null = null;
+
+function chatReadBooleanPreference(key: string, fallback = true): boolean {
+  const preferences = (App as any).Preferences;
+  if (typeof preferences?.getBoolean !== 'function') return fallback;
+  try {
+    const value = preferences.getBoolean(key, fallback);
+    return typeof value === 'boolean' ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function chatReadLatestSettings(): void {
+  const preferences = (App as any).Preferences;
+  chatLatestEnabled = chatReadBooleanPreference('chat-jump-latest-enabled');
+  chatLatestSmooth = chatReadBooleanPreference('chat-jump-latest-smooth');
+  const threshold = preferences?.getNumber
+    ? preferences.getNumber('chat-jump-latest-threshold', CHAT_LATEST_DEFAULT_THRESHOLD)
+    : CHAT_LATEST_DEFAULT_THRESHOLD;
+  chatLatestThreshold = CHAT_LATEST_ALLOWED_THRESHOLDS.includes(threshold)
+    ? threshold
+    : CHAT_LATEST_DEFAULT_THRESHOLD;
+}
 
 function chatSetJumpLatestVisible(visible: boolean): void {
   const button = $('chat-jump-latest') as HTMLButtonElement | null;
   if (!button) return;
+  visible = visible && chatLatestEnabled;
   button.classList.toggle('on', visible);
   button.setAttribute('aria-hidden', visible ? 'false' : 'true');
   button.tabIndex = visible ? 0 : -1;
 }
 
 function chatIsNearLatest(messages: HTMLElement): boolean {
-  return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= CHAT_LATEST_THRESHOLD;
+  return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= chatLatestThreshold;
 }
 
 function chatSyncLatestState(): void {
@@ -54,13 +82,21 @@ function chatScrollToLatest(options: { force?: boolean; smooth?: boolean } = {})
 
   chatFollowLatest = true;
   chatSetJumpLatestVisible(false);
-  if (options.smooth && typeof messages.scrollTo === 'function') {
+  const smooth = options.smooth === undefined ? chatLatestSmooth : options.smooth;
+  if (smooth && typeof messages.scrollTo === 'function') {
     messages.scrollTo({ top: messages.scrollHeight, behavior: 'smooth' });
     chatScheduleSmoothScrollSync();
   } else {
     messages.scrollTop = messages.scrollHeight;
   }
   return true;
+}
+
+function refreshReadingSettings(): void {
+  chatReadLatestSettings();
+  const messages = $('ms');
+  if (messages) chatSyncLatestState();
+  else chatSetJumpLatestVisible(false);
 }
 
 function chatGetActiveSessionTabId(): string | null {
@@ -304,10 +340,10 @@ function bind(): void {
     App.ChatTimeline?.handleMessagesScroll();
   }, { passive: true });
   jumpLatest?.addEventListener('click', () => {
-    chatScrollToLatest({ force: true, smooth: true });
+    chatScrollToLatest({ force: true });
   });
   App.ChatTimeline?.bind();
-  chatSyncLatestState();
+  refreshReadingSettings();
 
   ci.addEventListener('input', () => {
     ci.style.height = 'auto';
@@ -771,4 +807,5 @@ window.showModelPicker = showModelPicker;
   App.Chat.refreshWorkspaceState = refreshWorkspaceState;
   App.Chat.resetMsgKeys = resetMsgKeys;
   App.Chat.scrollToLatest = chatScrollToLatest;
+  App.Chat.refreshReadingSettings = refreshReadingSettings;
 } }

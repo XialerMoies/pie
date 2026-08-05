@@ -32,6 +32,7 @@ async function setup(messages) {
     .replaceAll(">", "&gt;");
 
   let currentMessages = messages;
+  const preferences = new Map();
   const panel = doc.getElementById("ms");
   let scrollTop = 0;
   let scrollHeight = 1600;
@@ -47,6 +48,27 @@ async function setup(messages) {
     scrollTop = Number(options.top);
   };
   win.App = {
+    Preferences: {
+      get(key, fallback) {
+        return preferences.has(key) ? preferences.get(key) : fallback;
+      },
+      getBoolean(key, fallback = false) {
+        const value = preferences.has(key)
+          ? preferences.get(key)
+          : (fallback ? "1" : "0");
+        if (value === "1" || value === "true") return true;
+        if (value === "0" || value === "false") return false;
+        return fallback;
+      },
+      getNumber(key, fallback, min = -Infinity, max = Infinity) {
+        if (!preferences.has(key)) return fallback;
+        const raw = String(preferences.get(key));
+        if (!raw.trim()) return fallback;
+        const parsed = Number(raw);
+        if (!Number.isFinite(parsed)) return fallback;
+        return Math.max(min ?? -Infinity, Math.min(max ?? Infinity, parsed));
+      },
+    },
     ChatState: {
       getMessages: () => currentMessages,
     },
@@ -64,6 +86,7 @@ async function setup(messages) {
     doc,
     timeline: doc.getElementById("chat-timeline"),
     setMessages(nextMessages) { currentMessages = nextMessages; },
+    setPreference(key, value) { preferences.set(key, typeof value === "boolean" ? (value ? "1" : "0") : value); },
     setScrollMetrics(next) {
       if (next.scrollTop !== undefined) scrollTop = next.scrollTop;
       if (next.scrollHeight !== undefined) scrollHeight = next.scrollHeight;
@@ -136,6 +159,81 @@ describe("chat Timeline", () => {
     assert.ok(first);
     assert.ok(Array.from(first.querySelector(".chat-timeline-prompt")?.textContent || "").length <= 12);
     assert.strictEqual(first.getAttribute("title"), "这是一个超过十二个字的提问目录标题");
+  });
+
+  it("keeps Timeline enabled with a nine-item window when preferences are missing", () => {
+    assert.ok(env.win.App.ChatTimeline, "App.ChatTimeline should be registered");
+
+    env.setMessages(makeTurns(12));
+    env.win.App.ChatTimeline.sync();
+
+    assert.strictEqual(env.timeline.classList.contains("on"), true);
+    assert.strictEqual(env.timeline.querySelectorAll("[data-timeline-index]").length, 9);
+  });
+
+  it("fails safe to enabled for an unknown persisted enabled preference", () => {
+    assert.ok(env.win.App.ChatTimeline, "App.ChatTimeline should be registered");
+
+    env.setPreference("chat-timeline-enabled", "maybe");
+    env.setMessages(makeTurns(3));
+    env.win.App.ChatTimeline.sync();
+
+    assert.strictEqual(env.timeline.classList.contains("on"), true);
+    assert.strictEqual(env.timeline.querySelectorAll("[data-timeline-index]").length, 3);
+  });
+
+  it("uses a persisted five-item Timeline window", () => {
+    assert.ok(env.win.App.ChatTimeline, "App.ChatTimeline should be registered");
+
+    env.setPreference("chat-timeline-window-size", 5);
+    env.setMessages(makeTurns(12));
+    env.win.App.ChatTimeline.sync();
+
+    assert.strictEqual(env.timeline.querySelectorAll("[data-timeline-index]").length, 5);
+  });
+
+  it("falls back to a nine-item Timeline window for an invalid persisted setting", () => {
+    assert.ok(env.win.App.ChatTimeline, "App.ChatTimeline should be registered");
+
+    env.setPreference("chat-timeline-window-size", "bad");
+    env.setMessages(makeTurns(12));
+    env.win.App.ChatTimeline.sync();
+
+    assert.strictEqual(env.timeline.querySelectorAll("[data-timeline-index]").length, 9);
+  });
+
+  it("hides and clears Timeline when the persisted setting is disabled", () => {
+    assert.ok(env.win.App.ChatTimeline, "App.ChatTimeline should be registered");
+
+    env.setMessages(makeTurns(3));
+    env.win.App.ChatTimeline.sync();
+    assert.strictEqual(env.timeline.querySelectorAll("[data-timeline-index]").length, 3);
+
+    env.setPreference("chat-timeline-enabled", false);
+    env.win.App.ChatTimeline.refreshSettings();
+
+    assert.strictEqual(env.timeline.classList.contains("on"), false);
+    assert.strictEqual(env.timeline.getAttribute("aria-hidden"), "true");
+    assert.strictEqual(env.timeline.childElementCount, 0);
+  });
+
+  it("recomputes the active turn from scroll position after re-enabling", () => {
+    assert.ok(env.win.App.ChatTimeline, "App.ChatTimeline should be registered");
+
+    env.setMessages(makeTurns(12));
+    env.renderMessageTargets(Array.from({ length: 24 }, (_, index) => index * 100));
+    env.setScrollMetrics({ scrollTop: 1600, scrollHeight: 2600, clientHeight: 400 });
+    env.win.App.ChatTimeline.sync();
+
+    env.setPreference("chat-timeline-enabled", false);
+    env.win.App.ChatTimeline.refreshSettings();
+    env.setPreference("chat-timeline-enabled", true);
+    env.win.App.ChatTimeline.refreshSettings();
+
+    const active = env.timeline.querySelector('[aria-current="true"]');
+    assert.ok(active);
+    assert.strictEqual(active.dataset.timelineIndex, "8");
+    assert.strictEqual(env.doc.getElementById("ms").scrollTop, 1600);
   });
 
   it("renders at most nine turns around the active turn", () => {

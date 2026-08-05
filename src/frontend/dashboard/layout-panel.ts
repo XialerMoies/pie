@@ -47,6 +47,8 @@ function restorePanel(name: string): void {
   const si = $('si');
   if (!si) return;
 
+  const restoredPanel = name === 'permissions' ? 'explorer' : name;
+
   const panel = App.State.getSnapshot().panel;
   const isClosed = panel.closed === true;
   const savedWidth = panel.width > 50 ? panel.width : _panelWidth();
@@ -58,9 +60,9 @@ function restorePanel(name: string): void {
     si.classList.remove('closed');
     si.style.width = savedWidth + 'px';
   }
-  document.querySelectorAll('.sbar .b[data-side]').forEach(b => (b as HTMLElement).classList.toggle('on', (b as HTMLElement).dataset.side === name));
-  if (!isClosed) renderPanel(name, pc);
-  _syncPanelToStore(name);
+  document.querySelectorAll('.sbar .b[data-side]').forEach(b => (b as HTMLElement).classList.toggle('on', (b as HTMLElement).dataset.side === restoredPanel));
+  if (!isClosed) renderPanel(restoredPanel, pc);
+  _syncPanelToStore(restoredPanel);
 }
 
 function initResizeHandle(): void {

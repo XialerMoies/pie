@@ -538,6 +538,28 @@ describe("msgs() 渲染", () => {
 });
 
 describe("side panel interaction", () => {
+  it("maps a persisted Permissions panel to Explorer during startup restore", () => {
+    const panel = doc.getElementById("si");
+    assert.ok(panel);
+    panel.className = "sinfo";
+    panel.innerHTML = '<div class="panel-content" id="pc"></div>';
+
+    const originalGetPane = globalThis.getPane;
+    globalThis.getPane = (name) => name === "explorer"
+      ? (container) => { container.innerHTML = '<div id="explorer-pane">Explorer</div>'; }
+      : null;
+    try {
+      win.App.State.updatePanel({ active: "permissions", closed: false, width: 260 });
+      win.App.UI.restorePanel("permissions");
+
+      assert.strictEqual(win.App.State.getSnapshot().panel.active, "explorer");
+      assert.ok(doc.getElementById("explorer-pane"));
+      assert.doesNotMatch(panel.textContent, /未注册/);
+    } finally {
+      globalThis.getPane = originalGetPane;
+    }
+  });
+
   it("opens the requested panel when restored state and startup DOM disagree", () => {
     win.App.State.updatePanel({ active: "chat", closed: false, width: 260 });
 

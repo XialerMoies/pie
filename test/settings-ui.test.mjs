@@ -6,6 +6,9 @@ import { Window } from "happy-dom";
 
 const win = new Window();
 const storage = new Map();
+const settingsSpies = {
+  refreshCalls: [],
+};
 
 global.window = win;
 global.document = win.document;
@@ -25,7 +28,29 @@ global.E = (value) => String(value)
 global.toast = () => {};
 global.getD = () => {};
 win.__state = { D: null };
-win.App = { Settings: {} };
+win.App = {
+  Settings: {},
+  ChatTimeline: {
+    refreshSettings: (...args) => settingsSpies.refreshCalls.push({ label: "timeline-refresh", args }),
+  },
+  Chat: {
+    refreshReadingSettings: (...args) => settingsSpies.refreshCalls.push({ label: "reading-refresh", args }),
+  },
+  Permissions: {
+    mount: (...args) => {
+      settingsSpies.refreshCalls.push({ label: "permissions-mount", args });
+      const host = args[0] && typeof args[0].append === "function"
+        ? args[0]
+        : document.getElementById("mc-settings") || document.body;
+      const marker = document.createElement("div");
+      marker.dataset.permissionsMounted = "true";
+      marker.textContent = "mounted";
+      host.append(marker);
+    },
+    refresh: (...args) => settingsSpies.refreshCalls.push({ label: "permissions-refresh", args }),
+    unmount: (...args) => settingsSpies.refreshCalls.push({ label: "permissions-unmount", args }),
+  },
+};
 global.App = win.App;
 
 let fetchImpl = async () => ({ ok: true, json: async () => ({}) });
@@ -41,6 +66,7 @@ beforeEach(() => {
   document.body.innerHTML = "";
   document.documentElement.classList.remove("theme-light");
   storage.clear();
+  Object.values(settingsSpies).forEach((calls) => { calls.length = 0; });
   delete win.__monaco;
   win.__state.D = null;
   win._provOrder = [];
@@ -57,7 +83,38 @@ async function flushAsyncWork() {
   await Promise.resolve();
 }
 
+async function openGeneralSettings() {
+  win.App.Settings.openSettingsModal();
+  await flushAsyncWork();
+  const generalTab = document.querySelector('.ms-item[data-st="general"]');
+  assert.ok(generalTab, "General settings tab should be rendered");
+  generalTab.click();
+}
+
+function getControl(id) {
+  const control = document.getElementById(id);
+  assert.ok(control, `${id} should be rendered`);
+  return control;
+}
+
 describe("settings DOM boundary", () => {
+  it("removes the standalone Permissions sidebar entry while keeping the mode badge", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-layout.ts"), "utf8");
+
+    assert.doesNotMatch(source, /data-side=["']permissions["']/);
+    assert.match(source, /permission-mode-badge/);
+  });
+
+  it("declares the settings refresh and embedded Permissions contracts", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard.d.ts"), "utf8");
+
+    assert.match(source, /interface AppChatTimeline[\s\S]*?refreshSettings\(\): void;/);
+    assert.match(source, /interface AppChat[\s\S]*?refreshReadingSettings\(\): void;/);
+    assert.match(source, /interface AppPermissions[\s\S]*?mount\(container: HTMLElement\): void;[\s\S]*?refresh\(forceToast\?: boolean\): Promise<void>;[\s\S]*?unmount\(\): void;/);
+    assert.match(source, /interface AppNamespace[\s\S]*?Permissions: AppPermissions;/);
+    assert.match(source, /refreshPermissionsPanel\?: \(forceToast\?: boolean\) => Promise<void>;/);
+  });
+
   it("does not use inline event attributes", () => {
     const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-settings.ts"), "utf8");
     assert.doesNotMatch(source, /\son(?:click|change|dragstart|dragover|drop)\s*=/i);
@@ -142,6 +199,7 @@ describe("settings DOM boundary", () => {
 
     document.querySelector('[data-settings-action="close"]')?.click();
     assert.strictEqual(document.getElementById("settings-modal"), null);
+    assert.strictEqual(settingsSpies.refreshCalls.filter((call) => call.label === "permissions-unmount").length, 0);
   });
 
   it("applies the theme immediately before Monaco is ready", async () => {
@@ -159,5 +217,118 @@ describe("settings DOM boundary", () => {
     theme.value = "vs-dark";
     theme.dispatchEvent(new win.Event("change", { bubbles: true }));
     assert.strictEqual(document.documentElement.classList.contains("theme-light"), false);
+  });
+
+  it("renders Timeline and jump-to-latest General controls with their defaults", async () => {
+    await openGeneralSettings();
+
+    assert.strictEqual(document.getElementById("gs-timeline-enabled")?.checked, true);
+    assert.strictEqual(document.getElementById("gs-timeline-window")?.value, "9");
+    assert.strictEqual(document.getElementById("gs-jump-enabled")?.checked, true);
+    const jumpSmooth = getControl("gs-jump-smooth");
+    assert.strictEqual(jumpSmooth.tagName, "SELECT");
+    assert.deepStrictEqual([...jumpSmooth.options].map((option) => ({ value: option.value, label: option.textContent })), [
+      { value: "true", label: "Smooth" },
+      { value: "false", label: "Immediate" },
+    ]);
+    assert.strictEqual(jumpSmooth.value, "true");
+    assert.strictEqual(document.getElementById("gs-jump-threshold")?.value, "72");
+  });
+
+  it("persists Timeline and jump settings through their refresh facades without changing session state", async () => {
+    const sentinelDashboard = { activeSessionId: "sentinel-session" };
+    win.__state.D = sentinelDashboard;
+    const sentinelMessages = document.createElement("div");
+    sentinelMessages.id = "ms";
+    sentinelMessages.innerHTML = '<div class="sentinel-message">keep this content</div>';
+    sentinelMessages.scrollTop = 314;
+    document.body.append(sentinelMessages);
+    const activeSessionBefore = sentinelDashboard.activeSessionId;
+    const messageContentBefore = sentinelMessages.innerHTML;
+    const scrollTopBefore = sentinelMessages.scrollTop;
+
+    await openGeneralSettings();
+
+    const timelineEnabled = getControl("gs-timeline-enabled");
+    timelineEnabled.checked = false;
+    timelineEnabled.dispatchEvent(new win.Event("change", { bubbles: true }));
+    const timelineWindow = getControl("gs-timeline-window");
+    timelineWindow.value = "5";
+    timelineWindow.dispatchEvent(new win.Event("change", { bubbles: true }));
+
+    const jumpEnabled = getControl("gs-jump-enabled");
+    jumpEnabled.checked = false;
+    jumpEnabled.dispatchEvent(new win.Event("change", { bubbles: true }));
+    const jumpSmooth = getControl("gs-jump-smooth");
+    const refreshCallsBeforeSmooth = settingsSpies.refreshCalls.length;
+    jumpSmooth.value = "false";
+    jumpSmooth.dispatchEvent(new win.Event("change", { bubbles: true }));
+    assert.strictEqual(storage.get("chat-jump-latest-smooth"), "0");
+    assert.deepStrictEqual(settingsSpies.refreshCalls.slice(refreshCallsBeforeSmooth).map((call) => call.label), ["reading-refresh"]);
+    const jumpThreshold = getControl("gs-jump-threshold");
+    jumpThreshold.value = "120";
+    jumpThreshold.dispatchEvent(new win.Event("change", { bubbles: true }));
+
+    assert.strictEqual(storage.get("chat-timeline-enabled"), "0");
+    assert.strictEqual(storage.get("chat-timeline-window-size"), "5");
+    assert.strictEqual(storage.get("chat-jump-latest-enabled"), "0");
+    assert.strictEqual(storage.get("chat-jump-latest-smooth"), "0");
+    assert.strictEqual(storage.get("chat-jump-latest-threshold"), "120");
+    assert.deepStrictEqual(settingsSpies.refreshCalls.map((call) => call.label), [
+      "timeline-refresh",
+      "timeline-refresh",
+      "reading-refresh",
+      "reading-refresh",
+      "reading-refresh",
+    ]);
+    assert.strictEqual(win.__state.D, sentinelDashboard);
+    assert.strictEqual(document.getElementById("ms"), sentinelMessages);
+    assert.strictEqual(win.__state.D.activeSessionId, activeSessionBefore);
+    assert.strictEqual(sentinelMessages.innerHTML, messageContentBefore);
+    assert.strictEqual(sentinelMessages.scrollTop, scrollTopBefore);
+  });
+
+  it("mounts Permissions from its Settings entry", async () => {
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+
+    const permissionsTab = document.querySelector('.ms-item[data-st="permissions"]');
+    assert.ok(permissionsTab, "Permissions settings tab should be rendered");
+    permissionsTab.click();
+    await flushAsyncWork();
+
+    assert.ok(settingsSpies.refreshCalls.some((call) => call.label === "permissions-mount"));
+    assert.ok(document.querySelector('[data-permissions-mounted="true"]'));
+    assert.strictEqual(settingsSpies.refreshCalls.filter((call) => call.label === "permissions-refresh").length, 0);
+  });
+
+  it("unmounts Permissions when switching to another Settings tab", async () => {
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+
+    for (const tab of ["general", "model", "about"]) {
+      document.querySelector('.ms-item[data-st="permissions"]')?.click();
+      await flushAsyncWork();
+      const unmountsBefore = settingsSpies.refreshCalls.filter((call) => call.label === "permissions-unmount").length;
+      document.querySelector(`.ms-item[data-st="${tab}"]`)?.click();
+      await flushAsyncWork();
+      assert.strictEqual(
+        settingsSpies.refreshCalls.filter((call) => call.label === "permissions-unmount").length,
+        unmountsBefore + 1,
+        `switching to ${tab} should unmount Permissions`,
+      );
+    }
+  });
+
+  it("unmounts Permissions when closing an existing Permissions Settings modal", async () => {
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+    document.querySelector('.ms-item[data-st="permissions"]')?.click();
+    await flushAsyncWork();
+
+    win.App.Settings.openSettingsModal();
+
+    assert.strictEqual(document.getElementById("settings-modal"), null);
+    assert.strictEqual(settingsSpies.refreshCalls.filter((call) => call.label === "permissions-unmount").length, 1);
   });
 });

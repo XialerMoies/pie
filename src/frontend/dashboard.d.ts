@@ -136,6 +136,7 @@ interface AppChat {
   scheduleMessagesRender(scroll?: boolean): void;
   resetMsgKeys(): void;
   scrollToLatest(options?: { force?: boolean; smooth?: boolean }): boolean;
+  refreshReadingSettings(): void;
   isBusy(): boolean;
 }
 interface AppChatState {
@@ -152,6 +153,7 @@ interface AppChatState {
 interface AppChatTimeline {
   bind(): void;
   sync(): void;
+  refreshSettings(): void;
   handleMessagesScroll(): void;
   reset(): void;
 }
@@ -242,6 +244,11 @@ interface AppSessionActivation {
   onceActivated(sessionId: string, cb: SessionActivatedCallback): CancelSessionActivationSubscription;
   emitActivated(sessionId: string): void;
   invalidate(): void;
+}
+interface AppPermissions {
+  mount(container: HTMLElement): void;
+  refresh(forceToast?: boolean): Promise<void>;
+  unmount(): void;
 }
 interface AppSettings {
   openSettingsModal(): void;
@@ -363,6 +370,7 @@ interface AppNamespace {
   SessionActivation: AppSessionActivation;
   SessionTabs: AppSessionTabs;
   SessionRestore: AppSessionRestore;
+  Permissions: AppPermissions;
   Settings: AppSettings;
   Git: AppGit;
   McpState: AppMcpState;
