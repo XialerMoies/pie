@@ -225,10 +225,10 @@ function renderTabs(): void {
   let items: AppTab[] = state.items;
   const activeId = state.activeId;
   // TabStore 中 session/chat tab 的 title 为 '新会话'（openTab 时写入），
-  // 从 sessionTabLabel() 实时解析真实名称
-  if (typeof (window as any).sessionTabLabel === 'function') {
-    items = items.map(t => t.kind !== 'file' ? { ...t, title: (window as any).sessionTabLabel(t.id) } : t);
-  }
+  // 从 App.Session 实时解析真实名称
+  items = items.map(t => t.kind !== 'file'
+    ? { ...t, title: App.Session.getTabLabel(t.id) || t.title }
+    : t);
 
   let scroll = '';
   for (let i = 0; i < items.length; i++) {

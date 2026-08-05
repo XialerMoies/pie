@@ -889,6 +889,7 @@ if (AppSess) {
   AppSess.branchSession = branchSession;
   AppSess.commitSessionTab = commitSessionTab;
   AppSess.maybeAutoTitleSession = maybeAutoTitleSession;
+  AppSess.getTabLabel = sessionTabLabel;
   AppSess.getActiveSessionTabId = () => App.Tabs.getActiveSessionTabId();
   AppSess.setActiveSessionTabId = setActiveSessionTabId;
   AppSess.ensureDraftSessionTab = ensureDraftSessionTab;

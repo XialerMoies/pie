@@ -196,6 +196,7 @@ interface AppSession {
   branchSession(id: string): void;
   commitSessionTab(oldId: string, newId: string): void;
   maybeAutoTitleSession(id: string, assistantText?: string): Promise<string | null>;
+  getTabLabel(id: string): string;
   getActiveSessionTabId(): string | null;
   setActiveSessionTabId(id: string | null): void;
   ensureDraftSessionTab(): string;

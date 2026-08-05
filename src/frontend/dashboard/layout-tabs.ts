@@ -223,7 +223,7 @@ function tabMoreMenu(e: MouseEvent): void {
         ? ExplorerService.iconFor(tab.title, false)
         : S('ic', 14);
       const title = tab.kind !== 'file'
-        ? ((window as any).sessionTabLabel?.(tab.id) || tab.title)
+        ? (App.Session.getTabLabel(tab.id) || tab.title)
         : tab.title;
       item.innerHTML = `<span class="ctx-tab-icon">${icon}</span><span class="ctx-tab-label">${E(title)}</span><span class="ctx-tab-close">✕</span>`;
       item.querySelector('.ctx-tab-close')!.addEventListener('click', (ce) => { ce.stopPropagation(); menu.remove(); T?.close(tab.id); });

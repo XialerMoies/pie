@@ -66,7 +66,9 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
         },
       },
       UI: {}, Chat: { clearAttachments: () => {} },
-      File: {}, Session: {}, Settings: {}, Git: {},
+      File: {}, Session: {
+        getTabLabel: (id) => win.__state._sessionTabLabels[id] || "新会话",
+      }, Settings: {}, Git: {},
     };
     win.__state._uiStateStore = {
       _state: { activeView: { type: "chat" }, tabs: { sessions: [], files: [], labels: {} }, recent: { sessions: {} } },
@@ -100,7 +102,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     win.__state._fileTabs = [];
     win.__state._activeFileTab = null;
     win.__state._activeSessionTabId = null;
-    delete win.sessionTabLabel;
+    win.App.Session.getTabLabel = (id) => win.__state._sessionTabLabels[id] || "新会话";
   });
 
   it("getD bootstraps before dashboard fetch and retries a failed bootstrap", async () => {
@@ -232,7 +234,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   it("更多菜单中的会话标签使用实时标题", () => {
     const ts = win.App.Tabs;
     ts.openTab({ kind: "session", id: "sess-real-title", title: "新会话", sessionId: "sess-real-title" });
-    win.sessionTabLabel = (id) => id === "sess-real-title" ? "真实会话标题" : "新会话";
+    win.App.Session.getTabLabel = (id) => id === "sess-real-title" ? "真实会话标题" : "新会话";
 
     win.tabMoreMenu(new MouseEvent("click", { clientX: 12, clientY: 12 }));
 
@@ -247,7 +249,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
 
     const ts = win.App.Tabs;
     ts.openTab({ kind: "session", id: "sess-long-title", title: "新会话", sessionId: "sess-long-title" });
-    win.sessionTabLabel = () => "运行 git log --oneline -5 查看最近的提交然后继续执行状态检查并生成总结";
+    win.App.Session.getTabLabel = () => "运行 git log --oneline -5 查看最近的提交然后继续执行状态检查并生成总结";
     win.tabMoreMenu(new MouseEvent("click", { clientX: 999, clientY: 12 }));
 
     const menu = win.document.querySelector(".ctx-tabs-menu");

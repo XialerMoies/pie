@@ -81,6 +81,18 @@ describe("frontend state ownership", () => {
     assert.doesNotMatch(source, /const App\s*=\s*\(window as any\)\.App/);
   });
 
+  it("reads session tab labels through App.Session", () => {
+    const root = resolve(process.cwd(), "src/frontend");
+    for (const file of [
+      "dashboard/dashboard-layout.ts",
+      "dashboard/layout-tabs.ts",
+    ]) {
+      const source = readFileSync(resolve(root, file), "utf8");
+      assert.doesNotMatch(source, /(?:window|\(window as any\))\.sessionTabLabel/);
+      assert.match(source, /App\.Session\.getTabLabel\(/);
+    }
+  });
+
   it("keeps legacy window state and tab projections out of production TypeScript", () => {
     const root = resolve(process.cwd(), "src/frontend");
     for (const file of frontendTypeScriptFiles(root)) {
