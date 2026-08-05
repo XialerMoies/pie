@@ -72,6 +72,15 @@ describe("dashboard DOM event ownership", () => {
 });
 
 describe("frontend state ownership", () => {
+  it("narrows the shared App facade once at the initialization boundary", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "src/frontend/dashboard/dashboard-helpers.ts"),
+      "utf8",
+    );
+    assert.match(source, /const App:\s*AppNamespace\s*=\s*window\.App\s*;/);
+    assert.doesNotMatch(source, /const App\s*=\s*\(window as any\)\.App/);
+  });
+
   it("keeps legacy window state and tab projections out of production TypeScript", () => {
     const root = resolve(process.cwd(), "src/frontend");
     for (const file of frontendTypeScriptFiles(root)) {

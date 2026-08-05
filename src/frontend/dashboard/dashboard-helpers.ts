@@ -581,7 +581,7 @@ function getPane(name: string): ((container: HTMLElement) => void) | undefined {
 }
 
 // ─── App 命名空间绑定 ──────────────────────────────────────
-const App = (window as any).App;
+const App: AppNamespace = window.App;
 App.UI.$ = $;
 App.UI.S = S;
 App.UI.E = E;
