@@ -23,6 +23,7 @@ export interface RuntimeConfig {
   agentDir: string
   cwd: string
   sessionsDir: string
+  sessionsDirForWorkspace?: (workspace: string) => string
   authFile: string
   modelsFile: string
   /** 权限模式：由宿主设置，传递给工具执行上下文 */
@@ -316,6 +317,9 @@ export class AgentRuntime {
 
   /** 获取 workspace 对应的 session 目录（与 routes 共用 wsDir） */
   private wsSessionDir(workspace: string): string {
+    if (this.config.sessionsDirForWorkspace) {
+      return this.config.sessionsDirForWorkspace(workspace)
+    }
     return wsDir(this.config.sessionsDir, workspace)
   }
 

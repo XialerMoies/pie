@@ -7,6 +7,7 @@ import { processAttachments, buildContextBlock } from "./attach.js";
 import type { CommandConfirmationRequest, CommandConfirmationResult } from "../../agent/types.js";
 import { writeServerPermissionError } from "../permission-service.js";
 import { writePathGuardError } from "./path-guard.js";
+import { WorkspaceLockConflictError } from "../workspace-lock.js";
 import { authorizeWorkspacePath, switchAuthorizedWorkspace } from "./workspace-authorization.js";
 import { replayChatEvents, resetChatEventHistory, writeChatEvent, writeChatStreamBaseline } from "../chat-stream.js";
 
@@ -171,6 +172,11 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         res.end(JSON.stringify({ ok: true, workspace: result.workspace, switched: result.switched }));
       } catch (err: unknown) { const msg = err instanceof Error ? (err as Error).message : String(err);
         console.log(`❌ Workspace switch error: ${msg}`);
+        if (err instanceof WorkspaceLockConflictError) {
+          res.writeHead(err.statusCode, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ error: err.message, code: err.code, owner: err.owner }));
+          return;
+        }
         if (writeServerPermissionError(res, cors, err)) return;
         if (writePathGuardError(res, cors, err)) return;
         res.writeHead(400, { ...cors });
@@ -189,6 +195,10 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         const parsed = JSON.parse(body);
         const { message, workspace: requestedWorkspace, attachments } = parsed;
         const workspace = await authorizeWorkspacePath(ctx, requestedWorkspace, "chat.workspace");
+        if (workspace && runtime.currentWorkspace !== workspace) {
+          console.log(`📂 Chat with workspace: ${workspace} (was: ${runtime.currentWorkspace})`);
+          await switchAuthorizedWorkspace(ctx, workspace, "chat.workspace");
+        }
         resetChatEventHistory(chatStream);
         console.log(`[chat] POST message="${message?.slice(0, 60)}${(message?.length || 0) > 60 ? "…" : ""}" ws="${workspace || "?"}" atts=${attachments?.length || 0}`);
         chatStream.textBuffer = "";
@@ -202,11 +212,6 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         chatStream.textSegments = [];
         chatStream.emittedTraces = new Set();
         if (workspace) chatStream.currentWorkspace = workspace;
-        // 切换 agent 工作目录到当前项目（重建 AgentSession）
-        if (workspace && runtime.currentWorkspace !== workspace) {
-          console.log(`📂 Chat with workspace: ${workspace} (was: ${runtime.currentWorkspace})`);
-          await runtime.switchWorkspace(workspace);
-        }
         // 处理引用文件附件
         let finalMessage = message;
         if (attachments && Array.isArray(attachments) && attachments.length > 0) {

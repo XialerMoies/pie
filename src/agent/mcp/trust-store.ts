@@ -1,18 +1,18 @@
 /**
- * 信任存储 — 记录用户确认过的 MCP server。
+ * 信任存储 - 记录用户确认过的 MCP server。
  *
  * 核心逻辑：
  * - server 身份由 workspacePath + commandHash(server.launch fields) 决定
- * - command hash 变化 → 视为新 server，需重新确认
- * - 存储文件：<PI_CONFIG_DIR>/mcp-trust.json
+ * - command hash 变化后视为新 server，需重新确认
+ * - 存储文件：<PI_USER_CONFIG>/mcp-trust.json
  */
-
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
-import { resolve, dirname } from "node:path"
 import { createHash } from "node:crypto"
+import { existsSync, readFileSync } from "node:fs"
+import { resolve } from "node:path"
+import { readLockedJson, updateLockedJson } from "../../data/locked-json-store.js"
 import type { McpServerConfig, TrustRecord, TrustStoreFile } from "./types.js"
 
-// ─── Hash ──────────────────────────────────────────
+// --- Hash --------------------------------------------------
 
 /**
  * 生成 MCP server 启动指纹。
@@ -20,7 +20,7 @@ import type { McpServerConfig, TrustRecord, TrustStoreFile } from "./types.js"
  * stdio: hash command + args + env + cwd + transport
  * http/sse: hash url + headers(排序) + env + transport
  *
- * 任一字段变化 → hash 变化 → 需重新信任确认。
+ * 任一字段变化后 hash 变化，需重新信任确认。
  */
 export function hashServerCommand(config: McpServerConfig): string {
   const transport = config.transport || "stdio"
@@ -31,19 +31,17 @@ export function hashServerCommand(config: McpServerConfig): string {
     h.update((config.args ?? []).join("\x00")).update("\x00")
     if (config.cwd) h.update(config.cwd).update("\x00")
   } else {
-    // http/sse: hash url + headers
     h.update(config.url ?? "").update("\x00")
     if (config.headers) {
-      for (const k of Object.keys(config.headers).sort()) {
-        h.update(k).update("=").update(config.headers[k]).update("\x00")
+      for (const key of Object.keys(config.headers).sort()) {
+        h.update(key).update("=").update(config.headers[key]).update("\x00")
       }
     }
   }
 
-  // env 按 key 排序后 hash
   if (config.env) {
-    for (const k of Object.keys(config.env).sort()) {
-      h.update(k).update("=").update(config.env[k]).update("\x00")
+    for (const key of Object.keys(config.env).sort()) {
+      h.update(key).update("=").update(config.env[key]).update("\x00")
     }
   }
 
@@ -51,27 +49,24 @@ export function hashServerCommand(config: McpServerConfig): string {
   return h.digest("hex")
 }
 
-// ─── 存储 ──────────────────────────────────────────
+// --- 存储 --------------------------------------------------
 
 export interface TrustStoreOptions {
-  /** 存储文件路径，默认 <PI_CONFIG_DIR>/mcp-trust.json */
+  /** 存储文件路径，默认 <PI_USER_CONFIG>/mcp-trust.json。 */
   filePath?: string
 }
 
-/**
- * 默认存储路径：PI 配置目录下的 mcp-trust.json
- */
+/** 默认存储路径：用户级 PI 配置目录下的 mcp-trust.json。 */
 export function defaultTrustStorePath(): string {
   const home = process.env.HOME
     || process.env.USERPROFILE
     || (process.platform === "win32" ? process.env.USERPROFILE : "/home/pi")
-  const configDir = process.env.PI_CONFIG_DIR || resolve(home!, ".pi", "agent")
+  const configDir = process.env.PI_USER_CONFIG
+    || process.env.PI_CONFIG_DIR
+    || resolve(home!, ".pi", "agent")
   return resolve(configDir, "mcp-trust.json")
 }
 
-/**
- * 信任存储实例
- */
 export class TrustStore {
   private records: TrustRecord[] = []
   private readonly filePath: string
@@ -81,104 +76,81 @@ export class TrustStore {
     this._load()
   }
 
-  // ─── 公开方法 ──────────────────────────────────
-
-  /**
-   * 检查 server 是否受信任。
-   * workspacePath + commandHash 都匹配才算信任。
-   */
+  /** 检查 server 是否受信任；workspacePath 与 commandHash 都必须匹配。 */
   isTrusted(workspacePath: string, commandHash: string): boolean {
     return this.records.some(
-      (r) => r.workspacePath === workspacePath && r.commandHash === commandHash,
+      (record) => record.workspacePath === workspacePath && record.commandHash === commandHash,
     )
   }
 
-  /**
-   * 添加信任记录。
-   * 相同 workspace + hash 会更新时间戳。
-   */
+  /** 添加或刷新信任记录；相同 workspace + hash 会更新时间戳。 */
   addTrust(
     workspacePath: string,
     commandHash: string,
     label: string,
-  ): void {
-    // 移除旧记录（如果存在）
-    this.removeTrust(workspacePath, commandHash)
-    this.records.push({
-      workspacePath,
-      commandHash,
-      label,
-      trustedAt: Date.now(),
-    })
-    this._save()
+  ): Promise<void> {
+    return this._update((records) => [
+      ...records.filter((record) => !(record.workspacePath === workspacePath && record.commandHash === commandHash)),
+      { workspacePath, commandHash, label, trustedAt: Date.now() },
+    ])
   }
 
-  /**
-   * 移除单条信任记录。
-   */
-  removeTrust(workspacePath: string, commandHash: string): void {
-    const before = this.records.length
-    this.records = this.records.filter(
-      (r) => !(r.workspacePath === workspacePath && r.commandHash === commandHash),
-    )
-    if (this.records.length !== before) {
-      this._save()
-    }
+  removeTrust(workspacePath: string, commandHash: string): Promise<void> {
+    return this._update((records) => records.filter(
+      (record) => !(record.workspacePath === workspacePath && record.commandHash === commandHash),
+    ))
   }
 
-  /**
-   * 清空指定 workspace 的所有信任记录。
-   * 用户可用 /mcp reset-trust 恢复出厂。
-   */
-  clearWorkspace(workspacePath: string): void {
-    const before = this.records.length
-    this.records = this.records.filter(
-      (r) => r.workspacePath !== workspacePath,
-    )
-    if (this.records.length !== before) {
-      this._save()
-    }
+  clearWorkspace(workspacePath: string): Promise<void> {
+    return this._update((records) => records.filter((record) => record.workspacePath !== workspacePath))
   }
 
-  /**
-   * 重置所有信任。
-   */
-  clearAll(): void {
-    if (this.records.length === 0) return
-    this.records = []
-    this._save()
+  clearAll(): Promise<void> {
+    return this._update(() => [])
   }
 
-  /** 获取所有信任记录（只读快照） */
+  /** 获取所有信任记录的只读快照。 */
   getAllRecords(): ReadonlyArray<TrustRecord> {
     return [...this.records]
   }
 
-  /** 获取指定 workspace 的信任记录 */
+  /** 获取指定 workspace 的信任记录。 */
   getWorkspaceRecords(workspacePath: string): ReadonlyArray<TrustRecord> {
-    return this.records.filter((r) => r.workspacePath === workspacePath)
+    return this.records.filter((record) => record.workspacePath === workspacePath)
   }
 
-  // ─── 私有 ────────────────────────────────────
+  async refresh(): Promise<void> {
+    const document = await readLockedJson<TrustStoreFile>(
+      this.filePath,
+      () => ({ records: [] }),
+      { recoverInvalidJson: true },
+    )
+    this.records = sanitizeTrustRecords(document)
+  }
 
   private _load(): void {
     try {
       if (!existsSync(this.filePath)) return
-      const content = readFileSync(this.filePath, "utf-8")
-      const parsed = JSON.parse(content) as TrustStoreFile
-      this.records = Array.isArray(parsed.records) ? parsed.records : []
+      this.records = sanitizeTrustRecords(JSON.parse(readFileSync(this.filePath, "utf8")))
     } catch {
-      // 文件损坏等情况：从空记录开始
+      // 文件损坏等情况：从空记录开始。
       this.records = []
     }
   }
 
-  private _save(): void {
-    try {
-      mkdirSync(dirname(this.filePath), { recursive: true })
-      writeFileSync(this.filePath, JSON.stringify({ records: this.records }, null, 2), "utf-8")
-    } catch {
-      // 写入失败静默处理
-    }
+  private async _update(updater: (records: TrustRecord[]) => TrustRecord[]): Promise<void> {
+    const document = await updateLockedJson<TrustStoreFile>(
+      this.filePath,
+      () => ({ records: [] }),
+      (current) => ({ records: updater(sanitizeTrustRecords(current)) }),
+      { recoverInvalidJson: true },
+    )
+    this.records = sanitizeTrustRecords(document)
   }
+}
+
+function sanitizeTrustRecords(document: unknown): TrustRecord[] {
+  if (!document || typeof document !== "object" || Array.isArray(document)) return []
+  const records = (document as Partial<TrustStoreFile>).records
+  return Array.isArray(records) ? records : []
 }

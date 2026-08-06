@@ -16,6 +16,7 @@ import { resolve } from "node:path";
 let mockStatus = 200;
 let mockBody = {};
 let lastRequest = null;
+const originalPiUserConfig = process.env.PI_USER_CONFIG;
 const originalPiConfigDir = process.env.PI_CONFIG_DIR;
 const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
 
@@ -44,6 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreEnv("PI_USER_CONFIG", originalPiUserConfig);
   restoreEnv("PI_CONFIG_DIR", originalPiConfigDir);
   restoreEnv("ANTHROPIC_API_KEY", originalAnthropicApiKey);
 });
@@ -310,6 +312,50 @@ describe("search tool", () => {
 });
 
 describe("web-search tool", () => {
+  it("prefers PI_USER_CONFIG auth over legacy auth candidates", async () => {
+    const tmp = mkdtempSync(resolve(process.cwd(), ".tmp-web-search-auth-priority-"));
+    try {
+      const userConfigDir = resolve(tmp, "user-config");
+      const legacyConfigDir = resolve(tmp, "legacy-config");
+      mkdirSync(userConfigDir, { recursive: true });
+      mkdirSync(legacyConfigDir, { recursive: true });
+      const userAuthPath = resolve(userConfigDir, "auth.json");
+      writeFileSync(userAuthPath, JSON.stringify({
+        deepseek: { apiKey: "sk-user-config-priority" },
+      }));
+      writeFileSync(resolve(legacyConfigDir, "auth.json"), JSON.stringify({
+        deepseek: { apiKey: "sk-legacy-config" },
+      }));
+      process.env.PI_USER_CONFIG = userConfigDir;
+      process.env.PI_CONFIG_DIR = legacyConfigDir;
+      mockBody = {
+        content: [
+          {
+            type: "text",
+            text: "provider result",
+          },
+        ],
+      };
+      setSearchBackend("provider");
+      const authorizedPaths = [];
+
+      const result = await webSearchTool.execute({ query: "codex" }, {
+        toolCallId: "call-1",
+        workspace: tmp,
+        authorizePath: async (root, target, operation, source) => {
+          authorizedPaths.push(target);
+          return { operation, root, path: target, relativePath: target, source };
+        },
+      });
+
+      assert.ok(toolText(result).includes("provider result"));
+      assert.deepStrictEqual(authorizedPaths, [userAuthPath]);
+      assert.strictEqual(lastRequest?.init?.headers?.["x-api-key"], "sk-user-config-priority");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("authorizes provider auth config reads through the shared path hook", async () => {
     const tmp = mkdtempSync(resolve(process.cwd(), ".tmp-web-search-auth-"));
     try {
@@ -318,6 +364,7 @@ describe("web-search tool", () => {
       writeFileSync(resolve(configDir, "auth.json"), JSON.stringify({
         deepseek: { apiKey: "sk-test-web-search" },
       }));
+      delete process.env.PI_USER_CONFIG;
       process.env.PI_CONFIG_DIR = configDir;
       mockBody = {
         content: [
@@ -357,6 +404,7 @@ describe("web-search tool", () => {
       writeFileSync(resolve(configDir, "auth.json"), JSON.stringify({
         deepseek: { apiKey: "sk-denied-web-search" },
       }));
+      delete process.env.PI_USER_CONFIG;
       process.env.PI_CONFIG_DIR = configDir;
       mockBody = {
         content: [

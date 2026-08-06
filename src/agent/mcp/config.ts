@@ -153,7 +153,10 @@ export function defaultGlobalConfigPath(): string {
   const home = process.env.HOME
     || process.env.USERPROFILE
     || (process.platform === "win32" ? process.env.USERPROFILE : "/home/pi")
-  return resolve(home!, ".pi", "agent", "mcp.json")
+  const configDir = process.env.PI_USER_CONFIG
+    || process.env.PI_CONFIG_DIR
+    || resolve(home!, ".pi", "agent")
+  return resolve(configDir, "mcp.json")
 }
 
 /**

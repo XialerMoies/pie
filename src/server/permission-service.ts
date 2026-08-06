@@ -145,6 +145,7 @@ export class ServerPermissionService {
   private activeWorkspaceRulePath = "";
   private auditSeq = 0;
   private audit: PermissionAuditEntry[] = [];
+  private auditWriteQueue: Promise<void> = Promise.resolve();
 
   constructor(options: ServerPermissionServiceOptions = {}) {
     this.sessionPermissionState = options.sessionPermissionState;
@@ -528,7 +529,7 @@ export class ServerPermissionService {
     }
 
     const appliedRules = confirmed.scope === "session" || confirmed.scope === "workspace"
-      ? this.applyPermissionSuggestions(suggestions, confirmed.scope)
+      ? await this.applyPermissionSuggestions(suggestions, confirmed.scope)
       : [];
 
     this.record({
@@ -559,13 +560,15 @@ export class ServerPermissionService {
     return this.audit.slice(-normalizedLimit);
   }
 
-  clearAuditTrail(): void {
+  async flushAuditWrites(): Promise<void> {
+    await this.auditWriteQueue;
+  }
+
+  async clearAuditTrail(): Promise<void> {
     this.audit = [];
-    try {
-      this.auditStore?.clear();
-    } catch {
-      // Keep in-memory permission decisions usable even if the history file is locked.
-    }
+    if (!this.auditStore) return;
+    this.auditWriteQueue = this.auditWriteQueue.then(() => this.auditStore!.clear()).catch(() => {});
+    await this.auditWriteQueue;
   }
 
   getRulesSnapshot(): PermissionRulesSnapshot {
@@ -579,10 +582,10 @@ export class ServerPermissionService {
     };
   }
 
-  applyPermissionSuggestions(
+  async applyPermissionSuggestions(
     suggestions: readonly PermissionSuggestion[],
     scope: PermissionRuleScope,
-  ): PermissionRule[] {
+  ): Promise<PermissionRule[]> {
     this.syncWorkspaceRules();
     const state = this.requireSessionPermissionState();
     if (scope === "session") {
@@ -598,17 +601,17 @@ export class ServerPermissionService {
         : []
     ));
     if (rules.length === 0) return [];
-    this.mutateWorkspaceRules((candidate) => {
+    await this.mutateWorkspaceRules((candidate) => {
       for (const rule of rules) addUniqueRule(candidate.alwaysAllowRules, rule);
     });
     return rules;
   }
 
-  addSessionRule(list: PermissionRuleListName, rule: PermissionRule): { added: boolean; rule: PermissionRule } {
+  async addSessionRule(list: PermissionRuleListName, rule: PermissionRule): Promise<{ added: boolean; rule: PermissionRule }> {
     return this.addRule(list, rule, "session");
   }
 
-  addRule(list: PermissionRuleListName, rule: PermissionRule, scope: PermissionRuleScope = "session"): { added: boolean; rule: PermissionRule } {
+  async addRule(list: PermissionRuleListName, rule: PermissionRule, scope: PermissionRuleScope = "session"): Promise<{ added: boolean; rule: PermissionRule }> {
     this.syncWorkspaceRules();
     const state = this.requireSessionPermissionState();
     const normalized = normalizePermissionRule(rule);
@@ -620,59 +623,66 @@ export class ServerPermissionService {
         "workspace_internal_ask_rule",
       );
     }
-    const rules = rulesForList(state, list, scope);
-    const exists = rules.some((existing) => (
-      existing.toolName === normalized.toolName &&
-      existing.ruleContent === normalized.ruleContent &&
-      (existing.match ?? "prefix") === (normalized.match ?? "prefix")
-    ));
-    if (!exists) {
-      if (scope === "workspace") {
-        this.mutateWorkspaceRules((candidate) => rulesForRuleSet(candidate, list).push(normalized));
-      } else {
-        rules.push(normalized);
-      }
+    if (scope === "workspace") {
+      let added = false;
+      await this.mutateWorkspaceRules((candidate) => {
+        added = addUniqueRule(rulesForRuleSet(candidate, list), normalized);
+      });
+      return { added, rule: normalized };
     }
-    return { added: !exists, rule: normalized };
+
+    const rules = rulesForList(state, list, scope);
+    const added = addUniqueRule(rules, normalized);
+    return { added, rule: normalized };
   }
 
-  removeSessionRule(list: PermissionRuleListName, index: number): PermissionRule | undefined {
+  async removeSessionRule(list: PermissionRuleListName, index: number): Promise<PermissionRule | undefined> {
     return this.removeRule(list, index, "session");
   }
 
-  removeRule(list: PermissionRuleListName, index: number, scope: PermissionRuleScope = "session"): PermissionRule | undefined {
+  async removeRule(list: PermissionRuleListName, index: number, scope: PermissionRuleScope = "session"): Promise<PermissionRule | undefined> {
     this.syncWorkspaceRules();
     const state = this.requireSessionPermissionState();
     const rules = rulesForList(state, list, scope);
     if (!Number.isInteger(index) || index < 0 || index >= rules.length) return undefined;
-    const removed = rules[index];
+    const selected = { ...rules[index] };
     if (scope === "workspace") {
-      this.mutateWorkspaceRules((candidate) => { rulesForRuleSet(candidate, list).splice(index, 1); });
-    } else {
-      rules.splice(index, 1);
+      let removed: PermissionRule | undefined;
+      await this.mutateWorkspaceRules((candidate) => {
+        const latest = rulesForRuleSet(candidate, list);
+        const latestIndex = latest.findIndex((rule) => samePermissionRule(rule, selected));
+        if (latestIndex >= 0) removed = latest.splice(latestIndex, 1)[0];
+      });
+      return removed ? { ...removed } : undefined;
     }
-    return removed;
+    return rules.splice(index, 1)[0];
   }
 
-  clearSessionRules(list?: PermissionRuleListName | "all"): number {
+  async clearSessionRules(list?: PermissionRuleListName | "all"): Promise<number> {
     return this.clearRules(list, "session");
   }
 
-  clearRules(list: PermissionRuleListName | "all" = "all", scope: PermissionRuleScope = "session"): number {
+  async clearRules(list: PermissionRuleListName | "all" = "all", scope: PermissionRuleScope = "session"): Promise<number> {
     this.syncWorkspaceRules();
     const state = this.requireSessionPermissionState();
-    let removed = 0;
     const lists: PermissionRuleListName[] = list && list !== "all" ? [list] : ["allow", "deny", "ask"];
+    if (scope === "workspace") {
+      let removed = 0;
+      await this.mutateWorkspaceRules((candidate) => {
+        for (const item of lists) {
+          const rules = rulesForRuleSet(candidate, item);
+          removed += rules.length;
+          rules.length = 0;
+        }
+      });
+      return removed;
+    }
+
+    let removed = 0;
     for (const item of lists) {
       const rules = rulesForList(state, item, scope);
       removed += rules.length;
-    }
-    if (scope === "workspace") {
-      this.mutateWorkspaceRules((candidate) => {
-        for (const item of lists) rulesForRuleSet(candidate, item).length = 0;
-      });
-    } else {
-      for (const item of lists) rulesForList(state, item, scope).length = 0;
+      rules.length = 0;
     }
     if (scope === "session" && (!list || list === "all")) {
       removed += state.additionalWorkingDirectories.size;
@@ -699,14 +709,15 @@ export class ServerPermissionService {
     this.activeWorkspaceRulePath = workspacePath;
   }
 
-  private mutateWorkspaceRules(mutator: (candidate: WorkspacePermissionRuleSet) => void): void {
+  private async mutateWorkspaceRules(mutator: (candidate: WorkspacePermissionRuleSet) => void): Promise<void> {
     const state = this.requireSessionPermissionState();
     if (!this.permissionRuleStore || !this.activeWorkspaceRulePath) {
       throw new ServerPermissionError("Workspace permission rule store is not available", 503, "permission_rule_store_unavailable");
     }
-    const candidate = workspaceRuleSetFromState(state);
-    mutator(candidate);
-    this.permissionRuleStore.save(this.activeWorkspaceRulePath, candidate);
+    const candidate = await this.permissionRuleStore.update(this.activeWorkspaceRulePath, (latest) => {
+      mutator(latest);
+      return latest;
+    });
     replaceWorkspaceRules(state, candidate);
   }
 
@@ -733,10 +744,11 @@ export class ServerPermissionService {
     if (this.audit.length > this.maxAuditEntries) {
       this.audit.splice(0, this.audit.length - this.maxAuditEntries);
     }
-    try {
-      this.auditStore?.save(this.audit);
-    } catch {
-      // Persistent history is best-effort; the hot audit trail remains available.
+    if (this.auditStore) {
+      const persistedEntry = { ...nextEntry };
+      this.auditWriteQueue = this.auditWriteQueue
+        .then(() => this.auditStore!.append(persistedEntry))
+        .catch(() => {});
     }
   }
 
@@ -842,7 +854,7 @@ export class ServerPermissionService {
     }
 
     if (confirmed.scope === "session" || confirmed.scope === "workspace") {
-      this.applyPermissionSuggestions(decision.suggestions, confirmed.scope);
+      await this.applyPermissionSuggestions(decision.suggestions, confirmed.scope);
     }
 
     this.record({
@@ -977,14 +989,6 @@ function findScopedMcpCapabilityRule(
   return undefined;
 }
 
-function workspaceRuleSetFromState(state: SessionPermissionState): WorkspacePermissionRuleSet {
-  return {
-    alwaysAllowRules: permissionRulesForScopes({ workspace: state.alwaysAllowRules.workspace }),
-    alwaysDenyRules: permissionRulesForScopes({ workspace: state.alwaysDenyRules.workspace }),
-    alwaysAskRules: permissionRulesForScopes({ workspace: state.alwaysAskRules.workspace }),
-  };
-}
-
 function replaceWorkspaceRules(state: SessionPermissionState, rules: WorkspacePermissionRuleSet): void {
   state.alwaysAllowRules.workspace.splice(0, state.alwaysAllowRules.workspace.length, ...rules.alwaysAllowRules.map((rule) => ({ ...rule })));
   state.alwaysDenyRules.workspace.splice(0, state.alwaysDenyRules.workspace.length, ...rules.alwaysDenyRules.map((rule) => ({ ...rule })));
@@ -1010,11 +1014,15 @@ function normalizePermissionRule(rule: PermissionRule): PermissionRule {
 }
 
 function addUniqueRule(rules: PermissionRule[], rule: PermissionRule): boolean {
-  const exists = rules.some((existing) => (
-    existing.toolName === rule.toolName &&
-    existing.ruleContent === rule.ruleContent &&
-    (existing.match ?? "prefix") === (rule.match ?? "prefix")
-  ));
+  const exists = rules.some((existing) => samePermissionRule(existing, rule));
   if (!exists) rules.push({ ...rule });
   return !exists;
+}
+
+function samePermissionRule(left: PermissionRule, right: PermissionRule): boolean {
+  return (
+    left.toolName === right.toolName &&
+    left.ruleContent === right.ruleContent &&
+    (left.match ?? "prefix") === (right.match ?? "prefix")
+  );
 }

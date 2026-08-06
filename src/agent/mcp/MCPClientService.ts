@@ -156,6 +156,16 @@ export async function connectAllWithReport(
   const result = loadMcpConfig({ projectRoot: workspace })
   const enabled = getEnabledServers(result)
   let complete = result.errors.length === 0
+  const trustStore = getTrustStore()
+  await trustStore.refresh()
+
+  if (gen !== _mcpGen) {
+    return {
+      tools,
+      complete: false,
+      configErrors: result.errors.map((error) => ({ ...error })),
+    }
+  }
 
   // 清空旧 status，避免跨 workspace 残留
   _clearStatuses()
@@ -167,8 +177,6 @@ export async function connectAllWithReport(
       break
     }
     const hash = hashServerCommand(source.config)
-    const trustStore = getTrustStore()
-
     if (!trustStore.isTrusted(workspace, hash)) {
       console.log(`[mcp] 跳过未信任的 server: ${source.name}（在 ${source.sourcePath} 中配置）`)
       _setStatus(source.name, "error", `未信任：请确认"${source.name}"后使用`, source.config)

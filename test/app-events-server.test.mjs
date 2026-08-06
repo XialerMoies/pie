@@ -208,7 +208,7 @@ describe("AppEventHub", () => {
     assert.doesNotMatch(source, /watch\(APP_ROOT/);
     assert.match(source, /new WorkspaceFileWatcher\(/);
     assert.match(source, /runtime\.onWorkspaceChange\(\(workspace\) =>/);
-    assert.match(source, /workspaceWatcher\.watchWorkspace\(runtime\.currentWorkspace \|\| APP_ROOT\)/);
+    assert.match(source, /workspaceWatcher\.watchWorkspace\(runtime\.currentWorkspace \|\| STARTUP\.workspace\)/);
     assert.match(source, /appEvents\.publish\("explorer\.changed", \{ file \}\)/);
   });
 

@@ -61,12 +61,24 @@ interface ElectronAPI {
   minimize(): void;
   maximize(): void;
   close(): void;
-  newWindow(): void;
+  newWindow(): Promise<{ ok: boolean; workspace?: string; instanceId?: string } | null>;
   openFile(): Promise<string | null>;
   openFolder(): Promise<string | null>;
   showItemInFolder(path: string): Promise<void>;
   trashItem(path: string): Promise<boolean>;
   spawnTerminal(): Promise<boolean>;
+}
+
+interface StorageLocationInfo {
+  dataRoot: string;
+  activeDataRoot: string;
+  restartRequired: boolean;
+  workspace?: string;
+  instanceId?: string;
+  workspaceLock?: {
+    status: 'locked' | 'unlocked';
+    owner?: { workspace?: string; instanceId?: string; pid?: number; port?: number; startedAt?: number };
+  };
 }
 
 // ─── Unified Tab System types ─────────────────────────

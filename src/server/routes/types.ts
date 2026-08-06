@@ -9,6 +9,8 @@ import type { ServerPermissionService } from "../permission-service.js";
 import type { RootRegistry } from "../root-registry.js";
 import type { PermissionModeController } from "../permission-mode.js";
 import type { AppEventHub } from "../app-events.js";
+import type { StartupPathsSnapshot } from "../startup-paths.js";
+import type { WorkspaceLockCoordinator } from "../workspace-lock.js";
 
 // ─── Trace Event 类型 ────────────────────────────────────
 
@@ -76,12 +78,15 @@ export interface ServerContext {
   permissionService?: ServerPermissionService;
   rootRegistry?: RootRegistry;
   permissionMode?: PermissionModeController;
+  workspaceLock?: WorkspaceLockCoordinator;
   paths: {
     APP_ROOT: string;
     DATA_DIR: string;
     PI_CONFIG_DIR: string;
     SESSIONS_DIR: string;
     SETTINGS_FILE: string;
+    DATA_ROOT_POINTER_FILE?: string;
+    STARTUP?: StartupPathsSnapshot;
     FRONTEND_DIR: string;
     FRONTEND_SRC_DIR: string;
     HAS_BUILT_FRONTEND: boolean;

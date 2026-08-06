@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, symlinkSync, 
 import { resolve } from "node:path";
 
 import { createSessionPermissionState } from "../src/agent/permissions.ts";
+import { normalizePermissionPath } from "../src/agent/permissions.ts";
 import {
   ServerPermissionError,
   ServerPermissionService,
@@ -86,7 +87,7 @@ function makeAsyncJsonReq(method, url, body) {
 }
 
 describe("workspace permission rule store", () => {
-  it("persists valid rules across store instances and isolates workspaces", () => {
+  it("persists valid rules across store instances and isolates workspaces", async () => {
     const root = makeTempRoot("permission-rule-store-");
     try {
       const file = resolve(root, "permission-rules.json");
@@ -94,7 +95,7 @@ describe("workspace permission rule store", () => {
       const workspaceB = resolve(root, "workspace-b");
       const rule = { toolName: "Write", ruleContent: `Write(${resolve(workspaceA, "**")})`, match: "wildcard" };
       const first = new FileWorkspacePermissionRuleStore(file);
-      first.save(workspaceA, {
+      await first.save(workspaceA, {
         alwaysAllowRules: [rule],
         alwaysDenyRules: [],
         alwaysAskRules: [],
@@ -138,7 +139,7 @@ describe("workspace permission rule store", () => {
     }
   });
 
-  it("recovers from a corrupt file on the next valid save", () => {
+  it("recovers from a corrupt file on the next valid save", async () => {
     const root = makeTempRoot("permission-rule-store-corrupt-");
     try {
       const file = resolve(root, "permission-rules.json");
@@ -148,10 +149,44 @@ describe("workspace permission rule store", () => {
       assert.deepStrictEqual(store.load(workspace).alwaysAllowRules, []);
 
       const rule = { toolName: "Tool", ruleContent: "Tool(mcp__fs__read)", match: "exact" };
-      store.save(workspace, { alwaysAllowRules: [rule], alwaysDenyRules: [], alwaysAskRules: [] });
+      await store.save(workspace, { alwaysAllowRules: [rule], alwaysDenyRules: [], alwaysAskRules: [] });
 
       assert.deepStrictEqual(new FileWorkspacePermissionRuleStore(file).load(workspace).alwaysAllowRules, [rule]);
       assert.strictEqual(JSON.parse(readFileSync(file, "utf-8")).version, 1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates a legacy workspace key to the canonical key during locked updates", async () => {
+    const root = makeTempRoot("permission-rule-store-legacy-key-");
+    try {
+      const file = resolve(root, "permission-rules.json");
+      const workspace = resolve(root, "Workspace");
+      const denyRule = { toolName: "Write", ruleContent: "Write(blocked.txt)", match: "exact" };
+      const askRule = { toolName: "Command", ruleContent: "Command(git status)", match: "exact" };
+      writeFileSync(file, JSON.stringify({
+        version: 1,
+        workspaces: {
+          "legacy-workspace-key": {
+            workspacePath: workspace,
+            alwaysAllowRules: [],
+            alwaysDenyRules: [denyRule],
+            alwaysAskRules: [],
+          },
+        },
+      }));
+
+      const store = new FileWorkspacePermissionRuleStore(file);
+      const updated = await store.update(workspace, (rules) => {
+        rules.alwaysAskRules.push(askRule);
+      });
+
+      assert.deepStrictEqual(updated.alwaysDenyRules, [denyRule]);
+      assert.deepStrictEqual(updated.alwaysAskRules, [askRule]);
+      const document = JSON.parse(readFileSync(file, "utf8"));
+      assert.deepStrictEqual(Object.keys(document.workspaces), [normalizePermissionPath(workspace)]);
+      assert.strictEqual(document.workspaces["legacy-workspace-key"], undefined);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -168,7 +203,7 @@ describe("server permission service", () => {
       mkdirSync(workspaceB);
       const blocked = resolve(workspaceA, "blocked.txt");
       const store = new FileWorkspacePermissionRuleStore(resolve(root, "permission-rules.json"));
-      store.save(workspaceA, {
+      await store.save(workspaceA, {
         alwaysAllowRules: [],
         alwaysDenyRules: [{ toolName: "Write", ruleContent: `Write(${blocked})`, match: "exact" }],
         alwaysAskRules: [],
@@ -195,7 +230,7 @@ describe("server permission service", () => {
     }
   });
 
-  it("persists scoped rule mutations and exposes stable scope-local indexes", () => {
+  it("persists scoped rule mutations and exposes stable scope-local indexes", async () => {
     const root = makeTempRoot("server-perm-workspace-mutate-");
     try {
       const workspace = resolve(root, "workspace");
@@ -209,7 +244,7 @@ describe("server permission service", () => {
         permissionRuleStore: store,
       });
 
-      assert.strictEqual(first.addRule("allow", rule, "workspace").added, true);
+      assert.strictEqual((await first.addRule("allow", rule, "workspace")).added, true);
       const firstSnapshot = first.getRulesSnapshot();
       assert.deepStrictEqual(firstSnapshot.alwaysAllowRules[0], { ...rule, scope: "workspace", index: 0 });
 
@@ -219,7 +254,7 @@ describe("server permission service", () => {
         permissionRuleStore: new FileWorkspacePermissionRuleStore(file),
       });
       assert.strictEqual(second.getRulesSnapshot().alwaysAllowRules[0].scope, "workspace");
-      assert.deepStrictEqual(second.removeRule("allow", 0, "workspace"), rule);
+      assert.deepStrictEqual(await second.removeRule("allow", 0, "workspace"), rule);
       assert.strictEqual(new FileWorkspacePermissionRuleStore(file).load(workspace).alwaysAllowRules.length, 0);
 
       const capabilityRule = {
@@ -227,14 +262,14 @@ describe("server permission service", () => {
         ruleContent: "McpCapability(docs,readOnly)",
         match: "exact",
       };
-      assert.strictEqual(second.addRule("allow", capabilityRule, "workspace").added, true);
+      assert.strictEqual((await second.addRule("allow", capabilityRule, "workspace")).added, true);
       assert.deepStrictEqual(new FileWorkspacePermissionRuleStore(file).load(workspace).alwaysAllowRules, [capabilityRule]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("leaves workspace rules unchanged when persistence fails", () => {
+  it("leaves workspace rules unchanged when persistence fails", async () => {
     const root = makeTempRoot("server-perm-workspace-transaction-");
     try {
       mkdirSync(resolve(root, "workspace"));
@@ -244,11 +279,12 @@ describe("server permission service", () => {
         workspaceRootProvider: () => resolve(root, "workspace"),
         permissionRuleStore: {
           load: () => ({ alwaysAllowRules: [], alwaysDenyRules: [], alwaysAskRules: [] }),
-          save: () => { throw new Error("disk locked"); },
+          save: async () => { throw new Error("disk locked"); },
+          update: async () => { throw new Error("disk locked"); },
         },
       });
 
-      assert.throws(
+      await assert.rejects(
         () => service.addRule("allow", { toolName: "Tool", ruleContent: "Tool(test)", match: "exact" }, "workspace"),
         /disk locked/,
       );
@@ -1015,6 +1051,7 @@ describe("server permission service", () => {
         permissionRequired: false,
         args: { path: "output.txt" },
       });
+      await firstService.flushAuditWrites();
 
       const saved = JSON.parse(readFileSync(auditFile, "utf-8"));
       assert.strictEqual(saved.length, 1);
@@ -1115,6 +1152,7 @@ describe("server permission service", () => {
         auditStore: new FilePermissionAuditStore(auditFile, { maxEntries: 20 }),
       });
       await firstService.authorizePath(root, "first.txt", "write", "test.audit.persist");
+      await firstService.flushAuditWrites();
 
       const saved = JSON.parse(readFileSync(auditFile, "utf-8"));
       assert.strictEqual(saved.length, 1);
@@ -1228,8 +1266,8 @@ describe("server permission service", () => {
       assert.strictEqual(service.getRulesSnapshot().alwaysAllowRules.length, 0);
 
       const sessionRule = { toolName: "Read", ruleContent: "Read(session-only)", match: "exact" };
-      service.addRule("allow", sessionRule, "session");
-      service.addRule("allow", rule, "workspace");
+      await service.addRule("allow", sessionRule, "session");
+      await service.addRule("allow", rule, "workspace");
       const clearRes = makeRes();
       await handlePermissions(
         makeReq("POST", "/api/permissions/rules/clear", { list: "all", scope: "workspace" }),
@@ -2260,25 +2298,133 @@ describe("server permission service", () => {
 
   it("authorizes UI state before startup restore reads it", () => {
     const serverSource = readFileSync(resolve(process.cwd(), "src", "server", "server.ts"), "utf-8");
+    const uiStateSource = readFileSync(resolve(process.cwd(), "src", "server", "routes", "ui-state.ts"), "utf-8");
 
-    assert.match(
-      serverSource,
-      /authorizeRoutePath\(\s*baseCtx,\s*PI_CONFIG_DIR,\s*"ui-state\.json",\s*"read",\s*"ui-state\.startup\.restore",?\s*\)/,
-    );
-    assert.doesNotMatch(
-      serverSource,
-      /const uiStateFile = resolve\(PI_CONFIG_DIR, "ui-state\.json"\)/,
-    );
+    assert.match(serverSource, /readWorkspaceUiState\(baseCtx, STARTUP\.workspace\)/);
+    assert.match(uiStateSource, /authorizeRoutePath\(\s*ctx,\s*paths\.workspaceRoot,\s*paths\.uiStateFile,\s*"read",\s*"ui-state\.read",?\s*\)/);
   });
 
-  it("restores the explicitly active workspace before legacy session fallback", () => {
-    const serverSource = readFileSync(resolve(process.cwd(), "src", "server", "server.ts"), "utf-8");
-    const activeWorkspaceLookup = serverSource.indexOf("uiData.activeWorkspace");
-    const legacyWorkspaceScan = serverSource.indexOf("Object.entries(workspaces).filter", activeWorkspaceLookup);
+  it("does not resurrect cleared audit entries when a stale service appends a new event", async () => {
+    const root = makeTempRoot("server-perm-audit-clear-stale-");
+    try {
+      const auditFile = resolve(root, "permission-audit.json");
+      const staleService = new ServerPermissionService({
+        auditStore: new FilePermissionAuditStore(auditFile, { maxEntries: 20 }),
+      });
+      await staleService.authorizePath(root, "before.txt", "write", "test.audit.before-clear");
+      await staleService.flushAuditWrites();
 
-    assert.ok(activeWorkspaceLookup >= 0);
-    assert.ok(legacyWorkspaceScan > activeWorkspaceLookup);
-    assert.match(serverSource, /activeState\s*\?\s*\[\[activeWorkspace, activeState\]\]/);
+      const clearingService = new ServerPermissionService({
+        auditStore: new FilePermissionAuditStore(auditFile, { maxEntries: 20 }),
+      });
+      await clearingService.clearAuditTrail();
+
+      await staleService.authorizePath(root, "after.txt", "write", "test.audit.after-clear");
+      await staleService.flushAuditWrites();
+
+      const persisted = JSON.parse(readFileSync(auditFile, "utf8"));
+      assert.deepStrictEqual(persisted.map((entry) => entry.source), ["test.audit.after-clear"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("deduplicates concurrent workspace rule additions against the locked latest state", async () => {
+    const root = makeTempRoot("server-perm-workspace-add-contention-");
+    try {
+      const workspace = resolve(root, "workspace");
+      mkdirSync(workspace);
+      const file = resolve(root, "permission-rules.json");
+      const rule = { toolName: "Tool", ruleContent: "Tool(mcp__fs__read)", match: "exact" };
+      const createService = () => new ServerPermissionService({
+        sessionPermissionState: createSessionPermissionState(),
+        workspaceRootProvider: () => workspace,
+        permissionRuleStore: new FileWorkspacePermissionRuleStore(file),
+      });
+
+      const results = await Promise.all([
+        createService().addRule("allow", rule, "workspace"),
+        createService().addRule("allow", rule, "workspace"),
+      ]);
+
+      assert.deepStrictEqual(results.map((result) => result.added).sort(), [false, true]);
+      assert.deepStrictEqual(new FileWorkspacePermissionRuleStore(file).load(workspace).alwaysAllowRules, [rule]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes the selected deny and ask rule identity from the locked latest state", async () => {
+    const root = makeTempRoot("server-perm-workspace-remove-interleaving-");
+    try {
+      const workspace = resolve(root, "workspace");
+      mkdirSync(workspace);
+      for (const list of ["deny", "ask"]) {
+        const selected = { toolName: "Command", ruleContent: `Command(selected-${list})`, match: "exact" };
+        const inserted = { toolName: "Command", ruleContent: `Command(inserted-${list})`, match: "exact" };
+        const listKey = list === "deny" ? "alwaysDenyRules" : "alwaysAskRules";
+        let persisted;
+        const store = {
+          load: () => ({ alwaysAllowRules: [], alwaysDenyRules: list === "deny" ? [selected] : [], alwaysAskRules: list === "ask" ? [selected] : [] }),
+          save: async () => {},
+          update: async (_workspacePath, updater) => {
+            const latest = { alwaysAllowRules: [], alwaysDenyRules: [], alwaysAskRules: [] };
+            latest[listKey] = [inserted, selected];
+            persisted = updater(latest) || latest;
+            return persisted;
+          },
+        };
+        const service = new ServerPermissionService({
+          sessionPermissionState: createSessionPermissionState(),
+          workspaceRootProvider: () => workspace,
+          permissionRuleStore: store,
+        });
+
+        assert.deepStrictEqual(await service.removeRule(list, 0, "workspace"), selected);
+        assert.deepStrictEqual(persisted[listKey], [inserted]);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns the number of rules cleared from the locked latest state", async () => {
+    const root = makeTempRoot("server-perm-workspace-clear-interleaving-");
+    try {
+      const workspace = resolve(root, "workspace");
+      mkdirSync(workspace);
+      const staleRule = { toolName: "Tool", ruleContent: "Tool(stale)", match: "exact" };
+      const concurrentRule = { toolName: "Tool", ruleContent: "Tool(concurrent)", match: "exact" };
+      let persisted;
+      const store = {
+        load: () => ({ alwaysAllowRules: [staleRule], alwaysDenyRules: [], alwaysAskRules: [] }),
+        save: async () => {},
+        update: async (_workspacePath, updater) => {
+          const latest = { alwaysAllowRules: [staleRule, concurrentRule], alwaysDenyRules: [], alwaysAskRules: [] };
+          persisted = updater(latest) || latest;
+          return persisted;
+        },
+      };
+      const service = new ServerPermissionService({
+        sessionPermissionState: createSessionPermissionState(),
+        workspaceRootProvider: () => workspace,
+        permissionRuleStore: store,
+      });
+
+      assert.strictEqual(await service.clearRules("allow", "workspace"), 2);
+      assert.deepStrictEqual(persisted.alwaysAllowRules, []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("restores only the explicitly requested startup workspace", () => {
+    const serverSource = readFileSync(resolve(process.cwd(), "src", "server", "server.ts"), "utf-8");
+
+    assert.match(serverSource, /readWorkspaceUiState\(baseCtx, STARTUP\.workspace\)/);
+    assert.match(serverSource, /runtime\.openSession\(sessionFile, STARTUP\.workspace\)/);
+    assert.doesNotMatch(serverSource, /uiData\.activeWorkspace/);
+    assert.doesNotMatch(serverSource, /Object\.entries\(workspaces\)\.filter/);
   });
 
   it("fails closed on session list symlink or junction escapes when the platform follows them", async () => {

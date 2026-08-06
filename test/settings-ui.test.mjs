@@ -68,6 +68,7 @@ beforeEach(() => {
   storage.clear();
   Object.values(settingsSpies).forEach((calls) => { calls.length = 0; });
   delete win.__monaco;
+  delete win.electronAPI;
   win.__state.D = null;
   win._provOrder = [];
   fetchImpl = async (url) => {
@@ -233,6 +234,30 @@ describe("settings DOM boundary", () => {
     ]);
     assert.strictEqual(jumpSmooth.value, "true");
     assert.strictEqual(document.getElementById("gs-jump-threshold")?.value, "72");
+  });
+
+  it("selects a storage root through Electron and stages it for restart", async () => {
+    const selectedRoot = "E:\\agent-data";
+    let postedRoot = null;
+    win.electronAPI = { openFolder: async () => selectedRoot };
+    fetchImpl = async (url, init) => {
+      if (String(url) === "/api/storage-location" && init?.method === "POST") {
+        postedRoot = JSON.parse(String(init.body)).dataRoot;
+        return { ok: true, json: async () => ({ ok: true, restartRequired: true }) };
+      }
+      if (String(url) === "/api/storage-location") {
+        return { ok: true, json: async () => ({ dataRoot: "E:\\current-data", activeDataRoot: "E:\\current-data", restartRequired: false }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    await openGeneralSettings();
+    await flushAsyncWork();
+    document.querySelector('[data-settings-action="choose-data-root"]')?.click();
+    await flushAsyncWork();
+
+    assert.strictEqual(postedRoot, selectedRoot);
+    assert.match(document.getElementById("gs-data-root-status")?.textContent || "", /重启后生效/);
   });
 
   it("persists Timeline and jump settings through their refresh facades without changing session state", async () => {

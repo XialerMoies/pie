@@ -3,25 +3,36 @@
  * 作为子进程运行，通过 HTTP 提供仪表盘和对话 API
  *
  * 环境变量：
- *   PI_DESKTOP_DATA    - 数据目录
- *   PI_DESKTOP_CONFIG  - pi 配置目录
- *   PI_DESKTOP_SESSIONS - 会话目录
+ *   PI_WORKSPACE       - initial workspace
+ *   PI_DATA_ROOT       - persistent data root
+ *   PI_INSTANCE_ID     - per-launch instance id
  */
 import { initAgent, type AgentRuntime } from "../agent/index.js";
 import { createServer, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from "http";
 import { resolve, dirname } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
-import { appendFileSync, readFileSync, writeFileSync, existsSync, statSync } from "fs";
+import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from "fs";
 import { dispatchRoute } from "./routes/index.js";
-import { createCommandConfirmCallback } from "./routes/chat.js";
+import { cancelCommandConfirmationsForResponse, createCommandConfirmCallback } from "./routes/chat.js";
 import type { ServerContext, ChatStreamState, TraceEvent, AssistantBlock } from "./routes/types.js";
 import { TsserverManager } from "./ts-server.js";
 import { mark, logTiming } from "./timing.js";
 import { shellDialectFromEnv } from "../agent/tools/command/shell-parser.js";
 import { createSessionPermissionState } from "../agent/permissions.js";
-import { authorizeLocalApiRequest, clearDesktopSessionTokenEnv, createDesktopSecurityConfig, installSecurityHeaders, isApiPreflight, writeSecurityError } from "./security.js";
+import {
+  authorizeLocalApiRequest,
+  cleanupStaleInstanceDirectories,
+  clearDesktopSessionTokenEnv,
+  createDesktopSecurityConfig,
+  installSecurityHeaders,
+  isApiPreflight,
+  removeInstanceRuntimeDirectory,
+  writeInstanceMetadata,
+  writeSecurityError,
+  type InstanceMetadata,
+} from "./security.js";
 import { authorizeRoutePath, ServerPermissionService } from "./permission-service.js";
-import { authorizeWorkspacePath } from "./routes/workspace-authorization.js";
+import { authorizeWorkspacePath, runWithWorkspaceOwnership } from "./routes/workspace-authorization.js";
 import { cancelPermissionConfirmationsForResponse, createPermissionConfirmCallback } from "./permission-confirmation.js";
 import { FilePermissionAuditStore } from "./permission-audit-store.js";
 import { FileWorkspacePermissionRuleStore } from "./permission-rule-store.js";
@@ -32,6 +43,11 @@ import { writeChatEvent } from "./chat-stream.js";
 import { AppEventHub } from "./app-events.js";
 import { WorkspaceFileWatcher } from "./workspace-file-watcher.js";
 import { getServersStatus, subscribeStatusChanges } from "../agent/mcp/MCPClientService.js";
+import { resolveStartupPaths, startupPathsSnapshot } from "./startup-paths.js";
+import { canonicalWorkspacePath } from "../data/data-layout.js";
+import { WorkspaceLockCoordinator } from "./workspace-lock.js";
+import { workspaceDataPaths, writeWorkspaceMetadata } from "./routes/session-dir.js";
+import { readWorkspaceUiState } from "./routes/ui-state.js";
 
 export type SessionWriteAuthorizer = (sessionFile: string, source: string) => void;
 
@@ -100,14 +116,36 @@ export function tagSessionHeader(
 // ─── 路径（绝对路径）───────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(__dirname, "..", "..");
-const DATA_DIR = process.env.PI_DESKTOP_DATA || resolve(APP_ROOT, "data");
-const PI_CONFIG_DIR = process.env.PI_DESKTOP_CONFIG || resolve(APP_ROOT, "data", "pi");
-const SESSIONS_DIR = process.env.PI_DESKTOP_SESSIONS || resolve(APP_ROOT, "data", "pi", "sessions");
-const SETTINGS_FILE = resolve(PI_CONFIG_DIR, "settings.json");
+const STARTUP = resolveStartupPaths({ appRoot: APP_ROOT, argv: process.argv.slice(2), env: process.env });
+const STARTUP_SNAPSHOT = startupPathsSnapshot(STARTUP);
+const DATA_DIR = STARTUP.dataRoot;
+const PI_CONFIG_DIR = STARTUP.layout.userRoot;
+const SESSIONS_DIR = STARTUP.layout.sessionsDir;
+const SETTINGS_FILE = STARTUP.layout.settingsFile;
+const DATA_ROOT_POINTER_FILE = process.env.PI_DESKTOP_DATA_ROOT_POINTER || "";
 const FRONTEND_DIR = resolve(APP_ROOT, "dist", "frontend");
 const FRONTEND_ENTRY_FILE = "dashboard.html";
 const HAS_BUILT_FRONTEND = existsSync(resolve(FRONTEND_DIR, FRONTEND_ENTRY_FILE));
 const FRONTEND_SRC_DIR = resolve(APP_ROOT, "src", "frontend");
+const TRANSIENT_EMPTY_WORKSPACE = STARTUP.workspace === canonicalWorkspacePath(
+  resolve(STARTUP.layout.instanceRoot, "empty-workspace"),
+);
+let activeWorkspaceLock: WorkspaceLockCoordinator | null = null;
+let activeWorkspaceLockRelease: Promise<void> | null = null;
+
+async function releaseActiveWorkspaceLock(): Promise<void> {
+  if (activeWorkspaceLockRelease) return activeWorkspaceLockRelease;
+  const lock = activeWorkspaceLock;
+  if (!lock) return;
+  activeWorkspaceLockRelease = lock.release()
+    .then(() => {
+      if (activeWorkspaceLock === lock) activeWorkspaceLock = null;
+    })
+    .finally(() => {
+      activeWorkspaceLockRelease = null;
+    });
+  await activeWorkspaceLockRelease;
+}
 
 // ─── 启动 Pi ──────────────────────────────────────────────────────
 function appendAssistantSnapshot(aggregate: string, previousSnapshot: string | undefined, snapshot: string): { aggregate: string; snapshot: string; delta: string } {
@@ -765,11 +803,45 @@ async function main() {
   mark("server_start");
   console.log("Starting Pi server...");
 
+  await cleanupStaleInstanceDirectories(STARTUP.dataRoot, STARTUP.instanceId);
+  for (const directory of [
+    STARTUP.layout.dataRoot,
+    STARTUP.layout.userRoot,
+    STARTUP.layout.workspaceRoot,
+    STARTUP.layout.sessionsDir,
+    STARTUP.layout.instanceRoot,
+    STARTUP.layout.cacheDir,
+  ]) {
+    mkdirSync(directory, { recursive: true });
+  }
+  try {
+    writeFileSync(STARTUP.layout.authFile, JSON.stringify({}, null, 2), { encoding: "utf8", flag: "wx" });
+  } catch (error: any) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+  const instanceMetadata: InstanceMetadata = {
+    version: 1,
+    instanceId: STARTUP.instanceId,
+    pid: process.pid,
+    port: 0,
+    workspace: STARTUP.workspace,
+    startedAt: Date.now(),
+  };
+  await writeInstanceMetadata(STARTUP.layout.portFile, instanceMetadata);
+
+  const workspaceLock = new WorkspaceLockCoordinator({
+    dataRoot: STARTUP.dataRoot,
+    instanceId: STARTUP.instanceId,
+  });
+  activeWorkspaceLock = workspaceLock;
+  await workspaceLock.acquireInitial(STARTUP.workspace);
+  writeWorkspaceMetadata(DATA_DIR, STARTUP.workspace);
+
   // ─── 共享可变状态 ────────────────────────────────────────────
   const chatStream: ChatStreamState = { textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "", response: null, turnId: "", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0, eventSeq: 0, eventHistory: [] };
   const appEvents = new AppEventHub();
   appEvents.subscribeClientRemoved(cancelPermissionConfirmationsForResponse);
-  attachMcpEvents(appEvents);
+  const unsubscribeMcpEvents = attachMcpEvents(appEvents);
   const sessionPermissionState = createSessionPermissionState();
   let runtime: AgentRuntime;
   const security = createDesktopSecurityConfig();
@@ -777,11 +849,11 @@ async function main() {
   const rootRegistry = new RootRegistry();
   const permissionService = new ServerPermissionService({
     sessionPermissionState,
-    workspaceRootProvider: () => runtime?.currentWorkspace || APP_ROOT,
+    workspaceRootProvider: () => runtime?.currentWorkspace || STARTUP.workspace,
     rootRegistry,
     confirmPermission: createPermissionConfirmCallback(appEvents),
-    auditStore: new FilePermissionAuditStore(resolve(PI_CONFIG_DIR, "permission-audit.json"), { maxEntries: 2000 }),
-    permissionRuleStore: new FileWorkspacePermissionRuleStore(resolve(PI_CONFIG_DIR, "permission-rules.json")),
+    auditStore: new FilePermissionAuditStore(STARTUP.layout.permissionAuditFile, { maxEntries: 2000 }),
+    permissionRuleStore: new FileWorkspacePermissionRuleStore(STARTUP.layout.permissionRulesFile),
   });
   const permissionMode = createPermissionModeController("standard", (mode) => {
     permissionService.recordPermissionModeChange(mode, "permissions.mode");
@@ -789,10 +861,11 @@ async function main() {
 
   runtime = await initAgent({
     agentDir: PI_CONFIG_DIR,
-    cwd: APP_ROOT,
+    cwd: STARTUP.workspace,
     sessionsDir: SESSIONS_DIR,
-    authFile: resolve(PI_CONFIG_DIR, "auth.json"),
-    modelsFile: resolve(PI_CONFIG_DIR, "models.json"),
+    sessionsDirForWorkspace: (workspace) => workspaceDataPaths(DATA_DIR, workspace).sessionsDir,
+    authFile: STARTUP.layout.authFile,
+    modelsFile: STARTUP.layout.modelsFile,
     getPermissionMode: () => permissionMode.get(),
     shellDialect: shellDialectFromEnv(),
     confirmCommand: createCommandConfirmCallback(chatStream),
@@ -800,7 +873,9 @@ async function main() {
     sessionPermissionState,
     authorizePath: (root, target, operation, source) => permissionService.authorizePath(root, target, operation, source),
     authorizeTool: (request) => permissionService.authorizeTool(request),
-    applyPermissionSuggestions: (suggestions, scope) => permissionService.applyPermissionSuggestions(suggestions, scope),
+    applyPermissionSuggestions: async (suggestions, scope) => {
+      await permissionService.applyPermissionSuggestions(suggestions, scope);
+    },
   });
 
   for (const [root, source] of [
@@ -808,6 +883,8 @@ async function main() {
     [DATA_DIR, "app-data"],
     [PI_CONFIG_DIR, "app-data"],
     [SESSIONS_DIR, "session"],
+    [STARTUP.layout.workspaceRoot, "app-data"],
+    [STARTUP.layout.instanceRoot, "app-data"],
   ] as const) {
     try {
       rootRegistry.register(root, {
@@ -819,7 +896,7 @@ async function main() {
     }
   }
   try {
-    rootRegistry.setWorkspaceRoot(runtime.currentWorkspace || APP_ROOT);
+    rootRegistry.setWorkspaceRoot(runtime.currentWorkspace || STARTUP.workspace);
   } catch {
     // Permission checks remain fail-closed if the initial workspace is unavailable.
   }
@@ -834,10 +911,12 @@ async function main() {
     security,
     permissionService,
     permissionMode,
+    workspaceLock,
     rootRegistry,
     recordUserNote: (note) => recordUserNoteBlock(runtime, chatStream, note, {
       authorizeSessionWrite: (sessionFile, source) => {
-        permissionService.authorizePathSync(SESSIONS_DIR, sessionFile, "write", source);
+        const sessionsDir = workspaceDataPaths(DATA_DIR, runtime.currentWorkspace || STARTUP.workspace).sessionsDir;
+        permissionService.authorizePathSync(sessionsDir, sessionFile, "write", source);
       },
     }),
     paths: {
@@ -846,50 +925,22 @@ async function main() {
       PI_CONFIG_DIR,
       SESSIONS_DIR,
       SETTINGS_FILE,
+      DATA_ROOT_POINTER_FILE,
+      STARTUP: STARTUP_SNAPSHOT,
       FRONTEND_DIR,
       FRONTEND_SRC_DIR,
       HAS_BUILT_FRONTEND,
     },
   };
 
-  // ─── 启动恢复：切换到上次活跃 workspace ──────────────────────
+  // ─── 启动恢复：只恢复本实例显式指定的 workspace ─────────────
   try {
-    const uiStateFile = (await authorizeRoutePath(
-      baseCtx,
-      PI_CONFIG_DIR,
-      "ui-state.json",
-      "read",
-      "ui-state.startup.restore",
-    )).path;
-    if (existsSync(uiStateFile)) {
-      const uiData = JSON.parse(readFileSync(uiStateFile, "utf-8"));
-      const workspaces = uiData.workspaces || {};
-      const activeWorkspace = typeof uiData.activeWorkspace === "string" ? uiData.activeWorkspace : "";
-      const activeState = activeWorkspace && activeWorkspace !== "_default" ? workspaces[activeWorkspace] : undefined;
-      const candidates = activeState
-        ? [[activeWorkspace, activeState]]
-        : Object.entries(workspaces).filter(([ws, state]: any) => (
-            ws !== "_default" && state.activeView?.type === "session" && state.activeView?.id
-          ));
-      for (const [ws, state] of candidates as any) {
-        if (ws !== "_default") {
-          console.log(`[startup] 恢复 workspace: "${ws}", session: ${state.activeView?.id || "none"}`);
-          const authorizedWorkspace = await authorizeWorkspacePath(baseCtx, ws, "workspace.startup.restore", { required: true });
-          if (state.activeView?.type === "session" && state.activeView?.id) {
-            const { findAuthorizedSessionFileById } = await import("./routes/sessions.js");
-            const sessionFile = await findAuthorizedSessionFileById(baseCtx, state.activeView.id, "sessions.startup.restore");
-            if (sessionFile) {
-              // openSession 内部处理跨 workspace 切换，无需额外 switchWorkspace
-              await runtime.openSession(sessionFile, authorizedWorkspace);
-            } else {
-              await runtime.switchWorkspace(authorizedWorkspace);
-            }
-          } else {
-            await runtime.switchWorkspace(authorizedWorkspace);
-          }
-          break;
-        }
-      }
+    const state = await readWorkspaceUiState(baseCtx, STARTUP.workspace);
+    if (state.activeView?.type === "session" && state.activeView.id) {
+      console.log(`[startup] 恢复 workspace: "${STARTUP.workspace}", session: ${state.activeView.id}`);
+      const { findAuthorizedSessionFileById } = await import("./routes/sessions.js");
+      const sessionFile = await findAuthorizedSessionFileById(baseCtx, state.activeView.id, "sessions.startup.restore");
+      if (sessionFile) await runtime.openSession(sessionFile, STARTUP.workspace);
     }
   } catch (e) {
     console.log(`[startup] 恢复失败: ${e}`);
@@ -902,9 +953,27 @@ async function main() {
     onError: (error) => console.log("[watcher] not available: " + error.message),
   });
   const unsubscribeWorkspaceWatcher = runtime.onWorkspaceChange((workspace) => {
+    instanceMetadata.workspace = workspace;
+    void writeInstanceMetadata(STARTUP.layout.portFile, instanceMetadata).catch((error) => {
+      console.error("Failed to update instance workspace metadata:", error);
+    });
+    const workspacePaths = workspaceDataPaths(DATA_DIR, workspace);
+    mkdirSync(workspacePaths.sessionsDir, { recursive: true });
+    writeWorkspaceMetadata(DATA_DIR, workspace);
+    try {
+      rootRegistry.register(workspacePaths.workspaceRoot, {
+        source: "app-data",
+        operations: ["read", "write", "create", "remove"],
+      });
+      rootRegistry.register(workspacePaths.sessionsDir, {
+        source: "session",
+        operations: ["read", "write", "create", "remove"],
+      });
+      rootRegistry.setWorkspaceRoot(workspace);
+    } catch {}
     workspaceWatcher.watchWorkspace(workspace);
   });
-  workspaceWatcher.watchWorkspace(runtime.currentWorkspace || APP_ROOT);
+  workspaceWatcher.watchWorkspace(runtime.currentWorkspace || STARTUP.workspace);
 
   attachSessionEvents(runtime, chatStream, baseCtx);
 
@@ -945,7 +1014,8 @@ async function main() {
     const reqPath = url.includes("?") ? url.slice(0, url.indexOf("?")) : url;
     if (reqPath.startsWith("/icons/") && reqPath.endsWith(".svg")) {
       try {
-        const iconFile = resolveStaticAssetPath(FRONTEND_SRC_DIR, reqPath);
+        const iconRoot = HAS_BUILT_FRONTEND ? FRONTEND_DIR : FRONTEND_SRC_DIR;
+        const iconFile = resolveStaticAssetPath(iconRoot, reqPath);
         const content = readFileSync(iconFile);
         res.writeHead(200, { "Content-Type": "image/svg+xml", "Cache-Control": "max-age=3600" });
         res.end(content);
@@ -1019,23 +1089,105 @@ async function main() {
     if (addr && typeof addr === "object") {
       const port = addr.port;
       process.env.SERVER_PORT = String(port);
-      console.log(`SERVER_PORT:${port}`);
-      mark("http_listening");
-      logTiming();
-      console.log(`Pi Desktop server: http://127.0.0.1:${port}`);
+      void workspaceLock.updatePort(port).then(async () => {
+        instanceMetadata.port = port;
+        await writeInstanceMetadata(STARTUP.layout.portFile, instanceMetadata);
+        console.log(`SERVER_PORT:${port}`);
+        mark("http_listening");
+        logTiming();
+        console.log(`Pi Desktop server: http://127.0.0.1:${port}`);
+      }).catch((error) => {
+        console.error("Failed to update workspace lock:", error);
+        server.close();
+        void releaseActiveWorkspaceLock()
+          .catch((releaseError) => console.error("Failed to release workspace lock:", releaseError))
+          .finally(() => process.exit(1));
+      });
     }
     // ─── 文件系统监听 ──────────────────────────────────────────
   });
+
+  let releaseInstancePromise: Promise<void> | null = null;
+  const closeInstanceStreams = () => {
+    appEvents.closeAll();
+    const response = chatStream.response;
+    if (!response) return;
+    cancelCommandConfirmationsForResponse(response);
+    try { response.end(); } catch {}
+    if (chatStream.response === response) chatStream.response = null;
+  };
+  const releaseInstanceResources = (removeRuntimeData: boolean): Promise<void> => {
+    if (releaseInstancePromise) return releaseInstancePromise;
+    releaseInstancePromise = (async () => {
+      closeInstanceStreams();
+      unsubscribeMcpEvents();
+      unsubscribeWorkspaceWatcher();
+      workspaceWatcher.close();
+      tsServer.stop();
+      try {
+        await permissionService.flushAuditWrites();
+      } catch (error) {
+        console.error("Failed to flush permission audit:", error);
+      }
+      runtime.dispose();
+      try {
+        await releaseActiveWorkspaceLock();
+      } catch (error) {
+        console.error("Failed to release workspace lock:", error);
+      }
+      if (removeRuntimeData) {
+        try {
+          await removeInstanceRuntimeDirectory(STARTUP.layout.instanceRoot);
+        } catch (error) {
+          console.error("Failed to remove instance runtime data:", error);
+        }
+        if (TRANSIENT_EMPTY_WORKSPACE) {
+          try {
+            await removeInstanceRuntimeDirectory(STARTUP.layout.workspaceRoot);
+          } catch (error) {
+            console.error("Failed to remove transient workspace data:", error);
+          }
+        }
+      }
+    })();
+    return releaseInstancePromise;
+  };
+
   server.on("close", () => {
-    unsubscribeWorkspaceWatcher();
-    workspaceWatcher.close();
+    void releaseInstanceResources(false);
+  });
+  server.on("error", (error) => {
+    console.error("Server error:", error);
+    void releaseInstanceResources(false)
+      .finally(() => process.exit(1));
+  });
+
+  let shuttingDown = false;
+  const shutdown = (signal: NodeJS.Signals | "stdin") => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[server] ${signal}, shutting down`);
+    closeInstanceStreams();
+    server.close();
+    void releaseInstanceResources(true).finally(() => process.exit(0));
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    if (String(chunk).split(/\r?\n/).includes("PI_SERVER_SHUTDOWN")) shutdown("stdin");
   });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((err) => {
+  main().catch(async (err) => {
     console.error("Fatal error:", err);
-    process.exit(1);
+    try {
+      await releaseActiveWorkspaceLock();
+    } catch (releaseError) {
+      console.error("Failed to release workspace lock:", releaseError);
+    }
+    process.exitCode = 1;
   });
 }
 

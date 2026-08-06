@@ -6,15 +6,33 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync, statS
 import { resolve, basename, dirname } from "path";
 import { randomUUID } from "crypto";
 import { parseBody } from "./parse-body.js";
-import { wsKey, wsDir } from "./session-dir.js";
+import { workspaceDataPaths, wsKey, wsDir } from "./session-dir.js";
 import { isPathGuardError, writePathGuardError } from "./path-guard.js";
 import { authorizeRoutePath, isServerPermissionError, writeServerPermissionError } from "../permission-service.js";
-import { authorizeWorkspacePath } from "./workspace-authorization.js";
+import { authorizeWorkspacePath, runWithWorkspaceOwnership } from "./workspace-authorization.js";
 
 // Re-export for backward compat (tests use mod.wsKey / mod.wsDir)
 export { wsKey, wsDir } from "./session-dir.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
+
+function usesCanonicalWorkspaceData(ctx: ServerContext): boolean {
+  return !!ctx.paths.STARTUP?.dataRoot;
+}
+
+function sessionsDirForWorkspace(ctx: ServerContext, workspace: string): string {
+  if (usesCanonicalWorkspaceData(ctx)) {
+    return workspaceDataPaths(ctx.paths.DATA_DIR, workspace).sessionsDir;
+  }
+  return wsDir(ctx.paths.SESSIONS_DIR, workspace);
+}
+
+function activeSessionsDir(ctx: ServerContext): string {
+  const workspace = ctx.runtime.currentWorkspace || ctx.paths.STARTUP?.workspace || ctx.paths.APP_ROOT;
+  return usesCanonicalWorkspaceData(ctx)
+    ? sessionsDirForWorkspace(ctx, workspace)
+    : ctx.paths.SESSIONS_DIR;
+}
 
 function publishActiveSessionChanged(ctx: ServerContext): void {
   try { ctx.appEvents.publish("dashboard.changed"); } catch {}
@@ -137,7 +155,7 @@ export function findSessionFileById(baseDir: string, id: string): string | null 
 
 export async function findAuthorizedSessionFileById(ctx: ServerContext, id: string, source: string): Promise<string | null> {
   if (typeof id !== "string" || !id.trim()) return null;
-  return findAuthorizedSessionFileInDir(ctx, ctx.paths.SESSIONS_DIR, id, source);
+  return findAuthorizedSessionFileInDir(ctx, activeSessionsDir(ctx), id, source);
 }
 
 async function findAuthorizedSessionFileInDir(ctx: ServerContext, dir: string, id: string, source: string): Promise<string | null> {
@@ -222,8 +240,9 @@ async function authorizeSessionPath(
   targetPath: string,
   operation: "read" | "write" | "create" | "remove",
   source: string,
+  sessionsRoot = activeSessionsDir(ctx),
 ): Promise<string> {
-  return (await authorizeRoutePath(ctx, ctx.paths.SESSIONS_DIR, targetPath, operation, source)).path;
+  return (await authorizeRoutePath(ctx, sessionsRoot, targetPath, operation, source)).path;
 }
 
 function textFromBlocks(blocks: Array<{type: string; text?: string; thinking?: string}>): string {
@@ -582,11 +601,14 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       const includeOther = u.searchParams.get("other") === "1";
       const curId = (session as any).sessionManager?.getSessionId?.() ?? "";
 
-      // Migrate old flat sessions -> by-project/
-      await migrateOldSessions(ctx);
+      // Canonical legacy copies are opt-in through the Settings migration flow.
+      if (!usesCanonicalWorkspaceData(ctx)) {
+        // Legacy contexts retain the old in-place migration behavior.
+        await migrateOldSessions(ctx);
+      }
 
       // Current workspace sessions dir
-      const curSessionsDir = wsDir(p.SESSIONS_DIR, currentWs);
+      const curSessionsDir = sessionsDirForWorkspace(ctx, currentWs || runtime.currentWorkspace);
       // Active session ID from runtime
       const activeSession = runtime.getActiveSession ? runtime.getActiveSession() : null;
       const runningSessionId = (session as any).isStreaming ? activeSession?.id || curId : "";
@@ -626,7 +648,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
 
       // Other projects
       let other: { project: string; path: string; sessions: Record<string, unknown>[] }[] = [];
-      if (includeOther) {
+      if (includeOther && !usesCanonicalWorkspaceData(ctx)) {
         const allDirs = await findAuthorizedProjectDirs(ctx, p.SESSIONS_DIR, "sessions.list.projects");
         const curKey = wsKey(currentWs);
         for (const dir of allDirs) {
@@ -658,12 +680,13 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       const body = await parseBody(req).catch(() => ({}));
       const workspace = await authorizeWorkspacePath(ctx, body.workspace, "sessions.new.workspace");
       const targetWorkspace = workspace || runtime.currentWorkspace || "";
-      if (existsSync(p.SESSIONS_DIR)) {
-        await authorizeSessionPath(ctx, wsDir(p.SESSIONS_DIR, targetWorkspace), "create", "sessions.new.destination");
+      const targetSessionsDir = sessionsDirForWorkspace(ctx, targetWorkspace);
+      if (existsSync(targetSessionsDir)) {
+        await authorizeSessionPath(ctx, targetSessionsDir, "create", "sessions.new.destination", targetSessionsDir);
       }
       // 如果 workspace 与当前不同，先切 workspace 再创建
       if (workspace && runtime.currentWorkspace !== workspace) {
-        await runtime.switchWorkspace(workspace);
+        await runWithWorkspaceOwnership(ctx, workspace, () => runtime.switchWorkspace(workspace));
       }
       const id = await runtime.createNewSession();
       publishActiveSessionChanged(ctx);
@@ -686,9 +709,16 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       const workspace = await authorizeWorkspacePath(ctx, body.workspace, "sessions.migrate.workspace");
       const sFile = await findAuthorizedSessionFileById(ctx, id, "sessions.migrate.lookup");
       if (!sFile) { res.writeHead(404, { ...cors }); res.end(JSON.stringify({ error: "not found" })); return true; }
-      const sourceFile = await authorizeSessionPath(ctx, sFile, "read", "sessions.migrate.source");
-      const targetDir = wsDir(p.SESSIONS_DIR, workspace || "");
-      const targetFile = await authorizeSessionPath(ctx, resolve(targetDir, basename(sourceFile)), "create", "sessions.migrate.destination");
+      const sourceRoot = activeSessionsDir(ctx);
+      const sourceFile = await authorizeSessionPath(ctx, sFile, "read", "sessions.migrate.source", sourceRoot);
+      const targetDir = sessionsDirForWorkspace(ctx, workspace || runtime.currentWorkspace || "");
+      const targetFile = await authorizeSessionPath(
+        ctx,
+        resolve(targetDir, basename(sourceFile)),
+        "create",
+        "sessions.migrate.destination",
+        targetDir,
+      );
       if (!existsSync(dirname(targetFile))) mkdirSync(dirname(targetFile), { recursive: true });
       // Read, tag, and move
       const content = readFileSync(sourceFile, "utf-8");
@@ -698,7 +728,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       lines[0] = JSON.stringify(header);
       writeFileSync(targetFile, lines.join("\n") + "\n");
       if (sourceFile !== targetFile) {
-        const removeSource = await authorizeSessionPath(ctx, sourceFile, "remove", "sessions.migrate.source");
+        const removeSource = await authorizeSessionPath(ctx, sourceFile, "remove", "sessions.migrate.source", sourceRoot);
         unlinkSync(removeSource);
       }
       console.log(`📦 Migrated session ${id} → by-project/${wsKey(workspace)}/`);
@@ -779,7 +809,12 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
         timestamp: new Date().toISOString(),
       });
       writeFileSync(targetFile, [JSON.stringify(branchHeader), branchInfo, ...sourceLines.slice(1)].join("\n") + "\n");
-      await runtime.openSession(targetFile, workspace || runtime.currentWorkspace);
+      const targetWorkspace = workspace || runtime.currentWorkspace;
+      await runWithWorkspaceOwnership(
+        ctx,
+        targetWorkspace,
+        () => runtime.openSession(targetFile, targetWorkspace),
+      );
       publishActiveSessionChanged(ctx);
       const readableTarget = await authorizeSessionPath(ctx, targetFile, "read", "sessions.branch.result");
       const messages = parseSessionMessages(readFileSync(readableTarget, "utf-8"));
@@ -815,7 +850,12 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       }
       // openSession 会重建 session，同 workspace 下切换不同 session 文件
       const authorizedFile = await authorizeSessionPath(ctx, sessionFile, "read", "sessions.activate");
-      await runtime.openSession(authorizedFile, workspace || runtime.currentWorkspace);
+      const targetWorkspace = workspace || runtime.currentWorkspace;
+      await runWithWorkspaceOwnership(
+        ctx,
+        targetWorkspace,
+        () => runtime.openSession(authorizedFile, targetWorkspace),
+      );
       publishActiveSessionChanged(ctx);
       const content = readFileSync(authorizedFile, "utf-8");
       const messages = parseSessionMessages(content);

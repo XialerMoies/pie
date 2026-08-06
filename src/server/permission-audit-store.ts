@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
-import { dirname } from "path";
+import { existsSync, readFileSync } from "fs";
 import type { PermissionAuditEntry } from "./permission-service.js";
+import { updateLockedJson } from "../data/locked-json-store.js";
 
 export interface PermissionAuditStore {
   load(limit: number): PermissionAuditEntry[];
-  save(entries: readonly PermissionAuditEntry[]): void;
-  clear(): void;
+  append(entry: PermissionAuditEntry): Promise<void>;
+  clear(): Promise<void>;
 }
 
 export class FilePermissionAuditStore implements PermissionAuditStore {
@@ -28,17 +28,17 @@ export class FilePermissionAuditStore implements PermissionAuditStore {
     }
   }
 
-  save(entries: readonly PermissionAuditEntry[]): void {
-    const recent = entries.filter(isPermissionAuditEntry).slice(-this.maxEntries);
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    const tmp = `${this.filePath}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(recent, null, 2)}\n`);
-    renameSync(tmp, this.filePath);
+  async append(entry: PermissionAuditEntry): Promise<void> {
+    if (!isPermissionAuditEntry(entry)) return;
+    await updateLockedJson<unknown>(this.filePath, () => [], (raw) => {
+      const existing = Array.isArray(raw) ? raw.filter(isPermissionAuditEntry) : [];
+      existing.push({ ...entry });
+      return existing.slice(-this.maxEntries);
+    }, { recoverInvalidJson: true });
   }
 
-  clear(): void {
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    writeFileSync(this.filePath, "[]\n");
+  async clear(): Promise<void> {
+    await updateLockedJson<PermissionAuditEntry[]>(this.filePath, () => [], () => [], { recoverInvalidJson: true });
   }
 }
 

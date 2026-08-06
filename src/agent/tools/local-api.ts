@@ -3,7 +3,10 @@ import type { ToolContext } from "../types.js"
 const DESKTOP_TOKEN_HEADER = "X-My-Code-Agent-Token"
 
 export function getLocalApiBaseUrl(): string {
-  const port = process.env.SERVER_PORT || process.env.PI_DEV_PORT || "3099"
+  const port = process.env.SERVER_PORT
+  if (!port || !/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    throw new Error("SERVER_PORT is unavailable for the active server instance")
+  }
   return `http://127.0.0.1:${port}`
 }
 

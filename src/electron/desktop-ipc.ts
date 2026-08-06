@@ -5,11 +5,11 @@ export const DESKTOP_IPC_SEND_CHANNELS = [
   "window-minimize",
   "window-maximize",
   "window-close",
-  "window-new",
 ] as const;
 
 export const DESKTOP_IPC_INVOKE_CHANNELS = [
   "desktop-session-token",
+  "window-new",
   "dialog-open-file",
   "dialog-open-folder",
   "open-folder-dialog",
@@ -50,8 +50,8 @@ export interface DesktopIpcMainLike {
 export interface DesktopIpcHandlerDeps {
   ipcMain: DesktopIpcMainLike;
   getMainWindow(): DesktopWindowLike | null | undefined;
-  createWindow(): void;
   showOpenDialog(options: DesktopOpenDialogOptions): Promise<DesktopOpenDialogResult>;
+  launchEmptyWindow(): unknown | Promise<unknown>;
   showItemInFolder(filePath: string): void;
   trashItem(filePath: string): Promise<void>;
   spawnTerminal(): Promise<boolean> | boolean;
@@ -154,10 +154,10 @@ export function registerDesktopIpcHandlers(deps: DesktopIpcHandlerDeps): void {
     deps.getMainWindow()?.close();
   });
 
-  deps.ipcMain.on("window-new", (event, ...args) => {
+  deps.ipcMain.handle("window-new", async (event, ...args) => {
     deps.validateSender(event);
     assertNoArgs("window-new", args);
-    deps.createWindow();
+    return deps.launchEmptyWindow();
   });
 
   deps.ipcMain.handle("dialog-open-file", async (event, ...args) => {

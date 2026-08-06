@@ -102,6 +102,7 @@ async function getProviderConfig(ctx?: ToolContext): Promise<ProviderConfig | nu
 
   const projectRoot = getProjectRoot();
   const candidates = [
+    process.env.PI_USER_CONFIG && resolve(process.env.PI_USER_CONFIG, "auth.json"),
     process.env.PI_CONFIG_DIR && resolve(process.env.PI_CONFIG_DIR, "auth.json"),
     resolve(projectRoot, "data", "pi", "auth.json"),
     resolve(homedir(), ".pi", "agent", "auth.json"),

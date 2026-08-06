@@ -17,9 +17,10 @@ export class AppEventHub {
   private readonly clients = new Set<ServerResponse>();
   private readonly clientRemovedHandlers = new Set<(response: ServerResponse) => void>();
   private currentRevision = 0;
+  private closed = false;
 
   addClient(response: ServerResponse): void {
-    if (this.isWritable(response)) this.clients.add(response);
+    if (!this.closed && this.isWritable(response)) this.clients.add(response);
   }
 
   removeClient(response: ServerResponse): void {
@@ -63,6 +64,15 @@ export class AppEventHub {
 
   revision(): number {
     return this.currentRevision;
+  }
+
+  closeAll(): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const client of [...this.clients]) {
+      this.removeClient(client);
+      try { client.end(); } catch {}
+    }
   }
 
   private createFrame<T>(type: AppEventType, payload?: T): string {

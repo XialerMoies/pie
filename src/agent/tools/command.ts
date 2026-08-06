@@ -424,13 +424,13 @@ function appliedPermissionRuleLabel(suggestion: PermissionSuggestion): string {
   return suggestion.rule.ruleContent
 }
 
-function applyPathPermissionSuggestions(
+async function applyPathPermissionSuggestions(
   pathResult: CommandPathValidationResult,
   ctx: ToolContext | undefined,
   scope: "session" | "workspace",
-): string[] {
+): Promise<string[]> {
   if (pathResult.allowed || !pathResult.suggestions?.length || !ctx?.applyPermissionSuggestions) return []
-  ctx.applyPermissionSuggestions(pathResult.suggestions, scope)
+  await ctx.applyPermissionSuggestions(pathResult.suggestions, scope)
   return pathResult.suggestions.map(appliedPermissionRuleLabel)
 }
 
@@ -439,9 +439,9 @@ function commandConfirmationRequest(pathResult: CommandPathValidationResult): Co
   return { permissionSuggestions: pathResult.suggestions }
 }
 
-function maybeApplyPathPermissionSuggestions(pathResult: CommandPathValidationResult, ctx: ToolContext | undefined, state: ConfirmationState): void {
+async function maybeApplyPathPermissionSuggestions(pathResult: CommandPathValidationResult, ctx: ToolContext | undefined, state: ConfirmationState): Promise<void> {
   if (!state.applyPermissionSuggestions || (state.scope !== "session" && state.scope !== "workspace")) return
-  state.appliedPermissionRules = applyPathPermissionSuggestions(pathResult, ctx, state.scope)
+  state.appliedPermissionRules = await applyPathPermissionSuggestions(pathResult, ctx, state.scope)
 }
 
 async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: ToolContext, shellDialect = shellDialectForCommand(cmd, ctx)): Promise<string> {
@@ -575,7 +575,7 @@ export const commandTool: AgentTool = defineAgentTool({
             ? cancelledWithConfirmationOutcome("⛔ 用户已取消执行", confirmationState)
             : cancelledWithConfirmationOutcome(`⛔ 路径安全检查需要确认: ${pathResult.reason}`, confirmationState), ctx, confirmationState, "deny", "Command confirmation was not granted")
         }
-        maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
+        await maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
       }
       return commandDecisionResult(withConfirmationOutcome(await executeCmd(cmd, args, ctx, shellDialect), confirmationState), ctx, confirmationState, "allow")
     }
@@ -591,13 +591,13 @@ export const commandTool: AgentTool = defineAgentTool({
       if (!(await askUser(cmd, reason, ctx, confirmationState, commandConfirmationRequest(pathResult)))) {
         return commandDecisionResult(cancelledWithConfirmationOutcome("⛔ 用户已取消执行", confirmationState), ctx, confirmationState, "deny", "Command confirmation was not granted")
       }
-      maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
+      await maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
     } else if (mode === "dontAsk") {
       if (!pathResult.allowed) {
         if (!(await askUser(cmd, `路径安全检查需要确认: ${pathConfirmationReason(pathResult)}`, ctx, confirmationState, commandConfirmationRequest(pathResult)))) {
           return commandDecisionResult(cancelledWithConfirmationOutcome(`⛔ 路径安全检查需要确认: ${pathResult.reason}`, confirmationState), ctx, confirmationState, "deny", "Command path confirmation was not granted")
         }
-        maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
+        await maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
       }
     } else {
       const standardAutoAllow = mode === "standard" && pathResult.allowed && (
@@ -610,7 +610,7 @@ export const commandTool: AgentTool = defineAgentTool({
         if (!(await askUser(cmd, reason, ctx, confirmationState, commandConfirmationRequest(pathResult)))) {
           return commandDecisionResult(cancelledWithConfirmationOutcome("⛔ 用户已取消执行", confirmationState), ctx, confirmationState, "deny", "Command confirmation was not granted")
         }
-        maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
+        await maybeApplyPathPermissionSuggestions(pathResult, ctx, confirmationState)
       }
     }
 

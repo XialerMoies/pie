@@ -12,6 +12,15 @@ export interface WorkspaceSwitchResult {
   switched: boolean;
 }
 
+export function runWithWorkspaceOwnership<T>(
+  ctx: ServerContext,
+  workspace: string,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  if (ctx.workspaceLock) return ctx.workspaceLock.switchTo(workspace, operation);
+  return Promise.resolve().then(operation);
+}
+
 interface WorkspaceSwitchState {
   tail: Promise<void>;
   activeByTarget: Map<string, Promise<WorkspaceSwitchResult>>;
@@ -91,7 +100,11 @@ export function switchAuthorizedWorkspace(
       return { workspace: latestWorkspace, previousWorkspace: latestWorkspace, switched: false };
     }
 
-    await ctx.runtime.switchWorkspace(authorizedWorkspace);
+    await runWithWorkspaceOwnership(
+      ctx,
+      authorizedWorkspace,
+      () => ctx.runtime.switchWorkspace(authorizedWorkspace),
+    );
     publishWorkspaceChanged(ctx);
     console.log(`📂 Switched workspace: "${latestWorkspace}" → "${authorizedWorkspace}"`);
     return { workspace: authorizedWorkspace, previousWorkspace: latestWorkspace, switched: true };

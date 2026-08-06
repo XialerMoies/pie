@@ -1,5 +1,7 @@
-import { randomBytes, timingSafeEqual } from "crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "crypto";
+import { readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "http";
+import { join, resolve } from "node:path";
 
 export interface DesktopSecurityConfig {
   token: string;
@@ -21,13 +23,100 @@ const PUBLIC_READ_API_PATHS = new Set([
   "/api/mcp/catalog",
 ]);
 
-export function createDesktopSecurityConfig(token = process.env[DESKTOP_TOKEN_ENV] || createDesktopSessionToken()): DesktopSecurityConfig {
+export interface InstanceMetadata {
+  version: 1;
+  instanceId: string;
+  pid: number;
+  port: number;
+  workspace: string;
+  startedAt: number;
+}
+
+const INVALID_INSTANCE_GRACE_MS = 24 * 60 * 60 * 1000;
+
+export function createDesktopSecurityConfig(token?: string): DesktopSecurityConfig {
+  const configuredToken = token === undefined ? process.env[DESKTOP_TOKEN_ENV] : token;
   return {
-    token,
+    token: configuredToken?.trim() || createDesktopSessionToken(),
     cookieName: DEFAULT_COOKIE_NAME,
     cookieMaxAgeSeconds: DEFAULT_COOKIE_MAX_AGE_SECONDS,
     allowedOrigins: parseAllowedOrigins(process.env[DESKTOP_ALLOWED_ORIGINS_ENV]),
   };
+}
+
+export async function writeInstanceMetadata(filePath: string, metadata: InstanceMetadata): Promise<void> {
+  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tempPath, JSON.stringify(metadata, null, 2), { encoding: "utf8", flag: "wx" });
+    await rename(tempPath, filePath);
+  } finally {
+    await unlink(tempPath).catch((error: any) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+  }
+}
+
+export async function cleanupStaleInstanceDirectories(
+  dataRoot: string,
+  currentInstanceId: string,
+): Promise<string[]> {
+  const instancesRoot = join(resolve(dataRoot), "instances");
+  let entries;
+  try {
+    entries = await readdir(instancesRoot, { withFileTypes: true });
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+
+  const removed: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === currentInstanceId) continue;
+    const instanceRoot = join(instancesRoot, entry.name);
+    const metadata = await readInstanceMetadata(join(instanceRoot, "port.json"));
+    if (metadata ? processIsAlive(metadata.pid) : !(await isExpiredInvalidInstance(instanceRoot))) continue;
+    await rm(instanceRoot, { recursive: true, force: true });
+    removed.push(instanceRoot);
+  }
+  return removed.sort();
+}
+
+export async function removeInstanceRuntimeDirectory(instanceRoot: string): Promise<void> {
+  await rm(instanceRoot, { recursive: true, force: true });
+}
+
+async function readInstanceMetadata(filePath: string): Promise<InstanceMetadata | null> {
+  try {
+    const value = JSON.parse(await readFile(filePath, "utf8")) as Partial<InstanceMetadata>;
+    if (value.version !== 1
+      || typeof value.instanceId !== "string"
+      || !Number.isInteger(value.pid)
+      || !Number.isInteger(value.port)
+      || typeof value.workspace !== "string"
+      || !Number.isFinite(value.startedAt)) return null;
+    return value as InstanceMetadata;
+  } catch {
+    return null;
+  }
+}
+
+async function isExpiredInvalidInstance(instanceRoot: string): Promise<boolean> {
+  try {
+    const details = await stat(instanceRoot);
+    return Date.now() - details.mtimeMs >= INVALID_INSTANCE_GRACE_MS;
+  } catch (error: any) {
+    return error?.code === "ENOENT";
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: any) {
+    return error?.code === "EPERM";
+  }
 }
 
 export function clearDesktopSessionTokenEnv(): void {

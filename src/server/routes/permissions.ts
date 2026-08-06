@@ -91,7 +91,7 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
       const list = normalizeRuleList(body?.list);
       const rule = normalizeRuleBody(body?.rule);
       const scope = normalizeRuleScope(body?.scope);
-      const result = service.addRule(list, rule, scope);
+      const result = await service.addRule(list, rule, scope);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({
         ok: true,
@@ -114,7 +114,7 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
       const list = normalizeRuleList(body?.list ?? parsedUrl.searchParams.get("list"));
       const index = normalizeRuleIndex(body?.index ?? parsedUrl.searchParams.get("index"));
       const scope = normalizeRuleScope(body?.scope ?? parsedUrl.searchParams.get("scope"));
-      const removed = service.removeRule(list, index, scope);
+      const removed = await service.removeRule(list, index, scope);
       if (!removed) {
         res.writeHead(404, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({
@@ -144,7 +144,7 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
       const rawList = body?.list;
       const list = rawList === undefined || rawList === "all" ? "all" : normalizeRuleList(rawList);
       const scope = normalizeRuleScope(body?.scope);
-      const removed = service.clearRules(list, scope);
+      const removed = await service.clearRules(list, scope);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({
         ok: true,

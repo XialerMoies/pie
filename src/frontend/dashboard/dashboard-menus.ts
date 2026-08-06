@@ -95,7 +95,11 @@ async function workspaceSwitchError(response: Response): Promise<string> {
 
 function fileAction(action: string): void {
   const api = (window as any).electronAPI as ElectronAPI | undefined;
-  if (action === 'newWindow' && api) api.newWindow();
+  if (action === 'newWindow' && api) {
+    void api.newWindow().then((result) => {
+      if (result?.ok) toast('已打开新窗口', 'success');
+    }).catch((error) => toast(`新窗口启动失败: ${(error as Error).message}`, 'error'));
+  }
   else if (action === 'openFile' && api) api.openFile().then((p: string | null) => { if (p) toast('已选择: ' + p); });
   else if (action === 'openFolder' && api) api.openFolder().then(async (p: string | null) => {
     if (p) {

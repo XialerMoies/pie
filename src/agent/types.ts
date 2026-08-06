@@ -196,7 +196,7 @@ export interface ToolContext {
   applyPermissionSuggestions?: (
     suggestions: PermissionSuggestion[],
     scope: PermissionRuleScope,
-  ) => void
+  ) => void | Promise<void>
   authorizePath?: ToolPathAuthorizer
   authorizeTool?: ToolAuthorizer
   /** One mutable, serializable authorization record shared by the tool and its path/specialized policies. */

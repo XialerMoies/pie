@@ -6,6 +6,13 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { parseBody } from "./parse-body.js";
 import { writePathGuardError } from "./path-guard.js";
 import { authorizeRoutePath, writeServerPermissionError } from "../permission-service.js";
+import { readDataRootPointer, writeDataRootPointer } from "../../data/data-root-config.js";
+import { updateLockedJson } from "../../data/locked-json-store.js";
+import {
+  LegacySessionPreviewMismatchError,
+  migrateLegacySessions,
+  previewLegacySessions,
+} from "./session-dir.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
@@ -18,6 +25,80 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
   const { runtime, paths: p } = ctx;
   const session = runtime.session;
   const modelRegistry = runtime.modelRegistry;
+
+  if (url === "/api/storage-location" && method === "GET") {
+    const pointerFile = p.DATA_ROOT_POINTER_FILE;
+    const configuredDataRoot = pointerFile
+      ? readDataRootPointer(pointerFile, p.DATA_DIR)
+      : p.DATA_DIR;
+    res.writeHead(200, { "Content-Type": "application/json", ...cors });
+    res.end(JSON.stringify({
+      dataRoot: configuredDataRoot,
+      activeDataRoot: p.DATA_DIR,
+      restartRequired: configuredDataRoot !== p.DATA_DIR,
+      workspace: runtime.currentWorkspace || p.STARTUP?.workspace || p.APP_ROOT,
+      instanceId: p.STARTUP?.instanceId || "",
+      workspaceLock: {
+        status: ctx.workspaceLock?.owner ? "locked" : "unlocked",
+        ...(ctx.workspaceLock?.owner ? { owner: ctx.workspaceLock.owner } : {}),
+      },
+    }));
+    return true;
+  }
+
+  if (url === "/api/storage-migration/preview" && method === "GET") {
+    try {
+      const workspace = runtime.currentWorkspace || p.STARTUP?.workspace || p.APP_ROOT;
+      const preview = previewLegacySessions(p.DATA_DIR, workspace);
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ ok: true, ...preview }));
+    } catch (err: unknown) {
+      res.writeHead(400, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ ok: false, error: (err as Error).message }));
+    }
+    return true;
+  }
+
+  if (url === "/api/storage-migration/confirm" && method === "POST") {
+    try {
+      const data = await parseBody(req);
+      if (data.confirm !== true || typeof data.previewId !== "string") {
+        res.writeHead(400, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: "Explicit migration confirmation and preview ID are required" }));
+        return true;
+      }
+      const workspace = runtime.currentWorkspace || p.STARTUP?.workspace || p.APP_ROOT;
+      const preview = previewLegacySessions(p.DATA_DIR, workspace);
+      if (preview.previewId !== data.previewId) {
+        res.writeHead(409, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: "Migration preview changed; review it again" }));
+        return true;
+      }
+      const migration = migrateLegacySessions(p.DATA_DIR, workspace, data.previewId);
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ ok: true, preview, migration }));
+    } catch (err: unknown) {
+      res.writeHead(err instanceof LegacySessionPreviewMismatchError ? 409 : 400, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ ok: false, error: (err as Error).message }));
+    }
+    return true;
+  }
+
+  if (url === "/api/storage-location" && method === "POST") {
+    try {
+      if (!p.DATA_ROOT_POINTER_FILE) {
+        throw new Error("Data-root bootstrap pointer is unavailable");
+      }
+      const data = await parseBody(req);
+      const result = writeDataRootPointer(p.DATA_ROOT_POINTER_FILE, data.dataRoot, p.DATA_DIR);
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ ok: true, ...result }));
+    } catch (err: unknown) {
+      res.writeHead(400, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ ok: false, error: (err as Error).message }));
+    }
+    return true;
+  }
 
   // List available models (only those with configured API key in auth.json)
   if (url === "/api/models") {
@@ -58,13 +139,11 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
     try {
       const data = await parseBody(req);
       const settingsFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "settings.json", "write", "settings.save")).path;
-      let settings: Record<string, unknown> = {};
-      if (existsSync(settingsFile)) {
-        settings = JSON.parse(readFileSync(settingsFile, "utf-8"));
-      }
-      if (data.defaultProvider) settings.defaultProvider = data.defaultProvider;
-      if (data.defaultModel) settings.defaultModel = data.defaultModel;
-      writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
+      await updateLockedJson<Record<string, unknown>>(settingsFile, () => ({}), (settings) => {
+        if (data.defaultProvider) settings.defaultProvider = data.defaultProvider;
+        if (data.defaultModel) settings.defaultModel = data.defaultModel;
+        return settings;
+      }, { trailingNewline: false });
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {
@@ -103,10 +182,10 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
       const { provider, apiKey } = await parseBody(req);
       if (!provider || !apiKey) { res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: "provider and apiKey required" })); return true; }
       const authFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "auth.json", "write", "settings.auth")).path;
-      let authData: Record<string, unknown> = {};
-      if (existsSync(authFile)) authData = JSON.parse(readFileSync(authFile, "utf-8"));
-      authData[provider] = { apiKey };
-      writeFileSync(authFile, JSON.stringify(authData, null, 2));
+      await updateLockedJson<Record<string, unknown>>(authFile, () => ({}), (authData) => {
+        authData[provider] = { apiKey };
+        return authData;
+      }, { trailingNewline: false });
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {
@@ -168,13 +247,11 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
       }
       // Persist to settings
       const settingsFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "settings.json", "write", "settings.model-switch")).path;
-      let settings: Record<string, unknown> = {};
-      if (existsSync(settingsFile)) {
-        settings = JSON.parse(readFileSync(settingsFile, "utf-8"));
-      }
-      settings.defaultProvider = provider;
-      settings.defaultModel = modelId;
-      writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
+      await updateLockedJson<Record<string, unknown>>(settingsFile, () => ({}), (settings) => {
+        settings.defaultProvider = provider;
+        settings.defaultModel = modelId;
+        return settings;
+      }, { trailingNewline: false });
       // Hot switch
       await session.setModel(model);
       publishDashboardChanged(ctx);

@@ -71,7 +71,8 @@ function waitForResult() {
 }
 
 try {
-  child = spawn(executable, ["--disable-gpu", "--disable-gpu-compositing", "--in-process-gpu"], {
+  // This host cannot launch Chromium's sandboxed renderer; production keeps sandbox: true.
+  child = spawn(executable, ["--disable-gpu", "--disable-gpu-compositing", "--in-process-gpu", "--no-sandbox"], {
     cwd: ROOT,
     windowsHide: true,
     env: {
@@ -100,6 +101,7 @@ try {
   assert.equal(result.renderer?.webviewAttached, false);
   assert.equal(result.renderer?.revealOutsideRejected, true);
   assert.equal(result.renderer?.trashOutsideRejected, true);
+  assert.equal(result.textIconStatus, 200);
   assert.equal(result.unauthorizedApiStatus, 403);
   assert.equal(result.wrongTokenApiStatus, 403);
   assert.equal(result.hostileOriginApiStatus, 403);

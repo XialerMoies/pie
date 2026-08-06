@@ -13,6 +13,24 @@ import { isPathInside, normalizePermissionPath } from "../../agent/permissions.j
 import { TrustStore, hashServerCommand, defaultTrustStorePath } from "../../agent/mcp/trust-store.js";
 import { authorizeRoutePath, isServerPermissionError, ServerPermissionError, writeServerPermissionError } from "../permission-service.js";
 import { writePathGuardError } from "./path-guard.js";
+import { workspaceDataPaths } from "./session-dir.js";
+import { updateLockedJson } from "../../data/locked-json-store.js";
+
+function activeWorkspaceStorage(ctx: ServerContext): { sessionsDir: string; usageIndexFile: string } {
+  const { paths, runtime } = ctx;
+  if (paths.STARTUP?.dataRoot) {
+    const workspace = runtime.currentWorkspace || paths.STARTUP.workspace || paths.APP_ROOT;
+    const workspacePaths = workspaceDataPaths(paths.DATA_DIR, workspace);
+    return {
+      sessionsDir: workspacePaths.sessionsDir,
+      usageIndexFile: workspacePaths.usageIndexFile,
+    };
+  }
+  return {
+    sessionsDir: paths.SESSIONS_DIR || "",
+    usageIndexFile: paths.PI_CONFIG_DIR ? resolve(paths.PI_CONFIG_DIR, "usage-index.json") : "",
+  };
+}
 
 function publishMcpChanged(ctx: ServerContext): void {
   try { ctx.appEvents.publish("mcp.changed"); } catch {}
@@ -27,12 +45,13 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
   if (url === "/api/bootstrap" && (method === "GET" || method === "HEAD")) {
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
     if (method === "HEAD") res.end();
-    else res.end(JSON.stringify({ ok: true }));
+    else res.end(JSON.stringify({ ok: true, ...(p.STARTUP ? { startup: p.STARTUP } : {}) }));
     return true;
   }
 
   // Dashboard data
   if (url === "/api/dashboard") {
+    const workspaceStorage = activeWorkspaceStorage(ctx);
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
     res.end(JSON.stringify({
       modelProvider: session.model?.provider ?? "N/A",
@@ -46,9 +65,9 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
       tools: ((session.agent?.state?.tools as Array<{name: string}> | undefined) || []).map((t) => t.name),
       activeTools: ((session.agent?.state?.tools as Array<{name: string}> | undefined) || []).map((t) => t.name),
       dataDir: p.DATA_DIR,
-      sessionsDir: p.SESSIONS_DIR,
+      sessionsDir: workspaceStorage.sessionsDir,
       sessionId: (session as any).sessionManager?.getSessionId?.() ?? "",
-      _debug: { sessionsDir: p.SESSIONS_DIR, cwd: process.cwd(), appRoot: p.APP_ROOT },
+      _debug: { sessionsDir: workspaceStorage.sessionsDir, cwd: process.cwd(), appRoot: p.APP_ROOT },
     }));
     return true;
   }
@@ -133,14 +152,15 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
   if (url === "/api/usage/summary") {
     return (async (): Promise<boolean> => {
       try {
-        const indexPath = resolve(p.PI_CONFIG_DIR, "usage-index.json");
+        const workspaceStorage = activeWorkspaceStorage(ctx);
+        const indexPath = workspaceStorage.usageIndexFile;
         const indexRoot = existingAncestorForPath(indexPath);
         const authorizedIndexPath = (await authorizeRoutePath(ctx, indexRoot, indexPath, "read", "usage.summary.index")).path;
-        const authorizedFiles = await findAuthorizedUsageSessionFiles(ctx, p.SESSIONS_DIR, "usage.summary");
+        const authorizedFiles = await findAuthorizedUsageSessionFiles(ctx, workspaceStorage.sessionsDir, "usage.summary");
         const existingIndex = loadIndex(authorizedIndexPath);
         const index = existingIndex
-          ? incrementalScanFiles(p.SESSIONS_DIR, authorizedFiles, existingIndex)
-          : fullScanFiles(p.SESSIONS_DIR, authorizedFiles);
+          ? incrementalScanFiles(workspaceStorage.sessionsDir, authorizedFiles, existingIndex)
+          : fullScanFiles(workspaceStorage.sessionsDir, authorizedFiles);
         const writableIndexPath = (await authorizeRoutePath(ctx, indexRoot, indexPath, "write", "usage.summary.index")).path;
         saveIndex(writableIndexPath, index);
 
@@ -193,11 +213,12 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
 
   // Path info
   if (url === "/api/paths") {
+    const workspaceStorage = activeWorkspaceStorage(ctx);
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
     res.end(JSON.stringify({
       dataDir: p.DATA_DIR,
       configDir: p.PI_CONFIG_DIR,
-      sessionsDir: p.SESSIONS_DIR,
+      sessionsDir: workspaceStorage.sessionsDir,
     }));
     return true;
   }
@@ -248,17 +269,18 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
           return true;
         }
 
-        const indexPath = resolve(p.PI_CONFIG_DIR, "usage-index.json");
+        const workspaceStorage = activeWorkspaceStorage(ctx);
+        const indexPath = workspaceStorage.usageIndexFile;
         const indexRoot = existingAncestorForPath(indexPath);
         const authorizedIndexPath = (await authorizeRoutePath(ctx, indexRoot, indexPath, "read", "usage.compact.index")).path;
-        const authorizedFiles = await findAuthorizedUsageSessionFiles(ctx, p.SESSIONS_DIR, "usage.compact");
+        const authorizedFiles = await findAuthorizedUsageSessionFiles(ctx, workspaceStorage.sessionsDir, "usage.compact");
         const writableIndexPath = (await authorizeRoutePath(ctx, indexRoot, indexPath, "write", "usage.compact.index")).path;
 
         const result = await (session as any).compact(focus);
         const existingIndex = loadIndex(authorizedIndexPath);
         const idx = existingIndex
-          ? incrementalScanFiles(p.SESSIONS_DIR, authorizedFiles, existingIndex)
-          : fullScanFiles(p.SESSIONS_DIR, authorizedFiles);
+          ? incrementalScanFiles(workspaceStorage.sessionsDir, authorizedFiles, existingIndex)
+          : fullScanFiles(workspaceStorage.sessionsDir, authorizedFiles);
         saveIndex(writableIndexPath, idx);
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
@@ -331,11 +353,13 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
 
         // 修改 .mcp.json 中的 enabled 字段
         const filePath = await authorizeMcpConfigFileWrite(ctx, workspace, source.sourcePath, "mcp.toggle");
-        const content = JSON.parse(readFileSync(filePath, "utf-8"));
-        const current = content.servers?.[name]?.enabled;
-        const newEnabled = current === false ? true : false;
-        content.servers[name].enabled = newEnabled;
-        writeFileSync(filePath, JSON.stringify(content, null, 2) + "\n", "utf-8");
+        let newEnabled = false;
+        await updateMcpConfigFile(filePath, (content) => {
+          const current = content.servers?.[name]?.enabled;
+          newEnabled = current === false;
+          content.servers[name].enabled = newEnabled;
+          return content;
+        });
         publishMcpChanged(ctx);
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
@@ -364,7 +388,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
 
         const trustStore = await createAuthorizedTrustStore(ctx, "mcp.trust");
         const hash = hashServerCommand(source.config);
-        trustStore.addTrust(workspace, hash, source.name);
+        await trustStore.addTrust(workspace, hash, source.name);
         publishMcpChanged(ctx);
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
@@ -399,19 +423,17 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
 
         const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
         const globalPath = await authorizeMcpConfigFileWrite(ctx, workspace, defaultGlobalConfigPath(), "mcp.install.custom");
-        let config: any = {};
-        try { config = JSON.parse(readFileSync(globalPath, "utf-8")); } catch {}
-        if (!config.servers) config.servers = {};
-        config.servers[name] = { command, args: args || [], enabled: false };
-
-        mkdirSync(dirname(globalPath), { recursive: true });
-        writeFileSync(globalPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+        await updateMcpConfigFile(globalPath, (config) => {
+          if (!config.servers) config.servers = {};
+          config.servers[name] = { command, args: args || [], enabled: false };
+          return config;
+        }, true);
 
         // 自动预信任（用户主动安装视为同意）
         try {
           const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
           const store = await createAuthorizedTrustStore(ctx, "mcp.install.custom.trust");
-          store.addTrust(workspace, hashServerCommand({ command, args: args || [], transport: "stdio" }), name);
+          await store.addTrust(workspace, hashServerCommand({ command, args: args || [], transport: "stdio" }), name);
         } catch {}
         publishMcpChanged(ctx);
 
@@ -447,13 +469,11 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
 
         const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
         const globalPath = await authorizeMcpConfigFileWrite(ctx, workspace, defaultGlobalConfigPath(), "mcp.install");
-        let config: any = {};
-        try { config = JSON.parse(readFileSync(globalPath, "utf-8")); } catch {}
-        if (!config.servers) config.servers = {};
-        config.servers[entry.id] = { command: entry.command, args: entry.args, enabled: false };
-
-        mkdirSync(dirname(globalPath), { recursive: true });
-        writeFileSync(globalPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+        await updateMcpConfigFile(globalPath, (config) => {
+          if (!config.servers) config.servers = {};
+          config.servers[entry.id] = { command: entry.command, args: entry.args, enabled: false };
+          return config;
+        }, true);
 
         // 自动预信任（用户主动安装视为同意）
         try {
@@ -462,7 +482,7 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
             command: entry.command, args: entry.args, transport: "stdio",
           };
           const hash = hashServerCommand(srvConfig);
-          trustStore.addTrust(workspace, hash, entry.name);
+          await trustStore.addTrust(workspace, hash, entry.name);
         } catch {}
         publishMcpChanged(ctx);
 
@@ -504,10 +524,15 @@ export const handleDashboard: RouteHandler = (req, res, ctx) => {
 
         // 从配置来源的 .mcp.json 中删除
         const configPath = await authorizeMcpConfigFileWrite(ctx, workspace, source.sourcePath, "mcp.uninstall");
-        const config = JSON.parse(readFileSync(configPath, "utf-8"));
-        if (config.servers?.[name]) {
-          delete config.servers[name];
-          writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+        let removed = false;
+        await updateMcpConfigFile(configPath, (config) => {
+          if (config.servers?.[name]) {
+            delete config.servers[name];
+            removed = true;
+          }
+          return config;
+        });
+        if (removed) {
           publishMcpChanged(ctx);
         }
 
@@ -585,6 +610,28 @@ async function createAuthorizedTrustStore(ctx: ServerContext, source: string): P
   const trustPath = defaultTrustStorePath();
   const authorizedPath = (await authorizeRoutePath(ctx, existingAncestorForPath(trustPath), trustPath, "write", source)).path;
   return new TrustStore({ filePath: authorizedPath });
+}
+
+async function updateMcpConfigFile(
+  filePath: string,
+  updater: (config: any) => any,
+  recoverInvalidJson = false,
+): Promise<void> {
+  if (normalizePermissionPath(resolve(filePath)) === normalizePermissionPath(resolve(defaultGlobalConfigPath()))) {
+    await updateLockedJson<any>(filePath, () => ({}), updater, { recoverInvalidJson });
+    return;
+  }
+
+  let config: any;
+  try {
+    config = JSON.parse(readFileSync(filePath, "utf8"));
+  } catch (error) {
+    if (!recoverInvalidJson) throw error;
+    config = {};
+  }
+  const updated = updater(config);
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(updated, null, 2)}\n`, "utf8");
 }
 
 function existingAncestorForPath(filePath: string): string {

@@ -116,12 +116,12 @@ describe("TrustStore", () => {
     } finally { cleanup(dirname(p)); }
   });
 
-  it("添加信任后 isTrusted 返回 true", () => {
+  it("添加信任后 isTrusted 返回 true", async () => {
     const p = tmpPath();
     try {
       const store = new TrustStore({ filePath: p });
       const hash = hashServerCommand({ command: "npx", args: ["foo"] });
-      store.addTrust("/workspace", hash, "test-server");
+      await store.addTrust("/workspace", hash, "test-server");
       assert.ok(store.isTrusted("/workspace", hash));
     } finally { cleanup(dirname(p)); }
   });
@@ -137,87 +137,105 @@ describe("TrustStore", () => {
     } finally { cleanup(dirname(p)); }
   });
 
-  it("不同 workspace 的信任隔离", () => {
+  it("不同 workspace 的信任隔离", async () => {
     const p = tmpPath();
     try {
       const store = new TrustStore({ filePath: p });
       const hash = hashServerCommand({ command: "npx", args: ["foo"] });
-      store.addTrust("/workspace-a", hash, "server");
+      await store.addTrust("/workspace-a", hash, "server");
       assert.ok(store.isTrusted("/workspace-a", hash));
       assert.strictEqual(store.isTrusted("/workspace-b", hash), false);
     } finally { cleanup(dirname(p)); }
   });
 
-  it("hash 变化后不再信任", () => {
+  it("hash 变化后不再信任", async () => {
     const p = tmpPath();
     try {
       const store = new TrustStore({ filePath: p });
       const hash1 = hashServerCommand({ command: "npx", args: ["old"] });
       const hash2 = hashServerCommand({ command: "npx", args: ["new"] });
-      store.addTrust("/workspace", hash1, "server");
+      await store.addTrust("/workspace", hash1, "server");
       assert.ok(store.isTrusted("/workspace", hash1));
       assert.strictEqual(store.isTrusted("/workspace", hash2), false);
     } finally { cleanup(dirname(p)); }
   });
 
-  it("removeTrust 正确移除", () => {
+  it("removeTrust 正确移除", async () => {
     const p = tmpPath();
     try {
       const store = new TrustStore({ filePath: p });
       const hash = hashServerCommand({ command: "npx", args: ["foo"] });
-      store.addTrust("/workspace", hash, "server");
+      await store.addTrust("/workspace", hash, "server");
       assert.ok(store.isTrusted("/workspace", hash));
-      store.removeTrust("/workspace", hash);
+      await store.removeTrust("/workspace", hash);
       assert.strictEqual(store.isTrusted("/workspace", hash), false);
     } finally { cleanup(dirname(p)); }
   });
 
-  it("addTrust 更新已有记录且不重复", () => {
+  it("removeTrust preserves unrelated records added by another store instance", async () => {
+    const p = tmpPath();
+    try {
+      const staleStore = new TrustStore({ filePath: p });
+      const writer = new TrustStore({ filePath: p });
+      await writer.addTrust("/workspace-a", "hash-a", "server-a");
+      await writer.addTrust("/workspace-b", "hash-b", "server-b");
+
+      await staleStore.removeTrust("/workspace-a", "hash-a");
+
+      const reloaded = new TrustStore({ filePath: p });
+      assert.deepStrictEqual(
+        reloaded.getAllRecords().map((record) => [record.workspacePath, record.commandHash]),
+        [["/workspace-b", "hash-b"]],
+      );
+    } finally { cleanup(dirname(p)); }
+  });
+
+  it("addTrust 更新已有记录且不重复", async () => {
     const p = tmpPath();
     try {
       const store = new TrustStore({ filePath: p });
       const hash = hashServerCommand({ command: "npx", args: ["foo"] });
-      store.addTrust("/workspace", hash, "server");
+      await store.addTrust("/workspace", hash, "server");
       const t1 = store.getAllRecords()[0].trustedAt;
-      store.addTrust("/workspace", hash, "server");
+      await store.addTrust("/workspace", hash, "server");
       const t2 = store.getAllRecords()[0].trustedAt;
       assert.ok(t2 >= t1);
       assert.strictEqual(store.getWorkspaceRecords("/workspace").length, 1);
     } finally { cleanup(dirname(p)); }
   });
 
-  it("clearWorkspace 只清除指定 workspace", () => {
+  it("clearWorkspace 只清除指定 workspace", async () => {
     const p = tmpPath();
     try {
       const store = new TrustStore({ filePath: p });
       const hash = hashServerCommand({ command: "npx", args: ["foo"] });
-      store.addTrust("/ws1", hash, "s1");
-      store.addTrust("/ws2", hash, "s2");
-      store.clearWorkspace("/ws1");
+      await store.addTrust("/ws1", hash, "s1");
+      await store.addTrust("/ws2", hash, "s2");
+      await store.clearWorkspace("/ws1");
       assert.strictEqual(store.getWorkspaceRecords("/ws1").length, 0);
       assert.strictEqual(store.getWorkspaceRecords("/ws2").length, 1);
     } finally { cleanup(dirname(p)); }
   });
 
-  it("clearAll 清空所有", () => {
+  it("clearAll 清空所有", async () => {
     const p = tmpPath();
     try {
       const store = new TrustStore({ filePath: p });
       const hash = hashServerCommand({ command: "npx", args: ["foo"] });
-      store.addTrust("/ws1", hash, "s1");
-      store.addTrust("/ws2", hash, "s2");
-      store.clearAll();
+      await store.addTrust("/ws1", hash, "s1");
+      await store.addTrust("/ws2", hash, "s2");
+      await store.clearAll();
       assert.strictEqual(store.getAllRecords().length, 0);
     } finally { cleanup(dirname(p)); }
   });
 
-  it("持久化：写入文件后重新加载可读", () => {
+  it("持久化：写入文件后重新加载可读", async () => {
     const dir = mkdtempSync(resolve(tmpdir(), "mcp-trust-test-"));
     try {
       const filePath = resolve(dir, "trust.json");
       const store = new TrustStore({ filePath });
       const hash = hashServerCommand({ command: "npx", args: ["persist-test"] });
-      store.addTrust("/ws", hash, "persisted-server");
+      await store.addTrust("/ws", hash, "persisted-server");
 
       const store2 = new TrustStore({ filePath });
       assert.ok(store2.isTrusted("/ws", hash));
@@ -245,15 +263,15 @@ describe("TrustStore", () => {
     } finally { cleanup(dir); }
   });
 
-  it("getWorkspaceRecords 只返回指定 workspace", () => {
+  it("getWorkspaceRecords 只返回指定 workspace", async () => {
     const p = tmpPath();
     try {
       const store = new TrustStore({ filePath: p });
       const h1 = hashServerCommand({ command: "npx", args: ["a"] });
       const h2 = hashServerCommand({ command: "npx", args: ["b"] });
-      store.addTrust("/ws1", h1, "s1");
-      store.addTrust("/ws2", h2, "s2");
-      store.addTrust("/ws1", h2, "s3");
+      await store.addTrust("/ws1", h1, "s1");
+      await store.addTrust("/ws2", h2, "s2");
+      await store.addTrust("/ws1", h2, "s3");
 
       assert.strictEqual(store.getWorkspaceRecords("/ws1").length, 2);
       assert.strictEqual(store.getWorkspaceRecords("/ws2").length, 1);

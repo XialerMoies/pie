@@ -40,6 +40,7 @@ if (!existsSync(DIST)) {
 // 0. marked.umd.js（构建脚本负责复制，这里只读检查）
 console.log("📎 生产附件检查");
 check(existsSync(resolve(DIST, "marked.umd.js")), "marked.umd.js 在 dist/frontend/ 中");
+check(existsSync(resolve(DIST, "icons", "file_type_text.svg")), "TXT file icon is included in the production build");
 
 // 1. dashboard.html
 console.log("\n📄 生产 HTML 检查");

@@ -41,6 +41,18 @@ function bindSettingsModalEvents(overlay: HTMLElement): void {
       if (provider) saveApiKey(provider);
       return;
     }
+    if (action === 'choose-data-root') {
+      void chooseDataRoot();
+      return;
+    }
+    if (action === 'preview-storage-migration') {
+      void previewStorageMigration();
+      return;
+    }
+    if (action === 'confirm-storage-migration') {
+      void confirmStorageMigration();
+      return;
+    }
 
     const tab = target.closest<HTMLElement>('.ms-item[data-st]')?.dataset.st;
     if (tab) { switchSettingsModal(tab); return; }
@@ -268,6 +280,7 @@ function switchSettingsModal(tab: string): void {
     if (timelineWindowEl) timelineWindowEl.value = timelineWindow;
     const jumpThresholdEl = $('gs-jump-threshold') as HTMLSelectElement | null;
     if (jumpThresholdEl) jumpThresholdEl.value = jumpThreshold;
+    renderStorageLocationSettings(sc);
   } else if (tab === 'permissions') {
     sc.innerHTML = '<div id="settings-permissions-root"></div>';
     const root = document.getElementById('settings-permissions-root');
@@ -435,6 +448,160 @@ function applyEditorSettings(): void {
   document.documentElement.classList.toggle('theme-light', theme === 'vs');
   const m = (window as any).__monaco;
   if (m?.updateSettings) m.updateSettings();
+}
+
+function renderStorageLocationSettings(container: HTMLElement): void {
+  container.insertAdjacentHTML('beforeend', `
+      <div class="gs-section" data-storage-location>
+        <div class="gs-section-title">存储位置</div>
+        <div class="gs-group">
+          <div class="gs-row">
+            <span class="gs-label">数据根目录</span>
+            <div class="gs-control gs-storage-control">
+              <span class="gs-value gs-storage-value" id="gs-data-root-status">读取中...</span>
+              <button type="button" class="gs-btn gs-storage-btn" data-settings-action="choose-data-root"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><use href="#ifolder"></use></svg><span>选择目录</span></button>
+            </div>
+          </div>
+          <div class="gs-row">
+            <span class="gs-label">实例 ID</span>
+            <span class="gs-value gs-storage-value" id="gs-instance-id">读取中...</span>
+          </div>
+          <div class="gs-row">
+            <span class="gs-label">工作区锁</span>
+            <span class="gs-value gs-storage-value" id="gs-workspace-lock">读取中...</span>
+          </div>
+          <div class="gs-row">
+            <span class="gs-label">旧数据迁移</span>
+            <div class="gs-control gs-storage-control">
+              <span class="gs-value gs-storage-value" id="gs-migration-status">检查中...</span>
+              <button type="button" class="gs-btn gs-storage-btn" data-settings-action="preview-storage-migration">检查</button>
+              <button type="button" class="gs-btn gs-storage-btn" data-settings-action="confirm-storage-migration" id="gs-migration-confirm" style="display:none">确认迁移</button>
+            </div>
+          </div>
+          <div class="gs-row" style="border:none">
+            <span class="gs-desc gs-storage-note">新位置将在重启后使用，当前会话与缓存不会在运行中移动。</span>
+          </div>
+        </div>
+      </div>
+    `);
+
+  const section = container.querySelector<HTMLElement>('[data-storage-location]');
+  const status = section?.querySelector<HTMLElement>('#gs-data-root-status');
+  const instance = section?.querySelector<HTMLElement>('#gs-instance-id');
+  const lock = section?.querySelector<HTMLElement>('#gs-workspace-lock');
+  if (!section || !status) return;
+  fetch('/api/storage-location').then(r => r.json()).then((info: Partial<StorageLocationInfo>) => {
+    if (!status.isConnected) return;
+    if (!info.dataRoot) throw new Error('missing data root');
+    status.textContent = info.restartRequired
+      ? `${info.dataRoot}（重启后生效）`
+      : String(info.dataRoot);
+    if (instance) instance.textContent = String(info.instanceId || '未知');
+    if (lock) {
+      const owner = info.workspaceLock?.owner;
+      lock.textContent = info.workspaceLock?.status === 'locked'
+        ? `已锁定${owner?.port ? ` · ${owner.port}` : ''}`
+        : '未锁定';
+    }
+  }).catch(() => {
+    if (!status.isConnected) return;
+    status.textContent = '无法读取';
+    if (instance) instance.textContent = '无法读取';
+    if (lock) lock.textContent = '无法读取';
+  });
+  void previewStorageMigration(section);
+}
+
+interface StorageMigrationPreview {
+  fileCount: number;
+  bytes: number;
+  conflicts: string[];
+  previewId: string;
+}
+
+let _storageMigrationPreviewId: string | null = null;
+let _storageMigrationPreviewSeq = 0;
+
+function formatStorageBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function previewStorageMigration(root: ParentNode = document): Promise<void> {
+  const seq = ++_storageMigrationPreviewSeq;
+  const status = root.querySelector<HTMLElement>('#gs-migration-status');
+  const confirm = root.querySelector<HTMLElement>('#gs-migration-confirm');
+  if (!status) return;
+  _storageMigrationPreviewId = null;
+  if (confirm) confirm.style.display = 'none';
+  try {
+    const response = await fetch('/api/storage-migration/preview');
+    const result = await response.json() as StorageMigrationPreview & { error?: string };
+    if (!response.ok) throw new Error(result.error || '检查失败');
+    if (seq !== _storageMigrationPreviewSeq || !status.isConnected) return;
+    if (!result.previewId) throw new Error('检查结果缺少预览 ID');
+    _storageMigrationPreviewId = result.previewId;
+    status.textContent = result.conflicts.length > 0
+      ? `${result.fileCount} 个文件 · ${formatStorageBytes(result.bytes)} · ${result.conflicts.length} 个冲突`
+      : result.fileCount > 0
+        ? `${result.fileCount} 个文件 · ${formatStorageBytes(result.bytes)}`
+        : '无待迁移数据';
+    if (confirm) confirm.style.display = result.fileCount > 0 ? '' : 'none';
+  } catch (error) {
+    if (seq !== _storageMigrationPreviewSeq || !status.isConnected) return;
+    status.textContent = `检查失败: ${(error as Error).message}`;
+    if (confirm) confirm.style.display = 'none';
+  }
+}
+
+async function confirmStorageMigration(): Promise<void> {
+  const previewId = _storageMigrationPreviewId;
+  if (!previewId) {
+    toast('请先检查待迁移数据', 'error');
+    return;
+  }
+  try {
+    const response = await fetch('/api/storage-migration/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true, previewId }),
+    });
+    const result = await response.json() as { ok?: boolean; error?: string; migration?: { copied?: string[] } };
+    if (!response.ok || !result.ok) throw new Error(result.error || '迁移失败');
+    toast(`已迁移 ${result.migration?.copied?.length || 0} 个文件，旧数据未删除`, 'success');
+    App.Session.loadSessions();
+    await previewStorageMigration();
+  } catch (error) {
+    toast(`旧数据迁移失败: ${(error as Error).message}`, 'error');
+    await previewStorageMigration();
+  }
+}
+
+async function chooseDataRoot(): Promise<void> {
+  const api = window.electronAPI;
+  if (!api?.openFolder) {
+    toast('当前环境不支持选择数据目录', 'error');
+    return;
+  }
+
+  const selected = await api.openFolder();
+  if (!selected) return;
+
+  try {
+    const response = await fetch('/api/storage-location', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dataRoot: selected }),
+    });
+    const result = await response.json() as { ok?: boolean; error?: string; restartRequired?: boolean };
+    if (!response.ok || !result.ok) throw new Error(result.error || '保存失败');
+    const status = $('gs-data-root-status');
+    if (status) status.textContent = `${selected}（重启后生效）`;
+    toast('数据目录已保存，重启后生效', 'success');
+  } catch (error) {
+    toast(`数据目录保存失败: ${(error as Error).message}`, 'error');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════

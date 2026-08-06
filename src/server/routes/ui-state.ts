@@ -8,11 +8,12 @@
  * PUT /api/ui-state              → 保存当前 workspace 的状态
  */
 import type { RouteHandler } from "./types.js";
-import { existsSync, readFileSync, writeFileSync } from "fs";
-import { resolve } from "path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { dirname, resolve } from "path";
 import { writePathGuardError } from "./path-guard.js";
 import { authorizeRoutePath, writeServerPermissionError } from "../permission-service.js";
 import { authorizeWorkspacePath } from "./workspace-authorization.js";
+import { workspaceDataPaths } from "./session-dir.js";
 
 const FILE_NAME = "ui-state.json";
 
@@ -40,6 +41,21 @@ function stateFile(piConfigDir: string): string {
   return resolve(piConfigDir, FILE_NAME);
 }
 
+function usesCanonicalWorkspaceData(ctx: Parameters<RouteHandler>[2]): boolean {
+  return !!ctx.paths.STARTUP?.dataRoot;
+}
+
+function emptyState(workspace: string): WorkspaceUiState {
+  return {
+    schemaVersion: 2,
+    workspacePath: workspace,
+    activeView: { type: "chat" },
+    tabs: { sessions: [], files: [], chatOpen: true, labels: {} },
+    panel: { active: "explorer", closed: false, width: 260 },
+    recent: { sessions: {} },
+  };
+}
+
 function readStoreFile(filePath: string): UiStateStore {
   try {
     if (!existsSync(filePath)) return { workspaces: {} };
@@ -62,9 +78,42 @@ async function readAuthorizedStore(
 }
 
 function writeStoreFile(filePath: string, store: UiStateStore): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, JSON.stringify(store, null, 2));
+}
+
+export async function readWorkspaceUiState(
+  ctx: Parameters<RouteHandler>[2],
+  workspace: string,
+): Promise<WorkspaceUiState> {
+  const paths = workspaceDataPaths(ctx.paths.DATA_DIR, workspace);
+  const filePath = (await authorizeRoutePath(
+    ctx,
+    paths.workspaceRoot,
+    paths.uiStateFile,
+    "read",
+    "ui-state.read",
+  )).path;
   try {
-    writeFileSync(filePath, JSON.stringify(store, null, 2));
-  } catch { /* ignore */ }
+    if (existsSync(filePath)) return JSON.parse(readFileSync(filePath, "utf-8"));
+  } catch {}
+
+  for (const legacyFile of paths.legacyUiStateFiles) {
+    try {
+      if (!existsSync(legacyFile)) continue;
+      const legacyRoot = dirname(legacyFile);
+      const authorized = (await authorizeRoutePath(
+        ctx,
+        legacyRoot,
+        legacyFile,
+        "read",
+        "ui-state.legacy.read",
+      )).path;
+      const legacyStore = readStoreFile(authorized);
+      if (legacyStore.workspaces[workspace]) return legacyStore.workspaces[workspace];
+    } catch {}
+  }
+  return emptyState(workspace);
 }
 
 export const handleUiState: RouteHandler = async (req, res, ctx) => {
@@ -75,9 +124,18 @@ export const handleUiState: RouteHandler = async (req, res, ctx) => {
   if (url.startsWith("/api/ui-state") && method === "GET") {
     try {
       const params = new URL(url, "http://localhost").searchParams;
-      const workspace = params.get("workspace") || "_default";
+      const requestedWorkspace = params.get("workspace") || ctx.runtime.currentWorkspace || ctx.paths.STARTUP?.workspace || "_default";
+      const workspace = requestedWorkspace === "_default"
+        ? requestedWorkspace
+        : await authorizeWorkspacePath(ctx, requestedWorkspace, "ui-state.read.workspace", { required: true });
+      if (usesCanonicalWorkspaceData(ctx) && workspace !== "_default") {
+        const state = await readWorkspaceUiState(ctx, workspace);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(state));
+        return true;
+      }
       const { store } = await readAuthorizedStore(ctx, piConfigDir);
-      const state = store.workspaces[workspace] || { schemaVersion: 2, workspacePath: workspace, activeView: { type: "chat" }, tabs: { sessions: [], files: [], chatOpen: true, labels: {} }, panel: { active: "explorer", closed: false, width: 260 }, recent: { sessions: {} } };
+      const state = store.workspaces[workspace] || emptyState(workspace);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(state));
     } catch (err) {
@@ -97,6 +155,21 @@ export const handleUiState: RouteHandler = async (req, res, ctx) => {
       const workspace = parsed.workspacePath
         ? await authorizeWorkspacePath(ctx, parsed.workspacePath, "ui-state.save.workspace", { required: true })
         : "_default";
+      if (usesCanonicalWorkspaceData(ctx) && workspace !== "_default") {
+        const paths = workspaceDataPaths(ctx.paths.DATA_DIR, workspace);
+        mkdirSync(paths.workspaceRoot, { recursive: true });
+        const filePath = (await authorizeRoutePath(
+          ctx,
+          paths.workspaceRoot,
+          paths.uiStateFile,
+          "write",
+          "ui-state.save",
+        )).path;
+        writeStoreFile(filePath, parsed);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+        return true;
+      }
       const { store } = await readAuthorizedStore(ctx, piConfigDir);
       store.workspaces[workspace] = parsed;
       store.activeWorkspace = workspace;

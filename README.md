@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-1068%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-1327%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
   <img src="https://img.shields.io/badge/license-AGPLv3-6366F1?style=flat&labelColor=1a1a2e" alt="License">
   <img src="https://img.shields.io/badge/electron-39-F59E0B?style=flat&labelColor=1a1a2e" alt="Electron">
   <img src="https://img.shields.io/badge/typescript-5.9-3178C6?style=flat&labelColor=1a1a2e" alt="TypeScript">
@@ -125,28 +125,46 @@ npm run dist:portable
 # 产物：release/pie-${version}.exe
 ```
 
-构建后 `data/` 目录在 exe 旁边自动创建，所有配置和会话数据存在里面。
+构建后默认在 exe 旁创建 `data/`。设置页可把数据根目录改到其他磁盘，修改会在重启后生效；Electron 的系统用户目录中只保留一个很小的 `data-root.json` 路径指针。
+
+### 多实例与数据目录
+
+不同项目可以在独立 Electron 进程中同时运行。通过“文件 → 新建窗口”打开空窗口，再在新窗口中使用“打开文件夹”选择项目；每个窗口拥有独立 server、随机端口和桌面认证 token，关闭其中一个实例不会中止其他项目。
+
+```text
+<dataRoot>/
+├── user/                         # 用户共享：模型、认证、MCP 配置与信任
+├── workspaces/<workspace-hash>/ # 项目隔离：会话、用量、权限规则、UI 状态
+└── instances/<instance-id>/     # 实例临时数据：端口、token、缓存
+```
+
+- 用户共享配置通过跨进程文件锁保护。
+- 同一个 canonical workspace 同时只允许一个可写实例；第二个实例会显示当前 owner 信息并拒绝启动。
+- 旧版 `data/pi/sessions/by-project` 会话只在设置页预览并明确确认后复制迁移。迁移不删除源文件，也不覆盖目标文件。
+- 当前不支持单窗口内同一项目的多个会话同时运行；同项目会话仍按单活 runtime 工作。
+
+桌面启动参数为 `--workspace <path>`、`--data-root <path>` 和 `--instance-id <id>`。普通用户通过“新建窗口 → 打开文件夹”使用，无需手工传参。
 
 ### 测试
 
 ```bash
-npm test            # 全量 1068 项测试（unit + routes + frontend）
+npm test            # 全量 1327 项测试（unit + routes + frontend）
 npm run test:build  # 构建验证 + smoke test
 npm run typecheck   # TypeScript 类型检查
 ```
 
 | 套件 | 数量 | 覆盖 |
 |------|------|------|
-| unit | 670 | Shell/权限安全（含 workspace 级规则、外部删除确认、高危删除硬拦、4 种权限模式、pure-file-op fast-path）、工具、状态存储、偏好 facade、MCP、搜索替换、Agent memory |
-| routes | 251 | API、PathGuard、root provenance、桌面认证、会话/项目权限、session、SSE 重放、TS、附件与 trace、事件流 block 持久化、workspace Remove 规则跨实例持久化、权限模式 API |
-| frontend | 147 | 消息、会话、workspace、tabs、聊天/Explorer 流生命周期、权限中心、Explorer/Search/Git/MCP、DOM 事件所有权、桌面认证启动与 Monaco 生命周期、事件流增量渲染 |
+| unit | 765 | Shell/权限安全（含 workspace 级规则、外部删除确认、高危删除硬拦、4 种权限模式、pure-file-op fast-path）、数据布局与跨进程锁、工具、状态存储、偏好 facade、MCP、搜索替换、Agent memory |
+| routes | 315 | API、PathGuard、root provenance、桌面认证、多实例隔离与 workspace owner lock、会话/项目权限、session、SSE 重放、TS、附件与 trace、权限模式 API |
+| frontend | 247 | 消息、会话、workspace、tabs、聊天/Explorer 流生命周期、设置与权限中心、多实例启动 UI、Explorer/Search/Git/MCP、DOM 事件所有权、桌面认证与事件流增量渲染 |
 | CSS | 20+20 | 变量定义完整性扫描（dark + light 各 20 项） |
 
 ---
 
 ## 配置
 
-API Key 放在 `data/pi/auth.json`：
+API Key 放在 `<dataRoot>/user/auth.json`：
 
 ```json
 {
@@ -156,11 +174,11 @@ API Key 放在 `data/pi/auth.json`：
 
 也支持通过环境变量 `DEEPSEEK_API_KEY` 设置。
 
-模型列表在 `data/pi/models.json`，可在设置界面切换。
+模型列表在 `<dataRoot>/user/models.json`，可在设置界面切换。
 
 MCP 服务器配置：
 - 工作区级：项目目录下的 `.mcp.json`
-- 全局级：`data/pi/mcp.json`
+- 全局级：`<dataRoot>/user/mcp.json`
 
 ---
 
@@ -245,7 +263,7 @@ src/
 │   ├── services/        # TabStore / ProblemsStore / UiStateStore
 │   ├── pane/            # 5 面板（explorer / chat / search / git / mcp）
 │   └── ui/              # Tree 组件 + ContextMenu
-test/                    # 55 个测试文件，1059 项（另含 CSS / build smoke / packaged E2E 门禁）
+test/                    # 1327 项测试（另含 CSS / build smoke / packaged E2E 门禁）
 scripts/                 # 编译/构建/清理脚本
 ```
 

@@ -67,10 +67,10 @@ function withTrust(tempDir) {
   return configDir;
 }
 
-function addTrustForConfig(tempDir, name, config) {
+async function addTrustForConfig(tempDir, name, config) {
   const hash = hashServerCommand(config);
   const store = new TrustStore();
-  store.addTrust(tempDir, hash, name);
+  await store.addTrust(tempDir, hash, name);
 }
 
 function deferred() {
@@ -91,12 +91,12 @@ async function waitFor(predicate, message) {
   assert.fail(message);
 }
 
-function createTrustedWorkspace(root, name) {
+async function createTrustedWorkspace(root, name) {
   const workspace = resolve(root, name);
   mkdirSync(workspace, { recursive: true });
   const config = { command: `mock-${name}` };
   writeConfig(workspace, { [name]: config });
-  addTrustForConfig(workspace, name, config);
+  await addTrustForConfig(workspace, name, config);
   return workspace;
 }
 
@@ -369,7 +369,7 @@ describe("已信任但连接失败", () => {
       withTrust(tmpDir);
       const { loadMcpConfig } = await import("../src/agent/mcp/config.ts");
       const cfg = loadMcpConfig({ projectRoot: tmpDir }).servers[0];
-      addTrustForConfig(tmpDir, "broken-srv", cfg.config);
+      await addTrustForConfig(tmpDir, "broken-srv", cfg.config);
 
       const tools = await service.connectAll(tmpDir);
       assert.strictEqual(tools.length, 0);
@@ -385,7 +385,7 @@ describe("已信任但连接失败", () => {
       withTrust(tmpDir);
       const { loadMcpConfig } = await import("../src/agent/mcp/config.ts");
       const cfg = loadMcpConfig({ projectRoot: tmpDir }).servers[0];
-      addTrustForConfig(tmpDir, "bad-srv", cfg.config);
+      await addTrustForConfig(tmpDir, "bad-srv", cfg.config);
 
       await service.connectAll(tmpDir);
 
@@ -416,7 +416,7 @@ describe("多 server 隔离", () => {
       const { loadMcpConfig } = await import("../src/agent/mcp/config.ts");
       const result = loadMcpConfig({ projectRoot: tmpDir });
       for (const s of result.servers) {
-        addTrustForConfig(tmpDir, s.name, s.config);
+        await addTrustForConfig(tmpDir, s.name, s.config);
       }
 
       const tools = await service.connectAll(tmpDir);
@@ -452,7 +452,7 @@ describe("状态管理不变式", () => {
       withTrust(tmpDir);
       const { loadMcpConfig } = await import("../src/agent/mcp/config.ts");
       const cfg = loadMcpConfig({ projectRoot: tmpDir }).servers[0];
-      addTrustForConfig(tmpDir, "cfg-test", cfg.config);
+      await addTrustForConfig(tmpDir, "cfg-test", cfg.config);
 
       await service.connectAll(tmpDir);
       const statuses = service.getServersStatus();
@@ -473,7 +473,7 @@ describe("状态管理不变式", () => {
       withTrust(tmpDir);
       const { loadMcpConfig } = await import("../src/agent/mcp/config.ts");
       for (const s of loadMcpConfig({ projectRoot: tmpDir }).servers) {
-        addTrustForConfig(tmpDir, s.name, s.config);
+        await addTrustForConfig(tmpDir, s.name, s.config);
       }
       await service.connectAll(tmpDir);
       assert.ok(service.getServersStatus().length > 0);
@@ -486,7 +486,7 @@ describe("状态管理不变式", () => {
         writeConfig(tmpDir2, { "second": { command: "no-such-cmd-222" } });
         withTrust(tmpDir2);
         for (const s of loadMcpConfig({ projectRoot: tmpDir2 }).servers) {
-          addTrustForConfig(tmpDir2, s.name, s.config);
+          await addTrustForConfig(tmpDir2, s.name, s.config);
         }
         await service.connectAll(tmpDir2);
         const statuses = service.getServersStatus();
@@ -510,7 +510,7 @@ describe("状态管理不变式", () => {
       withTrust(tmpDir);
       const { loadMcpConfig } = await import("../src/agent/mcp/config.ts");
       const cfg = loadMcpConfig({ projectRoot: tmpDir }).servers[0];
-      addTrustForConfig(tmpDir, "stale-srv", cfg.config);
+      await addTrustForConfig(tmpDir, "stale-srv", cfg.config);
 
       Client.prototype.connect = function () {
         return new Promise((_, reject) => {
@@ -519,6 +519,7 @@ describe("状态管理不变式", () => {
       };
 
       const pending = service.connectAll(tmpDir);
+      await waitFor(() => typeof rejectConnect === "function", "stale connection did not start");
       service.bumpGeneration();
       rejectConnect(new Error("mock stale fail"));
 
@@ -530,6 +531,33 @@ describe("状态管理不变式", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("stale refresh returns an incomplete report without clearing current generation status", async () => {
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "mcp-svc-stale-refresh-"));
+    const originalRefresh = TrustStore.prototype.refresh;
+    const refreshGate = deferred();
+    let refreshStarted = false;
+    try {
+      TrustStore.prototype.refresh = function () {
+        refreshStarted = true;
+        return refreshGate.promise;
+      };
+
+      const pending = service.connectAllWithReport(tmpDir);
+      await waitFor(() => refreshStarted, "stale trust refresh did not start");
+      service.bumpGeneration();
+      service._setStatus("current-generation", "connected", undefined, { command: "current" }, ["current-tool"]);
+      refreshGate.resolve();
+
+      const report = await pending;
+      assert.strictEqual(report.complete, false);
+      assert.deepStrictEqual(service.getServersStatus().map((status) => status.name), ["current-generation"]);
+    } finally {
+      refreshGate.resolve();
+      TrustStore.prototype.refresh = originalRefresh;
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("tools MCP discovery concurrency", () => {
@@ -538,9 +566,9 @@ describe("tools MCP discovery concurrency", () => {
     await toolsModule.disconnectMcp();
     service.reset();
     withTrust(root);
-    const workspaces = Object.fromEntries(
-      workspaceNames.map((name) => [name, createTrustedWorkspace(root, name)]),
-    );
+    const workspaces = Object.fromEntries(await Promise.all(
+      workspaceNames.map(async (name) => [name, await createTrustedWorkspace(root, name)]),
+    ));
     const clients = installDeferredMcpClients(scripts);
     return { root, workspaces, clients };
   }
@@ -656,8 +684,8 @@ describe("tools MCP discovery concurrency", () => {
       const healthyConfig = { command: "mock-healthy" };
       const flakyConfig = { command: "mock-flaky" };
       writeConfig(state.workspaces.mixed, { healthy: healthyConfig, flaky: flakyConfig });
-      addTrustForConfig(state.workspaces.mixed, "healthy", healthyConfig);
-      addTrustForConfig(state.workspaces.mixed, "flaky", flakyConfig);
+      await addTrustForConfig(state.workspaces.mixed, "healthy", healthyConfig);
+      await addTrustForConfig(state.workspaces.mixed, "flaky", flakyConfig);
 
       await toolsModule.getCustomToolsAsync(state.workspaces.mixed);
       await waitFor(() => state.clients.attempts.length === 1, "healthy server did not start");

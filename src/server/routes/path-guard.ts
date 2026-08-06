@@ -96,6 +96,11 @@ export function writePathGuardError(
 ): boolean {
   if (!isPathGuardError(error)) return false;
   res.writeHead(error.statusCode, { "Content-Type": "application/json", ...headers });
-  res.end(JSON.stringify({ error: error.message, code: error.code }));
+  const owner = (error as PathGuardError & { owner?: unknown }).owner;
+  res.end(JSON.stringify({
+    error: error.message,
+    code: error.code,
+    ...(owner ? { owner } : {}),
+  }));
   return true;
 }

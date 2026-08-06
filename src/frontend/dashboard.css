@@ -518,6 +518,10 @@ body{background:var(--bg);height:100vh}
 .gs-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--bd)}
 .gs-label{font-size:.78rem;color:var(--ts)}
 .gs-control{display:flex;align-items:center;gap:6px}
+.gs-storage-control{min-width:0;flex:1;justify-content:flex-end}
+.gs-storage-value{min-width:0;max-width:min(360px,48vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.72rem;font-weight:500;text-align:right}
+.gs-storage-btn{width:auto;min-width:0;padding:0 9px;gap:5px;font-size:.72rem;flex-shrink:0}
+.gs-storage-note{font-size:.68rem;color:var(--tm);line-height:1.45}
 .gs-btn{width:28px;height:28px;border:1px solid var(--bd);border-radius:6px;background:var(--bc);color:var(--tx);font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .1s}
 .gs-btn:hover{background:var(--bs);border-color:var(--am)}
 .gs-value{min-width:24px;text-align:center;font-family:var(--fm);font-size:.9rem;color:var(--tx);font-weight:600}

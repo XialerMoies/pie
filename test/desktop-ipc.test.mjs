@@ -124,8 +124,8 @@ describe("desktop IPC governance", () => {
     registerDesktopIpcHandlers({
       ipcMain,
       getMainWindow: () => null,
-      createWindow: () => {},
       showOpenDialog: async () => ({ canceled: false, filePaths: [selected] }),
+      launchEmptyWindow: () => {},
       showItemInFolder: () => {},
       trashItem: async () => {},
       spawnTerminal: () => true,
@@ -159,7 +159,6 @@ describe("desktop IPC governance", () => {
     registerDesktopIpcHandlers({
       ipcMain,
       getMainWindow: () => window,
-      createWindow: () => calls.push("new-window"),
       showOpenDialog: async (options) => {
         calls.push(`dialog:${options.properties.join(",")}`);
         return {
@@ -167,6 +166,7 @@ describe("desktop IPC governance", () => {
           filePaths: options.properties.includes("openFile") ? [file] : [root],
         };
       },
+      launchEmptyWindow: () => { calls.push("new-window"); return { ok: true }; },
       showItemInFolder: (filePath) => calls.push(`reveal:${filePath}`),
       trashItem: async (filePath) => { calls.push(`trash:${filePath}`); },
       spawnTerminal: () => { calls.push("terminal"); return true; },
@@ -182,9 +182,11 @@ describe("desktop IPC governance", () => {
     ipcMain.send("window-maximize");
     ipcMain.send("window-maximize");
     ipcMain.send("window-close");
-    ipcMain.send("window-new");
-    assert.deepStrictEqual(calls.slice(0, 5), ["minimize", "maximize", "unmaximize", "close", "new-window"]);
-    assert.throws(() => ipcMain.send("window-new", "unexpected"), /does not accept renderer arguments/);
+    assert.deepStrictEqual(calls.slice(0, 4), ["minimize", "maximize", "unmaximize", "close"]);
+    assert.deepStrictEqual(await ipcMain.invoke("window-new"), { ok: true });
+    assert.ok(calls.includes("new-window"));
+    assert.strictEqual(calls.some((call) => call.startsWith("dialog:")), false);
+    await assert.rejects(() => ipcMain.invoke("window-new", "unexpected"), /does not accept renderer arguments/);
 
     assert.strictEqual(await ipcMain.invoke("dialog-open-file"), file);
     await ipcMain.invoke("show-item-in-folder", file);
@@ -222,11 +224,11 @@ describe("desktop IPC governance", () => {
         unmaximize: () => calls.push("unmaximize"),
         close: () => calls.push("close"),
       }),
-      createWindow: () => calls.push("new-window"),
       showOpenDialog: async () => {
         calls.push("dialog");
         return { canceled: true, filePaths: [] };
       },
+      launchEmptyWindow: () => { calls.push("new-window"); return { ok: true }; },
       showItemInFolder: () => calls.push("reveal"),
       trashItem: async () => { calls.push("trash"); },
       spawnTerminal: () => { calls.push("terminal"); return true; },

@@ -6,7 +6,7 @@
  * 4. 更新 HTML：注入 marked.umd.js + dashboard.js
  */
 import { execSync } from "child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, cpSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -20,6 +20,10 @@ console.log("→ Vite build…");
 console.log("-> Compile frontend TS...");
 execSync("node scripts/compile-frontend-ts.mjs", { cwd: ROOT, stdio: "inherit" });
 execSync("npx vite build", { cwd: ROOT, stdio: "inherit" });
+
+// Explorer icons are referenced by stable /icons/*.svg URLs and therefore
+// are not discovered by Vite's import graph.
+cpSync(resolve(SRC, "icons"), resolve(OUT, "icons"), { recursive: true });
 
 // 1.5 编译 preload.ts（Electron 需要 CommonJS 格式）
 const { compilePreload } = await import("./compile-preload.mjs");

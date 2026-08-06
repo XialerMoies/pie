@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { normalizePermissionPath } from "../agent/permissions.js";
 import type { PermissionRule, PermissionRuleMatch, PermissionToolName } from "../agent/types.js";
+import { updateLockedJson } from "../data/locked-json-store.js";
 
 export interface WorkspacePermissionRuleSet {
   alwaysAllowRules: PermissionRule[];
@@ -11,7 +11,11 @@ export interface WorkspacePermissionRuleSet {
 
 export interface WorkspacePermissionRuleStore {
   load(workspacePath: string): WorkspacePermissionRuleSet;
-  save(workspacePath: string, rules: WorkspacePermissionRuleSet): void;
+  save(workspacePath: string, rules: WorkspacePermissionRuleSet): Promise<void>;
+  update(
+    workspacePath: string,
+    updater: (rules: WorkspacePermissionRuleSet) => WorkspacePermissionRuleSet | void,
+  ): Promise<WorkspacePermissionRuleSet>;
 }
 
 interface WorkspacePermissionRuleEntry extends WorkspacePermissionRuleSet {
@@ -39,45 +43,64 @@ export class FileWorkspacePermissionRuleStore implements WorkspacePermissionRule
     return entry ? cloneRuleSet(entry) : emptyRuleSet();
   }
 
-  save(workspacePath: string, rules: WorkspacePermissionRuleSet): void {
-    const document = this.readDocument();
-    const resolvedWorkspace = normalizePermissionPath(workspacePath);
-    document.workspaces[resolvedWorkspace] = {
-      workspacePath,
-      ...sanitizeRuleSet(rules),
-    };
+  async save(workspacePath: string, rules: WorkspacePermissionRuleSet): Promise<void> {
+    await this.update(workspacePath, () => sanitizeRuleSet(rules));
+  }
 
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    const temporaryPath = `${this.filePath}.tmp`;
-    writeFileSync(temporaryPath, `${JSON.stringify(document, null, 2)}\n`, "utf-8");
-    renameSync(temporaryPath, this.filePath);
+  async update(
+    workspacePath: string,
+    updater: (rules: WorkspacePermissionRuleSet) => WorkspacePermissionRuleSet | void,
+  ): Promise<WorkspacePermissionRuleSet> {
+    const resolvedWorkspace = normalizePermissionPath(workspacePath);
+    let updatedRules = emptyRuleSet();
+    await updateLockedJson<unknown>(this.filePath, emptyDocument, (raw) => {
+      const document = normalizeDocument(raw);
+      const existingKey = document.workspaces[resolvedWorkspace]
+        ? resolvedWorkspace
+        : Object.keys(document.workspaces).find((key) => (
+          normalizePermissionPath(document.workspaces[key].workspacePath) === resolvedWorkspace
+        ));
+      const existing = existingKey ? document.workspaces[existingKey] : undefined;
+      const candidate = existing ? cloneRuleSet(existing) : emptyRuleSet();
+      updatedRules = sanitizeRuleSet(updater(candidate) || candidate);
+      if (existingKey && existingKey !== resolvedWorkspace) delete document.workspaces[existingKey];
+      document.workspaces[resolvedWorkspace] = {
+        workspacePath,
+        ...updatedRules,
+      };
+      return document;
+    }, { recoverInvalidJson: true });
+    return cloneRuleSet(updatedRules);
   }
 
   private readDocument(): WorkspacePermissionRuleDocument {
     if (!existsSync(this.filePath)) return emptyDocument();
     try {
-      const parsed = JSON.parse(readFileSync(this.filePath, "utf-8"));
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return emptyDocument();
-      const raw = parsed as Record<string, unknown>;
-      if (raw.version !== 1 || !raw.workspaces || typeof raw.workspaces !== "object" || Array.isArray(raw.workspaces)) {
-        return emptyDocument();
-      }
-
-      const workspaces: Record<string, WorkspacePermissionRuleEntry> = {};
-      for (const [key, value] of Object.entries(raw.workspaces as Record<string, unknown>)) {
-        if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-        const entry = value as Record<string, unknown>;
-        if (typeof entry.workspacePath !== "string" || !entry.workspacePath.trim()) continue;
-        workspaces[key] = {
-          workspacePath: entry.workspacePath,
-          ...sanitizeRuleSet(entry),
-        };
-      }
-      return { version: 1, workspaces };
+      return normalizeDocument(JSON.parse(readFileSync(this.filePath, "utf-8")));
     } catch {
       return emptyDocument();
     }
   }
+}
+
+function normalizeDocument(parsed: unknown): WorkspacePermissionRuleDocument {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return emptyDocument();
+  const raw = parsed as Record<string, unknown>;
+  if (raw.version !== 1 || !raw.workspaces || typeof raw.workspaces !== "object" || Array.isArray(raw.workspaces)) {
+    return emptyDocument();
+  }
+
+  const workspaces: Record<string, WorkspacePermissionRuleEntry> = {};
+  for (const [key, value] of Object.entries(raw.workspaces as Record<string, unknown>)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const entry = value as Record<string, unknown>;
+    if (typeof entry.workspacePath !== "string" || !entry.workspacePath.trim()) continue;
+    workspaces[key] = {
+      workspacePath: entry.workspacePath,
+      ...sanitizeRuleSet(entry),
+    };
+  }
+  return { version: 1, workspaces };
 }
 
 function emptyDocument(): WorkspacePermissionRuleDocument {

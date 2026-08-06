@@ -49,7 +49,7 @@ win.ExplorerService = global.ExplorerService = {
   getWorkspacePath: () => "E:/my-code-agent",
 };
 win.electronAPI = {
-  newWindow: () => calls.push(["newWindow"]),
+  newWindow: async () => { calls.push(["newWindow"]); return { ok: true }; },
   openFile: async () => { calls.push(["openFile"]); return "E:/picked.ts"; },
   openFolder: async () => null,
   close: () => calls.push(["closeWindow"]),
@@ -130,6 +130,7 @@ describe("dashboard action delegation", () => {
     assert.match(css, /\.chat-timeline-item\.active \.chat-timeline-mark\{[^}]*width:12px/);
     assert.match(css, /\.chat-timeline-item:hover \.chat-timeline-mark[^}]*width:24px/);
     assert.match(css, /@media\(max-width:/);
+    assert.strictEqual(app.querySelector("[data-layout-action='open-project-instance']"), null);
 
     app.querySelector("[data-layout-action='panel'][data-side='search']")?.click();
     app.querySelector("[data-layout-action='window'][data-window-action='minimize']")?.click();
@@ -140,14 +141,15 @@ describe("dashboard action delegation", () => {
     const menu = doc.getElementById("file-menu");
     assert.ok(menu, "file menu should open through delegated layout action");
     assert.strictEqual(menu.querySelectorAll("[onclick], [onchange], [oninput]").length, 0);
-    menu.querySelector("[data-file-action='openFile']")?.click();
+    assert.strictEqual(menu.querySelector("[data-file-action='openProjectInNewInstance']"), null);
+    menu.querySelector("[data-file-action='newWindow']")?.click();
     await new Promise(resolve => queueMicrotask(resolve));
 
     assert.ok(calls.some(call => call[0] === "togglePanel" && call[1] === "search"));
     assert.ok(calls.some(call => call[0] === "winCtrl" && call[1] === "minimize"));
     assert.ok(calls.some(call => call[0] === "spawnTerminal"));
     assert.ok(calls.some(call => call[0] === "settings"));
-    assert.ok(calls.some(call => call[0] === "openFile"));
+    assert.ok(calls.some(call => call[0] === "newWindow"));
     assert.strictEqual(doc.getElementById("file-menu"), null, "file menu should close after a command");
   });
 });
