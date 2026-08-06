@@ -54,6 +54,7 @@ let modeMutationQueue: Array<{
   generation: number;
   mountedGeneration: number;
   root: HTMLElement | null;
+  allowUnmounted: boolean;
 }> = [];
 let modeMutationProcessing = false;
 let modeMutationQueueEpoch = 0;
@@ -183,6 +184,25 @@ function isPermissionMode(value: unknown): value is PermissionMode {
   return value === "plan" || value === "standard" || value === "dontAsk" || value === "yes";
 }
 
+async function refreshPermissionMode(): Promise<PermissionMode> {
+  const requestModeMutationGeneration = modeMutationGeneration;
+  try {
+    const response = await fetch("/api/permissions/mode");
+    if (response.ok) {
+      const body = await response.json();
+      if (isPermissionMode(body.mode)) {
+        // 请求期间用户发起过 setMode：丢弃迟到的服务端快照，避免覆盖刚应用的模式
+        if (modeMutationGeneration !== requestModeMutationGeneration) return _permissionMode;
+        _permissionMode = body.mode;
+        updatePermissionModeBadge();
+      }
+    }
+  } catch {
+    // Keep the last known mode when the server is temporarily unavailable.
+  }
+  return _permissionMode;
+}
+
 function permissionModeOptions(): string {
   return ([
     ["plan", "计划模式"],
@@ -192,7 +212,7 @@ function permissionModeOptions(): string {
   ] as const).map(([value, label]) => `<option value="${value}"${_permissionMode === value ? " selected" : ""}>${label}</option>`).join("");
 }
 
-function requestPermissionMode(mode: PermissionMode): void {
+function requestPermissionMode(mode: PermissionMode, allowUnmounted = false): void {
   const requestModeMutationGeneration = ++modeMutationGeneration;
   const requestMountedGeneration = mountedGeneration;
   const requestRoot = mountedRoot;
@@ -202,6 +222,7 @@ function requestPermissionMode(mode: PermissionMode): void {
     generation: requestModeMutationGeneration,
     mountedGeneration: requestMountedGeneration,
     root: requestRoot,
+    allowUnmounted,
   });
   if (!modeMutationProcessing) {
     modeMutationProcessing = true;
@@ -220,7 +241,7 @@ async function drainModeMutations(): Promise<void> {
   try {
     while (queueEpoch === modeMutationQueueEpoch && modeMutationQueue.length > 0) {
       const mutation = modeMutationQueue.shift()!;
-      await performPermissionMode(mutation.mode, mutation.generation, mutation.mountedGeneration, mutation.root);
+      await performPermissionMode(mutation.mode, mutation.generation, mutation.mountedGeneration, mutation.root, mutation.allowUnmounted);
     }
   } finally {
     if (queueEpoch === modeMutationQueueEpoch) modeMutationProcessing = false;
@@ -232,15 +253,16 @@ async function performPermissionMode(
   requestModeMutationGeneration: number,
   requestMountedGeneration: number,
   requestRoot: HTMLElement | null,
+  allowUnmounted: boolean,
 ): Promise<void> {
-  if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot)) return;
+  if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot, allowUnmounted)) return;
   if (mode === "yes" && !(await confirmYesMode())) {
-    if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot)) return;
+    if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot, allowUnmounted)) return;
     resetPermissionModeControls();
     syncPermissionsPanel();
     return;
   }
-  if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot)) return;
+  if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot, allowUnmounted)) return;
   try {
     const response = await fetch("/api/permissions/mode", {
       method: "POST",
@@ -249,13 +271,13 @@ async function performPermissionMode(
     });
     const body = await response.json();
     if (!response.ok || !body.ok) throw new Error(body.error || `HTTP ${response.status}`);
-    if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot)) return;
+    if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot, allowUnmounted)) return;
     _permissionMode = mode;
     updatePermissionModeBadge();
     syncPermissionsPanel();
     toast(`已切换为${mode === "yes" ? " Yes" : ""}权限模式`, "success");
   } catch (error) {
-    if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot)) return;
+    if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot, allowUnmounted)) return;
     resetPermissionModeControls();
     syncPermissionsPanel();
     toast(`权限模式切换失败: ${(error as Error).message}`, "error");
@@ -272,9 +294,10 @@ function isCurrentModeMutation(
   requestModeMutationGeneration: number,
   requestMountedGeneration: number,
   requestRoot: HTMLElement | null,
+  allowUnmounted: boolean,
 ): boolean {
   return requestModeMutationGeneration === modeMutationGeneration
-    && isCurrentMountedRoot(requestMountedGeneration, requestRoot);
+    && (allowUnmounted || isCurrentMountedRoot(requestMountedGeneration, requestRoot));
 }
 
 function updatePermissionModeBadge(): void {
@@ -290,6 +313,7 @@ function updatePermissionModeBadge(): void {
   });
   const select = mountedRoot?.querySelector<HTMLSelectElement>("#perm-mode");
   if (select) select.value = _permissionMode;
+  (window as any).App?.Chat?.refreshModeButton?.();
 }
 
 function resetPermissionModeControls(): void {
@@ -491,5 +515,8 @@ permissionsApp.Permissions = {
   mount: mountPermissionsPanel,
   refresh: refreshPermissionsPanel,
   unmount: unmountPermissionsPanel,
+  getMode: () => _permissionMode,
+  setMode: (mode: PermissionMode) => requestPermissionMode(mode, true),
+  refreshMode: refreshPermissionMode,
 };
 (window as any).refreshPermissionsPanel = refreshPermissionsPanel;

@@ -14,11 +14,21 @@ type ChatSendContext = {
 let activeSendContext: ChatSendContext | null = null;
 const CHAT_LATEST_DEFAULT_THRESHOLD = 72;
 const CHAT_LATEST_ALLOWED_THRESHOLDS = [48, 72, 120];
+const CHAT_INPUT_MIN_HEIGHT = 34;
+const CHAT_INPUT_MAX_HEIGHT = 144;
 let chatLatestEnabled = true;
 let chatLatestSmooth = true;
 let chatLatestThreshold = CHAT_LATEST_DEFAULT_THRESHOLD;
 let chatFollowLatest = true;
 let chatSmoothScrollTimer: ReturnType<typeof setTimeout> | null = null;
+
+function resizeComposerInput(input: HTMLTextAreaElement): void {
+  input.style.height = 'auto';
+  const contentHeight = Math.max(CHAT_INPUT_MIN_HEIGHT, input.scrollHeight);
+  const cappedHeight = Math.min(contentHeight, CHAT_INPUT_MAX_HEIGHT);
+  input.style.height = `${cappedHeight}px`;
+  input.style.overflowY = contentHeight > CHAT_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+}
 
 function chatReadBooleanPreference(key: string, fallback = true): boolean {
   const preferences = (App as any).Preferences;
@@ -346,8 +356,7 @@ function bind(): void {
   refreshReadingSettings();
 
   ci.addEventListener('input', () => {
-    ci.style.height = 'auto';
-    ci.style.height = Math.min(ci.scrollHeight, 120) + 'px';
+    resizeComposerInput(ci);
     // Slash command popup (sourced from chat-mode.ts)
     const fn = App.Chat?.handleSlash;
     if (fn) fn(ci);
@@ -375,7 +384,7 @@ function bind(): void {
     const ciVal = rawText.trim();
     if (!ciVal) return;
     ci2.value = '';
-    ci2.style.height = 'auto';
+    resizeComposerInput(ci2);
 
     if (ciVal === '/clear') {
       App.ChatState.setBusy(false);
@@ -698,7 +707,7 @@ function bind(): void {
         ci.value = cmd + ' ';
         ci.focus();
         slashEl.style.display = 'none';
-        ci.style.height = 'auto';
+        resizeComposerInput(ci);
       });
     });
   }
@@ -756,7 +765,11 @@ function showModelPicker(e: MouseEvent): void {
     const rect = target.getBoundingClientRect();
     const picker = document.createElement('div');
     picker.id = 'model-picker';
-    picker.style.cssText = `position:fixed;bottom:${window.innerHeight - rect.top + 4}px;left:${rect.left}px;z-index:999;background:var(--be);border:1px solid var(--bd);border-radius:8px;padding:4px;max-height:200px;overflow-y:auto;min-width:200px;box-shadow:0 8px 32px rgba(0,0,0,.5)`;
+    picker.className = 'model-picker';
+    picker.style.bottom = `${window.innerHeight - rect.top + 4}px`;
+    picker.style.left = `${rect.left}px`;
+    const modelList = document.createElement('div');
+    modelList.className = 'model-picker-list';
     const grouped: Record<string, Array<{ provider: string; id: string }>> = {};
     for (const m of data.models) {
       if (!grouped[m.provider]) grouped[m.provider] = [];
@@ -766,7 +779,7 @@ function showModelPicker(e: MouseEvent): void {
       const header = document.createElement('div');
       header.style.cssText = 'font-size:.6rem;font-weight:600;text-transform:uppercase;color:var(--tm);padding:6px 10px 3px;letter-spacing:.05em;font-family:var(--fd)';
       header.textContent = provider;
-      picker.appendChild(header);
+      modelList.appendChild(header);
       for (const m of models) {
         const item = document.createElement('div');
         const stD = App.ChatState.getDashboard();
@@ -778,13 +791,15 @@ function showModelPicker(e: MouseEvent): void {
         item.addEventListener('click', () => {
           fetch('/api/model/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, modelId: m.id }) })
             .then(r => r.json()).then((r: { ok: boolean; error?: string }) => {
-              if (r.ok) { toast('已切换: ' + m.id, 'success'); getD(); picker.remove(); }
+              if (r.ok) { toast('已切换: ' + m.id, 'success'); getD(); void App.Chat?.syncThinkingLevel?.(); picker.remove(); }
               else toast('切换失败: ' + (r.error || ''), 'error');
             }).catch(() => toast('切换失败', 'error'));
         });
-        picker.appendChild(item);
+        modelList.appendChild(item);
       }
     }
+    picker.appendChild(modelList);
+    App.Chat?.mountThinkingControl?.(picker);
     document.body.appendChild(picker);
     const close = function (ev: MouseEvent) { if (!picker.contains(ev.target as Node) && ev.target !== target) { picker.remove(); document.removeEventListener('click', close, true); } };
     setTimeout(() => document.addEventListener('click', close as any, true), 0);
@@ -808,4 +823,5 @@ window.showModelPicker = showModelPicker;
   App.Chat.resetMsgKeys = resetMsgKeys;
   App.Chat.scrollToLatest = chatScrollToLatest;
   App.Chat.refreshReadingSettings = refreshReadingSettings;
+  App.Chat.resizeComposerInput = resizeComposerInput;
 } }

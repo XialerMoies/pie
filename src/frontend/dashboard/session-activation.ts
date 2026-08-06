@@ -111,7 +111,7 @@ function activateFailReset(): void {
   sessionActivationApp.ChatStream.close();
   const input = document.getElementById('ci') as HTMLTextAreaElement | null;
   const send = document.getElementById('cs') as HTMLButtonElement | null;
-  if (input) { input.disabled = false; input.style.height = 'auto'; }
+  if (input) { input.disabled = false; sessionActivationApp.Chat?.resizeComposerInput?.(input); }
   if (send) {
     send.disabled = false;
     send.title = '发送消息';

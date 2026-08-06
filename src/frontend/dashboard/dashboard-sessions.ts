@@ -329,7 +329,7 @@ function _setupDraftSession(id: string): void {
   App.ChatStream.close();
   focusChatView();
   const ci = $('ci') as HTMLTextAreaElement | null;
-  if (ci) { ci.value = ''; ci.style.height = 'auto'; }
+  if (ci) { ci.value = ''; App.Chat?.resizeComposerInput?.(ci); }
   const msgsEl = $('ms');
   if (msgsEl) msgsEl.innerHTML = '<div class="wl"><h2>💬 新会话</h2><p>输入消息开始新的对话</p></div>';
   App.ChatTimeline?.sync();
@@ -757,7 +757,7 @@ async function deleteSession(id: string): Promise<void> {
 
         // 重置输入框
         const ci = $('ci') as HTMLTextAreaElement | null;
-        if (ci) { ci.disabled = false; ci.value = ''; ci.style.height = 'auto'; }
+        if (ci) { ci.disabled = false; ci.value = ''; App.Chat?.resizeComposerInput?.(ci); }
         const cs = $('cs') as HTMLButtonElement | null;
         if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = window.S('iz', 16); }
         loadSessions();

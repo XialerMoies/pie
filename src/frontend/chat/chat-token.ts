@@ -359,7 +359,7 @@ async function refreshTokenUsage(): Promise<void> {
   return _tokenRefreshInFlight;
 }
 
-/** 将 Rail 垂直位置同步到输入框顶部 */
+/** 将 Rail 垂直位置同步到输入框底部 */
 function syncRailPosition(): void {
   const rail = document.getElementById('tr-rail');
   const fi = document.getElementById('fi') as HTMLElement | null;
@@ -371,9 +371,10 @@ function syncRailPosition(): void {
     return;
   }
   rail.style.display = 'flex';
+  rail.style.height = '';
   const top = offsetTopWithin(fiBox, mc as HTMLElement);
-  if (top >= 0) rail.style.top = top + 'px';
-  if (fiBox.offsetHeight > 0) rail.style.height = fiBox.offsetHeight + 'px';
+  const railTop = top + fiBox.offsetHeight - rail.offsetHeight;
+  if (railTop >= 0) rail.style.top = railTop + 'px';
 }
 
 function watchRailPosition(): void {

@@ -132,7 +132,7 @@ function buildMainArea(): string {
           <div class="fi-divider"></div>
           <div class="fi-actions-bar">
             <button class="fi-abtn fi-model" id="fi-model-btn" title="切换模型"><span id="fi-model-name">claude-sonnet</span> <span class="fi-arrow">▾</span></button>
-            <button class="fi-abtn fi-mode" id="fi-mode-btn" title="切换模式"><span id="fi-mode-name">自动</span> <span class="fi-arrow">▾</span></button>
+            <button class="fi-abtn fi-mode" id="fi-mode-btn" title="切换策略"><span id="fi-mode-name">自动</span> <span class="fi-arrow">▾</span></button>
             <button class="fi-abtn fi-file" id="fi-file-btn" title="添加本机文件">${window.S('iplus', 14)}</button>
             <span class="fi-spacer"></span>
             <button id="cs" class="fi-send-btn" title="${chatBusy ? '中止' : '发送消息'}">${window.S('iup', 16)}</button>

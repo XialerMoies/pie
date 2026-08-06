@@ -206,6 +206,7 @@ describe("permissions pane", { concurrency: 1 }, () => {
     assert.strictEqual(typeof win.App.Permissions?.mount, "function");
     assert.strictEqual(typeof win.App.Permissions?.refresh, "function");
     assert.strictEqual(typeof win.App.Permissions?.unmount, "function");
+    assert.strictEqual(typeof win.App.Permissions?.setMode, "function");
     assert.strictEqual(registerCalls.length, 0, "permissions should not register as a legacy pane");
 
     const first = doc.createElement("div");
@@ -264,6 +265,19 @@ describe("permissions pane", { concurrency: 1 }, () => {
     assert.ok(modeChange);
     assert.deepStrictEqual(JSON.parse(modeChange.options.body), { mode: "yes", acknowledgeRisk: true });
     container.remove();
+  });
+
+  it("changes mode from the strategy menu when the Permissions pane is unmounted", async () => {
+    win.App.Permissions.unmount();
+    resetState();
+    win.App.Permissions.setMode("dontAsk");
+    await waitTick();
+    await waitTick();
+
+    const modeChange = state.calls.find((call) => call.url === "/api/permissions/mode" && call.method === "POST");
+    assert.ok(modeChange);
+    assert.deepStrictEqual(JSON.parse(modeChange.options.body), { mode: "dontAsk" });
+    assert.equal(state.mode, "dontAsk");
   });
 
   it("keeps the pane and bottom Yes badges synchronized with the refreshed mode", async () => {

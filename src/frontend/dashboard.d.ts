@@ -124,6 +124,9 @@ interface AppChat {
   updateUI(): void;
   updateModelName(): void;
   showModelPicker(e: MouseEvent): void;
+  mountThinkingControl(root: HTMLElement): void;
+  syncThinkingLevel(): Promise<void>;
+  refreshModeButton(): void;
   addAttachment(att: Omit<ChatAttachment, 'id'>): void;
   removeAttachment(id: string): void;
   clearAttachments(): void;
@@ -137,6 +140,7 @@ interface AppChat {
   resetMsgKeys(): void;
   scrollToLatest(options?: { force?: boolean; smooth?: boolean }): boolean;
   refreshReadingSettings(): void;
+  resizeComposerInput(input: HTMLTextAreaElement): void;
   isBusy(): boolean;
 }
 interface AppChatState {
@@ -249,6 +253,9 @@ interface AppPermissions {
   mount(container: HTMLElement): void;
   refresh(forceToast?: boolean): Promise<void>;
   unmount(): void;
+  getMode(): 'plan' | 'standard' | 'dontAsk' | 'yes';
+  setMode(mode: 'plan' | 'standard' | 'dontAsk' | 'yes'): void;
+  refreshMode(): Promise<'plan' | 'standard' | 'dontAsk' | 'yes'>;
 }
 interface AppSettings {
   openSettingsModal(): void;

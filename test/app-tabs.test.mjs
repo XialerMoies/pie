@@ -231,6 +231,25 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     assertCssDecl(railValueCss, "white-space", "nowrap");
   });
 
+  it("token usage rail keeps a fixed height when the composer grows", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    const tokenCode = readFileSync(new URL("../src/frontend/chat/chat-token.ts", import.meta.url), "utf8");
+    const railCss = cssBlocks(css, ".tr-rail");
+
+    assertCssDecl(railCss, "height", "78px");
+    assertCssDecl(railCss, "min-height", "78px");
+    assert.match(tokenCode, /rail\.style\.height\s*=\s*''/);
+    assert.doesNotMatch(tokenCode, /rail\.style\.height\s*=\s*fiBox\.offsetHeight/);
+  });
+
+  it("token usage rail follows the composer bottom edge", () => {
+    const tokenCode = readFileSync(new URL("../src/frontend/chat/chat-token.ts", import.meta.url), "utf8");
+
+    assert.match(tokenCode, /const\s+railTop\s*=\s*top\s*\+\s*fiBox\.offsetHeight\s*-\s*rail\.offsetHeight/);
+    assert.match(tokenCode, /rail\.style\.top\s*=\s*railTop\s*\+\s*'px'/);
+    assert.doesNotMatch(tokenCode, /rail\.style\.top\s*=\s*top\s*\+\s*'px'/);
+  });
+
   it("更多菜单中的会话标签使用实时标题", () => {
     const ts = win.App.Tabs;
     ts.openTab({ kind: "session", id: "sess-real-title", title: "新会话", sessionId: "sess-real-title" });

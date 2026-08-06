@@ -63,7 +63,7 @@ function resetWorkspaceState(workspace: string): void {
   if (msgsEl) { msgsEl.innerHTML = (window as any).msgs ? (window as any).msgs() : ''; msgsEl.scrollTop = 0; }
   App.ChatTimeline?.sync();
   const ci = $('ci') as HTMLTextAreaElement | null;
-  if (ci) { ci.disabled = false; ci.value = ''; ci.style.height = 'auto'; }
+  if (ci) { ci.disabled = false; ci.value = ''; App.Chat?.resizeComposerInput?.(ci); }
   const cs = $('cs') as HTMLButtonElement | null;
   if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = S('iup', 16); }
   const m = (window as any).__monaco;

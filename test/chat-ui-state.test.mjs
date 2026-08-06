@@ -1,5 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 
 function attachEventListeners(source) {
@@ -213,6 +214,36 @@ describe("chat ui state", () => {
     assert.strictEqual(panel.innerHTML, firstHtml);
 
     env.win.Element.prototype.replaceWith = origReplaceWith;
+  });
+
+  it("输入框随内容增高但在上限后改为内部滚动", () => {
+    const input = env.doc.getElementById("ci");
+    let measuredHeight = 196;
+    Object.defineProperty(input, "scrollHeight", {
+      configurable: true,
+      get: () => measuredHeight,
+    });
+
+    input.value = "多行输入";
+    input.dispatchEvent(new env.win.Event("input", { bubbles: true }));
+    assert.strictEqual(input.style.height, "144px");
+    assert.strictEqual(input.style.overflowY, "auto");
+
+    measuredHeight = 48;
+    input.value = "短文本";
+    input.dispatchEvent(new env.win.Event("input", { bubbles: true }));
+    assert.strictEqual(input.style.height, "48px");
+    assert.strictEqual(input.style.overflowY, "hidden");
+  });
+
+  it("输入框和外框由内容高度驱动而不是被 flex:1 固定", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    const boxRule = css.match(/(?:^|\n)\.fi-box\{([^}]*)\}/)?.[1] || "";
+    const inputRule = css.match(/(?:^|\n)\.fi-box textarea\{([^}]*)\}/)?.[1] || "";
+
+    assert.match(boxRule, /(?:^|;)flex:0 0 auto(?:;|$)/);
+    assert.match(inputRule, /(?:^|;)flex:0 0 auto(?:;|$)/);
+    assert.match(inputRule, /(?:^|;)height:34px(?:;|$)/);
   });
 
   it("消息变化时 updateUI 会重绘消息区", () => {

@@ -24,6 +24,8 @@ function handleSlash(ci: HTMLTextAreaElement): void {
 // ═══════════════════════════════════════════════════════════════════
 
 const MODE_LABELS: Record<string, string> = { auto: '自动', explain: '解释', plan: '计划' };
+const PERMISSION_MODE_ORDER = ['plan', 'standard', 'dontAsk', 'yes'] as const;
+const PERMISSION_MODE_LABELS: Record<string, string> = { plan: '计划', standard: '标准', dontAsk: '不询问', yes: 'Yes' };
 const EFFORT_LABELS: Record<string, string> = { off: '关闭', minimal: '极少', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
 
 const MODE_INSTRUCTIONS: Record<string, string> = {
@@ -82,6 +84,8 @@ function loadModeState(): void {
   updateModeButton();
   // 启动时从服务端获取真实思考档位；不支持时保留本地 fallback 选择
   void syncThinkingLevel();
+  // 启动时同步一次权限模式，避免按钮显示模块默认值直到首次打开弹窗
+  syncPermissionMode();
 }
 
 function setMode(mode: string): void {
@@ -121,9 +125,79 @@ function updateEffortControl(root: HTMLElement, effortKeys: string[]): void {
   });
 }
 
+function mountThinkingControl(root: HTMLElement): void {
+  const effortKeys = _supportsThinking && _availableLevels.length > 0
+    ? _availableLevels
+    : Object.keys(EFFORT_LABELS);
+  const control = document.createElement('div');
+  control.className = 'model-thinking-control';
+  control.innerHTML = `
+    <div class="effort-head"><span>思考深度</span><strong id="effort-value"></strong></div>
+    <div class="effort-control"><div class="effort-rail-pad"><div id="effort-track" class="effort-track">
+      <div id="effort-fill" class="effort-fill"></div>
+      <div id="effort-knob" class="effort-knob"></div>
+      ${effortKeys.map((key, i) => `<span class="effort-dot" data-effort="${key}" style="left:${i / Math.max(1, effortKeys.length - 1) * 100}%"></span>`).join('')}
+    </div></div></div>`;
+  root.appendChild(control);
+  updateEffortControl(control, effortKeys);
+
+  const track = control.querySelector<HTMLElement>('#effort-track');
+  if (!track) return;
+  const updateFromPointer = (clientX: number) => {
+    const rect = track.getBoundingClientRect();
+    let position = (clientX - rect.left) / rect.width;
+    position = Math.max(0, Math.min(1, position));
+    const effort = effortKeys[Math.round(position * (effortKeys.length - 1))] || 'medium';
+    void setEffort(effort);
+    updateEffortControl(control, effortKeys);
+  };
+  track.addEventListener('mousedown', (event) => {
+    updateFromPointer(event.clientX);
+    const onMove = (moveEvent: MouseEvent) => updateFromPointer(moveEvent.clientX);
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+  track.addEventListener('touchstart', (event) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    updateFromPointer(touch.clientX);
+    const onMove = (moveEvent: TouchEvent) => {
+      const nextTouch = moveEvent.touches[0];
+      if (nextTouch) updateFromPointer(nextTouch.clientX);
+    };
+    const onEnd = () => {
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('touchend', onEnd);
+    };
+    document.addEventListener('touchmove', onMove, { passive: true });
+    document.addEventListener('touchend', onEnd);
+  }, { passive: true });
+}
+
 function updateModeButton(): void {
   const el = $('fi-mode-name');
-  if (el) el.textContent = MODE_LABELS[_currentMode] || '自动';
+  if (!el) return;
+  const conversationLabel = MODE_LABELS[_currentMode] || '自动';
+  const permissionMode = App.Permissions?.getMode?.() || 'standard';
+  el.textContent = `${conversationLabel} · ${PERMISSION_MODE_LABELS[permissionMode] || '标准'}`;
+}
+
+let permissionModeSynced = false;
+
+/** 从服务端同步权限模式一次；成功后刷新策略按钮，可选的弹窗在其中一并更新 active 状态 */
+function syncPermissionMode(popup?: HTMLElement): void {
+  void App.Permissions?.refreshMode?.().then((mode) => {
+    permissionModeSynced = true;
+    updateModeButton();
+    if (!popup?.isConnected) return;
+    popup.querySelectorAll<HTMLElement>('[data-permission-mode]').forEach((option) => {
+      option.classList.toggle('active', option.dataset.permissionMode === mode);
+    });
+  });
 }
 
 function showModePopup(btn: HTMLElement): void {
@@ -136,36 +210,26 @@ function showModePopup(btn: HTMLElement): void {
   popup.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
   popup.style.left = rect.left + 'px';
 
-  const modeKeys = Object.keys(MODE_LABELS);
-  // 使用服务端返回的可用档位，而非硬编码
-  const effortKeys = _supportsThinking && _availableLevels.length > 0 ? _availableLevels : Object.keys(EFFORT_LABELS);
+  const permissionMode = App.Permissions?.getMode?.() || 'standard';
   let html = '';
 
-  html += '<div class="mode-popup-title">模式</div><div class="mode-segment">';
+  html += '<div class="mode-popup-title">对话方式</div><div class="mode-segment">';
   for (const [key, label] of Object.entries(MODE_LABELS)) {
     const active = key === _currentMode;
     html += `<button class="mode-option${active ? ' active' : ''}" type="button" data-mode="${key}">${label}</button>`;
   }
   html += '</div>';
 
-  const ec = effortKeys.indexOf(_currentEffort);
-  const pct = ec / (effortKeys.length - 1) * 100;
-  html += '<div class="effort-head"><span>思考深度</span><strong id="effort-value"></strong></div>';
-  html += '<div class="effort-control">';
-  html += '<div class="effort-rail-pad">';
-  html += '<div id="effort-track" class="effort-track">';
-  html += `<div id="effort-fill" class="effort-fill" style="width:${pct}%"></div>`;
-  html += `<div id="effort-knob" class="effort-knob" style="left:${pct}%"></div>`;
-  effortKeys.forEach((key, i) => {
-    html += `<span class="effort-dot" data-effort="${key}" style="left:${i / Math.max(1, effortKeys.length - 1) * 100}%"></span>`;
-  });
-  html += '</div></div></div>';
+  html += '<div class="mode-popup-title permission-popup-title">执行权限</div><div class="mode-segment permission-segment">';
+  for (const key of PERMISSION_MODE_ORDER) {
+    html += `<button class="mode-option permission-option${key === permissionMode ? ' active' : ''}" type="button" data-permission-mode="${key}">${PERMISSION_MODE_LABELS[key]}</button>`;
+  }
+  html += '</div>';
 
   popup.innerHTML = html;
   document.body.appendChild(popup);
-  updateEffortControl(popup, effortKeys);
 
-  popup.querySelectorAll('.mode-option').forEach(el => {
+  popup.querySelectorAll('.mode-option[data-mode]').forEach(el => {
     el.addEventListener('click', () => {
       const mode = (el as HTMLElement).dataset.mode || 'auto';
       setMode(mode);
@@ -175,36 +239,15 @@ function showModePopup(btn: HTMLElement): void {
     });
   });
 
-  const track = document.getElementById('effort-track') as HTMLElement | null;
-  const fill = document.getElementById('effort-fill') as HTMLElement | null;
-  const knob = document.getElementById('effort-knob') as HTMLElement | null;
-  if (track && fill && knob) {
-    function upd(clientX: number) {
-      const r = track!.getBoundingClientRect();
-      let p = (clientX - r.left) / r.width;
-      p = Math.max(0, Math.min(1, p));
-      const idx = Math.round(p * (effortKeys.length - 1));
-      const effort = effortKeys[idx] || 'medium';
-      setEffort(effort);
-      updateEffortControl(popup, effortKeys);
-    }
-    track.addEventListener('mousedown', (e) => {
-      upd(e.clientX);
-      function onMove(ev: MouseEvent) { upd(ev.clientX); }
-      function onUp() { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); }
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+  popup.querySelectorAll<HTMLElement>('[data-permission-mode]').forEach((option) => {
+    option.addEventListener('click', () => {
+      const mode = option.dataset.permissionMode as 'plan' | 'standard' | 'dontAsk' | 'yes';
+      App.Permissions?.setMode?.(mode);
+      popup.remove();
     });
-    track.addEventListener('touchstart', (e) => {
-      const touch = e.touches[0];
-      if (!touch) return;
-      upd(touch.clientX);
-      function onMove(ev: TouchEvent) { const t = ev.touches[0]; if (t) upd(t.clientX); }
-      function onEnd() { document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onEnd); }
-      document.addEventListener('touchmove', onMove, { passive: true });
-      document.addEventListener('touchend', onEnd);
-    }, { passive: true });
-  }
+  });
+  // 启动已同步过一次；弹窗仅在从未同步时再查一次服务器，其余情况用本地缓存
+  if (!permissionModeSynced) syncPermissionMode(popup);
 
   setTimeout(() => {
     document.addEventListener('click', function close(ev) {
@@ -250,8 +293,11 @@ function stripInstruction(text: string): string {
 { const AppChat = (window as any).App?.Chat; if (AppChat) {
   AppChat.setMode = setMode;
   AppChat.setEffort = setEffort;
+  AppChat.mountThinkingControl = mountThinkingControl;
+  AppChat.syncThinkingLevel = syncThinkingLevel;
   AppChat.getMode = () => _currentMode;
   AppChat.getEffort = () => _currentEffort;
+  AppChat.refreshModeButton = updateModeButton;
   AppChat.buildInstruction = buildInstruction;
   AppChat.handleSlash = handleSlash;
   AppChat.loadModeState = loadModeState;
