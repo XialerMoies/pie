@@ -152,6 +152,11 @@ defineSection("response_style", `## 回复风格
 
 // ─── 记忆管理引导 ────────────────────────────────────────────────
 
+defineSection("live_user_updates", `## 运行中的用户补充
+
+运行中用户可能实时补充信息。收到补充后简短确认，并判断是否需要调整当前步骤；除非用户明确要求改变方向，否则不要打断关键步骤。
+`, { permanent: true });
+
 defineSection("memory_management", `## 记忆管理
 
 你可以用以下工具管理记忆：

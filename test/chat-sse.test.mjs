@@ -173,6 +173,81 @@ describe("Chat SSE", () => {
     assert.deepStrictEqual(await confirmed, { allow: true, scope: "once" });
   });
 
+  it("POST /api/chat/note queues steer and followUp without starting a new prompt", async () => {
+    const calls = [];
+    const notes = [];
+    const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: ROOT };
+    const ctx = {
+      runtime: {
+        session: {
+          isStreaming: true,
+          async steer(message) { calls.push(["steer", message]); },
+          async followUp(message) { calls.push(["followUp", message]); },
+        },
+        currentWorkspace: ROOT,
+      },
+      paths: { APP_ROOT: ROOT },
+      chatStream,
+      sseClients: [],
+      recordUserNote(note) { notes.push(note); },
+    };
+
+    const steerRes = makeResWithEvents();
+    await handleChat(makeReq("POST", "/api/chat/note", { message: "先检查测试结果", mode: "steer", noteId: "note-steer" }), steerRes, ctx);
+    const followRes = makeResWithEvents();
+    await handleChat(makeReq("POST", "/api/chat/note", { message: "最后再总结", mode: "followUp", noteId: "note-follow" }), followRes, ctx);
+
+    assert.deepStrictEqual(calls, [["steer", "先检查测试结果"], ["followUp", "最后再总结"]]);
+    assert.deepStrictEqual(notes, [
+      { noteId: "note-steer", message: "先检查测试结果", mode: "steer" },
+      { noteId: "note-follow", message: "最后再总结", mode: "followUp" },
+    ]);
+    assert.deepStrictEqual(JSON.parse(steerRes._body), { ok: true, mode: "steer", noteId: "note-steer" });
+    assert.deepStrictEqual(JSON.parse(followRes._body), { ok: true, mode: "followUp", noteId: "note-follow" });
+  });
+
+  it("POST /api/chat/note validates mode, message, and active streaming session", async () => {
+    const base = {
+      paths: { APP_ROOT: ROOT },
+      chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: ROOT },
+      sseClients: [],
+    };
+    const invalidModeRes = makeResWithEvents();
+    await handleChat(makeReq("POST", "/api/chat/note", { message: "x", mode: "later" }), invalidModeRes, {
+      ...base,
+      runtime: { session: { isStreaming: true }, currentWorkspace: ROOT },
+    });
+    assert.strictEqual(invalidModeRes._status, 400);
+
+    const emptyRes = makeResWithEvents();
+    await handleChat(makeReq("POST", "/api/chat/note", { message: "   " }), emptyRes, {
+      ...base,
+      runtime: { session: { isStreaming: true }, currentWorkspace: ROOT },
+    });
+    assert.strictEqual(emptyRes._status, 400);
+
+    const idleRes = makeResWithEvents();
+    await handleChat(makeReq("POST", "/api/chat/note", { message: "x" }), idleRes, {
+      ...base,
+      runtime: { session: { isStreaming: false }, currentWorkspace: ROOT },
+    });
+    assert.strictEqual(idleRes._status, 409);
+  });
+
+  it("POST /api/chat/abort aborts the active SDK session", async () => {
+    let aborted = 0;
+    const ctx = {
+      runtime: { session: { abort() { aborted++; } }, currentWorkspace: ROOT },
+      paths: { APP_ROOT: ROOT },
+      chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: ROOT },
+      sseClients: [],
+    };
+    const res = makeResWithEvents();
+    await handleChat(makeReq("POST", "/api/chat/abort"), res, ctx);
+    assert.strictEqual(aborted, 1);
+    assert.deepStrictEqual(JSON.parse(res._body), { ok: true });
+  });
+
   it("command confirm 无 SSE 连接时 fail-closed", async () => {
     const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" };
     const confirmed = await createCommandConfirmCallback(chatStream)("node --version", "需要确认");

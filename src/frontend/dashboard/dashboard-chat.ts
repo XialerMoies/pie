@@ -12,6 +12,7 @@ type ChatSendContext = {
 };
 
 let activeSendContext: ChatSendContext | null = null;
+let chatNoteMode: 'steer' | 'followUp' = 'steer';
 const CHAT_LATEST_DEFAULT_THRESHOLD = 72;
 const CHAT_LATEST_ALLOWED_THRESHOLDS = [48, 72, 120];
 const CHAT_INPUT_MIN_HEIGHT = 34;
@@ -360,6 +361,7 @@ function bind(): void {
     // Slash command popup (sourced from chat-mode.ts)
     const fn = App.Chat?.handleSlash;
     if (fn) fn(ci);
+    updateUI();
   });
 
   let renderFrame: number | null = null;
@@ -377,6 +379,72 @@ function bind(): void {
     last.thinking = '';
     last._rv = (last._rv || 0) + 1;
     updateUI();
+  }
+
+  function updateNoteStatus(noteId: string, status: 'queued' | 'delivered' | 'failed'): void {
+    const messages = App.ChatState.getMessages();
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index];
+      const block = message.blocks?.find(item => item.type === 'user_note' && item.noteId === noteId);
+      if (!block) continue;
+      block.status = status;
+      message._rv = (message._rv || 0) + 1;
+      const updated = index === messages.length - 1 && App.Chat?.updateLastBlock?.(block);
+      if (!updated) scheduleMessagesRender(false);
+      return;
+    }
+  }
+
+  function insertQueuedNote(text: string, noteId: string, mode: 'steer' | 'followUp'): boolean {
+    const messages = App.ChatState.getMessages();
+    const assistant = [...messages].reverse()
+      .find(message => message.role === 'assistant' && message.streaming);
+    if (!assistant) return false;
+    if (!assistant.blocks) assistant.blocks = [];
+    const maxSeq = assistant.blocks.reduce((max, block) => Math.max(max, Number(block.seq) || 0), 0);
+    assistant.blocks.push({
+      type: 'user_note', noteId, mode, text, status: 'queued', turnId: assistant.turnId,
+      blockId: 'note-' + noteId, seq: maxSeq + 0.5,
+    });
+    assistant._rv = (assistant._rv || 0) + 1;
+    return true;
+  }
+
+  function submitNote(rawText: string): void {
+    const text = rawText.trim();
+    if (!text || !App.ChatState.isBusy()) return;
+    ci.value = '';
+    resizeComposerInput(ci);
+    const mode = chatNoteMode;
+    const noteId = 'note-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+    if (!insertQueuedNote(text, noteId, mode)) return;
+    updateUI();
+    chatScrollToLatest({ force: true });
+    void fetch('/api/chat/note', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, mode, noteId }),
+    }).then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.ok !== true) throw new Error(data?.error || '补充消息未送达');
+      updateNoteStatus(noteId, 'delivered');
+      toast(mode === 'followUp' ? '补充已排队，任务完成后处理' : '补充已送达，当前步骤完成后处理', 'info');
+    }).catch((error: unknown) => {
+      updateNoteStatus(noteId, 'failed');
+      toast(error instanceof Error ? error.message : '补充消息未送达', 'error');
+    });
+  }
+
+  function abortRun(): void {
+    if (!App.ChatState.isBusy()) return;
+    App.ChatStream.close();
+    const messages = App.ChatState.getMessages();
+    const last = [...messages].reverse().find((message) => message.role === 'assistant' && message.streaming);
+    if (last) last.streaming = false;
+    App.ChatState.setBusy(false);
+    updateUI();
+    sb('ms');
+    void fetch('/api/chat/abort', { method: 'POST' }).catch(() => undefined);
   }
 
   function submitMessage(rawText: string): void {
@@ -481,6 +549,12 @@ function bind(): void {
             }).catch(() => undefined);
           })();
           return;
+        } else if (d.type === 'queue_update') {
+          const steering = Array.isArray((d as any).steering) ? (d as any).steering.length : 0;
+          const followUp = Array.isArray((d as any).followUp) ? (d as any).followUp.length : 0;
+          const total = steering + followUp;
+          if (total > 0) toast(`${total} 条补充已排队`, 'info');
+          return;
         } else if (d.type === 'block') {
           if (last?.streaming && d.block) {
             if (!last.blocks) last.blocks = [];
@@ -521,6 +595,8 @@ function bind(): void {
           const _ci = $('ci') as HTMLTextAreaElement | null;
           if (_cs) { _cs.disabled = false; _cs.title = '发送消息'; _cs.innerHTML = S('iup', 16); }
           if (_ci) _ci.disabled = false;
+          const _stop = $('chat-stop') as HTMLButtonElement | null;
+          if (_stop) _stop.style.display = 'none';
           const sessionId = (d as any).sessionId || activeSendContext?.sessionId || '';
           const sendContext = activeSendContext;
           activeSendContext = null;
@@ -550,6 +626,8 @@ function bind(): void {
           const _ci2 = $('ci') as HTMLTextAreaElement | null;
           if (_cs2) { _cs2.disabled = false; _cs2.title = '发送消息'; _cs2.innerHTML = S('iup', 16); }
           if (_ci2) _ci2.disabled = false;
+          const _stop2 = $('chat-stop') as HTMLButtonElement | null;
+          if (_stop2) _stop2.style.display = 'none';
           const failedContext = activeSendContext;
           activeSendContext = null;
           finalizeSendContext(failedContext);
@@ -597,11 +675,7 @@ function bind(): void {
 
   function sendOrStop(): void {
     if (App.ChatState.isBusy()) {
-      App.ChatStream.close();
-      const messages = App.ChatState.getMessages();
-      const last = messages[messages.length - 1];
-      if (last?.streaming) last.streaming = false;
-      App.ChatState.setBusy(false); updateUI(); sb('ms');
+      submitNote(ci.value);
       return;
     }
     submitMessage(ci.value);
@@ -620,6 +694,13 @@ function bind(): void {
     }
   });
   cs.addEventListener('click', sendOrStop);
+  const stopButton = $('chat-stop') as HTMLButtonElement | null;
+  stopButton?.addEventListener('click', abortRun);
+  const noteModeButton = $('chat-note-mode') as HTMLButtonElement | null;
+  noteModeButton?.addEventListener('click', () => {
+    chatNoteMode = chatNoteMode === 'steer' ? 'followUp' : 'steer';
+    updateUI();
+  });
 
   // ─── Wire up model button ───
   const modelBtn = $('fi-model-btn');
@@ -736,11 +817,19 @@ function updateModelName(): void {
 function updateUI(): void {
   const ci = $("ci") as HTMLTextAreaElement | null, cs = $("cs") as HTMLButtonElement | null;
   const stIL = App.ChatState.isBusy();
-  if (ci) ci.disabled = stIL;
+  if (ci) ci.disabled = false;
   if (cs) {
-    cs.disabled = stIL ? false : !ci?.value.trim();
-    cs.title = stIL ? "中止" : "发送消息";
-    cs.innerHTML = stIL ? S("ipause", 16) : S("iup", 16);
+    cs.disabled = !ci?.value.trim();
+    cs.innerHTML = S("iup", 16);
+    cs.title = stIL ? "发送补充" : "发送消息";
+  }
+  const stopButton = $("chat-stop") as HTMLButtonElement | null;
+  if (stopButton) stopButton.style.display = stIL ? "" : "none";
+  const noteModeButton = $("chat-note-mode") as HTMLButtonElement | null;
+  if (noteModeButton) {
+    noteModeButton.style.display = stIL ? "" : "none";
+    noteModeButton.textContent = chatNoteMode === 'followUp' ? "做完再处理" : "当前步骤后";
+    noteModeButton.title = chatNoteMode === 'followUp' ? "补充将在任务完成后处理" : "补充将在当前步骤完成后处理";
   }
   const msgsEl = $("ms");
   if (msgsEl && (window as any).msgs) {

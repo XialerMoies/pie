@@ -37,6 +37,18 @@ function mockRuntime(sessionFile, sessionManager = {}) {
 }
 
 describe("trace persistence lifecycle", () => {
+  it("forwards SDK queue_update through the chat SSE stream", () => {
+    const runtime = mockRuntime(undefined);
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", response: { writableEnded: false, destroyed: false, write(data) { this.data = (this.data || "") + data; } },
+      turnId: "turn-queue", eventSeq: 0, eventHistory: [], blocks: [], emittedTraces: new Set(), blockSeq: 0,
+    };
+    attachSessionEvents(runtime, chatStream);
+    runtime.emit({ type: "queue_update", steering: ["调整方向"], followUp: ["最后总结"] });
+    const payloads = chatStream.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1])).filter((entry) => entry.type === "queue_update");
+    assert.deepStrictEqual(payloads, [{ type: "queue_update", steering: ["调整方向"], followUp: ["最后总结"] }]);
+  });
+
   it("keeps trace pending before SDK flush, then appends without creating the session file early", () => {
     const dir = mkdtempSync(resolve(tmpdir(), "trace-pending-"));
     const sessionFile = resolve(dir, "session.jsonl");

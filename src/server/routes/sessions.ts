@@ -400,6 +400,29 @@ export function parseSessionMessages(content: string): SessionMessage[] {
     }
     blocksByTurn.set(turnId, list);
   }
+  const runtimeNoteCounts = new Map<string, number>();
+  for (const blocks of blocksByTurn.values()) {
+    for (const block of blocks) {
+      if (block.type === "user_note" && typeof block.text === "string") {
+        runtimeNoteCounts.set(block.text, (runtimeNoteCounts.get(block.text) || 0) + 1);
+      }
+    }
+  }
+  const runtimeNoteEntryIndexes = new Set<number>();
+  if (runtimeNoteCounts.size > 0) {
+    const userIndexesByText = new Map<string, number[]>();
+    for (const [index, entry] of entries.entries()) {
+      if (entry.type !== "message" || entry.message?.role !== "user") continue;
+      const text = stripInstruction(textFromBlocks(entry.message.content || []));
+      const indexes = userIndexesByText.get(text) || [];
+      indexes.push(index);
+      userIndexesByText.set(text, indexes);
+    }
+    for (const [text, count] of runtimeNoteCounts) {
+      const indexes = userIndexesByText.get(text) || [];
+      for (const index of indexes.slice(Math.max(0, indexes.length - count))) runtimeNoteEntryIndexes.add(index);
+    }
+  }
   const mergeTrace = (trace: SessionTrace[], item: SessionTrace): SessionTrace[] => {
     const idx = trace.findIndex((existing) => existing.id === item.id);
     if (idx === -1) return [...trace, item];
@@ -450,7 +473,7 @@ export function parseSessionMessages(content: string): SessionMessage[] {
       pendingTrace = appendTrace(pendingTrace, trace);
     }
   };
-  for (const entry of entries) {
+  for (const [entryIndex, entry] of entries.entries()) {
     try {
       if (entry.type === "assistant_block" && entry.block) {
         continue;
@@ -486,6 +509,7 @@ export function parseSessionMessages(content: string): SessionMessage[] {
         const textContent = textFromBlocks(blocks);
         if (!textContent && role !== "assistant") continue;
         const displayContent = role === "user" ? stripInstruction(textContent) : textContent;
+        if (role === "user" && runtimeNoteEntryIndexes.has(entryIndex)) continue;
         if (!displayContent && role !== "assistant") continue;
         if (!displayContent && role === "assistant") {
           // 无正文的 assistant 消息可能有 block 记录，保留

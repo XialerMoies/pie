@@ -270,6 +270,27 @@ export function emitBlock(
   }
   writeChatEvent(chatStream, { type: "block", block });
 }
+
+export function recordUserNoteBlock(
+  runtime: AgentRuntime,
+  chatStream: ChatStreamState,
+  note: { noteId: string; message: string; mode: "steer" | "followUp" },
+  options?: SessionPersistenceOptions,
+): boolean {
+  if (!chatStream.turnId) return false;
+  const block: AssistantBlock = {
+    type: "user_note",
+    noteId: note.noteId,
+    mode: note.mode,
+    text: note.message,
+    status: "delivered",
+    turnId: chatStream.turnId,
+    blockId: "note-" + note.noteId,
+    seq: nextBlockSeq(chatStream),
+  };
+  emitBlock(runtime, chatStream, block, options);
+  return true;
+}
 export function persistTraceEvent(
   runtime: AgentRuntime,
   trace: TraceEvent,
@@ -380,6 +401,14 @@ export function attachSessionEvents(
 
   runtime.onEvent((event: any, sourceSession) => {
     if (sourceSession && runtime.session !== sourceSession) return;
+    if (event.type === "queue_update") {
+      writeChatEvent(chatStream, {
+        type: "queue_update",
+        steering: Array.isArray(event.steering) ? event.steering : [],
+        followUp: Array.isArray(event.followUp) ? event.followUp : [],
+      });
+      return;
+    }
     if (event.type === "agent_start") publishLifecycleChanged();
     if (event.type === "compaction_start") {
       if ((runtime.session as any).isCompacting) publishUsageChanged();
@@ -571,22 +600,25 @@ export function attachSessionEvents(
         } else {
           // 无 contentIndex 的兼容路径：遍历 content 的 text 块，用块序号作 blockId。
           // 工具边界后 content 新增 text 块会生成新段；同段更新由 emitBlock 保留 seq。
-          const textBlocks = msg.content.filter((c: any) => c.type === "text");
+          const textBlocks = msg.content
+            .map((block: any, index: number) => ({ block, index }))
+            .filter(({ block }: any) => block.type === "text");
           if (!chatStream.textSegments) chatStream.textSegments = [];
           const segCount = chatStream.textSegments.length;
-          const totalText = textBlocks.map((c: any) => c.text || "").join("");
+          const totalText = textBlocks.map(({ block }: any) => block.text || "").join("");
           const textState = appendAssistantSnapshot(chatStream.textBuffer, chatStream.currentTextSnapshot, totalText);
           chatStream.currentTextSnapshot = textState.snapshot;
           chatStream.textBuffer = textState.aggregate;
           for (let i = 0; i < textBlocks.length; i++) {
-            const curText = textBlocks[i].text || "";
+            const curText = textBlocks[i].block.text || "";
+            const contentIndex = textBlocks[i].index;
             const prev = chatStream.textSegments[i] ?? "";
             const delta = curText.startsWith(prev) ? curText.slice(prev.length) : curText;
             if (delta || prev !== curText) {
               chatStream.textSegments[i] = curText;
               const block: AssistantBlock = {
                 type: "text", text: curText, turnId,
-                blockId: `text-${i}`, seq: nextBlockSeq(chatStream),
+                blockId: `m${chatStream.messageSeq || 1}:text-${contentIndex}`, seq: nextBlockSeq(chatStream),
               };
               emitBlock(runtime, chatStream, block, { persist: false });
               if (i >= segCount || !prev) {
@@ -803,6 +835,11 @@ async function main() {
     permissionService,
     permissionMode,
     rootRegistry,
+    recordUserNote: (note) => recordUserNoteBlock(runtime, chatStream, note, {
+      authorizeSessionWrite: (sessionFile, source) => {
+        permissionService.authorizePathSync(SESSIONS_DIR, sessionFile, "write", source);
+      },
+    }),
     paths: {
       APP_ROOT,
       DATA_DIR,

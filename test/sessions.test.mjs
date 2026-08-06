@@ -44,6 +44,35 @@ describe("parseSessionMessages", () => {
     assert.strictEqual(msgs[1].blocks[0].type, "tool_use");
   });
 
+  it("user_note assistant_block 回放为事件流节点且不重复显示对应 user message", () => {
+    const c = [
+      JSON.stringify({ type: "session", id: "s1" }),
+      JSON.stringify({ type: "message", id: "u1", message: { role: "user", content: [{ type: "text", text: "开始检查" }] } }),
+      JSON.stringify({ type: "message", id: "u2", message: { role: "user", content: [{ type: "text", text: "检查 package.json" }] } }),
+      JSON.stringify({ type: "assistant_block", turnId: "t1", block: { type: "tool", status: "success", name: "pwd", output: "007", blockId: "tool-1", seq: 1 } }),
+      JSON.stringify({ type: "assistant_block", turnId: "t1", block: { type: "user_note", noteId: "note-1", mode: "steer", text: "检查 package.json", status: "delivered", blockId: "note-note-1", seq: 2 } }),
+      JSON.stringify({ type: "message", id: "a1", turnId: "t1", message: { role: "assistant", content: [{ type: "text", text: "已检查" }] } }),
+    ].join("\n");
+    const msgs = mod.parseSessionMessages(c);
+    assert.deepStrictEqual(msgs.map((message) => message.role), ["user", "assistant"]);
+    assert.strictEqual(msgs[1].blocks.length, 2);
+    assert.strictEqual(msgs[1].blocks[1].type, "user_note");
+    assert.strictEqual(msgs[1].blocks[1].text, "检查 package.json");
+  });
+
+  it("user_note 与初始提问同文时只去掉后出现的 SDK user message", () => {
+    const c = [
+      JSON.stringify({ type: "session", id: "s1" }),
+      JSON.stringify({ type: "message", id: "u1", message: { role: "user", content: [{ type: "text", text: "继续检查" }] } }),
+      JSON.stringify({ type: "message", id: "u2", message: { role: "user", content: [{ type: "text", text: "继续检查" }] } }),
+      JSON.stringify({ type: "assistant_block", turnId: "t1", block: { type: "user_note", noteId: "note-1", mode: "steer", text: "继续检查", status: "delivered", blockId: "note-note-1", seq: 1 } }),
+      JSON.stringify({ type: "message", id: "a1", turnId: "t1", message: { role: "assistant", content: [{ type: "text", text: "完成" }] } }),
+    ].join("\n");
+    const msgs = mod.parseSessionMessages(c);
+    assert.deepStrictEqual(msgs.map((message) => [message.role, message.content]), [["user", "继续检查"], ["assistant", "完成"]]);
+    assert.strictEqual(msgs[1].blocks[0].type, "user_note");
+  });
+
   it("真实 PI message 无 turnId 时按 trace turnId 恢复 assistant blocks", () => {
     const c = [
       JSON.stringify({ type: "session", id: "s1" }),

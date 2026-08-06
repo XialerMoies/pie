@@ -199,6 +199,12 @@ function renderTraceItem(t: any, defaultOpen?: boolean): string {
   if (t.type === 'step') {
     return `<div class="trace-node trace-step trace-${t.status || 'info'}"><div class="trace-dot"></div><div class="trace-body"><div class="trace-title"><span class="trace-summary-title">${E(t.text || '')}</span></div></div></div>`;
   }
+  if (t.type === 'user_note') {
+    const status = t.status === 'failed' ? 'failed' : t.status === 'delivered' ? 'delivered' : 'queued';
+    const statusText = status === 'failed' ? '发送失败' : status === 'delivered' ? '已送达' : '排队中';
+    const modeText = t.mode === 'followUp' ? '做完再处理' : '当前步骤后';
+    return `<div class="trace-node trace-user-note trace-${status}"><div class="trace-dot"></div><div class="trace-body"><div class="trace-title"><span class="trace-summary-title">你 · 补充</span><span class="trace-note-mode">${modeText}</span><span class="trace-note-status">${statusText}</span></div><div class="trace-note-text">${mdRender(t.text || '')}</div></div></div>`;
+  }
   if (t.type === 'text') {
     return `<div class="trace-node trace-text"><div class="trace-dot"></div><div class="trace-body trace-text-body">${mdRender(t.text || '')}</div></div>`;
   }
@@ -260,6 +266,15 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean): string 
       type: 'step',
       status: b.status || 'info',
       text: b.text || '',
+      id: blockId(b),
+    });
+  }
+  if (b.type === 'user_note') {
+    return renderTraceItem({
+      type: 'user_note',
+      text: b.text || '',
+      status: b.status || 'queued',
+      mode: b.mode || 'steer',
       id: blockId(b),
     });
   }
@@ -399,7 +414,7 @@ function updateLastBlock(block: any): boolean {
       return true;
     }
   }
-  if (target && (block.type === 'tool' || block.type === 'tool_use' || block.type === 'tool_result' || block.type === 'step')) {
+  if (target && (block.type === 'tool' || block.type === 'tool_use' || block.type === 'tool_result' || block.type === 'step' || block.type === 'user_note')) {
     replaceBlockContents(target, renderEventBlock(block, message.blocks));
     return true;
   }

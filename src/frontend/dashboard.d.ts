@@ -26,9 +26,9 @@ interface Message {
 }
 
 interface AssistantBlock {
-  type: 'thinking' | 'text' | 'tool' | 'tool_use' | 'tool_result' | 'step';
+  type: 'thinking' | 'text' | 'tool' | 'tool_use' | 'tool_result' | 'step' | 'user_note';
   text?: string;
-  status?: 'streaming' | 'done' | 'running' | 'success' | 'error' | 'info';
+  status?: 'streaming' | 'done' | 'running' | 'success' | 'error' | 'info' | 'queued' | 'delivered' | 'failed';
   name?: string;
   input?: unknown;
   output?: string;
@@ -37,6 +37,8 @@ interface AssistantBlock {
   toolCallId?: string;
   toolUseId?: string;
   turnId?: string;
+  noteId?: string;
+  mode?: 'steer' | 'followUp';
   blockId: string;
   seq: number;
 }

@@ -9,7 +9,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 
-import { attachSessionEvents, persistBlockEvent, flushPendingBlockPersist, nextBlockSeq } from "../src/server/server.ts";
+import { attachSessionEvents, persistBlockEvent, flushPendingBlockPersist, nextBlockSeq, recordUserNoteBlock } from "../src/server/server.ts";
 
 function jsonl(file) {
   return readFileSync(file, "utf-8")
@@ -33,6 +33,22 @@ function mockRuntime(sessionFile, sessionManager = {}) {
 }
 
 describe("block persistence lifecycle", () => {
+  it("records a runtime user note as one assistant block", () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "pi-note-"));
+    const sessionFile = resolve(dir, "session.jsonl");
+    writeFileSync(sessionFile, "{}\n");
+    const runtime = mockRuntime(sessionFile, { flushed: true });
+    const chatStream = { turnId: "turn-1", blockSeq: 0, blocks: [], response: { write() {} } };
+
+    assert.strictEqual(recordUserNoteBlock(runtime, chatStream, {
+      noteId: "note-1", message: "补充检查", mode: "steer",
+    }), true);
+    assert.strictEqual(chatStream.blocks.length, 1);
+    assert.strictEqual(chatStream.blocks[0].type, "user_note");
+    assert.strictEqual(chatStream.blocks[0].blockId, "note-note-1");
+    const records = jsonl(sessionFile);
+    assert.strictEqual(records.filter((entry) => entry.type === "assistant_block").length, 1);
+  });
   it("keeps block pending before SDK flush, then appends once on flush", () => {
     const dir = mkdtempSync(resolve(tmpdir(), "block-pending-"));
     const sessionFile = resolve(dir, "session.jsonl");
@@ -239,5 +255,37 @@ describe("block persistence lifecycle", () => {
     const last = doneBlocks[doneBlocks.length - 1];
     assert.strictEqual(last.type, "text", "纯工具调用末尾也补正文节点");
     assert.strictEqual(last.text, "本轮未生成最终回复。");
+  });
+});
+
+describe("block persistence compatibility snapshots", () => {
+  it("reuses the indexed text block after an unindexed compatibility snapshot", () => {
+    let callback = null;
+    const runtime = {
+      session: { sessionFile: undefined, sessionManager: { flushed: true, getSessionId: () => "session-1" } },
+      onEvent(handler) { callback = handler; return () => {}; },
+      emit(event) { callback(event); },
+    };
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write() { return true; }, end() {} }, currentWorkspace: "", turnId: "turn-1",
+      emittedTraces: new Set(), blocks: [], blockSeq: 0, textSegments: [],
+    };
+    attachSessionEvents(runtime, chatStream);
+
+    const content = [{ type: "text", text: "same text" }];
+    runtime.emit({ type: "message_start", turnId: "turn-1", message: { role: "assistant", content } });
+    runtime.emit({ type: "message_update", turnId: "turn-1", message: { role: "assistant", content } });
+    runtime.emit({
+      type: "message_update",
+      turnId: "turn-1",
+      message: { role: "assistant", content },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "same text" },
+    });
+
+    const textBlocks = chatStream.blocks.filter((block) => block.type === "text");
+    assert.strictEqual(textBlocks.length, 1, "mixed snapshots must not create duplicate text blocks");
+    assert.strictEqual(textBlocks[0].blockId, "m1:text-0");
+    assert.strictEqual(textBlocks[0].text, "same text");
   });
 });

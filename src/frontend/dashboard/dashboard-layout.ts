@@ -128,14 +128,16 @@ function buildMainArea(): string {
             <div class="fi-slash-item" data-cmd="/clear"><span class="cmd">/clear</span> <span class="desc">清除缓存</span></div>
           </div>
           <div class="fi-attach-bar" id="fi-attach-bar" style="display:none"></div>
-          <textarea id="ci" rows="1" placeholder="输入消息...（输入 / 使用快捷命令）" ${chatBusy ? 'disabled' : ''}></textarea>
+          <textarea id="ci" rows="1" placeholder="输入消息...（输入 / 使用快捷命令）"></textarea>
           <div class="fi-divider"></div>
           <div class="fi-actions-bar">
             <button class="fi-abtn fi-model" id="fi-model-btn" title="切换模型"><span id="fi-model-name">claude-sonnet</span> <span class="fi-arrow">▾</span></button>
             <button class="fi-abtn fi-mode" id="fi-mode-btn" title="切换策略"><span id="fi-mode-name">自动</span> <span class="fi-arrow">▾</span></button>
             <button class="fi-abtn fi-file" id="fi-file-btn" title="添加本机文件">${window.S('iplus', 14)}</button>
             <span class="fi-spacer"></span>
-            <button id="cs" class="fi-send-btn" title="${chatBusy ? '中止' : '发送消息'}">${window.S('iup', 16)}</button>
+            <button id="chat-note-mode" class="fi-abtn fi-note-mode" title="补充处理时机" style="${chatBusy ? '' : 'display:none'}">当前步骤后</button>
+            <button id="chat-stop" class="fi-stop-btn" title="中止当前任务" aria-label="中止当前任务" style="${chatBusy ? '' : 'display:none'}">${window.S('ipause', 16)}</button>
+            <button id="cs" class="fi-send-btn" title="发送消息">${window.S('iup', 16)}</button>
           </div>
         </div>
       </div>

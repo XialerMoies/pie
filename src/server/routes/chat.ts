@@ -106,7 +106,60 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
     return true;
   }
 
-  // Switch workspace（重建整个 AgentSession）
+  // Queue a user note into the currently running SDK session without starting a second prompt.
+  if (url === "/api/chat/note" && method === "POST") {
+    let body = "";
+    req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+    req.on("end", async () => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const message = typeof parsed.message === "string" ? parsed.message.trim() : "";
+        const mode = parsed.mode === undefined ? "steer" : parsed.mode;
+        const noteId = typeof parsed.noteId === "string" && parsed.noteId.trim()
+          ? parsed.noteId.trim()
+          : "note-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+        if (!message || (mode !== "steer" && mode !== "followUp")) {
+          res.writeHead(400, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: false, error: "message and mode are invalid" }));
+          return;
+        }
+        let session;
+        try { session = runtime.session; } catch {
+          res.writeHead(409, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: false, error: "No active streaming session" }));
+          return;
+        }
+        if (!session.isStreaming) {
+          res.writeHead(409, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: false, error: "No active streaming session" }));
+          return;
+        }
+        if (mode === "followUp") await session.followUp(message);
+        else await session.steer(message);
+        ctx.recordUserNote?.({ noteId, message, mode });
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: true, mode, noteId }));
+      } catch (err: unknown) {
+        res.writeHead(400, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+      }
+    });
+    return true;
+  }
+
+  // Stop is separate from the send/note action while the composer remains usable.
+  if (url === "/api/chat/abort" && method === "POST") {
+    try {
+      runtime.session.abort();
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err: unknown) {
+      res.writeHead(409, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    }
+    return true;
+  }
+
   if (url === "/api/workspace/switch" && method === "POST") {
     let body = "";
     req.on("data", (chunk: Buffer) => { body += chunk.toString(); });

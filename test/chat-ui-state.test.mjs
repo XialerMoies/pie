@@ -33,6 +33,8 @@ global.logTiming = () => {};
     '<button id="chat-jump-latest" aria-hidden="true" tabindex="-1"></button>',
     '<textarea id="ci"></textarea>',
     '<button id="cs"></button>',
+    '<button id="chat-stop"></button>',
+    '<button id="chat-note-mode"></button>',
     '<button id="fi-model-btn"></button>',
     '<button id="fi-mode-btn"></button>',
     '<button id="fi-file-btn"></button>',
@@ -234,6 +236,111 @@ describe("chat ui state", () => {
     input.dispatchEvent(new env.win.Event("input", { bubbles: true }));
     assert.strictEqual(input.style.height, "48px");
     assert.strictEqual(input.style.overflowY, "hidden");
+  });
+
+  it("运行中 Enter 投递补充而不是关闭流，输入框保持可用", async () => {
+    const calls = [];
+    const previousFetch = global.fetch;
+    const previousWindowFetch = env.win.fetch;
+    const fetchStub = async (url, options = {}) => {
+      calls.push([url, JSON.parse(options.body || "{}")]);
+      return { ok: true, json: async () => ({ ok: true, mode: "steer" }) };
+    };
+    global.fetch = fetchStub;
+    env.win.fetch = fetchStub;
+    env.win.App.ChatState.getMessages().at(-1).streaming = true;
+    env.win.App.ChatState.setBusy(true);
+    const input = env.doc.getElementById("ci");
+    input.value = "补充一个检查点";
+    env.win.updateUI();
+    assert.strictEqual(input.disabled, false);
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.strictEqual(calls[0][0], "/api/chat/note");
+    assert.strictEqual(calls[0][1].message, "补充一个检查点");
+    assert.strictEqual(calls[0][1].mode, "steer");
+    assert.match(calls[0][1].noteId, /^note-/);
+    assert.strictEqual(env.win.App.ChatState.isBusy(), true);
+    assert.ok(env.win.App.ChatState.getMessages().some((message) => message.blocks?.some((block) => block.type === "user_note" && block.text === "补充一个检查点")));
+    global.fetch = previousFetch;
+    env.win.fetch = previousWindowFetch;
+  });
+
+  it("运行中补充作为当前 assistant 事件流节点，不新增普通 user 气泡", async () => {
+    const calls = [];
+    const previousFetch = global.fetch;
+    const previousWindowFetch = env.win.fetch;
+    const fetchStub = async (url, options = {}) => {
+      calls.push([url, JSON.parse(options.body || "{}")]);
+      return { ok: true, json: async () => ({ ok: true, mode: "steer" }) };
+    };
+    global.fetch = fetchStub;
+    env.win.fetch = fetchStub;
+    env.win.App.ChatState.replaceMessages([
+      { role: "user", content: "初始检查" },
+      {
+        role: "assistant", content: "", streaming: true, turnId: "turn-1",
+        blocks: [{ type: "tool", name: "command", status: "running", blockId: "tool-1", seq: 1 }],
+      },
+    ]);
+    env.win.App.ChatState.setBusy(true);
+    env.win.updateUI();
+
+    const input = env.doc.getElementById("ci");
+    input.value = "第二阶段完成后检查 package.json";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const messages = env.win.App.ChatState.getMessages();
+    assert.deepStrictEqual(messages.map((message) => message.role), ["user", "assistant"]);
+    assert.strictEqual(messages[1].blocks.length, 2);
+    assert.strictEqual(messages[1].blocks[1].type, "user_note");
+    assert.strictEqual(messages[1].blocks[1].text, "第二阶段完成后检查 package.json");
+    assert.strictEqual(messages[1].blocks[1].status, "delivered");
+    assert.strictEqual(messages[1].blocks[1].mode, "steer");
+    assert.match(env.doc.getElementById("ms").innerHTML, /trace-user-note/);
+    assert.ok(env.doc.getElementById("ms").innerHTML.includes("第二阶段完成后检查 package.json"));
+    assert.ok(env.doc.getElementById("ms").innerHTML.includes("已送达"));
+    assert.strictEqual(calls[0][1].mode, "steer");
+    assert.match(calls[0][1].noteId, /^note-/);
+
+    global.fetch = previousFetch;
+    env.win.fetch = previousWindowFetch;
+  });
+
+  it("运行中可切换 followUp，独立中止按钮仍负责 stop", async () => {
+    const calls = [];
+    const previousFetch = global.fetch;
+    const previousWindowFetch = env.win.fetch;
+    const fetchStub = async (url, options = {}) => {
+      calls.push([url, JSON.parse(options.body || "{}")]);
+      return { ok: true, json: async () => ({ ok: true, mode: "followUp" }) };
+    };
+    global.fetch = fetchStub;
+    env.win.fetch = fetchStub;
+    let closed = 0;
+    const originalClose = env.win.App.ChatStream.close;
+    env.win.App.ChatStream.close = () => { closed++; };
+    env.win.App.ChatState.getMessages().at(-1).streaming = true;
+    env.win.App.ChatState.setBusy(true);
+    env.win.updateUI();
+    const mode = env.doc.getElementById("chat-note-mode");
+    assert.notStrictEqual(mode.style.display, "none");
+    mode.click();
+    const input = env.doc.getElementById("ci");
+    input.value = "做完后再处理";
+    input.dispatchEvent(new env.win.Event("input", { bubbles: true }));
+    env.doc.getElementById("cs").click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.strictEqual(calls[0][0], "/api/chat/note");
+    assert.strictEqual(calls[0][1].message, "做完后再处理");
+    assert.strictEqual(calls[0][1].mode, "followUp");
+    assert.match(calls[0][1].noteId, /^note-/);
+    env.doc.getElementById("chat-stop").click();
+    assert.strictEqual(closed, 1);
+    env.win.App.ChatStream.close = originalClose;
+    global.fetch = previousFetch;
+    env.win.fetch = previousWindowFetch;
   });
 
   it("输入框和外框由内容高度驱动而不是被 flex:1 固定", () => {

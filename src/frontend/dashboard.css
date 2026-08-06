@@ -301,6 +301,12 @@ body{background:var(--bg);height:100vh}
 .trace-running .trace-title{color:var(--em)}
 .trace-error .trace-title{color:var(--rs)}
 .trace-error .trace-summary-text{color:rgba(248,113,113,.92)}
+.trace-user-note .trace-dot{background:var(--am)}
+.trace-user-note.trace-failed .trace-dot{background:var(--rs)}
+.trace-note-mode,.trace-note-status{font-family:var(--fd);font-size:.62rem;font-weight:500;color:var(--tm)}
+.trace-user-note.trace-failed .trace-note-status{color:var(--rs)}
+.trace-note-text{font-size:.8rem;line-height:1.6;color:var(--tx);overflow-wrap:anywhere;word-break:break-word}
+.trace-note-text p{margin:0}
 .trace-thought{color:var(--ts);font-size:.8rem;line-height:1.6;max-width:100%;overflow:visible}
 .trace-thought summary{cursor:pointer;list-style:none;font-family:var(--fb);font-size:.8rem;color:var(--ts);margin-bottom:6px}
 .trace-thought summary::-webkit-details-marker{display:none}
@@ -408,6 +414,9 @@ body{background:var(--bg);height:100vh}
 .fi-send-btn{padding:3px 12px;border:none;border-radius:6px;background:var(--am);color:#0A0A0F;font-size:.75rem;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:4px;transition:all .15s;font-family:var(--fb);white-space:nowrap}
 .fi-send-btn:hover{background:#fbbf24}
 .fi-send-btn:disabled{opacity:.3;cursor:not-allowed}
+.fi-stop-btn{width:28px;height:28px;padding:0;border:1px solid color-mix(in srgb,var(--rs) 55%,var(--bd));border-radius:6px;background:transparent;color:var(--rs);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s}
+.fi-stop-btn:hover{background:color-mix(in srgb,var(--rs) 12%,transparent);border-color:var(--rs)}
+.fi-note-mode{font-size:.68rem;color:var(--am);max-width:92px;overflow:hidden;text-overflow:ellipsis}
 
 /* ─── Slash 命令浮层 ─── */
 .fi-slash{position:absolute;bottom:calc(100% + 6px);left:0;right:0;background:var(--be);border:1px solid var(--bd);border-radius:10px;padding:4px;box-shadow:0 -4px 24px var(--sd);z-index:11;display:flex;flex-direction:column;gap:1px}

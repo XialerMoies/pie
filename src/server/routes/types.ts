@@ -33,7 +33,8 @@ export type AssistantBlock =
   | { type: "tool"; toolCallId: string; name: string; input?: unknown; output?: string; error?: string; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
   | { type: "tool_use"; toolCallId: string; name: string; input?: unknown; output?: string; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
   | { type: "tool_result"; toolUseId: string; output?: string; isError?: boolean; turnId: string; blockId: string; seq: number }
-  | { type: "step"; text: string; status: "info" | "success" | "error"; turnId: string; blockId: string; seq: number };
+  | { type: "step"; text: string; status: "info" | "success" | "error"; turnId: string; blockId: string; seq: number }
+  | { type: "user_note"; noteId: string; mode: "steer" | "followUp"; text: string; status: "queued" | "delivered" | "failed"; turnId: string; blockId: string; seq: number };
 
 // ─── Chat Stream 状态 ────────────────────────────────────
 
@@ -68,6 +69,7 @@ export interface ChatStreamState {
 export interface ServerContext {
   runtime: AgentRuntime;
   chatStream: ChatStreamState;
+  recordUserNote?: (note: { noteId: string; message: string; mode: "steer" | "followUp" }) => void;
   appEvents: AppEventHub;
   tsServer?: TsserverManager;
   security?: DesktopSecurityConfig;
