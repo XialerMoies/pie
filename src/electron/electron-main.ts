@@ -46,7 +46,8 @@ const DATA_DIR = STARTUP.dataRoot;
 const PI_CONFIG_DIR = STARTUP.layout.userRoot;
 const SESSIONS_DIR = STARTUP.layout.sessionsDir;
 const AUTH_FILE = STARTUP.layout.authFile;
-const DESKTOP_SECURITY_TOKEN = process.env.NODE_ENV === "test" && process.env.MY_CODE_AGENT_DESKTOP_TOKEN
+const DESKTOP_SECURITY_TOKEN = (process.env.NODE_ENV === "test" || process.env.VITE_DEV_PORT)
+  && process.env.MY_CODE_AGENT_DESKTOP_TOKEN
   ? process.env.MY_CODE_AGENT_DESKTOP_TOKEN
   : createDesktopSessionToken();
 delete process.env.MY_CODE_AGENT_DESKTOP_TOKEN;
