@@ -275,7 +275,7 @@ function touchSession(sessionId: string, timestamp = Date.now()): void {
 }
 
 /** 启动时调用：优先从服务端读取新结构数据，否则从旧 localStorage 迁移 */
-async function hydrate(): Promise<WorkspaceUiState> {
+async function hydrateUiState(): Promise<WorkspaceUiState> {
   const workspaceGeneration = _workspaceGeneration;
   let state = await fetchServerState();
 
@@ -374,7 +374,7 @@ function _notify(): void {
 // ─── 挂载到 window ────────────────────────────────────
 
 (window as any).__uiStateStore = {
-  hydrate, getState: getUiState, patchState, subscribe, saveNow,
+  hydrate: hydrateUiState, getState: getUiState, patchState, subscribe, saveNow,
   isHydrated, getSnapshot, getWorkspacePath, setWorkspacePath, resetWorkspace,
   syncTabs, updateSessionMetadata, updatePanel, setChatOpen, touchSession,
   /** 直接引用 _state 供已有代码同步（迁移期过渡用） */
@@ -384,7 +384,7 @@ function _notify(): void {
 
 const app = (window as any).App || ((window as any).App = {});
 app.State = {
-  hydrate,
+  hydrate: hydrateUiState,
   saveNow,
   getSnapshot,
   getWorkspacePath,

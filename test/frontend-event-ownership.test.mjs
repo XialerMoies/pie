@@ -2,6 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { createContext, Script } from "node:vm";
+import { transform } from "esbuild";
 
 function frontendTypeScriptFiles(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -14,6 +16,60 @@ function frontendTypeScriptFiles(dir) {
 function relativeFrontendPath(file) {
   return file.slice(resolve(process.cwd(), "src/frontend").length + 1).replaceAll("\\", "/");
 }
+
+function createLocalStorage() {
+  const values = new Map();
+  return {
+    get length() { return values.size; },
+    getItem(key) { return values.get(String(key)) ?? null; },
+    key(index) { return [...values.keys()][index] ?? null; },
+    removeItem(key) { values.delete(String(key)); },
+    setItem(key, value) { values.set(String(key), String(value)); },
+  };
+}
+
+describe("dashboard bundle global ownership", () => {
+  it("keeps UI-state and preference hydration independent in the production scope", async () => {
+    const root = resolve(process.cwd(), "src/frontend/services");
+    const source = (await Promise.all(["ui-state-store.ts", "preferences.ts"].map(async (file) => {
+      const compiled = await transform(readFileSync(resolve(root, file), "utf8"), { loader: "ts", minify: false });
+      return compiled.code.replace(/^export\s+/gm, "");
+    }))).join("\n");
+    const expectedState = {
+      schemaVersion: 2,
+      workspacePath: "E:\\workspace",
+      activeView: { type: "chat" },
+      tabs: { sessions: ["session-1"], files: [], chatOpen: true, labels: {}, titleSources: {}, items: [], activeId: "session-1" },
+      panel: { active: "explorer", closed: false, width: 260 },
+      recent: { sessions: {} },
+    };
+    const localStorage = createLocalStorage();
+    const context = createContext({
+      AbortController,
+      Response,
+      clearTimeout,
+      console,
+      fetch: async (url) => new Response(JSON.stringify(
+        url === "/api/ui-state" ? expectedState : { preferences: {} },
+      ), { status: 200, headers: { "Content-Type": "application/json" } }),
+      localStorage,
+      setTimeout,
+      window: { App: {} },
+    });
+
+    new Script(source).runInContext(context);
+
+    assert.notStrictEqual(context.window.App.State.hydrate, context.window.App.Preferences.hydrate);
+    const restored = await context.window.App.State.hydrate();
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(restored.tabs)), expectedState.tabs);
+  });
+
+  it("checks duplicate top-level functions before writing the dashboard bundle", () => {
+    const compiler = readFileSync(resolve(process.cwd(), "scripts/compile-frontend-ts.mjs"), "utf8");
+    assert.match(compiler, /assertUniqueTopLevelFunctionDeclarations\(parts, bundleFiles\)/);
+    assert.match(compiler, /isFunctionDeclaration/);
+  });
+});
 
 describe("application event stream ownership", () => {
   it("has exactly one /api/events EventSource owner", () => {

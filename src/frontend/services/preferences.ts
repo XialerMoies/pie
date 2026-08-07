@@ -241,7 +241,7 @@ function scheduleHydrationRetry(): void {
   if (hydrationRetryTimer !== null) return;
   hydrationRetryTimer = setTimeout(() => {
     hydrationRetryTimer = null;
-    void hydrate();
+    void hydratePreferences();
   }, PREFERENCE_HYDRATION_RETRY_DELAY_MS);
 }
 
@@ -291,7 +291,7 @@ async function runHydrate(): Promise<boolean> {
   }
 }
 
-function hydrate(): Promise<void> {
+function hydratePreferences(): Promise<void> {
   if (!hydrationPromise) {
     const attempt = runHydrate();
     let sharedPromise: Promise<void>;
@@ -336,7 +336,7 @@ const preferencesApi: AppPreferences = {
     try { return JSON.parse(raw) as T; } catch { return fallback; }
   },
   setJson<T>(key: string, value: T): void { preferenceSet(key, JSON.stringify(value)); },
-  hydrate,
+  hydrate: hydratePreferences,
   onHydrated(listener: () => void): () => void {
     hydrationListeners.add(listener);
     return () => hydrationListeners.delete(listener);

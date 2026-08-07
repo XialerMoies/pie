@@ -155,7 +155,7 @@ async function refreshPermissionsPanel(forceToast = false): Promise<void> {
     } catch {
       // Mode is informational; audit and rules can still refresh independently.
     }
-    if (!isCurrentRefresh(requestGeneration, requestMountedGeneration, requestRoot)) return;
+    if (!isCurrentPermissionsRefresh(requestGeneration, requestMountedGeneration, requestRoot)) return;
     _permissionsAudit = Array.isArray(auditBody.audit) ? auditBody.audit : [];
     _permissionsRules = rulesBody;
     if (!requestModeMutationPending && requestModeMutationGeneration === modeMutationGeneration) {
@@ -165,7 +165,7 @@ async function refreshPermissionsPanel(forceToast = false): Promise<void> {
     syncPermissionsPanel();
     if (forceToast) toast("权限信息已刷新", "success");
   } catch (err) {
-    if (!isCurrentRefresh(requestGeneration, requestMountedGeneration, requestRoot)) return;
+    if (!isCurrentPermissionsRefresh(requestGeneration, requestMountedGeneration, requestRoot)) return;
     const content = mountedRoot?.querySelector<HTMLElement>("#permissions-content");
     if (content) {
       content.innerHTML = `<div class="perm-empty perm-error">加载失败: ${E((err as Error).message)}</div>`;
@@ -173,7 +173,7 @@ async function refreshPermissionsPanel(forceToast = false): Promise<void> {
   }
 }
 
-function isCurrentRefresh(requestGeneration: number, requestMountedGeneration: number, requestRoot: HTMLElement | null): boolean {
+function isCurrentPermissionsRefresh(requestGeneration: number, requestMountedGeneration: number, requestRoot: HTMLElement | null): boolean {
   return requestGeneration === refreshGeneration
     && requestMountedGeneration === mountedGeneration
     && requestRoot === mountedRoot

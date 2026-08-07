@@ -303,7 +303,7 @@ ExplorerService._setTree = (t: Tree | null) => {
 };
 ExplorerService._getTree = ((): Tree | null => _explorerTree) as typeof ExplorerService._getTree;
 
-function isCurrentRefresh(
+function isCurrentExplorerRefresh(
   tree: Tree,
   workspace: string,
   mountVersion: number,
@@ -325,12 +325,12 @@ async function refreshExplorerOnce(sequence: number): Promise<void> {
   if ((tree as any)._editingNode) return;
   try {
     const d = await ExplorerService.fetchDir(ws, '');
-    if (!isCurrentRefresh(tree, ws, mountVersion, sequence) || (tree as any)._editingNode) return;
+    if (!isCurrentExplorerRefresh(tree, ws, mountVersion, sequence) || (tree as any)._editingNode) return;
     const items = ExplorerService.reconcilePendingDeletes('', ExplorerService.toTreeNodes(d.items));
     const refreshKey = ExplorerService._makeRefreshKey(items, ws);
     if (refreshKey === ExplorerService._lastRefreshKey) {
       await tree.refreshExpandedChildren?.();
-      if (!isCurrentRefresh(tree, ws, mountVersion, sequence)) return;
+      if (!isCurrentExplorerRefresh(tree, ws, mountVersion, sequence)) return;
       setExplorerStatus(`目录已刷新 · ${items.length} 项`, 'ready');
       return;
     }
@@ -339,7 +339,7 @@ async function refreshExplorerOnce(sequence: number): Promise<void> {
     ExplorerService._lastRefreshKey = refreshKey;
     setExplorerStatus(`目录已刷新 · ${items.length} 项`, 'ready');
   } catch {
-    if (isCurrentRefresh(tree, ws, mountVersion, sequence)) {
+    if (isCurrentExplorerRefresh(tree, ws, mountVersion, sequence)) {
       setExplorerStatus('目录刷新失败', 'error');
     }
   }

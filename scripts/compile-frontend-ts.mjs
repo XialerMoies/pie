@@ -11,6 +11,7 @@ import { resolve, dirname, relative, join, sep } from "path";
 import { fileURLToPath } from "url";
 import { Script } from "node:vm";
 import * as esbuild from "esbuild";
+import ts from "typescript";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -53,6 +54,34 @@ function findModuleDeps(entryRelJsPath, allSources) {
   }
   walk(entryRelJsPath);
   return deps;
+}
+
+function assertUniqueTopLevelFunctionDeclarations(parts, files) {
+  const owners = new Map();
+  const conflicts = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    const file = files[index];
+    const sourceFile = ts.createSourceFile(
+      file,
+      parts[index],
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.JS,
+    );
+    for (const statement of sourceFile.statements) {
+      if (!ts.isFunctionDeclaration(statement) || !statement.name) continue;
+      const name = statement.name.text;
+      const owner = owners.get(name);
+      if (owner) {
+        conflicts.push(`${name} (${owner}, ${file})`);
+        continue;
+      }
+      owners.set(name, file);
+    }
+  }
+  if (conflicts.length > 0) {
+    throw new Error(`dashboard bundle 顶层函数重名:\n- ${conflicts.join("\n- ")}`);
+  }
 }
 
 // 读取所有 .ts 源文件到内存
@@ -167,10 +196,10 @@ if (bundleFiles.length > 0) {
     const fullPath = resolve(SRC, f);
     return readFileSync(fullPath, "utf-8");
   });
+  assertUniqueTopLevelFunctionDeclarations(parts, bundleFiles);
   const code = parts.join("\n");
-  // 编译期校验拼接产物：生产 bundle 是单作用域原生拼接，跨模块同名顶层
-  // 声明（function/const/let）会触发 SyntaxError，dev（Vite 模块化）不炸，
-  // 只有生产打包才暴露。这里用 vm.Script 提前解析，冲突在编译期就报。
+  // 生产 bundle 是单作用域原生拼接。上面的 AST 门禁捕获语法合法但会静默覆盖的
+  // 同名 function；vm.Script 再捕获 const/let 等会导致 bundle 无法加载的语法冲突。
   try {
     new Script(code);
   } catch (err) {
