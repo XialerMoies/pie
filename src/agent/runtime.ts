@@ -118,6 +118,12 @@ export class AgentRuntime {
     return this._session
   }
 
+  /** 等待当前 session 切换完成，再返回可用 session；切换失败时保持 fail-closed。 */
+  async waitForSessionReady(): Promise<AgentSession> {
+    await (this._transitionTail ?? Promise.resolve())
+    return this.session
+  }
+
   /** 仅在会话完整初始化后更新对外可见对象。 */
   set session(session: AgentSession) {
     this._session = session

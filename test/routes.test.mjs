@@ -185,6 +185,33 @@ describe("dashboard routes", () => {
     assert.strictEqual(body, "");
   });
 
+  it("waits for a session transition before serving dashboard data", async () => {
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const runtime = mockRuntime();
+    const session = runtime.session;
+    let ready = false;
+    Object.defineProperty(runtime, "session", {
+      configurable: true,
+      get() {
+        if (!ready) throw new Error("session transition in progress");
+        return session;
+      },
+    });
+    runtime.waitForSessionReady = async () => {
+      await pending;
+      ready = true;
+      return session;
+    };
+
+    const request = callHandler(handleDashboard, "GET", "/api/dashboard", undefined, mockContext({ runtime }));
+    await Promise.resolve();
+    release();
+    const { status, body } = await request;
+    assert.strictEqual(status, 200);
+    assert.strictEqual(parseJSON(body).modelId, "test-model");
+  });
+
   it("GET /api/dashboard 返回 200 JSON", async () => {
     const { status, body } = await callHandler(handleDashboard, "GET", "/api/dashboard");
     assert.strictEqual(status, 200);

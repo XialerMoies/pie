@@ -36,16 +36,26 @@ function publishMcpChanged(ctx: ServerContext): void {
   try { ctx.appEvents.publish("mcp.changed"); } catch {}
 }
 
-export const handleDashboard: RouteHandler = (req, res, ctx) => {
+export const handleDashboard: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
   const cors = { "Access-Control-Allow-Origin": "*" };
   const { runtime, paths: p } = ctx;
-  const session = runtime.session;
 
   if (url === "/api/bootstrap" && (method === "GET" || method === "HEAD")) {
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
     if (method === "HEAD") res.end();
     else res.end(JSON.stringify({ ok: true, ...(p.STARTUP ? { startup: p.STARTUP } : {}) }));
+    return true;
+  }
+
+  let session;
+  try {
+    session = typeof (runtime as any).waitForSessionReady === "function"
+      ? await runtime.waitForSessionReady()
+      : runtime.session;
+  } catch {
+    res.writeHead(503, { "Content-Type": "application/json", ...cors, "Retry-After": "1" });
+    res.end(JSON.stringify({ ok: false, code: "SESSION_NOT_READY" }));
     return true;
   }
 
