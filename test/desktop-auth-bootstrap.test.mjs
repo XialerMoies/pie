@@ -21,6 +21,7 @@ function setup(win = new Window()) {
 }
 
 const desktopWindow = setup();
+const dashboardApp = desktopWindow.App;
 const dashboardHelpers = await import("../src/frontend/dashboard/dashboard-helpers.ts?desktop-auth-suite");
 
 describe("desktop API bootstrap", { concurrency: false }, () => {
@@ -50,6 +51,23 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
 
     await assert.rejects(dashboardHelpers.bootstrapApi(), /403/);
     assert.deepEqual(calls[0][1].headers, { "X-My-Code-Agent-Token": "desktop-token" });
+  });
+
+  it("seeds the frontend workspace from bootstrap before startup continues", async () => {
+    const workspace = "C:\\Users\\ASUS\\Desktop\\project-007";
+    const seeded = [];
+    dashboardApp.State.getWorkspacePath = () => seeded.at(-1) || "";
+    dashboardApp.State.setWorkspacePath = (value) => { seeded.push(value); };
+    win.electronAPI = { getDesktopSessionToken: async () => "desktop-token" };
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({ ok: true, startup: { workspace } }),
+    });
+    win.fetch = global.fetch;
+
+    await dashboardHelpers.bootstrapApi();
+
+    assert.deepEqual(seeded, [workspace]);
   });
 
   it("renders the shell before background workspace recovery in development and packaged startup", () => {

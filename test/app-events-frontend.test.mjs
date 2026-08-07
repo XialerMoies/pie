@@ -874,7 +874,7 @@ describe("App.Events frontend event bus", () => {
     const context = {
       window: {
         App: {
-          State: { getWorkspacePath: () => "" },
+          State: { getWorkspacePath: () => "", setWorkspacePath: () => {} },
           Preferences: {
             hydrate: async () => {},
             get: () => "vs-dark",
@@ -890,7 +890,9 @@ describe("App.Events frontend event bus", () => {
       setTimeout,
       clearTimeout,
       fetch: async (url) => {
-        if (url === "/api/bootstrap") return { ok: true };
+        if (url === "/api/bootstrap") {
+          return { ok: true, json: async () => ({ ok: true, startup: { workspace: "/workspace" } }) };
+        }
         if (url !== "/api/dashboard") return { ok: true, json: async () => ({}) };
         const index = dashboardRequests.filter((entry) => entry.type === "request").length;
         dashboardRequests.push({ type: "request", index });

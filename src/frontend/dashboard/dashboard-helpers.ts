@@ -232,6 +232,15 @@ export function bootstrapApi(): Promise<void> {
         const body = await response.text().catch(() => '');
         throw new Error(`Desktop API bootstrap failed: ${response.status}${body ? ` ${body}` : ''}`);
       }
+      const body = await response.json().catch(() => null) as {
+        startup?: { workspace?: unknown };
+      } | null;
+      const startupWorkspace = typeof body?.startup?.workspace === 'string'
+        ? body.startup.workspace
+        : '';
+      if (startupWorkspace && !App.State.getWorkspacePath()) {
+        App.State.setWorkspacePath(startupWorkspace);
+      }
     })();
     _bootstrapPromise = _bootstrapPromise.catch((error) => {
       _bootstrapPromise = null;
