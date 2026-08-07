@@ -71,6 +71,18 @@ describe("dashboard DOM event ownership", () => {
   });
 });
 
+describe("dashboard workspace endpoint ownership", () => {
+  it("keeps workspace switching out of startup and in the user-triggered menu", () => {
+    const startup = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-startup.ts"), "utf8");
+    const helpers = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-helpers.ts"), "utf8");
+    const menus = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-menus.ts"), "utf8");
+
+    assert.doesNotMatch(startup, /\/api\/workspace\/switch/);
+    assert.doesNotMatch(helpers, /\/api\/workspace\/switch/);
+    assert.match(menus, /fetch\(['"]\/api\/workspace\/switch['"],\s*\{\s*method:\s*['"]POST['"]/);
+  });
+});
+
 describe("frontend state ownership", () => {
   it("narrows the shared App facade once at the initialization boundary", () => {
     const source = readFileSync(

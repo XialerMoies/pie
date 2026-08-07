@@ -8,6 +8,8 @@ import {
   readDataRootPointer,
   writeDataRootPointer,
 } from "../src/data/data-root-config.ts";
+import { canonicalWorkspacePath } from "../src/data/data-layout.ts";
+import { recordOpenedWorkspace } from "../src/data/user-settings.ts";
 import { handleSettings } from "../src/server/routes/settings.ts";
 import { previewLegacySessions, workspaceDataPaths } from "../src/server/routes/session-dir.ts";
 
@@ -23,13 +25,14 @@ function makeRoot() {
   return root;
 }
 
-async function callSettings(method, url, body, paths) {
+async function callSettings(method, url, body, paths, options = {}) {
+  const rawBody = options.rawBody ?? (body === undefined ? "" : JSON.stringify(body));
   const request = {
     method,
     url,
     headers: { "content-type": "application/json" },
     on(event, callback) {
-      if (event === "data" && body !== undefined) callback(Buffer.from(JSON.stringify(body)));
+      if (event === "data" && rawBody) callback(Buffer.from(rawBody));
       if (event === "end") callback();
       return request;
     },
@@ -47,12 +50,148 @@ async function callSettings(method, url, body, paths) {
     },
   };
   const context = {
-    runtime: { session: {}, modelRegistry: {}, currentWorkspace: paths.STARTUP?.workspace },
+    runtime: {
+      session: {},
+      modelRegistry: {},
+      currentWorkspace: paths.STARTUP?.workspace,
+      ...options.runtime,
+    },
     paths,
   };
   await handleSettings(request, response, context);
-  return { status: response.status, body: JSON.parse(response.body) };
+  return { status: response.status, body: response.body ? JSON.parse(response.body) : null };
 }
+
+describe("preferences REST boundary", () => {
+  it("GET returns empty preferences when SETTINGS_FILE is missing", async () => {
+    const root = makeRoot();
+    const paths = { SETTINGS_FILE: join(root, "user", "settings.json") };
+
+    const response = await callSettings("GET", "/api/preferences", undefined, paths);
+
+    assert.strictEqual(response.status, 200);
+    assert.deepStrictEqual(response.body, { preferences: {} });
+  });
+
+  it("GET returns only validated persisted preferences", async () => {
+    const root = makeRoot();
+    const settingsFile = join(root, "user", "settings.json");
+    mkdirSync(resolve(settingsFile, ".."), { recursive: true });
+    writeFileSync(settingsFile, JSON.stringify({
+      defaultModel: "kept-model",
+      preferences: {
+        "editor-theme": "vs-dark",
+        unknown: "ignored",
+        "auto-save": 42,
+      },
+    }));
+    const paths = { SETTINGS_FILE: settingsFile };
+
+    const response = await callSettings("GET", "/api/preferences", undefined, paths);
+
+    assert.strictEqual(response.status, 200);
+    assert.deepStrictEqual(response.body, { preferences: { "editor-theme": "vs-dark" } });
+  });
+
+  it("PATCH merges and removes preferences without replacing other settings", async () => {
+    const root = makeRoot();
+    const settingsFile = join(root, "user", "settings.json");
+    mkdirSync(resolve(settingsFile, ".."), { recursive: true });
+    writeFileSync(settingsFile, JSON.stringify({
+      defaultProvider: "kept-provider",
+      defaultModel: "kept-model",
+      preferences: { "editor-theme": "vs-dark", "auto-save": "1" },
+    }));
+    const paths = { SETTINGS_FILE: settingsFile };
+
+    const response = await callSettings("PATCH", "/api/preferences", {
+      values: { "chat-mode": "plan", "editor-theme": "vs" },
+      remove: ["auto-save"],
+    }, paths);
+
+    assert.strictEqual(response.status, 200);
+    assert.deepStrictEqual(response.body, {
+      ok: true,
+      preferences: { "editor-theme": "vs", "chat-mode": "plan" },
+    });
+    assert.deepStrictEqual(JSON.parse(readFileSync(settingsFile, "utf8")), {
+      defaultProvider: "kept-provider",
+      defaultModel: "kept-model",
+      preferences: { "editor-theme": "vs", "chat-mode": "plan" },
+    });
+  });
+
+  it("returns 400 for invalid preference patches and malformed JSON", async () => {
+    const root = makeRoot();
+    const settingsFile = join(root, "settings.json");
+    const paths = { SETTINGS_FILE: settingsFile };
+    const invalidPatches = [
+      [{ values: { unknown: "value" } }, "Unknown preference key"],
+      [{ values: { "editor-theme": 42 } }, "Preference value must be a string"],
+      [{ values: { "editor-theme": "x".repeat(4097) } }, "Preference value is too long"],
+      [null, "Preference patch must be an object"],
+      [[], "Preference patch must be an object"],
+      [{ values: [] }, "Preference values must be an object"],
+      [{ remove: {} }, "Preference remove must be an array"],
+      [{ remove: [42] }, "Unknown preference key"],
+    ];
+
+    for (const [patch, message] of invalidPatches) {
+      const response = await callSettings("PATCH", "/api/preferences", patch, paths);
+      assert.strictEqual(response.status, 400, message);
+      assert.strictEqual(typeof response.body.error, "string");
+      assert.match(response.body.error, new RegExp(message));
+    }
+
+    const malformed = await callSettings("PATCH", "/api/preferences", undefined, paths, { rawBody: "{" });
+    assert.strictEqual(malformed.status, 400);
+    assert.deepStrictEqual(malformed.body, { error: "Invalid JSON" });
+  });
+
+  it("preserves preferences, model, and startup fields during concurrent writes", async () => {
+    const root = makeRoot();
+    const settingsFile = join(root, "settings.json");
+    const workspace = join(root, "workspace");
+    mkdirSync(workspace, { recursive: true });
+    const model = { provider: "openai", id: "gpt-test" };
+    const paths = {
+      APP_ROOT: root,
+      DATA_DIR: root,
+      PI_CONFIG_DIR: root,
+      SETTINGS_FILE: settingsFile,
+      STARTUP: { workspace },
+    };
+    const runtime = {
+      currentWorkspace: workspace,
+      session: { setModel: async () => {} },
+      modelRegistry: { find: () => model },
+    };
+
+    const [preferences, modelResponse, startup] = await Promise.all([
+      callSettings("PATCH", "/api/preferences", {
+        values: { "editor-theme": "vs", "chat-mode": "plan" },
+      }, paths, { runtime }),
+      callSettings("POST", "/api/model/switch", {
+        provider: model.provider,
+        modelId: model.id,
+      }, paths, { runtime }),
+      recordOpenedWorkspace(settingsFile, workspace),
+    ]);
+
+    assert.strictEqual(preferences.status, 200);
+    assert.strictEqual(modelResponse.status, 200);
+    assert.strictEqual(startup, true);
+    assert.deepStrictEqual(JSON.parse(readFileSync(settingsFile, "utf8")), {
+      defaultProvider: model.provider,
+      defaultModel: model.id,
+      startup: {
+        lastWorkspace: canonicalWorkspacePath(workspace),
+        recentWorkspaces: [canonicalWorkspacePath(workspace)],
+      },
+      preferences: { "editor-theme": "vs", "chat-mode": "plan" },
+    });
+  });
+});
 
 describe("data-root bootstrap pointer", () => {
   it("stores only the selected absolute directory in the bootstrap file", () => {

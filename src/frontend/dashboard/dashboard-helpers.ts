@@ -241,20 +241,6 @@ export function bootstrapApi(): Promise<void> {
   return _bootstrapPromise;
 }
 
-export async function syncStartupWorkspace(): Promise<void> {
-  const workspace = window.App?.State?.getWorkspacePath?.() || '';
-  if (!workspace) return;
-  const response = await fetch('/api/workspace/switch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspace }),
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(`Workspace startup sync failed: ${response.status}${body ? ` ${body}` : ''}`);
-  }
-}
-
 async function getD(): Promise<void> {
   if (_dashboardRefreshInFlight) {
     _dashboardRefreshQueued = true;
@@ -587,7 +573,6 @@ App.UI.F = F;
 App.UI.sb = sb;
 App.UI.toast = toast;
 App.UI.bootstrapApi = bootstrapApi;
-App.UI.syncStartupWorkspace = syncStartupWorkspace;
 App.UI.getD = getD;
 App.UI.refresh = refresh;
 App.UI.winCtrl = winCtrl;
@@ -600,7 +585,6 @@ App.Tabs = App.Tabs || {};
 window.$ = $; window.S = S; window.E = E; window.F = F;
 window.sb = sb; window.toast = toast as any;
 window.bootstrapApi = bootstrapApi;
-window.syncStartupWorkspace = syncStartupWorkspace;
 window.getD = getD; window.refresh = refresh;
 window.winCtrl = winCtrl;
 window.placeContextMenu = placeContextMenu;

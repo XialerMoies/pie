@@ -14,21 +14,53 @@ assert.ok(existsSync(executable), `packaged executable is missing: ${executable}
 assert.ok(Number.isFinite(timeoutMs) && timeoutMs > 0, "timeout must be a positive number");
 
 const tempRoot = mkdtempSync(join(ROOT, ".tmp-packaged-e2e-"));
-const resultFile = join(tempRoot, "result.json");
 const dataDir = join(tempRoot, "data");
-let output = "";
-let child;
+const resultFiles = {
+  first: join(tempRoot, "result-first.json"),
+  second: join(tempRoot, "result-second.json"),
+};
+const outputs = new Map();
+const children = new Set();
 let passed = false;
 
-function stopProcessTree() {
+function hasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function stopProcessTree(child) {
   if (!child) return;
-  if (child.pid && child.exitCode === null) {
-    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+  if (child.pid && !hasExited(child)) {
+    const result = spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
       stdio: "ignore",
       timeout: 10_000,
       windowsHide: true,
     });
+    if (result.error) throw result.error;
   }
+}
+
+function waitForExit(child, waitMs = 15_000) {
+  if (hasExited(child)) return Promise.resolve();
+  return new Promise((resolveExit, rejectExit) => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolveExit();
+    };
+    const timer = setTimeout(() => {
+      child.removeListener("exit", onExit);
+      rejectExit(new Error(`packaged app did not exit within ${waitMs}ms`));
+    }, waitMs);
+    child.once("exit", onExit);
+  });
+}
+
+async function terminateChild(child) {
+  stopProcessTree(child);
+  await waitForExit(child, 10_000);
+  if (!hasExited(child)) {
+    throw new Error(`packaged app ${child.pid || "unknown"} reported exit without an exit code or signal`);
+  }
+  children.delete(child);
   child.stdout?.destroy();
   child.stderr?.destroy();
 }
@@ -48,31 +80,43 @@ async function removeTempRoot() {
   console.warn(`could not remove packaged Electron E2E temp root; leaving it for cleanup: ${tempRoot}`, lastError);
 }
 
-function waitForResult() {
+function assertEquivalentPath(actual, expected) {
+  const normalize = (value) => {
+    const resolved = resolve(value);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  assert.strictEqual(normalize(actual), normalize(expected));
+}
+
+function waitForResult(child, resultFile, output) {
   return new Promise((resolveResult, reject) => {
     const started = Date.now();
     const timer = setInterval(() => {
       if (existsSync(resultFile)) {
-        clearInterval(timer);
-        resolveResult(JSON.parse(readFileSync(resultFile, "utf8")));
+        try {
+          const result = JSON.parse(readFileSync(resultFile, "utf8"));
+          clearInterval(timer);
+          resolveResult(result);
+        } catch {}
         return;
       }
       if (child.exitCode !== null) {
         clearInterval(timer);
-        reject(new Error(`packaged app exited before reporting E2E results (${child.exitCode})\n${output}`));
+        reject(new Error(`packaged app exited before reporting E2E results (${child.exitCode})\n${output()}`));
         return;
       }
       if (Date.now() - started >= timeoutMs) {
         clearInterval(timer);
-        reject(new Error(`timed out waiting for packaged Electron E2E result\n${output}`));
+        reject(new Error(`timed out waiting for packaged Electron E2E result\n${output()}`));
       }
     }, 100);
   });
 }
 
-try {
+async function runRound(phase, resultFile) {
+  let output = "";
   // This host cannot launch Chromium's sandboxed renderer; production keeps sandbox: true.
-  child = spawn(executable, ["--disable-gpu", "--disable-gpu-compositing", "--in-process-gpu", "--no-sandbox"], {
+  const child = spawn(executable, ["--disable-gpu", "--disable-gpu-compositing", "--in-process-gpu", "--no-sandbox"], {
     cwd: ROOT,
     windowsHide: true,
     env: {
@@ -80,14 +124,36 @@ try {
       NODE_ENV: "test",
       MY_CODE_AGENT_E2E_RESULT_FILE: resultFile,
       MY_CODE_AGENT_E2E_DATA_DIR: dataDir,
+      MY_CODE_AGENT_E2E_PHASE: phase,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  children.add(child);
   child.stdout?.on("data", (chunk) => { output += chunk.toString(); });
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
+  outputs.set(phase, () => output);
 
-  const result = await waitForResult();
-  assert.equal(result.ok, true, `${JSON.stringify(result, null, 2)}\n${output}`);
+  try {
+    const result = await waitForResult(child, resultFile, () => output);
+    await waitForExit(child);
+    if (!hasExited(child)) throw new Error(`packaged app ${child.pid || "unknown"} exit was not confirmed`);
+    children.delete(child);
+    return result;
+  } catch (error) {
+    try {
+      await terminateChild(child);
+    } catch (terminationError) {
+      throw new AggregateError(
+        [error, terminationError],
+        `packaged ${phase} round failed and child termination was not confirmed\n${output}`,
+      );
+    }
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${output}`);
+  }
+}
+
+function assertExistingProbeResult(result, label) {
+  assert.equal(result.ok, true, `${label} probe failed: ${JSON.stringify(result, null, 2)}`);
   assert.equal(result.packaged, true);
   assert.match(result.pageUrl, /^http:\/\/127\.0\.0\.1:\d+\/?$/);
   assert.equal(result.pageTitle, "Pi Desktop");
@@ -129,17 +195,60 @@ try {
     "spawnTerminal",
     "trashItem",
   ]);
+  assert.equal(result.STARTUP?.instanceId?.startsWith("instance-"), true, `${label} startup instanceId missing`);
+  assert.equal(result.persistedPreferences?.status, 200, `${label} persisted preferences request failed`);
+  return result;
+}
+
+let failure;
+try {
+  const first = assertExistingProbeResult(
+    await runRound("first", resultFiles.first),
+    "first",
+  );
+  const second = assertExistingProbeResult(
+    await runRound("second", resultFiles.second),
+    "second",
+  );
+  const probeWorkspace = resolve(dataDir, "workspace");
+  const expectedPreferences = { "editor-theme": "vs", "explorer-filter": "0" };
+  assert.equal(first.workspaceSwitchStatus, 200);
+  assert.equal(first.preferencePatch?.status, 200);
+  assert.deepEqual(first.preferencePatch?.body?.preferences, expectedPreferences);
+  assertEquivalentPath(second.STARTUP.workspace, probeWorkspace);
+  assert.deepEqual(second.persistedPreferences.body?.preferences, expectedPreferences);
+  assert.notStrictEqual(first.STARTUP.instanceId, second.STARTUP.instanceId);
   passed = true;
-  console.log("packaged Electron E2E passed", JSON.stringify(result));
+  console.log("packaged Electron E2E passed", JSON.stringify({ first, second }));
+} catch (error) {
+  failure = error;
 } finally {
-  stopProcessTree();
+  const cleanupErrors = [];
+  for (const child of [...children]) {
+    try {
+      await terminateChild(child);
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (cleanupErrors.length > 0) {
+    passed = false;
+    const cleanupFailure = new AggregateError(cleanupErrors, "packaged Electron E2E left child processes running");
+    failure = failure
+      ? new AggregateError([failure, cleanupFailure], "packaged Electron E2E failed and cleanup was incomplete")
+      : cleanupFailure;
+  }
   if (process.platform === "win32") {
     await new Promise((resolveWait) => setTimeout(resolveWait, 500));
   }
-  if (!passed && process.env.CI) {
-    writeFileSync(join(tempRoot, "electron-output.log"), output, "utf8");
+  if (!passed) {
+    for (const [phase, getOutput] of outputs) {
+      writeFileSync(join(tempRoot, `electron-output-${phase}.log`), getOutput(), "utf8");
+    }
     console.error(`packaged Electron E2E artifacts retained at ${tempRoot}`);
   } else {
     await removeTempRoot();
   }
 }
+
+if (failure) throw failure;

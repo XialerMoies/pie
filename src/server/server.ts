@@ -45,6 +45,7 @@ import { WorkspaceFileWatcher } from "./workspace-file-watcher.js";
 import { getServersStatus, subscribeStatusChanges } from "../agent/mcp/MCPClientService.js";
 import { resolveStartupPaths, startupPathsSnapshot } from "./startup-paths.js";
 import { canonicalWorkspacePath } from "../data/data-layout.js";
+import { recordOpenedWorkspace } from "../data/user-settings.js";
 import { WorkspaceLockCoordinator } from "./workspace-lock.js";
 import { workspaceDataPaths, writeWorkspaceMetadata } from "./routes/session-dir.js";
 import { readWorkspaceUiState } from "./routes/ui-state.js";
@@ -835,6 +836,13 @@ async function main() {
   });
   activeWorkspaceLock = workspaceLock;
   await workspaceLock.acquireInitial(STARTUP.workspace);
+  try {
+    await recordOpenedWorkspace(SETTINGS_FILE, STARTUP.workspace, {
+      transientWorkspace: resolve(STARTUP.layout.instanceRoot, "empty-workspace"),
+    });
+  } catch (error) {
+    console.warn("Failed to record opened workspace:", error);
+  }
   writeWorkspaceMetadata(DATA_DIR, STARTUP.workspace);
 
   // ─── 共享可变状态 ────────────────────────────────────────────
@@ -952,6 +960,17 @@ async function main() {
     onWatching: (workspace) => console.log("[watcher] watching " + workspace),
     onError: (error) => console.log("[watcher] not available: " + error.message),
   });
+  let openedWorkspaceRecordTail = Promise.resolve();
+  const enqueueOpenedWorkspaceRecord = (workspace: string): void => {
+    openedWorkspaceRecordTail = openedWorkspaceRecordTail
+      .then(() => recordOpenedWorkspace(SETTINGS_FILE, workspace, {
+        transientWorkspace: resolve(STARTUP.layout.instanceRoot, "empty-workspace"),
+      }))
+      .then(
+        () => undefined,
+        (error) => { console.warn("Failed to record opened workspace:", error); },
+      );
+  };
   const unsubscribeWorkspaceWatcher = runtime.onWorkspaceChange((workspace) => {
     instanceMetadata.workspace = workspace;
     void writeInstanceMetadata(STARTUP.layout.portFile, instanceMetadata).catch((error) => {
@@ -972,6 +991,7 @@ async function main() {
       rootRegistry.setWorkspaceRoot(workspace);
     } catch {}
     workspaceWatcher.watchWorkspace(workspace);
+    enqueueOpenedWorkspaceRecord(workspace);
   });
   workspaceWatcher.watchWorkspace(runtime.currentWorkspace || STARTUP.workspace);
 
@@ -1128,6 +1148,11 @@ async function main() {
         await permissionService.flushAuditWrites();
       } catch (error) {
         console.error("Failed to flush permission audit:", error);
+      }
+      try {
+        await openedWorkspaceRecordTail;
+      } catch (error) {
+        console.warn("Failed to finish opened workspace recording:", error);
       }
       runtime.dispose();
       try {

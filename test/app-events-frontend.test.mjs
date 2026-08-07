@@ -597,17 +597,43 @@ describe("App.Events frontend event bus", () => {
     const { FakeEventSource, instances } = createEventSourceMock();
     const calls = [];
     const intervals = [];
+    const startupOrder = [];
+    let hydratedListener = null;
     const context = {
-      window: { App: { Session: { loadSessions: () => calls.push("sessions") } } },
+      window: {
+        App: {
+          Preferences: {
+            onHydrated: (listener) => {
+              hydratedListener = listener;
+              return () => { hydratedListener = null; };
+            },
+            hydrate: async () => {
+              calls.push("preferences");
+              startupOrder.push("preferences");
+              hydratedListener?.();
+            },
+            get: () => { startupOrder.push("theme"); return "vs-dark"; },
+          },
+          Session: { loadSessions: () => calls.push("sessions") },
+        },
+      },
+      document: {
+        documentElement: {
+          classList: {
+            toggle: () => { startupOrder.push("theme-applied"); },
+            remove: () => { startupOrder.push("revealed"); },
+          },
+        },
+      },
       EventSource: FakeEventSource,
       console,
       setTimeout,
       clearTimeout,
       setInterval: (callback, delay) => { intervals.push({ callback, delay }); return 1; },
-      bootstrapApi: async () => { calls.push("bootstrap"); },
-      layout: () => { calls.push("layout"); },
+      bootstrapApi: async () => { calls.push("bootstrap"); startupOrder.push("bootstrap"); },
+      applyExplorerPreferences: () => { startupOrder.push("explorer"); },
+      layout: () => { calls.push("layout"); startupOrder.push("layout"); },
       refresh: () => {},
-      syncStartupWorkspace: async () => { calls.push("workspace"); },
       getD: () => { calls.push("dashboard"); },
       toast: () => {},
     };
@@ -631,7 +657,10 @@ describe("App.Events frontend event bus", () => {
     assert.strictEqual(instances[0].url, "/api/events");
     instances[0].onopen?.(new Event("open"));
     await new Promise((resolve) => setImmediate(resolve));
-    assert.deepStrictEqual(calls, ["bootstrap", "layout", "dashboard", "workspace", "dashboard", "sessions"]);
+    assert.deepStrictEqual(calls, ["bootstrap", "preferences", "layout", "dashboard", "dashboard", "sessions"]);
+    assert.ok(calls.indexOf("bootstrap") < calls.indexOf("preferences"));
+    assert.ok(calls.indexOf("preferences") < calls.indexOf("layout"));
+    assert.deepStrictEqual(startupOrder, ["bootstrap", "preferences", "explorer", "theme", "theme-applied", "revealed", "layout"]);
     context.App.Events.stop();
   });
 
@@ -639,19 +668,70 @@ describe("App.Events frontend event bus", () => {
     const calls = [];
     const context = {
       window: {},
+      document: {
+        documentElement: {
+          classList: { toggle: () => {}, remove: () => {} },
+        },
+      },
       console: { ...console, warn: () => {} },
       setInterval: () => { throw new Error("Dashboard polling should not be installed"); },
       bootstrapApi: async () => { calls.push("bootstrap"); },
-      layout: () => { calls.push("layout"); },
-      refresh: () => {},
-      syncStartupWorkspace: async () => { calls.push("workspace"); },
-      getD: () => { calls.push("dashboard"); },
-      loadSessions: () => { calls.push("sessions"); },
-      toast: () => {},
+      applyExplorerPreferences: () => {},
       App: {
+        Preferences: {
+          hydrate: async () => { calls.push("preferences"); },
+          get: () => "vs-dark",
+        },
         Events: {
           subscribe: () => () => {},
           start: async () => { calls.push("events"); throw new Error("offline"); },
+        },
+        State: { resetWorkspace: () => { calls.push("reset"); } },
+        Session: { loadSessions: () => { calls.push("sessions"); } },
+      },
+      layout: () => { calls.push("layout"); },
+      refresh: () => {},
+      getD: () => { calls.push("dashboard"); },
+      loadSessions: () => { calls.push("sessions"); },
+      toast: () => {},
+    };
+    context.window.App = context.App;
+    const startupScript = await compileClassicScript("src/frontend/dashboard/dashboard-startup.ts");
+
+    new Script(startupScript, { filename: "dashboard-startup.js" }).runInNewContext(context);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepStrictEqual(calls, ["bootstrap", "preferences", "layout", "events", "dashboard", "sessions"]);
+  });
+
+  it("reveals and lays out the dashboard when preference hydration rejects", async () => {
+    const calls = [];
+    let revealed = false;
+    const context = {
+      window: {},
+      document: {
+        documentElement: {
+          classList: {
+            toggle: () => {},
+            remove: (name) => { if (name === "preferences-loading") revealed = true; },
+          },
+        },
+      },
+      console: { ...console, warn: () => {} },
+      bootstrapApi: async () => { calls.push("bootstrap"); },
+      applyExplorerPreferences: () => {},
+      layout: () => { calls.push("layout"); },
+      refresh: () => {},
+      getD: () => { calls.push("dashboard"); },
+      toast: () => {},
+      App: {
+        Preferences: {
+          hydrate: async () => { calls.push("preferences"); throw new Error("preference service offline"); },
+          get: () => "vs-dark",
+        },
+        Events: {
+          subscribe: () => () => {},
+          start: async () => { calls.push("events"); },
         },
         State: { resetWorkspace: () => { calls.push("reset"); } },
         Session: { loadSessions: () => { calls.push("sessions"); } },
@@ -662,8 +742,125 @@ describe("App.Events frontend event bus", () => {
 
     new Script(startupScript, { filename: "dashboard-startup.js" }).runInNewContext(context);
     await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
 
-    assert.deepStrictEqual(calls, ["bootstrap", "layout", "events", "workspace", "dashboard", "sessions"]);
+    assert.strictEqual(revealed, true);
+    assert.deepStrictEqual(calls, ["bootstrap", "preferences", "layout", "events", "dashboard", "sessions"]);
+  });
+
+  it("reveals and lays out after the preference hydration startup deadline", async () => {
+    const calls = [];
+    const timerMock = createTimerMock();
+    let revealed = false;
+    let explorerPreferenceApplications = 0;
+    let modeStateApplications = 0;
+    let readingSettingApplications = 0;
+    let monacoSettingApplications = 0;
+    let hydratedListener = null;
+    const context = {
+      window: {
+        __monaco: {
+          updateSettings: () => { monacoSettingApplications += 1; },
+        },
+      },
+      document: {
+        documentElement: {
+          classList: {
+            toggle: () => {},
+            remove: (name) => { if (name === "preferences-loading") revealed = true; },
+          },
+        },
+      },
+      console: { ...console, warn: () => {} },
+      setTimeout: timerMock.setTimeout,
+      clearTimeout: timerMock.clearTimeout,
+      bootstrapApi: async () => { calls.push("bootstrap"); },
+      applyExplorerPreferences: () => { explorerPreferenceApplications += 1; },
+      layout: () => { calls.push("layout"); },
+      refresh: () => {},
+      getD: () => { calls.push("dashboard"); },
+      toast: () => {},
+      App: {
+        Preferences: {
+          onHydrated: (listener) => {
+            hydratedListener = listener;
+            return () => { hydratedListener = null; };
+          },
+          hydrate: async () => {
+            calls.push("preferences");
+            await new Promise(() => {});
+          },
+          get: () => "vs-dark",
+        },
+        Events: {
+          subscribe: () => () => {},
+          start: async () => { calls.push("events"); },
+        },
+        State: { resetWorkspace: () => { calls.push("reset"); } },
+        Session: { loadSessions: () => { calls.push("sessions"); } },
+        Chat: {
+          loadModeState: () => { modeStateApplications += 1; },
+          refreshReadingSettings: () => { readingSettingApplications += 1; },
+        },
+      },
+    };
+    context.window.App = context.App;
+    const startupScript = await compileClassicScript("src/frontend/dashboard/dashboard-startup.ts");
+
+    new Script(startupScript, { filename: "dashboard-startup.js" }).runInNewContext(context);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.strictEqual(revealed, false);
+    assert.strictEqual(timerMock.timers.length, 1);
+    timerMock.timers[0].callback();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.strictEqual(revealed, true);
+    assert.deepStrictEqual(calls, ["bootstrap", "preferences", "layout", "events", "dashboard", "sessions"]);
+    assert.strictEqual(explorerPreferenceApplications, 1);
+    assert.strictEqual(modeStateApplications, 0);
+    assert.strictEqual(readingSettingApplications, 0);
+    assert.strictEqual(monacoSettingApplications, 0);
+    assert.strictEqual(typeof hydratedListener, "function");
+    hydratedListener();
+    assert.strictEqual(explorerPreferenceApplications, 2);
+    assert.strictEqual(modeStateApplications, 1);
+    assert.strictEqual(readingSettingApplications, 1);
+    assert.strictEqual(monacoSettingApplications, 1);
+  });
+
+  it("reveals the authentication error without laying out when bootstrap rejects", async () => {
+    const calls = [];
+    let revealed = false;
+    const context = {
+      window: {},
+      document: {
+        documentElement: {
+          classList: {
+            remove: (name) => { if (name === "preferences-loading") revealed = true; },
+          },
+        },
+      },
+      console: { ...console, error: () => { calls.push("error"); } },
+      bootstrapApi: async () => { calls.push("bootstrap"); throw new Error("authentication failed"); },
+      layout: () => { calls.push("layout"); },
+      toast: () => { calls.push("toast"); },
+      App: {
+        Preferences: {
+          hydrate: async () => { calls.push("preferences"); },
+        },
+        Events: { subscribe: () => () => {} },
+      },
+    };
+    context.window.App = context.App;
+    const startupScript = await compileClassicScript("src/frontend/dashboard/dashboard-startup.ts");
+
+    new Script(startupScript, { filename: "dashboard-startup.js" }).runInNewContext(context);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.strictEqual(revealed, true);
+    assert.deepStrictEqual(calls, ["bootstrap", "error", "toast"]);
   });
 
   it("coalesces dashboard events into one follow-up request without stale overwrite", async () => {
@@ -678,6 +875,10 @@ describe("App.Events frontend event bus", () => {
       window: {
         App: {
           State: { getWorkspacePath: () => "" },
+          Preferences: {
+            hydrate: async () => {},
+            get: () => "vs-dark",
+          },
           Chat: { updateModelName: () => {} },
           ChatState: { setDashboard: (data) => dashboardRequests.push({ type: "state", data }), getDashboard: () => null },
           Session: { loadSessions: () => {} },
@@ -696,8 +897,11 @@ describe("App.Events frontend event bus", () => {
         return new Promise((resolve) => dashboardResolvers.push(() => resolve({ ok: true, json: async () => dashboardData[index] })));
       },
       bootstrapApi: undefined,
+      applyExplorerPreferences: () => {},
+      document: {
+        documentElement: { classList: { toggle: () => {}, remove: () => {} } },
+      },
       layout: () => {},
-      syncStartupWorkspace: async () => {},
       toast: () => {},
     };
     context.App = context.window.App;

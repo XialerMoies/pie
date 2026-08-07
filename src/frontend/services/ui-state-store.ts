@@ -54,6 +54,7 @@ let _hydrated = false;
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 let _saveGeneration = 0;
 let _savePromise: Promise<boolean> | null = null;
+let _workspaceGeneration = 0;
 
 // ─── localStorage 旧 key（迁移用） ──────────────────────
 
@@ -103,22 +104,19 @@ function readLegacyState(): Partial<WorkspaceUiState> {
   partial.panel = { active: panelActive, closed: false, width: panelWidth > 50 ? panelWidth : DEFAULT_STATE.panel.width };
 
   partial.recent = { sessions: {}, lastSessionId: readLS(OLD.LAST_SESSION) || undefined };
-  partial.workspacePath = readLS(OLD.WS_KEY) || "";
-
   return partial;
 }
 
 // ─── 服务端读写 ────────────────────────────────────────
 
-async function fetchServerState(): Promise<WorkspaceUiState | null> {
+async function fetchServerState(): Promise<Partial<WorkspaceUiState> | null> {
   try {
-    const ws = readLS(OLD.WS_KEY) || "";
-    const url = ws ? `/api/ui-state?workspace=${encodeURIComponent(ws)}` : "/api/ui-state";
-    const r = await fetch(url);
+    const r = await fetch("/api/ui-state");
     if (!r.ok) return null;
     const data = await r.json();
     // 服务端返回了完整新结构（含 schemaVersion/tabs）→ 直接使用
     if (data && data.schemaVersion === 2) return data as WorkspaceUiState;
+    if (data && typeof data.workspacePath === "string") return { workspacePath: data.workspacePath };
     // 旧结构（只有 openSessionIds）→ 视为无数据，降级
     return null;
   } catch {
@@ -196,10 +194,11 @@ function getSnapshot(): WorkspaceUiState {
 }
 
 function getWorkspacePath(): string {
-  return _state.workspacePath || readLS(OLD.WS_KEY) || "";
+  return _state.workspacePath || "";
 }
 
 function setWorkspacePath(workspacePath: string): void {
+  ++_workspaceGeneration;
   _state.workspacePath = workspacePath;
   try { localStorage.setItem(OLD.WS_KEY, workspacePath); } catch {}
   _notify();
@@ -207,6 +206,7 @@ function setWorkspacePath(workspacePath: string): void {
 }
 
 function resetWorkspace(workspacePath: string): void {
+  ++_workspaceGeneration;
   _state = {
     schemaVersion: 2,
     workspacePath,
@@ -276,7 +276,14 @@ function touchSession(sessionId: string, timestamp = Date.now()): void {
 
 /** 启动时调用：优先从服务端读取新结构数据，否则从旧 localStorage 迁移 */
 async function hydrate(): Promise<WorkspaceUiState> {
+  const workspaceGeneration = _workspaceGeneration;
   let state = await fetchServerState();
+
+  if (workspaceGeneration !== _workspaceGeneration) {
+    _hydrated = true;
+    saveNow();
+    return _state;
+  }
 
   if (state && state.schemaVersion === 2) {
     _state = { ...DEFAULT_STATE, ...state };
@@ -288,7 +295,8 @@ async function hydrate(): Promise<WorkspaceUiState> {
 
   // 降级：从旧 localStorage 迁移到新结构
   const legacy = readLegacyState();
-  _state = { ...DEFAULT_STATE, ...legacy };
+  const workspacePath = typeof state?.workspacePath === "string" ? state.workspacePath : _state.workspacePath;
+  _state = { ...DEFAULT_STATE, ...legacy, workspacePath };
   ensureTabsFormat(_state);
   _hydrated = true;
   saveNow(); // 异步写回服务端
@@ -333,9 +341,6 @@ function serializeStateForSave(state: WorkspaceUiState): WorkspaceUiState {
 async function saveNow(): Promise<boolean> {
   _saveTimer = null;
   if (!_hydrated) return false;
-  if (!_state.workspacePath) {
-    try { _state.workspacePath = localStorage.getItem(OLD.WS_KEY) || ""; } catch {}
-  }
   ++_saveGeneration;
   if (_savePromise) return _savePromise;
 

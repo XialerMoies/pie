@@ -16,6 +16,32 @@ import { workspaceDataPaths } from "../src/server/routes/session-dir.ts";
 const children = new Set();
 const fixtureRoots = [];
 
+function hasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function waitForChildExit(child, timeoutMs = 10_000) {
+  if (hasExited(child)) return Promise.resolve();
+  return new Promise((resolveExit, rejectExit) => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolveExit();
+    };
+    const timer = setTimeout(() => {
+      child.removeListener("exit", onExit);
+      rejectExit(new Error(`child process ${child.pid || "unknown"} did not exit within ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.once("exit", onExit);
+  });
+}
+
+async function forceStopChild(child) {
+  if (hasExited(child)) return;
+  const exited = waitForChildExit(child);
+  child.kill();
+  await exited;
+}
+
 function createFixture() {
   // The test harness redirects os.tmpdir() under APP_ROOT, which is an app-data root in dev.
   const root = mkdtempSync(join(resolve(process.cwd(), ".."), "multi-instance-e2e-"));
@@ -44,9 +70,10 @@ function seedSession(dataRoot, workspace, id, message) {
 
 function startServer({ workspace, dataRoot, instanceId, token }) {
   return new Promise((resolveServer, rejectServer) => {
+    const workspaceArgs = workspace === undefined ? [] : ["--workspace", workspace];
     const child = spawn(process.execPath, [
       "--import", "tsx", resolve("src/server/server.ts"),
-      "--workspace", workspace,
+      ...workspaceArgs,
       "--data-root", dataRoot,
       "--instance-id", instanceId,
     ], {
@@ -63,8 +90,14 @@ function startServer({ workspace, dataRoot, instanceId, token }) {
 
     let stdout = "";
     let stderr = "";
+    let startupTimedOut = false;
     const timer = setTimeout(() => {
-      rejectServer(new Error(`server startup timed out\n${stdout}\n${stderr}`));
+      startupTimedOut = true;
+      const timeoutError = new Error(`server startup timed out\n${stdout}\n${stderr}`);
+      void forceStopChild(child).then(
+        () => rejectServer(timeoutError),
+        (stopError) => rejectServer(new AggregateError([timeoutError, stopError], "server startup timed out and child termination failed")),
+      );
     }, 30_000);
 
     child.stdout.on("data", (chunk) => {
@@ -81,7 +114,7 @@ function startServer({ workspace, dataRoot, instanceId, token }) {
     });
     child.once("exit", (code) => {
       children.delete(child);
-      if (!/SERVER_PORT:\d+/.test(stdout)) {
+      if (!startupTimedOut && !/SERVER_PORT:\d+/.test(stdout)) {
         clearTimeout(timer);
         rejectServer(new Error(`server exited before ready (${code})\n${stdout}\n${stderr}`));
       }
@@ -119,10 +152,13 @@ async function api(server, pathname, options = {}) {
   return { status: response.status, body };
 }
 
+function assertSameWorkspace(actual, expected) {
+  const normalize = (value) => process.platform === "win32" ? value.toLowerCase() : value;
+  assert.strictEqual(normalize(actual), normalize(expected));
+}
+
 afterEach(async () => {
-  for (const child of [...children]) {
-    try { child.kill(); } catch {}
-  }
+  await Promise.all([...children].map((child) => forceStopChild(child)));
   children.clear();
   while (fixtureRoots.length) rmSync(fixtureRoots.pop(), { recursive: true, force: true });
 });
@@ -226,5 +262,87 @@ test("two project instances keep commands, writes, sessions, and shutdown isolat
   } finally {
     await stopServer(instanceA).catch(() => {});
     await stopServer(instanceB).catch(() => {});
+  }
+});
+
+test("random instance restarts persist workspace and preferences", { timeout: 120_000 }, async () => {
+  const fixture = createFixture();
+  const preferencePatch = {
+    values: {
+      "editor-theme": "vs",
+      "explorer-filter": "0",
+    },
+  };
+  const transientInstanceId = "transient-instance";
+  const transientWorkspace = join(fixture.dataRoot, "instances", transientInstanceId, "empty-workspace");
+  mkdirSync(transientWorkspace, { recursive: true });
+
+  let restartA;
+  let restartB;
+  let transient;
+  let restartC;
+  try {
+    restartA = await startServer({
+      workspace: fixture.workspaceA,
+      dataRoot: fixture.dataRoot,
+      instanceId: "restart-a",
+      token: "restart-token-a",
+    });
+
+    const switched = await api(restartA, "/api/workspace/switch", {
+      method: "POST",
+      body: { workspace: fixture.workspaceB },
+    });
+    assert.strictEqual(switched.status, 200);
+    assert.strictEqual(switched.body.workspace, fixture.workspaceB);
+
+    const patched = await api(restartA, "/api/preferences", {
+      method: "PATCH",
+      body: preferencePatch,
+    });
+    assert.strictEqual(patched.status, 200);
+    assert.deepStrictEqual(patched.body.preferences, preferencePatch.values);
+    await stopServer(restartA);
+    restartA = null;
+
+    restartB = await startServer({
+      dataRoot: fixture.dataRoot,
+      instanceId: "restart-b",
+      token: "restart-token-b",
+    });
+    const restoredState = await api(restartB, "/api/ui-state");
+    const restoredPreferences = await api(restartB, "/api/preferences");
+    assert.strictEqual(restoredState.status, 200);
+    assertSameWorkspace(restoredState.body.workspacePath, fixture.workspaceB);
+    assert.strictEqual(restoredPreferences.status, 200);
+    assert.deepStrictEqual(restoredPreferences.body.preferences, preferencePatch.values);
+    await stopServer(restartB);
+    restartB = null;
+
+    transient = await startServer({
+      workspace: transientWorkspace,
+      dataRoot: fixture.dataRoot,
+      instanceId: transientInstanceId,
+      token: "transient-token",
+    });
+    const transientBootstrap = await api(transient, "/api/bootstrap");
+    assert.strictEqual(transientBootstrap.status, 200);
+    assertSameWorkspace(transientBootstrap.body.startup.workspace, transientWorkspace);
+    await stopServer(transient);
+    transient = null;
+
+    restartC = await startServer({
+      dataRoot: fixture.dataRoot,
+      instanceId: "restart-c",
+      token: "restart-token-c",
+    });
+    const restoredAgain = await api(restartC, "/api/ui-state");
+    assert.strictEqual(restoredAgain.status, 200);
+    assertSameWorkspace(restoredAgain.body.workspacePath, fixture.workspaceB);
+  } finally {
+    await stopServer(restartA).catch(() => {});
+    await stopServer(restartB).catch(() => {});
+    await stopServer(transient).catch(() => {});
+    await stopServer(restartC).catch(() => {});
   }
 });

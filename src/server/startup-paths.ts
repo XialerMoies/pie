@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, resolve } from "node:path";
 import { canonicalWorkspacePath, resolveDataLayout, type DataLayout } from "../data/data-layout.js";
+import { readStartupWorkspace } from "../data/user-settings.js";
 
 export interface StartupPathOptions {
   appRoot: string;
@@ -55,14 +56,16 @@ export function resolveStartupPaths(options: StartupPathOptions): StartupPaths {
   const argv = options.argv || [];
   const env = options.env || {};
   const appRoot = resolve(options.appRoot);
-  const workspaceInput = readValue(argv, env, "--workspace", "PI_WORKSPACE") || appRoot;
   const dataRootInput = readValue(argv, env, "--data-root", "PI_DATA_ROOT", "PI_DESKTOP_DATA") || join(appRoot, "data");
   const instanceId = readValue(argv, env, "--instance-id", "PI_INSTANCE_ID") || generateInstanceId();
 
   if (!isAbsolute(appRoot)) throw new Error("appRoot must be absolute");
-  const workspace = canonicalWorkspacePath(workspaceInput);
   if (!isAbsolute(dataRootInput)) throw new Error("dataRoot must be absolute");
   const dataRoot = resolve(dataRootInput);
+  const explicitWorkspace = readValue(argv, env, "--workspace", "PI_WORKSPACE");
+  const storedWorkspace = explicitWorkspace ? null : readStartupWorkspace(join(dataRoot, "user", "settings.json"));
+  const workspaceInput = explicitWorkspace || storedWorkspace || appRoot;
+  const workspace = canonicalWorkspacePath(workspaceInput);
   const layout = resolveDataLayout({ dataRoot, workspace, instanceId });
 
   return { appRoot, workspace, dataRoot: layout.dataRoot, instanceId, layout };

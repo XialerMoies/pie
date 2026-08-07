@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 
 import { canonicalWorkspacePath, resolveDataLayout } from "../src/data/data-layout.ts";
+import { withFileLock } from "../src/data/file-lock.ts";
+import { readUserSettings, recordOpenedWorkspace } from "../src/data/user-settings.ts";
 import { handleChat } from "../src/server/routes/chat.ts";
 import {
   WorkspaceLockConflictError,
@@ -96,6 +98,26 @@ function runServerToExit(workspace, dataRoot, instanceId) {
   child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
   child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
   return waitForExit(child, 10_000).then((result) => ({ ...result, stdout, stderr }));
+}
+
+async function waitFor(predicate, message, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+  }
+  assert.fail(message);
+}
+
+function switchWorkspace(running, instanceId, workspace) {
+  return fetch(`http://127.0.0.1:${running.port}/api/workspace/switch`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-My-Code-Agent-Token": `token-${instanceId}`,
+    },
+    body: JSON.stringify({ workspace }),
+  });
 }
 
 describe("workspace ownership lock", () => {
@@ -322,21 +344,191 @@ describe("workspace ownership lock", () => {
     }
   });
 
+  it("records successful server workspace switches but not failed or conflicting switches", async () => {
+    const f = fixture("workspace-lock-record-switch");
+    const instanceId = "record-switcher";
+    const target = resolve(f.root, "target");
+    const lockedTarget = resolve(f.root, "locked-target");
+    const missingTarget = resolve(f.root, "missing-target");
+    mkdirSync(target, { recursive: true });
+    mkdirSync(lockedTarget, { recursive: true });
+    const blocker = new WorkspaceLockCoordinator({ dataRoot: f.dataRoot, instanceId: "record-blocker" });
+    const settingsFile = resolveDataLayout({
+      dataRoot: f.dataRoot,
+      workspace: f.workspace,
+      instanceId,
+    }).settingsFile;
+    let running;
+    try {
+      running = await startServer(f.workspace, f.dataRoot, instanceId);
+      await waitFor(
+        () => readUserSettings(settingsFile).startup?.lastWorkspace === canonicalWorkspacePath(f.workspace),
+        "initial workspace was not recorded",
+      );
+
+      const switched = await switchWorkspace(running, instanceId, target);
+      assert.strictEqual(switched.status, 200);
+      await waitFor(
+        () => readUserSettings(settingsFile).startup?.lastWorkspace === canonicalWorkspacePath(target),
+        "successful workspace switch was not recorded",
+      );
+
+      const failed = await switchWorkspace(running, instanceId, missingTarget);
+      assert.strictEqual(failed.status, 400);
+      assert.strictEqual(readUserSettings(settingsFile).startup?.lastWorkspace, canonicalWorkspacePath(target));
+
+      await blocker.acquireInitial(lockedTarget);
+      const conflicted = await switchWorkspace(running, instanceId, lockedTarget);
+      assert.strictEqual(conflicted.status, 409);
+      assert.strictEqual(readUserSettings(settingsFile).startup?.lastWorkspace, canonicalWorkspacePath(target));
+    } finally {
+      try {
+        if (running?.child.exitCode === null) {
+          running.child.stdin.write("PI_SERVER_SHUTDOWN\n");
+          running.child.stdin.end();
+          await waitForExit(running.child);
+        }
+      } finally {
+        try {
+          await blocker.release();
+        } finally {
+          rmSync(f.root, { recursive: true, force: true });
+        }
+      }
+    }
+  });
+
+  it("waits for a queued workspace record before graceful shutdown", async () => {
+    const f = fixture("workspace-record-shutdown");
+    const instanceId = "record-shutdown";
+    const target = resolve(f.root, "target");
+    mkdirSync(target, { recursive: true });
+    const settingsFile = resolveDataLayout({
+      dataRoot: f.dataRoot,
+      workspace: f.workspace,
+      instanceId,
+    }).settingsFile;
+    let releaseSettingsLock;
+    const settingsLockRelease = new Promise((resolveRelease) => { releaseSettingsLock = resolveRelease; });
+    let signalSettingsLock;
+    const settingsLockEntered = new Promise((resolveEntered) => { signalSettingsLock = resolveEntered; });
+    let running;
+    let settingsLockOwner;
+    try {
+      running = await startServer(f.workspace, f.dataRoot, instanceId);
+      await waitFor(
+        () => readUserSettings(settingsFile).startup?.lastWorkspace === canonicalWorkspacePath(f.workspace),
+        "initial workspace was not recorded",
+      );
+
+      settingsLockOwner = withFileLock(`${settingsFile}.lock`, { timeoutMs: 30_000 }, async () => {
+        signalSettingsLock();
+        await settingsLockRelease;
+      });
+      await settingsLockEntered;
+
+      const switched = await switchWorkspace(running, instanceId, target);
+      assert.strictEqual(switched.status, 200);
+      await switched.arrayBuffer();
+
+      const exit = waitForExit(running.child);
+      running.child.stdin.write("PI_SERVER_SHUTDOWN\n");
+      running.child.stdin.end();
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+      releaseSettingsLock();
+      await exit;
+
+      assert.strictEqual(readUserSettings(settingsFile).startup?.lastWorkspace, canonicalWorkspacePath(target));
+    } finally {
+      try {
+        releaseSettingsLock?.();
+        if (settingsLockOwner) await settingsLockOwner;
+      } finally {
+        try {
+          if (running?.child.exitCode === null) running.child.kill();
+        } finally {
+          rmSync(f.root, { recursive: true, force: true });
+        }
+      }
+    }
+  });
+
+  it("keeps startup and workspace switching available when recording settings fails", async () => {
+    const f = fixture("workspace-recording-failure");
+    const instanceId = "recording-failure";
+    const target = resolve(f.root, "target");
+    mkdirSync(target, { recursive: true });
+    const settingsFile = resolveDataLayout({
+      dataRoot: f.dataRoot,
+      workspace: f.workspace,
+      instanceId,
+    }).settingsFile;
+    mkdirSync(settingsFile, { recursive: true });
+    let running;
+    try {
+      running = await startServer(f.workspace, f.dataRoot, instanceId);
+      await waitFor(
+        () => /Failed to record opened workspace/.test(running.stderr()),
+        "startup recording failure was not logged",
+      );
+      const warningsBeforeSwitch = running.stderr().match(/Failed to record opened workspace/g)?.length ?? 0;
+
+      const switched = await switchWorkspace(running, instanceId, target);
+      assert.strictEqual(switched.status, 200);
+      assert.strictEqual(canonicalWorkspacePath((await switched.json()).workspace), canonicalWorkspacePath(target));
+      await waitFor(
+        () => (running.stderr().match(/Failed to record opened workspace/g)?.length ?? 0) > warningsBeforeSwitch,
+        "workspace switch recording failure was not logged",
+      );
+
+      const bootstrap = await fetch(`http://127.0.0.1:${running.port}/api/bootstrap`, {
+        headers: { "X-My-Code-Agent-Token": `token-${instanceId}` },
+      });
+      assert.strictEqual(bootstrap.status, 200);
+      assert.ok((await bootstrap.json()).startup);
+    } finally {
+      try {
+        if (running?.child.exitCode === null) {
+          running.child.stdin.write("PI_SERVER_SHUTDOWN\n");
+          running.child.stdin.end();
+          await waitForExit(running.child);
+        }
+      } finally {
+        rmSync(f.root, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("writes the listening port and releases the lock on graceful shutdown", async () => {
     const f = fixture("workspace-lock-server");
+    const previousWorkspace = resolve(f.root, "previous-workspace");
+    mkdirSync(previousWorkspace, { recursive: true });
     let running;
     try {
       running = await startServer(f.workspace, f.dataRoot, "server-owner");
       const layout = resolveDataLayout({ dataRoot: f.dataRoot, workspace: f.workspace, instanceId: "server-owner" });
+      await waitFor(
+        () => readUserSettings(layout.settingsFile).startup?.lastWorkspace === canonicalWorkspacePath(f.workspace),
+        "lock owner startup workspace was not recorded",
+      );
       const owner = JSON.parse(readFileSync(layout.workspaceLockFile, "utf8"));
       assert.strictEqual(owner.instanceId, "server-owner");
       assert.strictEqual(owner.port, running.port);
+      await recordOpenedWorkspace(layout.settingsFile, previousWorkspace);
+      assert.strictEqual(
+        readUserSettings(layout.settingsFile).startup?.lastWorkspace,
+        canonicalWorkspacePath(previousWorkspace),
+      );
 
       const conflict = await runServerToExit(f.workspace, f.dataRoot, "server-second");
       assert.strictEqual(conflict.code, 1);
       assert.match(conflict.stderr, /WorkspaceLockConflictError/);
       assert.match(conflict.stderr, /server-owner/);
       assert.match(conflict.stderr, new RegExp(String(running.port)));
+      assert.strictEqual(
+        readUserSettings(layout.settingsFile).startup?.lastWorkspace,
+        canonicalWorkspacePath(previousWorkspace),
+      );
 
       running.child.stdin.write("PI_SERVER_SHUTDOWN\n");
       running.child.stdin.end();

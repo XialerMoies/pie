@@ -81,12 +81,7 @@ export class ExplorerService {
 
   /** 应用工作区选择（设置路径 + 重新渲染 panel） */
   static async applyWorkspace(): Promise<void> {
-    const p = await ExplorerService.selectWorkspace();
-    if (!p) return;
-    ExplorerService.setWorkspacePath(p);
-    toast('工作区: ' + p);
-    const pc = $('pc');
-    if (pc) renderPanel('explorer', pc);
+    App.File.fileAction('openFolder');
   }
 
   /** 文件名 → icon HTML（vscode-icons SVG + fallback） */
@@ -215,10 +210,13 @@ function setExplorerStatus(text: string, kind: 'loading' | 'ready' | 'error' = '
 }
 
 // 从统一偏好 facade 恢复筛选状态
-if (!App.Preferences.getBoolean('explorer-filter', true)) ExplorerService._filterEnabled = false;
+function applyExplorerPreferences(): void {
+  ExplorerService._filterEnabled = App.Preferences.getBoolean('explorer-filter', true);
+}
 
 // 暴露到全局（供 inline onclick 使用）
 (window as any).ExplorerService = ExplorerService;
+(window as any).applyExplorerPreferences = applyExplorerPreferences;
 
 // 当前 explorer 的 Tree 实例引用（事件刷新时不重建）
 let _explorerTree: Tree | null = null;

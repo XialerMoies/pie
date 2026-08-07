@@ -30,9 +30,11 @@ const E2E_DATA_DIR = E2E_RESULT_FILE && process.env.MY_CODE_AGENT_E2E_DATA_DIR
   ? path.resolve(process.env.MY_CODE_AGENT_E2E_DATA_DIR)
   : null;
 const E2E_MODE = app.isPackaged && !!E2E_RESULT_FILE;
+const E2E_PHASE = E2E_MODE ? process.env.MY_CODE_AGENT_E2E_PHASE || "" : "";
 const DATA_ROOT_POINTER_FILE = path.join(app.getPath("userData"), "data-root.json");
 delete process.env.MY_CODE_AGENT_E2E_RESULT_FILE;
 delete process.env.MY_CODE_AGENT_E2E_DATA_DIR;
+delete process.env.MY_CODE_AGENT_E2E_PHASE;
 const DEFAULT_DATA_ROOT = E2E_DATA_DIR || path.join(RUNTIME_ROOT, "data");
 const CONFIGURED_DATA_ROOT = E2E_DATA_DIR || readDataRootPointer(DATA_ROOT_POINTER_FILE, DEFAULT_DATA_ROOT);
 const STARTUP = resolveStartupPaths({
@@ -299,7 +301,13 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
     } catch (error) {
       sensitiveExternalReadBlocked = error instanceof Error && error.message.includes("timed out");
     }
+    const persistedPreferences = await requestJson("/api/preferences");
     const workspaceSwitch = await requestJson("/api/workspace/switch", "POST", { workspace });
+    const preferencePatch = E2E_PHASE === "first"
+      ? await requestJson("/api/preferences", "PATCH", {
+        values: { "editor-theme": "vs", "explorer-filter": "0" },
+      })
+      : null;
     const workspaceRead = await requestJson(
       `/api/file/read?root=${encodeURIComponent(workspace)}&path=read.txt`,
     );
@@ -312,6 +320,7 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
     writeE2EResult({
       ok: true,
       packaged: app.isPackaged,
+      STARTUP,
       pageUrl: win.webContents.getURL(),
       pageTitle: win.webContents.getTitle(),
       renderer,
@@ -326,7 +335,9 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
       fileWriteStatus: fileWrite.status,
       externalReadStatus: externalRead.status,
       sensitiveExternalReadBlocked,
+      persistedPreferences,
       workspaceSwitchStatus: workspaceSwitch.status,
+      preferencePatch,
       workspaceReadStatus: workspaceRead.status,
       pathTraversalStatus: pathTraversal.status,
       siblingTraversalStatus: siblingTraversal.status,

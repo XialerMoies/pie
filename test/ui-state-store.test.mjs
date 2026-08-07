@@ -119,6 +119,40 @@ describe("UiStateStore", () => {
     assert.match(source, /App\.State\.getSnapshot\(\)\.tabs/);
   });
 
+  it("keeps an explicit workspace reset when the hydration GET resolves late", async () => {
+    const puts = [];
+    let resolveGet;
+    global.fetch = async (url, init) => {
+      if (init?.method === "PUT") {
+        puts.push(JSON.parse(init.body));
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      return new Promise((resolve) => {
+        resolveGet = () => resolve({
+          ok: true,
+          json: async () => ({
+            schemaVersion: 2,
+            workspacePath: "/A",
+            activeView: { type: "chat" },
+            tabs: { items: [], activeId: null },
+            panel: { active: "explorer", closed: false, width: 260 },
+            recent: { sessions: {} },
+          }),
+        });
+      });
+    };
+
+    const hydration = store().hydrate();
+    store().resetWorkspace("/B");
+    resolveGet();
+    await hydration;
+    await store().saveNow();
+
+    assert.strictEqual(store().getWorkspacePath(), "/B");
+    assert.ok(puts.some((state) => state.workspacePath === "/B"));
+    assert.ok(puts.every((state) => state.workspacePath !== "/A"));
+  });
+
   it("syncs tabs and session UI data through detached App.State snapshots", async () => {
     global.fetch = async (url, init) => {
       if (init?.method === "PUT") return { ok: true, json: async () => ({ ok: true }) };
@@ -197,20 +231,69 @@ describe("UiStateStore", () => {
   });
 
   it("workspace A/B 隔离", async () => {
-    storage["workspace_path"] = "/project-alpha";
+    storage["workspace_path"] = "/legacy-workspace";
     storage["session-tabs"] = JSON.stringify([]);
 
-    let fetchUrl = "";
+    const fetchUrls = [];
     global.fetch = async (url, init) => {
       if (typeof url === "string" && url.includes("/api/ui-state")) {
-        if (!init?.method || init.method === "GET") fetchUrl = url;
-        return { ok: true, json: async () => ({ schemaVersion: 2, tabs: { sessions: [] }, workspacePath: "/project-alpha" }) };
+        if (!init?.method || init.method === "GET") fetchUrls.push(url);
+        if (init?.method === "PUT") return { ok: true, json: async () => ({ ok: true }) };
+        return { ok: true, json: async () => ({ schemaVersion: 2, tabs: { sessions: [] }, workspacePath: "/server-workspace" }) };
       }
       return { ok: true, json: async () => ({}) };
     };
 
     await store().hydrate();
-    assert.ok(fetchUrl.includes("workspace="), `GET 请求应带 workspace 参数: ${fetchUrl}`);
+    assert.deepStrictEqual(fetchUrls, ["/api/ui-state"]);
+    assert.strictEqual(store().getWorkspacePath(), "/server-workspace");
+  });
+
+  it("legacy UI state inherits the runtime workspace without consuming the legacy workspace key", async () => {
+    storage["workspace_path"] = "/legacy-workspace";
+    storage["session-tabs"] = JSON.stringify(["legacy-session"]);
+    storage["active-session-tab"] = "legacy-session";
+    storage["active-panel"] = "git";
+
+    global.fetch = async (url, init) => {
+      if (init?.method === "PUT") return { ok: true, json: async () => ({ ok: true }) };
+      return {
+        ok: true,
+        json: async () => ({ workspacePath: "/runtime-workspace", tabs: { sessions: [] } }),
+      };
+    };
+
+    await store().hydrate();
+    const state = store().getState();
+    assert.strictEqual(state.workspacePath, "/runtime-workspace");
+    assert.deepStrictEqual(state.tabs.sessions, ["legacy-session"]);
+    assert.strictEqual(state.panel.active, "git");
+  });
+
+  it("does not use the legacy workspace key when the hydrated state has no workspace path", async () => {
+    storage["workspace_path"] = "/legacy-workspace";
+    let savedBody = null;
+    global.fetch = async (url, init) => {
+      if (init?.method === "PUT") {
+        savedBody = JSON.parse(init.body);
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          schemaVersion: 2,
+          workspacePath: "",
+          tabs: { sessions: [] },
+          activeView: { type: "chat" },
+          panel: { active: "explorer", closed: false, width: 260 },
+          recent: { sessions: {} },
+        }),
+      };
+    };
+
+    await store().hydrate();
+    assert.strictEqual(store().getWorkspacePath(), "");
+    assert.strictEqual(savedBody.workspacePath, "");
   });
 
   it("resetWorkspaceState 清空 store 并更新 workspacePath", async () => {

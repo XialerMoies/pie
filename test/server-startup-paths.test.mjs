@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 
@@ -9,6 +9,7 @@ import {
   resolveStartupPaths,
   startupPathsSnapshot,
 } from "../src/server/startup-paths.ts";
+import { canonicalWorkspacePath } from "../src/data/data-layout.ts";
 import { handleDashboard } from "../src/server/routes/dashboard.ts";
 
 async function readBootstrap(paths) {
@@ -61,6 +62,25 @@ function startServerProcess(workspace, dataRoot) {
   });
 }
 
+function makeStartupFixture(name) {
+  const root = mkdtempSync(resolve(tmpdir(), `${name}-`));
+  const appRoot = resolve(root, "app-root");
+  const dataRoot = resolve(root, "data-root");
+  const storedWorkspace = resolve(root, "stored-workspace");
+  const envWorkspace = resolve(root, "env-workspace");
+  const cliWorkspace = resolve(root, "cli-workspace");
+  for (const directory of [appRoot, storedWorkspace, envWorkspace, cliWorkspace]) {
+    mkdirSync(directory, { recursive: true });
+  }
+  return { root, appRoot, dataRoot, storedWorkspace, envWorkspace, cliWorkspace };
+}
+
+function writeStartupSettings(dataRoot, document) {
+  const settingsFile = join(dataRoot, "user", "settings.json");
+  mkdirSync(resolve(settingsFile, ".."), { recursive: true });
+  writeFileSync(settingsFile, typeof document === "string" ? document : JSON.stringify(document));
+}
+
 describe("server startup paths", () => {
   it("uses explicit workspace, data root, and instance id without APP_ROOT fallback", () => {
     const appRoot = resolve("E:/my-code-agent");
@@ -97,6 +117,153 @@ describe("server startup paths", () => {
     assert.strictEqual(startup.workspace, resolve("E:/cli-workspace").toLowerCase());
     assert.strictEqual(startup.layout.dataRoot, resolve("D:/cli-data"));
     assert.strictEqual(startup.instanceId, "cli-id");
+  });
+
+  it("restores the persisted last workspace from the resolved data root", () => {
+    const fixture = makeStartupFixture("startup-persisted-workspace");
+    try {
+      writeStartupSettings(fixture.dataRoot, {
+        startup: { lastWorkspace: fixture.storedWorkspace },
+      });
+
+      const startup = resolveStartupPaths({
+        appRoot: fixture.appRoot,
+        argv: ["--data-root", fixture.dataRoot],
+        env: {},
+      });
+
+      assert.strictEqual(startup.workspace, canonicalWorkspacePath(fixture.storedWorkspace));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses CLI workspace before environment and persisted workspace", () => {
+    const fixture = makeStartupFixture("startup-cli-precedence");
+    try {
+      writeStartupSettings(fixture.dataRoot, {
+        startup: { lastWorkspace: fixture.storedWorkspace },
+      });
+
+      const startup = resolveStartupPaths({
+        appRoot: fixture.appRoot,
+        argv: ["--workspace", fixture.cliWorkspace, "--data-root", fixture.dataRoot],
+        env: { PI_WORKSPACE: fixture.envWorkspace },
+      });
+
+      assert.strictEqual(startup.workspace, canonicalWorkspacePath(fixture.cliWorkspace));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not read persisted settings when CLI workspace is explicit", () => {
+    const fixture = makeStartupFixture("startup-cli-skips-settings");
+    try {
+      mkdirSync(join(fixture.dataRoot, "user", "settings.json"), { recursive: true });
+
+      const startup = resolveStartupPaths({
+        appRoot: fixture.appRoot,
+        argv: ["--workspace", fixture.cliWorkspace, "--data-root", fixture.dataRoot],
+        env: {},
+      });
+
+      assert.strictEqual(startup.workspace, canonicalWorkspacePath(fixture.cliWorkspace));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses environment workspace before persisted workspace", () => {
+    const fixture = makeStartupFixture("startup-env-precedence");
+    try {
+      writeStartupSettings(fixture.dataRoot, {
+        startup: { lastWorkspace: fixture.storedWorkspace },
+      });
+
+      const startup = resolveStartupPaths({
+        appRoot: fixture.appRoot,
+        argv: [],
+        env: { PI_WORKSPACE: fixture.envWorkspace, PI_DATA_ROOT: fixture.dataRoot },
+      });
+
+      assert.strictEqual(startup.workspace, canonicalWorkspacePath(fixture.envWorkspace));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not read persisted settings when environment workspace is explicit", () => {
+    const fixture = makeStartupFixture("startup-env-skips-settings");
+    try {
+      mkdirSync(join(fixture.dataRoot, "user", "settings.json"), { recursive: true });
+
+      const startup = resolveStartupPaths({
+        appRoot: fixture.appRoot,
+        argv: [],
+        env: { PI_WORKSPACE: fixture.envWorkspace, PI_DATA_ROOT: fixture.dataRoot },
+      });
+
+      assert.strictEqual(startup.workspace, canonicalWorkspacePath(fixture.envWorkspace));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to app root when the persisted workspace was deleted", () => {
+    const fixture = makeStartupFixture("startup-deleted-persisted");
+    try {
+      writeStartupSettings(fixture.dataRoot, {
+        startup: { lastWorkspace: fixture.storedWorkspace },
+      });
+      rmSync(fixture.storedWorkspace, { recursive: true, force: true });
+
+      const startup = resolveStartupPaths({
+        appRoot: fixture.appRoot,
+        argv: ["--data-root", fixture.dataRoot],
+        env: {},
+      });
+
+      assert.strictEqual(startup.workspace, canonicalWorkspacePath(fixture.appRoot));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to app root when persisted settings are malformed", () => {
+    const fixture = makeStartupFixture("startup-malformed-settings");
+    try {
+      writeStartupSettings(fixture.dataRoot, "{not-json");
+
+      const startup = resolveStartupPaths({
+        appRoot: fixture.appRoot,
+        argv: ["--data-root", fixture.dataRoot],
+        env: {},
+      });
+
+      assert.strictEqual(startup.workspace, canonicalWorkspacePath(fixture.appRoot));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a relative persisted workspace", () => {
+    const fixture = makeStartupFixture("startup-relative-persisted");
+    try {
+      writeStartupSettings(fixture.dataRoot, {
+        startup: { lastWorkspace: "relative/workspace" },
+      });
+
+      const startup = resolveStartupPaths({
+        appRoot: fixture.appRoot,
+        argv: ["--data-root", fixture.dataRoot],
+        env: {},
+      });
+
+      assert.strictEqual(startup.workspace, canonicalWorkspacePath(fixture.appRoot));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
   });
 
   it("generates a valid per-launch instance id when none is supplied", () => {

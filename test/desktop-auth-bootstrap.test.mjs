@@ -56,28 +56,23 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
     const html = readFileSync(new URL("../src/frontend/dashboard.html", import.meta.url), "utf8");
     const startup = readFileSync(new URL("../src/frontend/dashboard/dashboard-startup.ts", import.meta.url), "utf8");
 
+    assert.match(html, /<html\s+lang=["']zh-CN["']\s+class=["']preferences-loading["']/);
+    assert.match(html, /html\.preferences-loading\s+body\s*\{/);
+    assert.doesNotMatch(html, /localStorage\.getItem\(['"]editor-theme['"]\)/);
     assert.match(html, /<script\s+src=["']\.\/gen\/dashboard\/dashboard-startup\.js["']><\/script>/);
     const layout = startup.indexOf("layout()");
-    const sync = startup.indexOf("syncStartupWorkspace()", layout);
+    const bootstrap = startup.indexOf("await bootstrapApi()");
+    const preferences = startup.indexOf("await hydratePreferencesForStartup()");
+    assert.ok(bootstrap >= 0, "canonical startup should bootstrap the API");
+    assert.ok(preferences > bootstrap, "canonical startup should hydrate preferences after bootstrap");
+    assert.ok(layout > preferences, "canonical startup should render after preference hydration");
     assert.ok(layout >= 0, "canonical startup should render the shell");
-    assert.ok(sync > layout, "canonical startup should recover the workspace after rendering");
-
-    assert.match(startup, /catch[\s\S]*App\.State\.resetWorkspace\(""\)/);
+    assert.match(startup, /Promise\.race\(\[/, "preference hydration should have a startup deadline");
+    assert.match(startup, /App\.Preferences\.hydrate\(\)/, "the bounded startup helper should hydrate preferences");
+    assert.doesNotMatch(startup, /syncStartupWorkspace|\/api\/workspace\/switch|resetWorkspace\(""\)/);
   });
 
-  it("syncs the persisted workspace once before protected panes load", async () => {
-    win.App.State.getWorkspacePath = () => "E:\\workspace";
-    const calls = [];
-    global.fetch = async (...args) => {
-      calls.push(args);
-      return { ok: true, status: 200, text: async () => "" };
-    };
-    win.fetch = global.fetch;
-
-    await dashboardHelpers.syncStartupWorkspace();
-
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0][0], "/api/workspace/switch");
-    assert.deepEqual(JSON.parse(calls[0][1].body), { workspace: "E:\\workspace" });
+  it("does not expose a startup workspace switch helper", () => {
+    assert.equal(dashboardHelpers.syncStartupWorkspace, undefined);
   });
 });

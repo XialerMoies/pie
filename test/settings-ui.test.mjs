@@ -143,7 +143,7 @@ describe("settings DOM boundary", () => {
 
   it("keeps hostile model ids as inert data and submits the exact selected model", async () => {
     const hostileModel = 'model" onclick="globalThis.__settingsInjected=true';
-    storage.set("providers_order", JSON.stringify(["openai"]));
+    win.App.Preferences.set("providers_order", JSON.stringify(["openai"]));
     let switchRequest = null;
     fetchImpl = async (url, init) => {
       if (String(url) === "/api/auth") {

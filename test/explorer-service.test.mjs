@@ -16,9 +16,11 @@ global.localStorage = {
   removeItem: (key) => { delete store[key]; },
 };
 let workspacePath = "";
+let preferenceReads = 0;
 const eventSubscriptions = new Map();
 const subscriptionRecords = [];
 let eventSourceConstructed = 0;
+let openFolderCalls = 0;
 const appEvents = {
   subscribe: (type, handler) => {
     let handlers = eventSubscriptions.get(type);
@@ -32,12 +34,16 @@ const appEvents = {
   stop: () => {},
 };
 global.App = {
+  File: {
+    fileAction: (action) => { if (action === "openFolder") openFolderCalls += 1; },
+  },
   State: {
     getWorkspacePath: () => workspacePath,
     setWorkspacePath: (path) => { workspacePath = path; },
   },
   Preferences: {
     getBoolean: (key, fallback = false) => {
+      preferenceReads += 1;
       const value = store[key];
       return value == null ? fallback : value === true || value === "true";
     },
@@ -73,6 +79,20 @@ describe("ExplorerService", () => {
     ExplorerService = mod.ExplorerService;
   });
 
+  it("defers explorer preference reads until the startup consumer applies hydration", () => {
+    assert.strictEqual(preferenceReads, 0);
+    store["explorer-filter"] = "0";
+    global.applyExplorerPreferences = global.window.applyExplorerPreferences;
+    assert.strictEqual(typeof global.applyExplorerPreferences, "function");
+
+    global.applyExplorerPreferences();
+
+    assert.strictEqual(preferenceReads, 1);
+    assert.strictEqual(ExplorerService.getFilterEnabled(), false);
+    delete store["explorer-filter"];
+    ExplorerService._filterEnabled = true;
+  });
+
   describe("getWorkspacePath / setWorkspacePath", () => {
     it("默认返回空字符串", () => {
       assert.strictEqual(ExplorerService.getWorkspacePath(), "");
@@ -82,6 +102,16 @@ describe("ExplorerService", () => {
       ExplorerService.setWorkspacePath("/test/path");
       assert.strictEqual(ExplorerService.getWorkspacePath(), "/test/path");
     });
+  });
+
+  it("delegates workspace selection to the authoritative File switch flow", async () => {
+    workspacePath = "/current-workspace";
+    openFolderCalls = 0;
+
+    await ExplorerService.applyWorkspace();
+
+    assert.strictEqual(openFolderCalls, 1);
+    assert.strictEqual(workspacePath, "/current-workspace");
   });
 
   describe("getFilterEnabled / setFilterEnabled", () => {

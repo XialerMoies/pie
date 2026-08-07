@@ -17,6 +17,9 @@ import {
   previewLegacySessions,
   migrateLegacySessions,
 } from "../src/server/routes/session-dir.ts";
+import { canonicalWorkspacePath, resolveDataLayout } from "../src/data/data-layout.ts";
+import { readUserSettings } from "../src/data/user-settings.ts";
+import { resolveStartupPaths } from "../src/server/startup-paths.ts";
 import {
   DESKTOP_IPC_INVOKE_CHANNELS,
   registerDesktopIpcHandlers,
@@ -59,21 +62,34 @@ function startServer({ workspace, dataRoot, instanceId, token }) {
     });
     let stdout = "";
     let stderr = "";
-    const timer = setTimeout(() => {
-      child.kill();
-      rejectServer(new Error(`server startup timed out\n${stdout}\n${stderr}`));
+    let settled = false;
+    let timer;
+    const settle = (callback) => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(timer);
+      callback();
+      return true;
+    };
+    const rejectStartup = (error, kill = true) => {
+      if (!settle(() => rejectServer(error))) return;
+      if (kill && child.exitCode === null) child.kill();
+    };
+    timer = setTimeout(() => {
+      rejectStartup(new Error(`server startup timed out\n${stdout}\n${stderr}`));
     }, 30_000);
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
       const match = stdout.match(/SERVER_PORT:(\d+)/);
       if (!match) return;
-      clearTimeout(timer);
-      resolveServer({ child, port: Number(match[1]), token });
+      settle(() => resolveServer({ child, port: Number(match[1]), token }));
     });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      rejectServer(error);
+    child.once("error", (error) => rejectStartup(error));
+    child.once("exit", (code, signal) => {
+      if (!settled) {
+        rejectStartup(new Error(`server exited before ready (${code ?? "unknown"}, ${signal ?? "unknown"})\n${stdout}\n${stderr}`), false);
+      }
     });
   });
 }
@@ -87,6 +103,15 @@ async function stopServer(server) {
     new Promise((resolveWait) => setTimeout(resolveWait, 5_000)),
   ]);
   if (server.child.exitCode === null) server.child.kill();
+}
+
+async function waitFor(predicate, message, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+  }
+  assert.fail(message);
 }
 
 describe("multi-instance launch and migration UX", () => {
@@ -184,10 +209,15 @@ describe("multi-instance launch and migration UX", () => {
     let first;
     let second;
     try {
-      [first, second] = await Promise.all([
+      const starts = await Promise.allSettled([
         startServer({ workspace: f.workspace, dataRoot: f.dataRoot, instanceId: "launch-a", token: "launch-token-a" }),
         startServer({ workspace: workspaceB, dataRoot: f.dataRoot, instanceId: "launch-b", token: "launch-token-b" }),
       ]);
+      first = starts[0].status === "fulfilled" ? starts[0].value : undefined;
+      second = starts[1].status === "fulfilled" ? starts[1].value : undefined;
+      for (const result of starts) {
+        if (result.status === "rejected") throw result.reason;
+      }
       assert.notStrictEqual(first.port, second.port);
       const [firstResponse, secondResponse] = await Promise.all([
         fetch(`http://127.0.0.1:${first.port}/api/bootstrap`, { headers: { "X-My-Code-Agent-Token": first.token } }),
@@ -215,6 +245,54 @@ describe("multi-instance launch and migration UX", () => {
       assert.notStrictEqual(restartedBody.startup.instanceRoot, firstBody.startup.instanceRoot);
     } finally {
       await Promise.all([stopServer(first), stopServer(second)]);
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("records a successful real startup workspace without replacing it for an empty window", async () => {
+    const f = fixture("startup-workspace-history");
+    const realInstanceId = "history-real";
+    const emptyInstanceId = "history-empty";
+    const settingsFile = resolveDataLayout({
+      dataRoot: f.dataRoot,
+      workspace: f.workspace,
+      instanceId: realInstanceId,
+    }).settingsFile;
+    const emptyWorkspace = resolve(f.dataRoot, "instances", emptyInstanceId, "empty-workspace");
+    mkdirSync(emptyWorkspace, { recursive: true });
+    let running;
+    try {
+      running = await startServer({
+        workspace: f.workspace,
+        dataRoot: f.dataRoot,
+        instanceId: realInstanceId,
+        token: "history-real-token",
+      });
+      await waitFor(
+        () => readUserSettings(settingsFile).startup?.lastWorkspace === canonicalWorkspacePath(f.workspace),
+        "successful startup workspace was not recorded",
+      );
+      await stopServer(running);
+      const restarted = resolveStartupPaths({
+        appRoot: f.root,
+        argv: ["--data-root", f.dataRoot, "--instance-id", "restart-new"],
+        env: {},
+      });
+      assert.strictEqual(restarted.workspace, canonicalWorkspacePath(f.workspace));
+
+      running = await startServer({
+        workspace: emptyWorkspace,
+        dataRoot: f.dataRoot,
+        instanceId: emptyInstanceId,
+        token: "history-empty-token",
+      });
+      await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+      assert.deepStrictEqual(readUserSettings(settingsFile).startup, {
+        lastWorkspace: canonicalWorkspacePath(f.workspace),
+        recentWorkspaces: [canonicalWorkspacePath(f.workspace)],
+      });
+    } finally {
+      await stopServer(running);
       rmSync(f.root, { recursive: true, force: true });
     }
   });

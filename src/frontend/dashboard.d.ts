@@ -1,4 +1,18 @@
 // 共享类型声明 — 被所有 dashboard-*.ts 引用
+interface AppPreferences {
+  get(key: string, fallback?: string): string;
+  set(key: string, value: string): void;
+  remove(key: string): void;
+  getBoolean(key: string, fallback?: boolean): boolean;
+  setBoolean(key: string, value: boolean): void;
+  getNumber(key: string, fallback: number, min?: number, max?: number): number;
+  getJson<T>(key: string, fallback: T): T;
+  setJson<T>(key: string, value: T): void;
+  hydrate(): Promise<void>;
+  onHydrated(listener: () => void): () => void;
+  isHydrated(): boolean;
+  flush(): Promise<boolean>;
+}
 
 interface DashboardData {
   modelProvider: string;
@@ -116,7 +130,6 @@ interface AppUI {
   winCtrl(action: string): void;
   toast(msg: string, type?: 'info' | 'error' | 'success'): void;
   bootstrapApi(): Promise<void>;
-  syncStartupWorkspace(): Promise<void>;
   getD(): Promise<void>;
   refresh(): Promise<void>;
   layout(): void;
@@ -465,7 +478,7 @@ declare function F(s: number): string;
 declare function sb(id: string): void;
 declare function toast(msg: string, type?: 'info' | 'error' | 'success'): void;
 declare function bootstrapApi(): Promise<void>;
-declare function syncStartupWorkspace(): Promise<void>;
+declare function applyExplorerPreferences(): void;
 declare function getD(): Promise<void>;
 declare function refresh(): Promise<void>;
 declare function winCtrl(action: string): void;
