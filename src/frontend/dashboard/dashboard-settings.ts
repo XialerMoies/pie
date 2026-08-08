@@ -255,11 +255,11 @@ function switchSettingsModal(tab: string): void {
             </div>
           </div>
           <div class="gs-row">
-            <span class="gs-label">平滑滚动</span>
+            <span class="gs-label">回到最新位置效果</span>
             <div class="gs-control">
               <select class="gs-select" id="gs-jump-smooth">
-                <option value="true"${jumpSmooth ? ' selected' : ''}>平滑</option>
-                <option value="false"${jumpSmooth ? '' : ' selected'}>立即</option>
+                <option value="true"${jumpSmooth ? ' selected' : ''}>平滑滚动</option>
+                <option value="false"${jumpSmooth ? '' : ' selected'}>立即到达</option>
               </select>
             </div>
           </div>
