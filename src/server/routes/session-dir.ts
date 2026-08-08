@@ -34,7 +34,6 @@ export interface WorkspaceDataPaths {
   metadataFile: string;
   legacySessionsRoot: string;
   legacyUiStateFiles: string[];
-  legacyUsageIndexFile: string;
 }
 
 export interface LegacySessionMigrationResult {
@@ -87,7 +86,6 @@ export function workspaceDataPaths(dataRoot: string, workspace: string): Workspa
       resolve(layout.userRoot, "ui-state.json"),
       resolve(legacyPiRoot, "ui-state.json"),
     ],
-    legacyUsageIndexFile: resolve(legacyPiRoot, "usage-index.json"),
   };
 }
 

@@ -320,33 +320,6 @@ function makeConvSnippet(text: string, match: { start: number; end: number }): {
   };
 }
 
-export function searchConversations(
-  q: string,
-  sessionsDir: string,
-  cs: boolean,
-  maxSessions = 50,
-  maxMatchesPerSession = 20,
-): ConvResponse {
-  const byProjectDir = resolve(sessionsDir, "by-project");
-  if (!existsSync(byProjectDir)) return { results: [], total: 0, truncated: false };
-
-  const files: string[] = [];
-  try {
-    const projects = readdirSync(byProjectDir);
-    for (const project of projects) {
-      const projectDir = resolve(byProjectDir, project);
-      try {
-        const entries = readdirSync(projectDir);
-        for (const entry of entries) {
-          if (entry.endsWith(".jsonl")) files.push(resolve(projectDir, entry));
-        }
-      } catch {}
-    }
-  } catch {}
-
-  return searchConversationFiles(q, sessionsDir, files, cs, maxSessions, maxMatchesPerSession);
-}
-
 export function searchConversationFiles(
   q: string,
   sessionsDir: string,

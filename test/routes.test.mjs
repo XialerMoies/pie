@@ -16,6 +16,22 @@ import { tmpdir } from "node:os";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
+describe("route implementation cleanup", () => {
+  it("does not retain superseded route helpers", () => {
+    const sessions = readFileSync(resolve(ROOT, "src/server/routes/sessions.ts"), "utf8");
+    const searchCore = readFileSync(resolve(ROOT, "src/server/routes/search-core.ts"), "utf8");
+    const gitCore = readFileSync(resolve(ROOT, "src/server/routes/git-core.ts"), "utf8");
+    const sessionDir = readFileSync(resolve(ROOT, "src/server/routes/session-dir.ts"), "utf8");
+
+    assert.doesNotMatch(sessions, /export function findAllJsonl\(/);
+    assert.doesNotMatch(sessions, /export function findSessionFileById\(/);
+    assert.doesNotMatch(searchCore, /export function searchConversations\(/);
+    assert.doesNotMatch(gitCore, /export function parseLogVerbose\(/);
+    assert.doesNotMatch(gitCore, /export (?:const STATUS_LABELS|function statusLabel)\b/);
+    assert.doesNotMatch(sessionDir, /legacyUsageIndexFile:\s*(?:string|resolve\()/);
+  });
+});
+
 // ─── Mock 工厂 ─────────────────────────────────────────────
 
 function mockModel(overrides) {

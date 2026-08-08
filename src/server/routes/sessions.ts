@@ -103,16 +103,6 @@ function fixSurrogates(s: string): string {
   return s.replace(/[\uD800-\uDBFF]([^\uDC00-\uDFFF]|$)/g, "").replace(/(^|[^\uD800-\uDBFF])([\uDC00-\uDFFF])/g, "");
 }
 
-export function findAllJsonl(dir: string): string[] {
-  const entries = readdirSync(dir, { withFileTypes: true });
-  const files: string[] = [];
-  for (const e of entries) {
-    if (e.isDirectory()) files.push(...findAllJsonl(resolve(dir, e.name)));
-    else if (e.name.endsWith(".jsonl")) files.push(resolve(dir, e.name));
-  }
-  return files;
-}
-
 async function findAuthorizedJsonl(ctx: ServerContext, dir: string, source: string): Promise<string[]> {
   if (!existsSync(dir)) return [];
   const authorizedDir = await authorizeSessionPath(ctx, dir, "read", `${source}.dir`);
@@ -127,30 +117,6 @@ async function findAuthorizedJsonl(ctx: ServerContext, dir: string, source: stri
     }
   }
   return files;
-}
-
-export function findSessionFileById(baseDir: string, id: string): string | null {
-  // Search all session files by reading header ID
-  const searchDirs = [baseDir, resolve(baseDir, "by-project")];
-  for (const dir of searchDirs) {
-    if (!existsSync(dir)) continue;
-    const entries = readdirSync(dir, { withFileTypes: true });
-    for (const e of entries) {
-      if (e.isDirectory()) {
-        // Recurse into subdirectories
-        const found = findSessionFileById(resolve(dir, e.name), id);
-        if (found) return found;
-      } else if (e.name.endsWith(".jsonl")) {
-        const fp = resolve(dir, e.name);
-        try {
-          const headerLine = readFileSync(fp, "utf-8").trim().split("\n")[0];
-          const header = JSON.parse(headerLine);
-          if (header.id === id || e.name.includes(id)) return fp;
-        } catch {}
-      }
-    }
-  }
-  return null;
 }
 
 export async function findAuthorizedSessionFileById(ctx: ServerContext, id: string, source: string): Promise<string | null> {
