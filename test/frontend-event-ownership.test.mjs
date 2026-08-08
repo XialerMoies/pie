@@ -118,6 +118,20 @@ describe("application event stream ownership", () => {
     assert.match(pkg.scripts["test:unit"], /test\/app-events-server\.test\.mjs/);
     assert.match(pkg.scripts["test:frontend"], /test\/app-events-frontend\.test\.mjs/);
   });
+
+  it("keeps route tests complete with bounded parallelism", () => {
+    const pkg = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf8"));
+    const commands = pkg.scripts["test:routes"].split(/\s+&&\s+/);
+
+    assert.strictEqual(commands.length, 2);
+    assert.match(commands[0], /--test-concurrency=4/);
+    assert.match(commands[0], /test\/multi-instance-e2e\.mjs/);
+    assert.doesNotMatch(commands[0], /test\/workspace-lock\.test\.mjs/);
+    assert.strictEqual(
+      commands[1],
+      "node scripts/tsx-test.mjs --test --test-concurrency=1 test/workspace-lock.test.mjs",
+    );
+  });
 });
 
 describe("dashboard DOM event ownership", () => {
