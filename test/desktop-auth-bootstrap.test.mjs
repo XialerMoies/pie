@@ -23,6 +23,7 @@ function setup(win = new Window()) {
 const desktopWindow = setup();
 const dashboardApp = desktopWindow.App;
 const dashboardHelpers = await import("../src/frontend/dashboard/dashboard-helpers.ts?desktop-auth-suite");
+const dashboardHelpersRetry = await import("../src/frontend/dashboard/dashboard-helpers.ts?desktop-auth-retry-suite");
 
 describe("desktop API bootstrap", { concurrency: false }, () => {
   const win = desktopWindow;
@@ -90,7 +91,43 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
     assert.doesNotMatch(startup, /syncStartupWorkspace|\/api\/workspace\/switch|resetWorkspace\(""\)/);
   });
 
+  it("spawns the development server before synchronous compilation and starts Electron before server readiness", () => {
+    const devScript = readFileSync(new URL("../scripts/dev.mjs", import.meta.url), "utf8");
+    const startServer = devScript.indexOf("const serverReady = startServer(markServerSpawned)");
+    const awaitSpawn = devScript.indexOf("await Promise.race([serverSpawned, serverReady])", startServer);
+    const buildElectron = devScript.indexOf("buildElectron()", awaitSpawn);
+    const startElectron = devScript.indexOf("startElectron()", startServer);
+    const awaitServer = devScript.indexOf("await serverReady", startElectron);
+
+    assert.ok(startServer >= 0, "development startup should retain the server readiness promise");
+    assert.ok(awaitSpawn > startServer, "development startup should wait until the server child is spawned");
+    assert.ok(buildElectron > awaitSpawn, "the server child should run while synchronous compilation blocks the launcher");
+    assert.ok(startElectron > startServer, "Electron should start after the server process is spawned");
+    assert.ok(awaitServer > startElectron, "server readiness should be awaited after Electron starts");
+  });
+
   it("does not expose a startup workspace switch helper", () => {
     assert.equal(dashboardHelpers.syncStartupWorkspace, undefined);
+  });
+
+  it("retries transient bootstrap failures while the server is starting", async () => {
+    const calls = [];
+    const workspace = "C:\\Users\\ASUS\\Desktop\\project-007";
+    dashboardApp.State.getWorkspacePath = () => "";
+    dashboardApp.State.setWorkspacePath = (value) => calls.push({ type: "workspace", value });
+    win.electronAPI = { getDesktopSessionToken: async () => "desktop-token" };
+    global.fetch = async (...args) => {
+      calls.push({ type: "fetch", args });
+      if (calls.filter((entry) => entry.type === "fetch").length === 1) {
+        return { ok: false, status: 503, text: async () => "server starting" };
+      }
+      return { ok: true, json: async () => ({ startup: { workspace } }) };
+    };
+    win.fetch = global.fetch;
+
+    await dashboardHelpersRetry.bootstrapApi();
+
+    assert.equal(calls.filter((entry) => entry.type === "fetch").length, 2);
+    assert.deepEqual(calls.at(-1), { type: "workspace", value: workspace });
   });
 });

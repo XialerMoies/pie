@@ -105,7 +105,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     win.App.Session.getTabLabel = (id) => win.__state._sessionTabLabels[id] || "新会话";
   });
 
-  it("getD bootstraps before dashboard fetch and retries a failed bootstrap", async () => {
+  it("getD waits for a transient bootstrap failure before fetching dashboard", async () => {
     const calls = [];
     const previousFetch = globalThis.fetch;
     const previousWindowFetch = win.fetch;
@@ -138,9 +138,6 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
       win.App.Chat.updateModelName = () => {};
 
       await win.getD();
-      assert.strictEqual(win.App.ChatState.getDashboard(), null);
-
-      await win.getD();
 
       assert.strictEqual(calls[0][0], "/api/bootstrap");
       assert.strictEqual(calls[0][1].credentials, "include");
@@ -151,6 +148,10 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
       assert.strictEqual(calls[2][0], "/api/dashboard");
       assert.strictEqual(calls[2][1].credentials, "include");
       assert.strictEqual(win.App.ChatState.getDashboard().modelId, "bootstrapped-model");
+
+      await win.getD();
+      assert.strictEqual(calls[3][0], "/api/dashboard");
+      assert.strictEqual(calls.length, 4, "successful bootstrap should remain cached");
     } finally {
       globalThis.fetch = previousFetch;
       global.fetch = previousFetch;

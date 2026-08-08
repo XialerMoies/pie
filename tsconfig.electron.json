@@ -6,6 +6,8 @@
     "strict": true,
     "esModuleInterop": true,
     "outDir": "dist-electron",
+    "incremental": true,
+    "tsBuildInfoFile": "dist-electron/.tsconfig.electron.tsbuildinfo",
     "rootDir": "src",
     "declaration": false,
     "sourceMap": false,

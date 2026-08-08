@@ -215,6 +215,32 @@ function toast(msg: string, type?: 'info' | 'error' | 'success'): void {
 let _bootstrapPromise: Promise<void> | null = null;
 let _dashboardRefreshInFlight: Promise<void> | null = null;
 let _dashboardRefreshQueued = false;
+const BOOTSTRAP_RETRY_DELAYS_MS = [100, 200, 400, 800, 1200, 2000, 3000, 4000, 5000, 6000, 6000];
+
+async function fetchBootstrap(token: string): Promise<Response> {
+  for (let attempt = 0; ; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch('/api/bootstrap', {
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { 'X-My-Code-Agent-Token': token },
+      });
+    } catch (error) {
+      if (attempt >= BOOTSTRAP_RETRY_DELAYS_MS.length) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, BOOTSTRAP_RETRY_DELAYS_MS[attempt]));
+      continue;
+    }
+
+    if (response.ok) return response;
+
+    const body = await response.text().catch(() => '');
+    const error = new Error(`Desktop API bootstrap failed: ${response.status}${body ? ` ${body}` : ''}`);
+    if (response.status < 500 || attempt >= BOOTSTRAP_RETRY_DELAYS_MS.length) throw error;
+
+    await new Promise<void>((resolve) => setTimeout(resolve, BOOTSTRAP_RETRY_DELAYS_MS[attempt]));
+  }
+}
 
 export function bootstrapApi(): Promise<void> {
   if (!_bootstrapPromise) {
@@ -223,15 +249,7 @@ export function bootstrapApi(): Promise<void> {
       if (!api?.getDesktopSessionToken) throw new Error('Electron preload API is unavailable');
       const token = await api.getDesktopSessionToken();
       if (!token) throw new Error('Desktop session token is unavailable');
-      const response = await fetch('/api/bootstrap', {
-        credentials: 'include',
-        cache: 'no-store',
-        headers: { 'X-My-Code-Agent-Token': token },
-      });
-      if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        throw new Error(`Desktop API bootstrap failed: ${response.status}${body ? ` ${body}` : ''}`);
-      }
+      const response = await fetchBootstrap(token);
       const body = await response.json().catch(() => null) as {
         startup?: { workspace?: unknown };
       } | null;

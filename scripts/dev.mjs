@@ -49,6 +49,14 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForPortReady(port, attempts = 50) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (await isPortInUse(port)) return true;
+    await delay(100);
+  }
+  throw new Error(`Timed out waiting for port ${port}`);
+}
+
 function killPortProcess(port) {
   try {
     const out = execSync(`netstat -ano | findstr "LISTENING" | findstr ":${port} "`, { encoding: "utf8", stdio: "pipe" });
@@ -119,15 +127,16 @@ async function startVite() {
     viteProcess = null;
     if (code !== 0) console.log(`Vite exited with code ${code}`);
   });
+  await waitForPortReady(VITE_PORT);
 }
 
-function startServer() {
+function startServer(onSpawn = () => {}) {
   if (serverStartPromise) return serverStartPromise;
-  serverStartPromise = startServerInner().finally(() => { serverStartPromise = null; });
+  serverStartPromise = startServerInner(onSpawn).finally(() => { serverStartPromise = null; });
   return serverStartPromise;
 }
 
-async function startServerInner() {
+async function startServerInner(onSpawn = () => {}) {
   if (serverProcess) {
     stopServer();
     await waitForPortFree(DEV_PORT);
@@ -154,6 +163,7 @@ async function startServerInner() {
         MY_CODE_AGENT_ALLOWED_ORIGINS: DEV_APP_ORIGIN,
       },
     });
+    onSpawn();
     let resolved = false;
     serverProcess.stdout?.on("data", (chunk) => {
       process.stdout.write(chunk); // 转发输出到控制台
@@ -168,7 +178,7 @@ async function startServerInner() {
       serverProcess = null;
       if (code !== 0 && !resolved) {
         console.log(`pi-server exited with code ${code} — restarting in 1s...`);
-        setTimeout(() => resolve(startServerInner()), 1000);
+        setTimeout(() => resolve(startServerInner(onSpawn)), 1000);
       }
     });
     serverProcess.on("error", reject);
@@ -276,6 +286,14 @@ async function main() {
   logStartupStage("process-start");
   cleanupOldProcesses();
 
+  // Start the server child before synchronous compilation so both can run in parallel.
+  const serverStartedAt = Date.now();
+  let markServerSpawned;
+  const serverSpawned = new Promise((resolve) => { markServerSpawned = resolve; });
+  const serverReady = startServer(markServerSpawned);
+  await Promise.race([serverSpawned, serverReady]);
+  logStartupStage("server-spawned", serverStartedAt);
+
   // 1. 编译 Electron
   const electronCompileStartedAt = Date.now();
   buildElectron();
@@ -300,14 +318,12 @@ async function main() {
   await startVite();
   logStartupStage("vite-ready", viteStartedAt);
 
-  // 5. 启动 pi-server（等待实际就绪）
-  const serverStartedAt = Date.now();
-  await startServer();
-  logStartupStage("server-ready", serverStartedAt);
-
-  // 6. 启动 Electron
+  // 5. The server has been initializing during compilation; show Electron now.
   startElectron();
   logStartupStage("electron-spawned");
+
+  await serverReady;
+  logStartupStage("server-ready", serverStartedAt);
 
   // 7. 文件监听
   setupWatcher();
