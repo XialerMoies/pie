@@ -40,10 +40,6 @@ let _items: AppTab[] = [];
 let _activeId: string | null = null;
 const tabStoreApp = (window as any).App || ((window as any).App = {});
 
-function _ensureInit(): void {
-  // State restoration is explicit through restoreTabs().
-}
-
 // ─── 辅助 ─────────────────────────────────────────────
 
 function _syncToState(): void {
@@ -53,23 +49,19 @@ function _syncToState(): void {
 // ─── 公开 API ─────────────────────────────────────────
 
 export function getState(): TabsState {
-  _ensureInit();
   return { items: [..._items], activeId: _activeId };
 }
 
 export function getTabs(): AppTab[] {
-  _ensureInit();
   return [..._items];
 }
 
 export function getActiveTab(): AppTab | null {
-  _ensureInit();
   if (!_activeId) return null;
   return _items.find(t => t.id === _activeId) ?? null;
 }
 
 export function getTab(id: string): AppTab | undefined {
-  _ensureInit();
   return _items.find(t => t.id === id);
 }
 
@@ -81,7 +73,6 @@ export function restoreTabs(items: AppTab[], activeId: string | null): void {
 
 /** 追加新标签到末尾 */
 export function openTab(tab: Omit<AppTab, 'order'>): AppTab {
-  _ensureInit();
   const full: AppTab = { ...tab, order: _items.length };
   _items.push(full);
   _syncToState();
@@ -90,7 +81,6 @@ export function openTab(tab: Omit<AppTab, 'order'>): AppTab {
 
 /** 设置 activeId，null = 空主区 */
 export function activateTab(id: string | null): void {
-  _ensureInit();
   if (id !== null && !_items.find(t => t.id === id)) return; // id 不在列表中则忽略
   _activeId = id;
   _syncToState();
@@ -98,7 +88,6 @@ export function activateTab(id: string | null): void {
 
 /** 关闭标签：移除并返回，自动切换 activeId */
 export function closeTab(id: string): AppTab | undefined {
-  _ensureInit();
   const idx = _items.findIndex(t => t.id === id);
   if (idx < 0) return undefined;
   const removed = _items.splice(idx, 1)[0];
@@ -117,7 +106,6 @@ export function closeTab(id: string): AppTab | undefined {
 
 /** 局部更新标签（chat→session 升级用） */
 export function replaceTab(id: string, updates: Partial<AppTab>): AppTab | undefined {
-  _ensureInit();
   const idx = _items.findIndex(t => t.id === id);
   if (idx < 0) return undefined;
   _items[idx] = { ..._items[idx], ...updates, order: idx };
@@ -129,7 +117,6 @@ export function replaceTab(id: string, updates: Partial<AppTab>): AppTab | undef
 
 /** 拖拽重排 */
 export function moveTab(from: number, to: number): void {
-  _ensureInit();
   if (from < 0 || from >= _items.length || to < 0 || to >= _items.length) return;
   const moved = _items.splice(from, 1)[0];
   _items.splice(to, 0, moved);
@@ -155,19 +142,16 @@ function _getNextActiveId(closedIdx: number): string | null {
 
 /** TabStore 在旧 _sessionTabs 中的投影（adapter 用） */
 export function getSessionTabIds(): string[] {
-  _ensureInit();
   return _items.filter(t => t.kind === 'session' || t.kind === 'chat').map(t => t.id);
 }
 
 /** TabStore 在旧 _fileTabs 中的投影（adapter 用） */
 export function getFileTabIds(): string[] {
-  _ensureInit();
   return _items.filter(t => t.kind === 'file').map(t => t.id);
 }
 
 /** TabStore activeId 映射到旧 getActiveSessionTabId 语义 */
 export function getActiveSessionTabId(): string | null {
-  _ensureInit();
   const tab = _items.find(t => t.id === _activeId);
   if (tab && (tab.kind === 'session' || tab.kind === 'chat')) return tab.id;
   return null;
@@ -175,7 +159,6 @@ export function getActiveSessionTabId(): string | null {
 
 /** TabStore activeId 映射到旧 _activeFileTab 语义 */
 export function getActiveFileTabId(): string | null {
-  _ensureInit();
   const tab = _items.find(t => t.id === _activeId);
   if (tab && tab.kind === 'file') return tab.id;
   return null;

@@ -29,6 +29,7 @@ describe("route implementation cleanup", () => {
     assert.doesNotMatch(gitCore, /export function parseLogVerbose\(/);
     assert.doesNotMatch(gitCore, /export (?:const STATUS_LABELS|function statusLabel)\b/);
     assert.doesNotMatch(sessionDir, /legacyUsageIndexFile:\s*(?:string|resolve\()/);
+    assert.strictEqual(existsSync(resolve(ROOT, "src/server/session-workspace.ts")), false);
   });
 });
 

@@ -88,7 +88,6 @@ function applySessionMessages(
 ): void {
   sessionActivationApp.Chat?.resetMsgKeys?.();
   sessionActivationApp.ChatState.replaceMessages(mapMessages(data.messages || []));
-  (window as any).focusChatView?.();
   renderMessages(options);
   sessionActivationApp.ChatTimeline?.sync();
 

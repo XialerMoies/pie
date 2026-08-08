@@ -1,7 +1,7 @@
 /**
  * Session workspace 链路测试
  *
- * 测试 chat route 的 workspace 记录 + session 文件迁移逻辑。
+ * 测试 chat route 的 workspace 切换逻辑。
  *
  * 运行：npx tsx --test test/workspace-session.test.mjs
  */
@@ -9,8 +9,6 @@ import { describe, it, before } from "node:test";
 import assert from "node:assert";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { makeReq, makeRes } from "./helpers/http.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -69,27 +67,5 @@ describe("chat route workspace", () => {
     await handleChat(req, res, ctx);
     await new Promise(r => setTimeout(r, 30));
     assert.strictEqual(reloadCalled, false, "同路径不应 reload");
-  });
-
-});
-
-describe("tagSessionWorkspace（已废弃，不再移动文件）", () => {
-  let tagSessionWorkspace;
-  let tmpDir;
-
-  before(async () => {
-    const ts = Date.now();
-    tagSessionWorkspace = (await import(`../src/server/session-workspace.ts?t=${ts}`)).tagSessionWorkspace;
-    tmpDir = mkdtempSync(resolve(tmpdir(), "ws-tag-"));
-  });
-
-  it("不存在的 sessionId 不报错", async () => {
-    await tagSessionWorkspace("id-does-not-exist-999", tmpDir, "/ws");
-    assert.ok(true);
-  });
-
-  it("undefined sessionId 不报错", async () => {
-    await tagSessionWorkspace(undefined, tmpDir, "/ws");
-    assert.ok(true);
   });
 });

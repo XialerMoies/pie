@@ -392,7 +392,7 @@ describe("session ui state", () => {
     assert.strictEqual(localStorage.getItem("last-session-id"), null);
     assert.ok(win.__state._sessionTabs.some(id => id.startsWith("draft:")));
     assert.ok(!fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/new") && method === "POST"));
-    // _activeFileTab 投影自 TabStore；验证 TabStore 已清 file active（newSession → focusChatView 调用 activateTab(null)）
+    // _activeFileTab 投影自 TabStore；草稿会话激活后 file active 应被清空。
     assert.strictEqual(win.__tabs?.getActiveFileTabId?.() ?? null, null);
     assert.notStrictEqual(doc.querySelector("#ms")?.style.display, "none");
     assert.strictEqual(doc.querySelector("#file-content")?.style.display, "none");

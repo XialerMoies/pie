@@ -304,11 +304,6 @@ async function maybeAutoTitleSession(id: string, assistantText?: string): Promis
   return title;
 }
 
-/** @deprecated _syncMainArea 已接管主区切换，不再影响 activeId */
-function focusChatView(): void {
-  // no-op: _syncMainArea 根据 TabStore.activeId 自动切换主区显示
-}
-
 /** UiStateStore 保存快捷通道——通过 store 的 saveNow 写服务端 */
 (window as any)._uiStateSave = function _uiStateSave(): void {
   const activeView = App.State.getSnapshot().activeView;
@@ -327,7 +322,6 @@ function _setupDraftSession(id: string): void {
   App.ChatState.setBusy(false);
   App.Chat?.clearAttachments?.();
   App.ChatStream.close();
-  focusChatView();
   const ci = $('ci') as HTMLTextAreaElement | null;
   if (ci) { ci.value = ''; App.Chat?.resizeComposerInput?.(ci); }
   const msgsEl = $('ms');
@@ -791,7 +785,6 @@ function branchSession(id: string): void {
     App.ChatState.setBusy(false);
     App.Chat?.resetMsgKeys?.();
     App.ChatState.replaceMessages((data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', streaming: false, _compacted: (m as any)._compacted || false, turnId: (m as any).turnId || undefined, blocks: (m as any).blocks || undefined })));
-    focusChatView();
     const activeId = data.activeSessionId || data.id || '';
     if (activeId) {
       

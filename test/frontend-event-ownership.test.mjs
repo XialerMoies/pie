@@ -71,6 +71,18 @@ describe("dashboard bundle global ownership", () => {
   });
 });
 
+describe("obsolete frontend compatibility hooks", () => {
+  it("does not retain no-op focus or initialization hooks", () => {
+    const sessions = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-sessions.ts"), "utf8");
+    const activation = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/session-activation.ts"), "utf8");
+    const tabStore = readFileSync(resolve(process.cwd(), "src/frontend/services/tab-store.ts"), "utf8");
+
+    assert.doesNotMatch(sessions, /\bfocusChatView\b/);
+    assert.doesNotMatch(activation, /\bfocusChatView\b/);
+    assert.doesNotMatch(tabStore, /\b_ensureInit\b/);
+  });
+});
+
 describe("application event stream ownership", () => {
   it("has exactly one /api/events EventSource owner", () => {
     const root = resolve(process.cwd(), "src/frontend");

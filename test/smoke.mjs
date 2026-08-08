@@ -127,8 +127,7 @@ console.log("\n🛣️  后端路由文件检查");
 for (const f of ["index.ts","types.ts","chat.ts","dashboard.ts","sessions.ts","explorer.ts","settings.ts","search.ts","search-core.ts","git.ts","git-core.ts","typescript.ts", "attach.ts", "parse-body.ts"]) {
   check(existsSync(resolve(ROOT, "src", "server", "routes", f)), `routes/${f}`);
 }
-// session-workspace.ts 在 server/ 根目录
-check(existsSync(resolve(ROOT, "src", "server", "session-workspace.ts")), "server/session-workspace.ts");
+check(!existsSync(resolve(ROOT, "src", "server", "session-workspace.ts")), "deprecated server/session-workspace.ts is absent");
 
 // ════════════════════════════════════════════════════════════════
 //  脚本加载链检查（开发模式）
