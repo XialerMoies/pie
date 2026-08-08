@@ -221,7 +221,7 @@ interface AppFile {
   openSearchResult(filePath: string, line?: number): Promise<void>;
 }
 interface AppSession {
-  loadSessions(): void;
+  loadSessions(): Promise<void>;
   bumpSessionListSeq(): number;
   isCurrentSessionListSeq(seq: number): boolean;
   newSession(): void;
@@ -263,7 +263,7 @@ interface AppSessionRestore {
 }
 interface SessionActivationCallbacks {
   rememberSessionTab(id: string): void;
-  loadSessions(): void;
+  loadSessions(): Promise<void> | void;
   setupDraftSession(id: string): void;
 }
 interface AppSessionActivation {

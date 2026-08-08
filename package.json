@@ -8,7 +8,7 @@
   "main": "dist-electron/electron/electron-main.js",
   "scripts": {
     "start": "node scripts/dev.mjs",
-    "dev": "node scripts/compile-frontend-ts.mjs && node scripts/dev.mjs",
+    "dev": "node scripts/dev.mjs",
     "compile:frontend-ts": "node scripts/compile-frontend-ts.mjs",
     "cli": "tsx src/server/main.ts --cli",
     "build:vite": "node scripts/build-frontend.mjs",

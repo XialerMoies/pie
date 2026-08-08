@@ -108,6 +108,15 @@ describe("file tab render before Monaco", { concurrency: false }, () => {
       "renderTabs 必须位于 await loadMonaco() 之前（标签栏渲染不依赖 Monaco）");
   });
 
+  it("源码断言：Monaco 加载期间先显示文件纯文本预览", () => {
+    const src = readFileSync(new URL("../src/frontend/dashboard/layout-tabs.ts", import.meta.url), "utf8");
+    const activateStart = src.indexOf("async function _fileActivate");
+    const fallback = src.indexOf("renderFileTextFallback", activateStart);
+    const monacoAwait = src.indexOf("await loadMonaco()", activateStart);
+    assert.ok(fallback >= 0 && fallback < monacoAwait,
+      "文件预览必须在等待 Monaco 之前渲染");
+  });
+
   it("openFileTab 同步渲染标签栏 + 切换到文件内容区（Monaco mock 下 DOM 集成）", () => {
     win.openFileTab("/x.ts", "hello", "ts");
     const el = win.document.getElementById("main-tabs");

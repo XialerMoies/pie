@@ -23,6 +23,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const ELECTRON_SRC = path.resolve(ROOT, "src");
 const PID_FILE = path.resolve(ROOT, "data", "pi", ".dev.pid");
+const devStartupStartedAt = Date.now();
+
+function logStartupStage(stage, startedAt = devStartupStartedAt) {
+  const now = Date.now();
+  console.log(`[startup] dev-${stage} wall=${now} elapsed=${now - devStartupStartedAt}ms duration=${now - startedAt}ms`);
+}
 
 const DEV_PORT = 3099;
 const VITE_PORT = 5173;
@@ -267,16 +273,21 @@ function setupWatcher() {
 
 // ─── 入口 ─────────────────────────────────────────────────────
 async function main() {
+  logStartupStage("process-start");
   cleanupOldProcesses();
 
   // 1. 编译 Electron
+  const electronCompileStartedAt = Date.now();
   buildElectron();
+  logStartupStage("electron-compiled", electronCompileStartedAt);
 
   // 2. 编译 TS→JS（Vite dev server 需要 .js 文件）
   console.log("🔁 Compiling frontend TS→JS...");
+  const frontendCompileStartedAt = Date.now();
   try {
     execSync("node scripts/compile-frontend-ts.mjs", { cwd: ROOT, stdio: "pipe" });
   } catch { console.log("⚠️  Frontend TS compile had issues"); }
+  logStartupStage("frontend-compiled", frontendCompileStartedAt);
 
   // 3. 等待端口可用
   if (await isPortInUse(DEV_PORT)) {
@@ -285,13 +296,18 @@ async function main() {
   }
 
   // 3. 启动 Vite dev server
+  const viteStartedAt = Date.now();
   await startVite();
+  logStartupStage("vite-ready", viteStartedAt);
 
   // 5. 启动 pi-server（等待实际就绪）
+  const serverStartedAt = Date.now();
   await startServer();
+  logStartupStage("server-ready", serverStartedAt);
 
   // 6. 启动 Electron
   startElectron();
+  logStartupStage("electron-spawned");
 
   // 7. 文件监听
   setupWatcher();

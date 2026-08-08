@@ -52,6 +52,7 @@ const DESKTOP_SECURITY_TOKEN = (process.env.NODE_ENV === "test" || process.env.V
   : createDesktopSessionToken();
 delete process.env.MY_CODE_AGENT_DESKTOP_TOKEN;
 const trustedDesktopRoots = new TrustedDesktopRoots();
+const electronBootStartedAt = Date.now();
 
 // Packaged E2E runs in restricted Windows environments where Chromium's GPU
 // process and default user cache may be unavailable. Keep this test-only.
@@ -559,6 +560,7 @@ function reloadWindow(port: number): void {
 // ─── 窗口创建 ──────────────────────────────────────────────────────
 
 function createWindow() {
+  console.log(`[startup] electron-create-window wall=${Date.now()} total=${Date.now() - electronBootStartedAt}ms`);
   e2eStage(`createWindow:start serverPort=${serverPort} vitePort=${process.env.VITE_DEV_PORT || ""}`);
   if (!process.env.VITE_DEV_PORT && !serverPort) return;
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -613,6 +615,7 @@ function createWindow() {
   mainWindow.once("ready-to-show", () => {
     clearTimeout(showTimer);
     if (!E2E_MODE) mainWindow?.show();
+    console.log(`[startup] electron-ready wall=${Date.now()} total=${Date.now() - electronBootStartedAt}ms`);
     console.log("✅ Window ready");
   });
 
@@ -629,7 +632,7 @@ function createWindow() {
 
   mainWindow.webContents.on("console-message", (details) => {
     if (E2E_MODE) e2eDiagnostics.push(`console[${details.level}] ${details.sourceId}:${details.lineNumber} ${details.message}`);
-    if (details.message.includes("404") || details.message.includes("Failed") || details.message.includes("Error")) {
+    if (details.message.includes("[startup]") || details.message.includes("404") || details.message.includes("Failed") || details.message.includes("Error")) {
       console.warn(`[page:${details.sourceId}:${details.lineNumber}] ${details.message}`);
     }
   });

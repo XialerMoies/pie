@@ -5,8 +5,8 @@ let _monacoLoadPromise: Promise<void> | null = null;
 
 async function loadMonaco(): Promise<void> {
   if ((window as any).__monaco) return;
-  mark("monaco-import-start");
   if (!_monacoLoadPromise) {
+    mark("monaco-import-start");
     _monacoLoadPromise = import("../editor/monaco-setup").then(() => {
       mark("monaco-import-end");
       return undefined;
@@ -14,11 +14,12 @@ async function loadMonaco(): Promise<void> {
       _monacoLoadPromise = null;
       throw err;
     });
-  } else {
-    // 已经在加载中，但还没标记结束 → 等 promise 结束时标记
-    _monacoLoadPromise.then(() => mark("monaco-import-end"));
   }
   await _monacoLoadPromise;
+}
+
+function renderFileTextFallback(editorEl: HTMLElement, content: string): void {
+  editorEl.innerHTML = `<pre class="fc-editor-fallback">${E(content)}</pre>`;
 }
 
 function _syncTabsToStore(): void {
@@ -273,7 +274,16 @@ async function _fileActivate(tab: AppTab): Promise<void> {
   if (fc) fc.style.display = '';
   mark("monaco-load-start");
   if (!(window as any).__monaco) {
-    await loadMonaco()
+    renderFileTextFallback(editorEl, tab.content || '');
+    try {
+      await loadMonaco();
+    } catch {
+      mark("monaco-load-end");
+      mark("file-activate-end");
+      renderTabs();
+      _syncTabsToStore();
+      return;
+    }
   }
   mark("monaco-load-end");
   const m = (window as any).__monaco;

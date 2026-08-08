@@ -704,6 +704,81 @@ describe("App.Events frontend event bus", () => {
     assert.deepStrictEqual(calls, ["bootstrap", "preferences", "layout", "events", "dashboard", "sessions"]);
   });
 
+  it("reports content ready only after dashboard, session restore, session list, and paint complete", async () => {
+    const calls = [];
+    const paintCallbacks = [];
+    const contentReadyLogs = [];
+    let resolveDashboard;
+    let resolveRestore;
+    let resolveSessions;
+    const dashboardReady = new Promise((resolve) => { resolveDashboard = resolve; });
+    const restoreReady = new Promise((resolve) => { resolveRestore = resolve; });
+    const sessionsReady = new Promise((resolve) => { resolveSessions = resolve; });
+    const context = {
+      window: {},
+      document: {
+        documentElement: {
+          classList: { toggle: () => {}, remove: () => {} },
+        },
+      },
+      performance: { now: () => 100 },
+      setTimeout,
+      clearTimeout,
+      requestAnimationFrame: (callback) => {
+        paintCallbacks.push(callback);
+        return paintCallbacks.length;
+      },
+      console: {
+        ...console,
+        info: (message) => contentReadyLogs.push(message),
+      },
+      bootstrapApi: async () => { calls.push("bootstrap"); },
+      applyExplorerPreferences: () => {},
+      layout: () => { calls.push("layout"); },
+      getD: () => { calls.push("dashboard"); return dashboardReady; },
+      toast: () => {},
+      App: {
+        Preferences: {
+          hydrate: async () => { calls.push("preferences"); },
+          get: () => "vs-dark",
+        },
+        Events: {
+          subscribe: () => () => {},
+          start: async () => { calls.push("events"); },
+        },
+        Session: {
+          whenReady: () => { calls.push("restore"); return restoreReady; },
+          loadSessions: () => { calls.push("sessions"); return sessionsReady; },
+        },
+      },
+    };
+    context.window.App = context.App;
+    const startupScript = await compileClassicScript("src/frontend/dashboard/dashboard-startup.ts");
+
+    new Script(startupScript, { filename: "dashboard-startup.js" }).runInNewContext(context);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepStrictEqual(calls, ["bootstrap", "preferences", "layout", "events", "dashboard", "restore", "sessions"]);
+    assert.deepStrictEqual(contentReadyLogs, []);
+
+    resolveDashboard();
+    resolveRestore();
+    resolveSessions();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(paintCallbacks.length, 1);
+    assert.deepStrictEqual(contentReadyLogs, []);
+
+    paintCallbacks.shift()(0);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(paintCallbacks.length, 1);
+    assert.deepStrictEqual(contentReadyLogs, []);
+
+    paintCallbacks.shift()(16);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(contentReadyLogs.length, 1);
+    assert.match(contentReadyLogs[0], /^\[startup\] content-ready /);
+  });
+
   it("reveals and lays out the dashboard when preference hydration rejects", async () => {
     const calls = [];
     let revealed = false;

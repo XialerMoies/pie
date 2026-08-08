@@ -632,17 +632,16 @@ function renderSessionPanel(): void {
 }
 
 /** 组合函数：先取数据、索引，再渲染会话面板 */
-function loadSessions(): void {
+function loadSessions(): Promise<void> {
   const el = $('sl');
   if (!el) {
     // #sl 不存在时仅后台索引，不 retry（chatPaneRender 挂载后会主动调）
-    fetchSessionIndex().catch(() => {});
-    return;
+    return fetchSessionIndex().catch(() => {});
   }
-  if ((window as any).isConversationSearchActive?.()) return;
+  if ((window as any).isConversationSearchActive?.()) return Promise.resolve();
   _loadRetries = 0;
   el.classList.add('is-loading');
-  fetchSessionIndex().then(() => renderSessionPanel()).catch(() => {
+  return fetchSessionIndex().then(() => renderSessionPanel()).catch(() => {
     const list = $('sl');
     if (list) {
       _lastSessionRenderKey = '';
