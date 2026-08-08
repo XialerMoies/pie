@@ -126,6 +126,31 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
     assert.doesNotMatch(electronMain, /}, 2000\)\.unref\(\)/, "the forced server cleanup timer must keep Electron alive");
   });
 
+  it("shows an independent window shell before its server is ready", () => {
+    const electronMain = readFileSync(new URL("../src/electron/electron-main.ts", import.meta.url), "utf8");
+    const packagedStartup = electronMain.indexOf("const earlyServerReady = process.env.VITE_DEV_PORT ? null : startPiServer()");
+    const createWindow = electronMain.indexOf("createWindow();", electronMain.indexOf("const serverReady = earlyServerReady"));
+    const awaitServer = electronMain.indexOf("await serverReady", createWindow);
+
+    assert.ok(packagedStartup >= 0, "packaged and independent windows should retain a server readiness promise");
+    assert.ok(createWindow > packagedStartup, "the window shell should be created after server startup begins");
+    assert.ok(awaitServer > createWindow, "the visible window shell must not wait for server readiness");
+    assert.match(electronMain, /show:\s*!E2E_MODE/, "normal windows should be visible immediately");
+    assert.doesNotMatch(electronMain, /Force-showing window|}, 5000\)/, "window visibility must not depend on a five-second fallback");
+  });
+
+  it("starts an independent server without cmd or npx and overlaps Electron readiness", () => {
+    const electronMain = readFileSync(new URL("../src/electron/electron-main.ts", import.meta.url), "utf8");
+    const earlyStart = electronMain.indexOf("const earlyServerReady = process.env.VITE_DEV_PORT ? null : startPiServer()");
+    const whenReady = electronMain.indexOf("app.whenReady().then");
+
+    assert.ok(earlyStart >= 0, "independent server startup should begin before Electron is ready");
+    assert.ok(earlyStart < whenReady, "server startup should overlap Electron app readiness");
+    assert.match(electronMain, /spawn\(process\.execPath, \["--import", "tsx", script\]/, "development server should use Electron's Node mode directly");
+    assert.match(electronMain, /ELECTRON_RUN_AS_NODE:\s*"1"/, "the direct child must run as Node");
+    assert.doesNotMatch(electronMain, /isWin \? "cmd" : "npx"|\["\/c", "npx", "tsx", script\]/, "independent startup must not traverse cmd or npx");
+  });
+
   it("does not expose a startup workspace switch helper", () => {
     assert.equal(dashboardHelpers.syncStartupWorkspace, undefined);
   });

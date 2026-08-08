@@ -411,7 +411,6 @@ function startPiServer(): Promise<number> {
       MY_CODE_AGENT_DESKTOP_TOKEN: DESKTOP_SECURITY_TOKEN,
     };
 
-    const isWin = process.platform === "win32";
     if (app.isPackaged) {
       serverProcess = spawn(process.execPath, [script], {
         env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
@@ -420,11 +419,12 @@ function startPiServer(): Promise<number> {
         shell: false,
       });
     } else {
-      serverProcess = spawn(
-        isWin ? "cmd" : "npx",
-        isWin ? ["/c", "npx", "tsx", script] : ["tsx", script],
-        { env, stdio: ["pipe", "pipe", "pipe"], cwd: APP_ROOT, shell: isWin },
-      );
+      serverProcess = spawn(process.execPath, ["--import", "tsx", script], {
+        env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd: APP_ROOT,
+        shell: false,
+      });
     }
 
     let output = "";
@@ -585,7 +585,6 @@ function reloadWindow(port: number): void {
 function createWindow() {
   console.log(`[startup] electron-create-window wall=${Date.now()} total=${Date.now() - electronBootStartedAt}ms`);
   e2eStage(`createWindow:start serverPort=${serverPort} vitePort=${process.env.VITE_DEV_PORT || ""}`);
-  if (!process.env.VITE_DEV_PORT && !serverPort) return;
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.focus();
     e2eStage("createWindow:reused");
@@ -609,7 +608,7 @@ function createWindow() {
       sandbox: true,
       webSecurity: true,
     },
-    show: false,
+    show: !E2E_MODE,
     autoHideMenuBar: true,
   });
   e2eStage("createWindow:browser-window-created");
@@ -618,7 +617,7 @@ function createWindow() {
   const vitePort = process.env.VITE_DEV_PORT;
   if (vitePort) {
     mainWindow.loadURL(`http://127.0.0.1:${vitePort}`);
-  } else {
+  } else if (serverPort) {
     mainWindow.loadURL(`http://127.0.0.1:${serverPort}`);
   }
   e2eStage(`createWindow:loadURL ${mainWindow.webContents.getURL() || "pending"}`);
@@ -627,20 +626,8 @@ function createWindow() {
     mainWindow.webContents.openDevTools({ mode: "detach" });
   }
 
-  // ready-to-show 未触发时的兜底：5 秒后强制显示
-  const showTimer = setTimeout(() => {
-    if (!E2E_MODE && mainWindow && !mainWindow.isVisible()) {
-      console.log("⏰ Force-showing window (ready-to-show timeout)");
-      mainWindow.show();
-    }
-  }, 5000);
-
-  mainWindow.once("ready-to-show", () => {
-    clearTimeout(showTimer);
-    if (!E2E_MODE) mainWindow?.show();
-    console.log(`[startup] electron-ready wall=${Date.now()} total=${Date.now() - electronBootStartedAt}ms`);
-    console.log("✅ Window ready");
-  });
+  console.log(`[startup] electron-ready wall=${Date.now()} total=${Date.now() - electronBootStartedAt}ms`);
+  console.log("✅ Window ready");
 
   mainWindow.webContents.on("did-finish-load", () => {
     e2eStage(`webContents:did-finish-load ${mainWindow?.webContents.getURL() || ""}`);
@@ -673,7 +660,6 @@ function createWindow() {
   mainWindow.once("focus", () => console.log("🔲 Window focused"));
 
   mainWindow.on("closed", () => {
-    clearTimeout(showTimer);
     mainWindow = null;
   });
 }
@@ -780,6 +766,9 @@ registerDesktopIpcHandlers({
   trustedRoots: trustedDesktopRoots,
 });
 
+const earlyServerReady = process.env.VITE_DEV_PORT ? null : startPiServer();
+void earlyServerReady?.catch(() => undefined);
+
 app.whenReady().then(async () => {
   e2eStage("app:when-ready");
   ensureDir(DATA_DIR);
@@ -792,13 +781,15 @@ app.whenReady().then(async () => {
     console.log(`📡 Dev mode: loading from Vite at http://127.0.0.1:${isDev}`);
     createWindow();
   } else {
+    const serverReady = earlyServerReady ?? startPiServer();
+    e2eStage("app:before-create-window");
+    createWindow();
+    e2eStage("app:after-create-window");
     try {
-      const port = await startPiServer();
+      const port = await serverReady;
       console.log(`✅ Pi server started on port ${port}`);
       startHealthCheck();
-      e2eStage("app:before-create-window");
-      createWindow();
-      e2eStage("app:after-create-window");
+      reloadWindow(port);
     } catch (err) {
       dialog.showErrorBox("无法启动 My Code Agent", err instanceof Error ? err.message : String(err));
       console.error("❌ Failed to start:", err);
