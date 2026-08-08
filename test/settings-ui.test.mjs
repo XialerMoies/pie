@@ -229,8 +229,8 @@ describe("settings DOM boundary", () => {
     const jumpSmooth = getControl("gs-jump-smooth");
     assert.strictEqual(jumpSmooth.tagName, "SELECT");
     assert.deepStrictEqual([...jumpSmooth.options].map((option) => ({ value: option.value, label: option.textContent })), [
-      { value: "true", label: "Smooth" },
-      { value: "false", label: "Immediate" },
+      { value: "true", label: "平滑" },
+      { value: "false", label: "立即" },
     ]);
     assert.strictEqual(jumpSmooth.value, "true");
     assert.strictEqual(document.getElementById("gs-jump-threshold")?.value, "72");

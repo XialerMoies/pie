@@ -104,7 +104,7 @@ function showSettingsModal(): void {
         <div class="modal-sidebar">
           <div class="ms-item on" data-st="model">模型</div>
           <div class="ms-item" data-st="general">通用</div>
-          <div class="ms-item" data-st="permissions">Permissions</div>
+          <div class="ms-item" data-st="permissions">权限</div>
           <div class="ms-item" data-st="about">关于</div>
         </div>
         <div class="modal-content" id="mc-settings"></div>
@@ -258,8 +258,8 @@ function switchSettingsModal(tab: string): void {
             <span class="gs-label">平滑滚动</span>
             <div class="gs-control">
               <select class="gs-select" id="gs-jump-smooth">
-                <option value="true"${jumpSmooth ? ' selected' : ''}>Smooth</option>
-                <option value="false"${jumpSmooth ? '' : ' selected'}>Immediate</option>
+                <option value="true"${jumpSmooth ? ' selected' : ''}>平滑</option>
+                <option value="false"${jumpSmooth ? '' : ' selected'}>立即</option>
               </select>
             </div>
           </div>
