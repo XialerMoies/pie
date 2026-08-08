@@ -236,6 +236,44 @@ describe("settings DOM boundary", () => {
     assert.strictEqual(document.getElementById("gs-jump-threshold")?.value, "72");
   });
 
+  it("keeps storage values and actions readable without vertical button text", async () => {
+    const longRoot = "E:\\my-code-agent\\data\\with-a-very-long-storage-directory-name";
+    const longInstanceId = "instance-3b87ebac-5a40-4a31-8483-2cf1dbd-long";
+    fetchImpl = async (url) => {
+      if (String(url) === "/api/storage-location") {
+        return {
+          ok: true,
+          json: async () => ({
+            dataRoot: longRoot,
+            instanceId: longInstanceId,
+            workspaceLock: { status: "locked", owner: { port: 3099 } },
+          }),
+        };
+      }
+      if (String(url) === "/api/storage-migration/preview") {
+        return { ok: true, json: async () => ({ fileCount: 0, bytes: 0, conflicts: [], previewId: "preview-storage" }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    await openGeneralSettings();
+    await flushAsyncWork();
+
+    const storageRows = [...document.querySelectorAll("[data-storage-location] .gs-storage-row")];
+    const chooseButton = document.querySelector('[data-settings-action="choose-data-root"]');
+    const dataRoot = document.getElementById("gs-data-root-status");
+    const instanceId = document.getElementById("gs-instance-id");
+    assert.strictEqual(storageRows.length, 5);
+    assert.ok(chooseButton?.closest(".gs-storage-actions"));
+    assert.strictEqual(dataRoot?.title, longRoot);
+    assert.strictEqual(instanceId?.title, longInstanceId);
+
+    const css = readFileSync(resolve(process.cwd(), "src/frontend/dashboard.css"), "utf8");
+    assert.match(css, /\.gs-storage-row\s*\{[^}]*display:grid[^}]*grid-template-columns:/);
+    assert.match(css, /\.gs-value\.gs-storage-value\s*\{[^}]*font-size:\.72rem[^}]*color:var\(--ts\)[^}]*font-weight:400/);
+    assert.match(css, /\.gs-btn\.gs-storage-btn\s*\{[^}]*width:auto[^}]*white-space:nowrap/);
+  });
+
   it("selects a storage root through Electron and stages it for restart", async () => {
     const selectedRoot = "E:\\agent-data";
     let postedRoot = null;

@@ -455,30 +455,30 @@ function renderStorageLocationSettings(container: HTMLElement): void {
       <div class="gs-section" data-storage-location>
         <div class="gs-section-title">存储位置</div>
         <div class="gs-group">
-          <div class="gs-row">
+          <div class="gs-row gs-storage-row">
             <span class="gs-label">数据根目录</span>
-            <div class="gs-control gs-storage-control">
-              <span class="gs-value gs-storage-value" id="gs-data-root-status">读取中...</span>
+            <span class="gs-value gs-storage-value" id="gs-data-root-status">读取中...</span>
+            <div class="gs-storage-actions">
               <button type="button" class="gs-btn gs-storage-btn" data-settings-action="choose-data-root"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><use href="#ifolder"></use></svg><span>选择目录</span></button>
             </div>
           </div>
-          <div class="gs-row">
+          <div class="gs-row gs-storage-row">
             <span class="gs-label">实例 ID</span>
-            <span class="gs-value gs-storage-value" id="gs-instance-id">读取中...</span>
+            <span class="gs-value gs-storage-value gs-storage-value-wide" id="gs-instance-id">读取中...</span>
           </div>
-          <div class="gs-row">
+          <div class="gs-row gs-storage-row">
             <span class="gs-label">工作区锁</span>
-            <span class="gs-value gs-storage-value" id="gs-workspace-lock">读取中...</span>
+            <span class="gs-value gs-storage-value gs-storage-value-wide" id="gs-workspace-lock">读取中...</span>
           </div>
-          <div class="gs-row">
+          <div class="gs-row gs-storage-row">
             <span class="gs-label">旧数据迁移</span>
-            <div class="gs-control gs-storage-control">
-              <span class="gs-value gs-storage-value" id="gs-migration-status">检查中...</span>
+            <span class="gs-value gs-storage-value" id="gs-migration-status">检查中...</span>
+            <div class="gs-storage-actions">
               <button type="button" class="gs-btn gs-storage-btn" data-settings-action="preview-storage-migration">检查</button>
               <button type="button" class="gs-btn gs-storage-btn" data-settings-action="confirm-storage-migration" id="gs-migration-confirm" style="display:none">确认迁移</button>
             </div>
           </div>
-          <div class="gs-row" style="border:none">
+          <div class="gs-row gs-storage-row gs-storage-note-row" style="border:none">
             <span class="gs-desc gs-storage-note">新位置将在重启后使用，当前会话与缓存不会在运行中移动。</span>
           </div>
         </div>
@@ -496,7 +496,11 @@ function renderStorageLocationSettings(container: HTMLElement): void {
     status.textContent = info.restartRequired
       ? `${info.dataRoot}（重启后生效）`
       : String(info.dataRoot);
-    if (instance) instance.textContent = String(info.instanceId || '未知');
+    status.title = status.textContent;
+    if (instance) {
+      instance.textContent = String(info.instanceId || '未知');
+      instance.title = instance.textContent;
+    }
     if (lock) {
       const owner = info.workspaceLock?.owner;
       lock.textContent = info.workspaceLock?.status === 'locked'
@@ -597,7 +601,10 @@ async function chooseDataRoot(): Promise<void> {
     const result = await response.json() as { ok?: boolean; error?: string; restartRequired?: boolean };
     if (!response.ok || !result.ok) throw new Error(result.error || '保存失败');
     const status = $('gs-data-root-status');
-    if (status) status.textContent = `${selected}（重启后生效）`;
+    if (status) {
+      status.textContent = `${selected}（重启后生效）`;
+      status.title = status.textContent;
+    }
     toast('数据目录已保存，重启后生效', 'success');
   } catch (error) {
     toast(`数据目录保存失败: ${(error as Error).message}`, 'error');
