@@ -326,6 +326,9 @@ describe("msgs() 渲染", () => {
     assert.strictEqual(updated, true);
     assert.strictEqual(panelRedraws, 0, "不能重绘整个消息列表");
     assert.strictEqual(panel.querySelector('[data-block-id="text-0"]'), targetBefore, "保留目标 block DOM");
+    assert.ok(targetBefore.querySelector('.trace-node.trace-text'), "streaming update preserves the text event node");
+    assert.ok(targetBefore.querySelector('.trace-dot'), "streaming update preserves the timeline dot");
+    assert.ok(targetBefore.querySelector('.trace-text-body'), "streaming update preserves the text body");
     assert.ok(targetBefore.textContent.includes("partial"));
     Object.defineProperty(panel, "innerHTML", descriptor);
   });

@@ -106,6 +106,26 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
     assert.ok(awaitServer > startElectron, "server readiness should be awaited after Electron starts");
   });
 
+  it("stops development startup instead of retrying a workspace lock conflict", () => {
+    const devScript = readFileSync(new URL("../scripts/dev.mjs", import.meta.url), "utf8");
+
+    assert.ok(devScript.includes('stdio: ["pipe", "pipe", "pipe"]'), "development startup must capture server stderr");
+    assert.ok(devScript.includes("isNonRetryableServerStartupError(errorOutput)"), "startup must classify deterministic server failures");
+    assert.ok(devScript.includes("reject(createServerStartupError"), "workspace lock conflicts must reject startup instead of entering the restart loop");
+    assert.ok(devScript.includes("main().catch(err => {\n  cleanup();"), "failed startup must clean up Vite and Electron children");
+    assert.doesNotMatch(devScript, /taskkill \/F \/IM electron\.exe/, "development cleanup must not kill unrelated Electron instances");
+    assert.ok(devScript.includes("fs.readFileSync(PID_FILE"), "development cleanup should target only its recorded process tree");
+  });
+
+  it("waits for an independent window server to exit before Electron quits", () => {
+    const electronMain = readFileSync(new URL("../src/electron/electron-main.ts", import.meta.url), "utf8");
+
+    assert.ok(electronMain.includes("function stopPiServer(): Promise<void>"), "server shutdown must be awaitable");
+    assert.ok(electronMain.includes("event.preventDefault()"), "before-quit must pause Electron shutdown");
+    assert.ok(electronMain.includes("void stopPiServer().finally"), "Electron must resume quitting only after server shutdown");
+    assert.doesNotMatch(electronMain, /}, 2000\)\.unref\(\)/, "the forced server cleanup timer must keep Electron alive");
+  });
+
   it("does not expose a startup workspace switch helper", () => {
     assert.equal(dashboardHelpers.syncStartupWorkspace, undefined);
   });

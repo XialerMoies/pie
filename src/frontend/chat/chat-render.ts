@@ -404,7 +404,9 @@ function updateLastBlock(block: any): boolean {
   const target = Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
     .find(element => element.dataset.blockId === blockId(block));
   if (target && block.type === 'text') {
-    target.innerHTML = mdRender(block.text || '');
+    const textBody = target.querySelector('.trace-text-body') as HTMLElement | null;
+    if (textBody) textBody.innerHTML = mdRender(block.text || '');
+    else replaceBlockContents(target, renderEventBlock(block, message.blocks));
     return true;
   }
   if (target && block.type === 'thinking') {
@@ -461,7 +463,9 @@ function finalizeLastMessage(): boolean {
       const target = Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
         .find(element => element.dataset.blockId === blockId(block));
       if (target && block.type === 'text') {
-        target.innerHTML = mdRender(block.text || '');
+        const textBody = target.querySelector('.trace-text-body') as HTMLElement | null;
+        if (textBody) textBody.innerHTML = mdRender(block.text || '');
+        else replaceBlockContents(target, renderEventBlock(block, message.blocks));
       } else if (target && block.type === 'thinking') {
         const textElement = target.querySelector('.trace-thinking-text') as HTMLElement | null;
         if (textElement) textElement.innerHTML = mdRender(block.text || '');

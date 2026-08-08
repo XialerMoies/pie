@@ -67,6 +67,20 @@ function killPortProcess(port) {
   } catch {}
 }
 
+function killProcessTree(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return;
+  try { execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" }); } catch {}
+}
+
+function readRegisteredPid() {
+  try {
+    const pid = Number.parseInt(fs.readFileSync(PID_FILE, "utf8").trim(), 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
 async function waitForPortFree(port, attempts = 12) {
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (!(await isPortInUse(port))) return true;
@@ -78,7 +92,7 @@ async function waitForPortFree(port, attempts = 12) {
 // ─── 清理残留进程 ─────────────────────────────────────────────
 function cleanupOldProcesses() {
   // 强制杀掉上次的 Electron / Vite / pi-server
-  try { execSync(`taskkill /F /IM electron.exe`, { stdio: "ignore" }); } catch {}
+  killProcessTree(readRegisteredPid());
   // 用端口反查 PID 杀掉残留
   for (const p of [DEV_PORT, VITE_PORT]) killPortProcess(p);
   try { fs.unlinkSync(PID_FILE); } catch {}
@@ -116,6 +130,14 @@ let serverRestartTimer = null;
 let pendingServerRestartFile = null;
 let frontendCompileTimer = null;
 let intentionalElectronStop = false;
+
+function isNonRetryableServerStartupError(errorOutput) {
+  return /WorkspaceLockConflictError|workspace_locked/.test(errorOutput);
+}
+
+function createServerStartupError(code) {
+  return new Error(`pi-server exited before ready (${code})`);
+}
 
 async function startVite() {
   if (viteProcess) return;
@@ -155,7 +177,7 @@ async function startServerInner(onSpawn = () => {}) {
     console.log("⚙️  Starting pi-server...");
     const started = Date.now();
     serverProcess = spawn("npx", ["tsx", "src/server/server.ts"], {
-      cwd: ROOT, stdio: ["pipe", "pipe", "inherit"], shell: true,
+      cwd: ROOT, stdio: ["pipe", "pipe", "pipe"], shell: true,
       env: {
         ...process.env,
         PI_DEV_PORT: String(DEV_PORT),
@@ -165,25 +187,51 @@ async function startServerInner(onSpawn = () => {}) {
     });
     onSpawn();
     let resolved = false;
+    let output = "";
+    let errorOutput = "";
+    const startupTimer = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      reject(createServerStartupError("timeout"));
+    }, 30000);
     serverProcess.stdout?.on("data", (chunk) => {
+      output += chunk.toString();
       process.stdout.write(chunk); // 转发输出到控制台
-      if (!resolved && chunk.toString().includes("SERVER_PORT:")) {
+      if (!resolved && output.includes("SERVER_PORT:")) {
         resolved = true;
+        clearTimeout(startupTimer);
         const elapsed = Date.now() - started;
         console.log(`⏱️  pi-server ready in ${elapsed}ms`);
         resolve();
       }
     });
+    serverProcess.stderr?.on("data", (chunk) => {
+      errorOutput += chunk.toString();
+      process.stderr.write(chunk);
+    });
     serverProcess.on("exit", (code) => {
       serverProcess = null;
-      if (code !== 0 && !resolved) {
+      if (resolved) return;
+      clearTimeout(startupTimer);
+      if (isNonRetryableServerStartupError(errorOutput)) {
+        resolved = true;
+        reject(createServerStartupError(code));
+      } else if (code !== 0) {
         console.log(`pi-server exited with code ${code} — restarting in 1s...`);
-        setTimeout(() => resolve(startServerInner(onSpawn)), 1000);
+        setTimeout(() => {
+          startServerInner(onSpawn).then(resolve, reject);
+        }, 1000);
+      } else {
+        resolved = true;
+        reject(createServerStartupError(code));
       }
     });
-    serverProcess.on("error", reject);
-    // 30 秒超时
-    setTimeout(() => { if (!resolved) { resolved = true; resolve(); } }, 30000);
+    serverProcess.on("error", (error) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(startupTimer);
+      reject(error);
+    });
   });
 }
 
@@ -198,7 +246,7 @@ function startElectron() {
   if (electronProcess) {
     // 先关闭所有旧 Electron 窗口
     intentionalElectronStop = true;
-    try { execSync("taskkill /F /IM electron.exe", { stdio: "ignore" }); } catch {}
+    killProcessTree(electronProcess.pid);
     electronProcess = null;
   }
   console.log("⚡ Starting Electron...");
@@ -291,6 +339,8 @@ async function main() {
   let markServerSpawned;
   const serverSpawned = new Promise((resolve) => { markServerSpawned = resolve; });
   const serverReady = startServer(markServerSpawned);
+  let serverStartupError = null;
+  void serverReady.catch((error) => { serverStartupError = error; });
   await Promise.race([serverSpawned, serverReady]);
   logStartupStage("server-spawned", serverStartedAt);
 
@@ -317,6 +367,7 @@ async function main() {
   const viteStartedAt = Date.now();
   await startVite();
   logStartupStage("vite-ready", viteStartedAt);
+  if (serverStartupError) throw serverStartupError;
 
   // 5. The server has been initializing during compilation; show Electron now.
   startElectron();
@@ -330,6 +381,7 @@ async function main() {
 }
 
 main().catch(err => {
+  cleanup();
   console.error("Fatal:", err);
   process.exit(1);
 });
@@ -344,9 +396,9 @@ process.on("SIGTERM", () => {
 });
 
 function cleanup() {
-  try { execSync(`taskkill /F /T /PID ${electronProcess?.pid}`, { stdio: "ignore" }); } catch {}
-  try { execSync(`taskkill /F /T /PID ${serverProcess?.pid}`, { stdio: "ignore" }); } catch {}
-  try { execSync(`taskkill /F /T /PID ${viteProcess?.pid}`, { stdio: "ignore" }); } catch {}
+  killProcessTree(electronProcess?.pid);
+  killProcessTree(serverProcess?.pid);
+  killProcessTree(viteProcess?.pid);
   electronProcess = null;
   serverProcess = null;
   viteProcess = null;

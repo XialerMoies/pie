@@ -114,6 +114,8 @@ let serverPort = 0;
 let mainWindow: BrowserWindow | null = null;
 let restartCount = 0;
 let serverStopping = false;
+let serverShutdownPromise: Promise<void> | null = null;
+let allowAppQuit = false;
 const MAX_RESTART_COUNT = 5;
 let healthCheckTimer: ReturnType<typeof setInterval> | null = null;
 let e2eProbeStarted = false;
@@ -352,7 +354,6 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
       diagnostics: e2eDiagnostics,
     });
   } finally {
-    stopPiServer();
     app.quit();
   }
 }
@@ -379,6 +380,7 @@ function startPiServer(): Promise<number> {
       return;
     }
     serverStopping = false;
+    serverShutdownPromise = null;
 
     ensureDir(DATA_DIR);
     ensureDir(PI_CONFIG_DIR);
@@ -488,25 +490,46 @@ function startPiServer(): Promise<number> {
   });
 }
 
-function stopPiServer() {
+function stopPiServer(): Promise<void> {
   stopHealthCheck();
-  if (serverStopping) return;
+  if (serverShutdownPromise) return serverShutdownPromise;
   serverStopping = true;
-  if (serverProcess) {
-    const child = serverProcess;
-    const pid = serverProcess.pid;
+  const child = serverProcess;
+  serverPort = 0;
+  if (!child) return Promise.resolve();
+
+  serverShutdownPromise = new Promise((resolve) => {
+    let settled = false;
+    let forceTimer: ReturnType<typeof setTimeout> | null = null;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (forceTimer) clearTimeout(forceTimer);
+      resolve();
+    };
+
+    child.once("exit", finish);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      finish();
+      return;
+    }
+
     try { child.stdin?.write("PI_SERVER_SHUTDOWN\n"); } catch {}
     try { child.stdin?.end(); } catch {}
-    setTimeout(() => {
-      if (child.exitCode !== null || child.signalCode !== null) return;
+    forceTimer = setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        finish();
+        return;
+      }
       if (process.platform === "win32") {
-        try { execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" }); } catch {}
+        try { execSync(`taskkill /F /T /PID ${child.pid}`, { stdio: "ignore" }); } catch {}
       } else {
         try { child.kill("SIGKILL"); } catch {}
       }
-    }, 2000).unref();
-    serverPort = 0;
-  }
+      finish();
+    }, 2000);
+  });
+  return serverShutdownPromise;
 }
 
 // ─── 健康检查 ──────────────────────────────────────────────────────
@@ -789,10 +812,18 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  stopPiServer();
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform === "darwin") {
+    void stopPiServer();
+  } else {
+    app.quit();
+  }
 });
 
-app.on("before-quit", () => {
-  stopPiServer();
+app.on("before-quit", (event) => {
+  if (allowAppQuit) return;
+  event.preventDefault();
+  void stopPiServer().finally(() => {
+    allowAppQuit = true;
+    app.quit();
+  });
 });
