@@ -32,8 +32,8 @@ export type AssistantBlock =
   | { type: "text"; text: string; turnId: string; blockId: string; seq: number }
   // B-5：tool 物理合并为一个 block（含 input/output/error，一个 seq）。
   // tool_use/tool_result 保留用于旧数据回放兼容。
-  | { type: "tool"; toolCallId: string; name: string; input?: unknown; output?: string; error?: string; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
-  | { type: "tool_use"; toolCallId: string; name: string; input?: unknown; output?: string; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
+  | { type: "tool"; toolCallId: string; name: string; input?: unknown; output?: string; error?: string; metadata?: Record<string, unknown>; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
+  | { type: "tool_use"; toolCallId: string; name: string; input?: unknown; output?: string; metadata?: Record<string, unknown>; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
   | { type: "tool_result"; toolUseId: string; output?: string; isError?: boolean; turnId: string; blockId: string; seq: number }
   | { type: "step"; text: string; status: "info" | "success" | "error"; turnId: string; blockId: string; seq: number }
   | { type: "user_note"; noteId: string; mode: "steer" | "followUp"; text: string; status: "queued" | "delivered" | "failed"; turnId: string; blockId: string; seq: number };

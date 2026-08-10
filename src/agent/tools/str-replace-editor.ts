@@ -11,10 +11,9 @@
 import { readFileSync, writeFileSync, existsSync, statSync } from "fs";
 import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool } from "../types.js";
 import { authorizeToolPath, guardToolPath } from "./path-authorization.js";
+import { buildFileDiffMetadata } from "./file-diff.js";
 
 const MAX_FILE_SIZE = 1024 * 1024; // 1 MB
-const MAX_RESULT_LINES = 50;
-
 // ─── 弯引号常量（Unicode 弯引号 → 直引号归一）──────────────
 const CURLY_SO = "‘"; // '
 const CURLY_SC = "’"; // '
@@ -302,15 +301,15 @@ export const strReplaceEditorTool: AgentTool = defineAgentTool({
 
     const totalLines = updated.split("\n").length;
     const changed = useEdits ? `${applied} 处替换` : `${editsToApply[0].replace_all ? "全部" : "1"} 处替换`;
-    let preview = totalLines <= MAX_RESULT_LINES ? `\n\n${updated.slice(0, 2000)}` : "";
+    const diff = buildFileDiffMetadata(fp, content, updated);
 
-    return structuredToolResult(`已替换 ${fp}：${changed}（文件共 ${totalLines} 行）。${preview}`, {
+    return structuredToolResult(`已替换 ${fp}：${changed}（文件共 ${totalLines} 行）。`, {
       path: fp,
       operation: "write",
       applied,
       totalLines,
       changed: true,
       replaceAll: useEdits ? undefined : editsToApply[0].replace_all,
-    });
+    }, [], { diff });
   },
 });

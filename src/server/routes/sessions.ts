@@ -149,7 +149,7 @@ async function findAuthorizedSessionFileInDir(ctx: ServerContext, dir: string, i
 
 type SessionTrace =
   | { type: "thinking"; status: "streaming" | "done"; text: string; turnId?: string; id: string }
-  | { type: "tool"; status: "running" | "success" | "error"; name: string; input?: unknown; output?: string; error?: string; turnId?: string; id: string }
+  | { type: "tool"; status: "running" | "success" | "error"; name: string; input?: unknown; output?: string; error?: string; metadata?: Record<string, unknown>; turnId?: string; id: string }
   | { type: "step"; status: "info" | "success" | "error"; text: string; turnId?: string; id: string };
 
 type SessionMessage = {
@@ -327,6 +327,7 @@ function convertTracesToBlocks(traces: SessionTrace[], content?: string): any[] 
         type: 'tool', toolCallId: t.id, name: t.name, input: t.input,
         output: isError ? undefined : last.output,
         error: isError ? (last.error || (last.status === 'running' ? '[中断]' : undefined)) : undefined,
+        metadata: last.metadata,
         status: terminalStatus,
         turnId: t.turnId || '', blockId: t.id, seq: seq++,
       });

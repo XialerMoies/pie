@@ -287,6 +287,47 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes("OUT"), "结果保留在 OUT 卡中");
   });
 
+  it("renders structured file diff metadata inside a tool event node", () => {
+    state.M = [{
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        status: "success",
+        name: "str_replace_editor",
+        toolCallId: "call1",
+        blockId: "b1",
+        seq: 1,
+        output: "updated",
+        metadata: {
+          diff: {
+            filePath: "src/app.ts",
+            type: "update",
+            linesAdded: 1,
+            linesRemoved: 1,
+            structuredPatch: [{
+              oldStart: 1,
+              oldLines: 1,
+              newStart: 1,
+              newLines: 1,
+              lines: ["-const a = 1;", "+const a = 2;"],
+            }],
+          },
+        },
+      }],
+    }];
+
+    const html = win.msgs();
+    assert.ok(html.includes("trace-diff"), "diff should render as a trace node section");
+    assert.ok(html.includes("trace-diff-sign"), "diff should show a dedicated sign column");
+    assert.ok(html.includes('<span class="trace-diff-text">const a = 1;</span>'), "diff should render line text in its own unboxed cell");
+    assert.ok(!html.includes("<code>const a = 1;</code>"), "diff line text should not inherit inline code chip styling");
+    assert.ok(html.includes("src/app.ts"), "diff should show file path");
+    assert.ok(html.includes("+1"), "diff should show additions");
+    assert.ok(html.includes("-1"), "diff should show deletions");
+    assert.ok(html.includes("const a = 1;"), "diff should show removed line");
+    assert.ok(html.includes("const a = 2;"), "diff should show added line");
+  });
+
   it("block tool_result 错误时显示 error 标记", () => {
     state.M = [{
       role: "assistant",

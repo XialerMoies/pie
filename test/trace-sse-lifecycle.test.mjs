@@ -269,6 +269,39 @@ describe("SSE agent_end ordering", () => {
     assert.ok(writes.some((chunk) => chunk.includes('"metadata":{"mcp":{"serverName":"docs","toolName":"read"}}')));
   });
 
+  it("preserves structured tool metadata in assistant blocks", () => {
+    const runtime = mockRuntime("", { flushed: true, getSessionId: () => "session-1" });
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write() { return true; }, end() {} },
+      turnId: "turn-1", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0,
+    };
+    attachSessionEvents(runtime, chatStream);
+    runtime.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-diff",
+      toolName: "str_replace_editor",
+      args: { file_path: "src/app.ts" },
+    });
+    runtime.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-diff",
+      toolName: "str_replace_editor",
+      result: "updated",
+      metadata: { diff: { filePath: "src/app.ts", type: "update", linesAdded: 1, linesRemoved: 1, structuredPatch: [] } },
+      isError: false,
+    });
+
+    const toolBlock = chatStream.blocks.find((b) => b.type === "tool");
+    assert.deepStrictEqual(toolBlock.metadata.diff, {
+      filePath: "src/app.ts",
+      type: "update",
+      linesAdded: 1,
+      linesRemoved: 1,
+      structuredPatch: [],
+    });
+  });
+
   it("tool_execution_update 单次 60KB chunk 触发 50KB 截断", () => {
     const runtime = mockRuntime("", { flushed: true, getSessionId: () => "session-1" });
     const chatStream = {

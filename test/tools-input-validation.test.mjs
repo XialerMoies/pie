@@ -59,6 +59,7 @@ import { gitStatusTool } from "../src/agent/tools/git-status.ts";
 import { searchTool } from "../src/agent/tools/search.ts";
 import { setSearchBackend, webSearchTool } from "../src/agent/tools/web-search.ts";
 import { toolRegistry } from "../src/agent/tools/index.ts";
+import { buildFileDiffMetadata } from "../src/agent/tools/file-diff.ts";
 
 function ctx(overrides = {}) {
   return { toolCallId: "call-1", workspace: "/repo", ...overrides };
@@ -85,7 +86,7 @@ describe("builtin tool governance metadata", () => {
     ["read_memory", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: false }],
     ["write_memory", { operations: ["read", "create", "write"], riskLevel: "medium", needsPermission: false, workspaceBounded: false }],
     ["str_replace_editor", { operations: ["read", "write"], riskLevel: "high", needsPermission: false, workspaceBounded: true }],
-    ["file_write", { operations: ["create", "write"], riskLevel: "high", needsPermission: false, workspaceBounded: true }],
+    ["file_write", { operations: ["create", "read", "write"], riskLevel: "high", needsPermission: false, workspaceBounded: true }],
   ]);
 
   it("every registered builtin tool declares the permission contract fields", () => {
@@ -140,6 +141,19 @@ describe("builtin tool governance metadata", () => {
         assert.strictEqual(tool.authorizationMode, expected.authorizationMode, `${name} authorizationMode drifted`);
       }
     }
+  });
+});
+
+describe("file diff metadata", () => {
+  it("truncates large create previews while preserving real line counts", () => {
+    const content = Array.from({ length: 450 }, (_, index) => `line-${index + 1}`).join("\n");
+    const diff = buildFileDiffMetadata("large.txt", null, content);
+
+    assert.strictEqual(diff.type, "create");
+    assert.strictEqual(diff.linesAdded, 450);
+    assert.strictEqual(diff.truncated, true);
+    assert.strictEqual(diff.omittedLines, 50);
+    assert.strictEqual(diff.content.split("\n").length, 400);
   });
 });
 
@@ -505,6 +519,36 @@ describe("str_replace_editor tool", () => {
     assert.strictEqual(content, "hello there");
   });
 
+  it("returns structured diff metadata after replacing text", async () => {
+    writeFileSync(resolve(dir, "test.txt"), "hello world\nsecond line\n", "utf-8");
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "test.txt", old_string: "hello world", new_string: "hello there" },
+      workspaceCtx(),
+    );
+
+    assert.strictEqual(r.metadata.diff.filePath, "test.txt");
+    assert.strictEqual(r.metadata.diff.type, "update");
+    assert.strictEqual(r.metadata.diff.linesAdded, 1);
+    assert.strictEqual(r.metadata.diff.linesRemoved, 1);
+    assert.ok(Array.isArray(r.metadata.diff.structuredPatch));
+    assert.ok(r.metadata.diff.structuredPatch[0].lines.includes("-hello world"));
+    assert.ok(r.metadata.diff.structuredPatch[0].lines.includes("+hello there"));
+  });
+
+  it("keeps replacement output summary-only when structured diff metadata is present", async () => {
+    writeFileSync(resolve(dir, "test.txt"), "first line\nsecond line\nthird line\n", "utf-8");
+    const r = await strReplaceEditorTool.execute(
+      { file_path: "test.txt", old_string: "second line", new_string: "changed line" },
+      workspaceCtx(),
+    );
+
+    const text = toolText(r);
+    assert.ok(text.includes("test.txt"));
+    assert.ok(r.metadata?.diff, "structured diff metadata should carry changed content");
+    assert.ok(!text.includes("first line"), "tool text should not duplicate unchanged file preview");
+    assert.ok(!text.includes("changed line"), "tool text should not duplicate changed file content");
+  });
+
   it("existing edits go through read/write path authorization", async () => {
     const calls = [];
     writeFileSync(resolve(dir, "guarded.txt"), "hello world", "utf-8");
@@ -654,6 +698,20 @@ describe("file_write tool", () => {
     assert.strictEqual(content, "hello");
   });
 
+  it("returns structured diff metadata when creating a file", async () => {
+    const r = await fileWriteTool.execute(
+      { file_path: "new.txt", content: "alpha\nbeta\n" },
+      workspaceCtx(),
+    );
+
+    assert.strictEqual(r.metadata.diff.filePath, "new.txt");
+    assert.strictEqual(r.metadata.diff.type, "create");
+    assert.strictEqual(r.metadata.diff.linesAdded, 2);
+    assert.strictEqual(r.metadata.diff.linesRemoved, 0);
+    assert.deepStrictEqual(r.metadata.diff.structuredPatch, []);
+    assert.strictEqual(r.metadata.diff.content, "alpha\nbeta\n");
+  });
+
   it("new files go through create path authorization", async () => {
     const calls = [];
     const ctx = {
@@ -684,6 +742,21 @@ describe("file_write tool", () => {
     assert.strictEqual(content, "new");
   });
 
+  it("returns structured diff metadata when overwriting a file", async () => {
+    writeFileSync(resolve(dir, "exist.txt"), "old\nstay\n", "utf-8");
+    const r = await fileWriteTool.execute(
+      { file_path: "exist.txt", content: "new\nstay\n" },
+      workspaceCtx(),
+    );
+
+    assert.strictEqual(r.metadata.diff.filePath, "exist.txt");
+    assert.strictEqual(r.metadata.diff.type, "update");
+    assert.strictEqual(r.metadata.diff.linesAdded, 1);
+    assert.strictEqual(r.metadata.diff.linesRemoved, 1);
+    assert.ok(r.metadata.diff.structuredPatch[0].lines.includes("-old"));
+    assert.ok(r.metadata.diff.structuredPatch[0].lines.includes("+new"));
+  });
+
   it("existing files go through write path authorization", async () => {
     const calls = [];
     writeFileSync(resolve(dir, "authorized-existing.txt"), "old", "utf-8");
@@ -699,9 +772,28 @@ describe("file_write tool", () => {
     await fileWriteTool.execute({ file_path: "authorized-existing.txt", content: "new" }, ctx);
 
     assert.deepStrictEqual(calls.map((call) => [call.operation, call.source]), [
+      ["read", "agent.file_write.read"],
       ["write", "agent.file_write.write"],
     ]);
     assert.strictEqual(readFileSync(resolve(dir, "authorized-existing.txt"), "utf-8"), "new");
+  });
+
+  it("does not overwrite or expose diff metadata when update read authorization rejects", async () => {
+    writeFileSync(resolve(dir, "read-denied.txt"), "secret old", "utf-8");
+    const ctx = {
+      workspace: dir,
+      toolCallId: "call-1",
+      authorizePath: async (root, target, operation, source) => {
+        if (operation === "read") throw new Error("read denied for test");
+        return { operation, root, path: target, relativePath: target, source };
+      },
+    };
+
+    const r = await fileWriteTool.execute({ file_path: "read-denied.txt", content: "new" }, ctx);
+
+    assert.ok(toolText(r).includes("read denied for test"));
+    assert.strictEqual(readFileSync(resolve(dir, "read-denied.txt"), "utf-8"), "secret old");
+    assert.strictEqual(r.metadata?.diff, undefined);
   });
 
   it("does not write when path authorization rejects", async () => {

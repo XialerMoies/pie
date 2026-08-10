@@ -63,6 +63,48 @@ function shortText(value: unknown, max = 1200): string {
   return text.length > max ? text.slice(0, max) + '\n... truncated' : text;
 }
 
+function chatDiffLineCount(text: string): number {
+  if (!text) return 0;
+  const lines = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  return lines.length;
+}
+
+function chatDiffLines(diff: any): string[] {
+  if (diff?.type === 'create' && typeof diff.content === 'string') {
+    return diff.content
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n')
+      .split('\n')
+      .filter((line: string, index: number, lines: string[]) => index < lines.length - 1 || line !== '')
+      .map((line: string) => '+' + line);
+  }
+  const hunks = Array.isArray(diff?.structuredPatch) ? diff.structuredPatch : [];
+  return hunks.flatMap((hunk: any) => Array.isArray(hunk?.lines) ? hunk.lines : []);
+}
+
+function renderFileDiffMetadata(diff: any): string {
+  if (!diff || typeof diff !== 'object' || typeof diff.filePath !== 'string') return '';
+  const added = Number.isFinite(Number(diff.linesAdded))
+    ? Number(diff.linesAdded)
+    : (diff.type === 'create' ? chatDiffLineCount(String(diff.content || '')) : 0);
+  const removed = Number.isFinite(Number(diff.linesRemoved)) ? Number(diff.linesRemoved) : 0;
+  const rawLines = chatDiffLines(diff);
+  const visibleLines = rawLines.slice(0, 160);
+  const truncated = rawLines.length > visibleLines.length;
+  const rows = visibleLines.map((line: string) => {
+    const marker = line[0] === '+' || line[0] === '-' || line[0] === ' ' ? line[0] : ' ';
+    const body = marker === ' ' ? line.slice(1) : line.slice(1);
+    const kind = marker === '+' ? 'add' : marker === '-' ? 'del' : 'ctx';
+    return `<div class="trace-diff-line trace-diff-${kind}"><span class="trace-diff-sign">${E(marker)}</span><span class="trace-diff-text">${E(body)}</span></div>`;
+  }).join('');
+  const metadataOmitted = Number.isFinite(Number(diff.omittedLines)) ? Number(diff.omittedLines) : 0;
+  const hiddenLines = rawLines.length - visibleLines.length + (diff.truncated ? metadataOmitted : 0);
+  const empty = rows || '<div class="trace-diff-empty">无文本变更</div>';
+  const more = truncated || diff.truncated ? `<div class="trace-diff-more">已隐藏 ${hiddenLines} 行</div>` : '';
+  return `<div class="trace-diff"><div class="trace-diff-head"><span class="trace-diff-path">${E(diff.filePath)}</span><span class="trace-diff-stat add">+${added}</span><span class="trace-diff-stat del">-${removed}</span></div><div class="trace-diff-code">${empty}${more}</div></div>`;
+}
+
 function toolTitle(name: string): string {
   const lower = String(name || 'tool').toLowerCase().replace(/[-_]+/g, '-');
   if (lower === 'search') return '搜索代码';
@@ -185,16 +227,17 @@ function renderTraceItem(t: any, defaultOpen?: boolean): string {
     const inputBlock = input ? `<div class="trace-card"><div class="trace-card-label">IN</div><pre>${E(input)}</pre></div>` : '';
     const outputLabel = t.status === 'error' ? 'ERROR' : 'OUT';
     const outputBlock = output ? `<div class="trace-card"><div class="trace-card-label${t.status === 'error' ? ' error' : ''}">${outputLabel}</div><pre>${E(output)}</pre></div>` : '';
+    const diffBlock = renderFileDiffMetadata(t.metadata?.diff);
     const collapsed = shouldCollapseTrace(t, output);
     const title = toolTitle(t.name);
     const rawSummary = traceSummaryText(t, input, output);
     const summary = rawSummary !== title && (!output || collapsed || !output.includes(rawSummary)) ? rawSummary : '';
     const summaryBlock = summary ? `<div class="trace-summary-text">${E(summary)}</div>` : '';
     const head = `<div class="trace-head"><div class="trace-title"><span class="trace-summary-title">${E(title)}</span></div>${summaryBlock}</div>`;
-    if (!inputBlock && !outputBlock) {
+    if (!inputBlock && !outputBlock && !diffBlock) {
       return `<div class="trace-node trace-tool trace-${status}"><div class="trace-dot"></div>${head}</div>`;
     }
-    return `<details class="trace-node trace-tool trace-${status} trace-details"${collapsed ? '' : ' open'}><summary class="trace-summary"><div class="trace-dot"></div>${head}</summary><div class="trace-body">${inputBlock}${outputBlock}</div></details>`;
+    return `<details class="trace-node trace-tool trace-${status} trace-details"${collapsed ? '' : ' open'}><summary class="trace-summary"><div class="trace-dot"></div>${head}</summary><div class="trace-body">${inputBlock}${outputBlock}${diffBlock}</div></details>`;
   }
   if (t.type === 'step') {
     return `<div class="trace-node trace-step trace-${t.status || 'info'}"><div class="trace-dot"></div><div class="trace-body"><div class="trace-title"><span class="trace-summary-title">${E(t.text || '')}</span></div></div></div>`;
@@ -233,6 +276,7 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean): string 
       input: b.input,
       output: b.error ? undefined : b.output,
       error: b.error,
+      metadata: b.metadata,
       id: blockId(b),
     });
   }
@@ -246,6 +290,7 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean): string 
       input: b.input,
       output: result?.isError ? undefined : (result?.output || b.output),
       error: result?.isError ? result?.output : undefined,
+      metadata: result?.metadata || b.metadata,
       id: blockId(b),
     });
   }

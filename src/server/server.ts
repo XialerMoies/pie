@@ -197,6 +197,7 @@ function traceFingerprint(trace: TraceEvent): string {
       input: trace.input,
       output: trace.output,
       error: trace.error,
+      metadata: trace.metadata,
       turnId: trace.turnId,
       id: trace.id,
     });
@@ -566,6 +567,7 @@ export function attachSessionEvents(
           input: flowBlock2?.input,
           output: event.result || flowOut || undefined,
           error: event.isError ? (event.result || flowOut) : undefined,
+          metadata: event.metadata,
           status: event.isError ? "error" : "success",
           turnId,
           blockId: "tool-" + (event.toolCallId || flowBlock2?.blockId || nextBlockSeq(chatStream)),

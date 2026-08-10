@@ -4,10 +4,11 @@
  * 与 str_replace_editor 配合使用：str_replace_editor 改已有文件，
  * file_write 创建新文件。两者互补，覆盖所有写场景。
  */
-import { writeFileSync, existsSync, mkdirSync } from "fs";
+import { writeFileSync, existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname } from "path";
 import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool } from "../types.js";
 import { authorizeToolPath, guardToolPath } from "./path-authorization.js";
+import { buildFileDiffMetadata } from "./file-diff.js";
 
 export const fileWriteTool: AgentTool = defineAgentTool({
   name: "file_write",
@@ -31,7 +32,7 @@ export const fileWriteTool: AgentTool = defineAgentTool({
   isReadOnly: false,
   isDestructive: true,
   isConcurrencySafe: false,
-  operations: ["create", "write"],
+  operations: ["create", "read", "write"],
   riskLevel: "high",
   needsPermission: false,
   workspaceBounded: true,
@@ -46,10 +47,18 @@ export const fileWriteTool: AgentTool = defineAgentTool({
     if (!root) return "当前没有活跃 workspace。";
 
     let absPath: string;
+    let isNew: boolean;
+    let oldContent: string | null = null;
     try {
       const candidatePath = guardToolPath(root, fp);
-      const operation = existsSync(candidatePath) ? "write" : "create";
-      absPath = await authorizeToolPath(ctx, root, candidatePath, operation, `agent.file_write.${operation}`);
+      isNew = !existsSync(candidatePath);
+      if (isNew) {
+        absPath = await authorizeToolPath(ctx, root, candidatePath, "create", "agent.file_write.create");
+      } else {
+        const readPath = await authorizeToolPath(ctx, root, candidatePath, "read", "agent.file_write.read");
+        oldContent = readFileSync(readPath, "utf-8");
+        absPath = await authorizeToolPath(ctx, root, candidatePath, "write", "agent.file_write.write");
+      }
     } catch (e: any) {
       return structuredToolError(e.message, "path_authorization_denied", { path: fp });
     }
@@ -58,19 +67,18 @@ export const fileWriteTool: AgentTool = defineAgentTool({
     const parent = dirname(absPath);
     mkdirSync(parent, { recursive: true });
 
-    const isNew = !existsSync(absPath);
-
     // 写文件
     writeFileSync(absPath, cnt, "utf-8");
 
     const lines = cnt.split("\n").length;
     const sizeKB = (Buffer.byteLength(cnt, "utf-8") / 1024).toFixed(1);
+    const diff = buildFileDiffMetadata(fp, oldContent, cnt);
     return structuredToolResult(`${isNew ? "已创建" : "已覆盖"} ${fp}（${lines} 行，${sizeKB}KB）。`, {
       path: fp,
       operation: isNew ? "create" : "write",
       created: isNew,
       bytes: Buffer.byteLength(cnt, "utf-8"),
       lines,
-    });
+    }, [], { diff });
   },
 });

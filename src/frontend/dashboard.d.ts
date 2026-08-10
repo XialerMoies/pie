@@ -47,6 +47,7 @@ interface AssistantBlock {
   input?: unknown;
   output?: string;
   error?: string;
+  metadata?: Record<string, unknown>;
   isError?: boolean;
   toolCallId?: string;
   toolUseId?: string;
