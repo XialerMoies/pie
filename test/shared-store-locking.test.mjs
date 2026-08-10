@@ -197,9 +197,9 @@ describe("shared user store cross-process locking", () => {
 
   it("initializes auth files with exclusive create in both processes", () => {
     const serverSource = readFileSync(resolve(repositoryRoot, "src/server/server.ts"), "utf8");
-    const electronSource = readFileSync(resolve(repositoryRoot, "src/electron/electron-main.ts"), "utf8");
+    const electronSource = readFileSync(resolve(repositoryRoot, "src/electron/server-binding.ts"), "utf8");
     assert.match(serverSource, /STARTUP\.layout\.authFile[\s\S]{0,160}flag:\s*"wx"/);
-    assert.match(electronSource, /AUTH_FILE[\s\S]{0,160}flag:\s*"wx"/);
+    assert.match(electronSource, /spec\.layout\.authFile[\s\S]{0,160}flag:\s*"wx"/);
   });
 
   it("flushes permission audit writes before normal server shutdown exits", () => {

@@ -41,7 +41,7 @@ function waitForExit(child, timeoutMs = 10_000) {
   });
 }
 
-function startServer(workspace, dataRoot, instanceId) {
+function startServer(workspace, dataRoot, instanceId, env = {}) {
   const child = spawn(process.execPath, [
     "--import", "tsx", resolve("src/server/server.ts"),
     "--workspace", workspace,
@@ -49,7 +49,12 @@ function startServer(workspace, dataRoot, instanceId) {
     "--instance-id", instanceId,
   ], {
     cwd: process.cwd(),
-    env: { ...process.env, MY_CODE_AGENT_DESKTOP_TOKEN: `token-${instanceId}`, PI_DEV_PORT: "0" },
+    env: {
+      ...process.env,
+      MY_CODE_AGENT_DESKTOP_TOKEN: `token-${instanceId}`,
+      PI_DEV_PORT: "0",
+      ...env,
+    },
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -534,6 +539,59 @@ describe("workspace ownership lock", () => {
       running.child.stdin.end();
       await waitForExit(running.child);
       assert.strictEqual(existsSync(layout.workspaceLockFile), false);
+    } finally {
+      if (running?.child.exitCode === null) running.child.kill();
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("releases the workspace lock when a desktop-parented server loses stdin", async () => {
+    const f = fixture("workspace-lock-parent-pipe");
+    const instanceId = "parent-pipe-owner";
+    let running;
+    try {
+      running = await startServer(f.workspace, f.dataRoot, instanceId, {
+        PI_ELECTRON_PARENTED: "1",
+      });
+      const layout = resolveDataLayout({
+        dataRoot: f.dataRoot,
+        workspace: f.workspace,
+        instanceId,
+      });
+      assert.strictEqual(existsSync(layout.workspaceLockFile), true);
+
+      const exit = waitForExit(running.child);
+      running.child.stdin.end();
+
+      assert.deepStrictEqual(await exit, { code: 0, signal: null });
+      assert.strictEqual(existsSync(layout.workspaceLockFile), false);
+    } finally {
+      if (running?.child.exitCode === null) running.child.kill();
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a regular CLI server running when stdin closes", async () => {
+    const f = fixture("workspace-lock-cli-pipe");
+    const instanceId = "cli-pipe-owner";
+    let running;
+    try {
+      running = await startServer(f.workspace, f.dataRoot, instanceId);
+      const layout = resolveDataLayout({
+        dataRoot: f.dataRoot,
+        workspace: f.workspace,
+        instanceId,
+      });
+
+      running.child.stdin.end();
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 150));
+
+      assert.strictEqual(running.child.exitCode, null);
+      assert.strictEqual(existsSync(layout.workspaceLockFile), true);
+
+      const exit = waitForExit(running.child);
+      running.child.kill("SIGTERM");
+      await exit;
     } finally {
       if (running?.child.exitCode === null) running.child.kill();
       rmSync(f.root, { recursive: true, force: true });

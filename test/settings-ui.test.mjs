@@ -8,6 +8,7 @@ const win = new Window();
 const storage = new Map();
 const settingsSpies = {
   refreshCalls: [],
+  toastCalls: [],
 };
 
 global.window = win;
@@ -25,7 +26,7 @@ global.E = (value) => String(value)
   .replaceAll("<", "&lt;")
   .replaceAll(">", "&gt;")
   .replaceAll("'", "&#39;");
-global.toast = () => {};
+global.toast = (message, type) => settingsSpies.toastCalls.push([message, type]);
 global.getD = () => {};
 win.__state = { D: null };
 win.App = {
@@ -277,7 +278,14 @@ describe("settings DOM boundary", () => {
   it("selects a storage root through Electron and stages it for restart", async () => {
     const selectedRoot = "E:\\agent-data";
     let postedRoot = null;
-    win.electronAPI = { openFolder: async () => selectedRoot };
+    let selectFolderCalls = 0;
+    let openWorkspaceFolderCalls = 0;
+    let legacyOpenFolderCalls = 0;
+    win.electronAPI = {
+      selectFolder: async () => { selectFolderCalls += 1; return selectedRoot; },
+      openWorkspaceFolder: async () => { openWorkspaceFolderCalls += 1; return null; },
+      openFolder: async () => { legacyOpenFolderCalls += 1; return selectedRoot; },
+    };
     fetchImpl = async (url, init) => {
       if (String(url) === "/api/storage-location" && init?.method === "POST") {
         postedRoot = JSON.parse(String(init.body)).dataRoot;
@@ -295,7 +303,57 @@ describe("settings DOM boundary", () => {
     await flushAsyncWork();
 
     assert.strictEqual(postedRoot, selectedRoot);
+    assert.strictEqual(selectFolderCalls, 1);
+    assert.strictEqual(openWorkspaceFolderCalls, 0);
+    assert.strictEqual(legacyOpenFolderCalls, 0);
     assert.match(document.getElementById("gs-data-root-status")?.textContent || "", /重启后生效/);
+  });
+
+  it("does nothing when storage folder selection is cancelled", async () => {
+    let selectFolderCalls = 0;
+    const postCalls = [];
+    win.electronAPI = {
+      selectFolder: async () => { selectFolderCalls += 1; return null; },
+    };
+    fetchImpl = async (url, init) => {
+      if (init?.method === "POST") postCalls.push([url, init]);
+      if (String(url) === "/api/storage-location") {
+        return { ok: true, json: async () => ({ dataRoot: "E:\\current-data", activeDataRoot: "E:\\current-data", restartRequired: false }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    await openGeneralSettings();
+    document.querySelector('[data-settings-action="choose-data-root"]')?.click();
+    await flushAsyncWork();
+
+    assert.strictEqual(selectFolderCalls, 1);
+    assert.strictEqual(postCalls.length, 0);
+  });
+
+  it("shows an error when storage folder selection rejects", async () => {
+    let selectFolderCalls = 0;
+    const postCalls = [];
+    win.electronAPI = {
+      selectFolder: async () => { selectFolderCalls += 1; throw new Error("storage picker failed"); },
+    };
+    fetchImpl = async (url, init) => {
+      if (init?.method === "POST") postCalls.push([url, init]);
+      if (String(url) === "/api/storage-location") {
+        return { ok: true, json: async () => ({ dataRoot: "E:\\current-data", activeDataRoot: "E:\\current-data", restartRequired: false }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    await openGeneralSettings();
+    document.querySelector('[data-settings-action="choose-data-root"]')?.click();
+    await flushAsyncWork();
+
+    assert.strictEqual(selectFolderCalls, 1);
+    assert.strictEqual(postCalls.length, 0);
+    assert.ok(settingsSpies.toastCalls.some(([message, type]) => (
+      message.includes("storage picker failed") && type === "error"
+    )), JSON.stringify(settingsSpies.toastCalls));
   });
 
   it("persists Timeline and jump settings through their refresh facades without changing session state", async () => {

@@ -32,6 +32,7 @@ function syncMsgScrollPadding(): void {
 
 function layout(): void {
   const app = $('app')!;
+  const lightweightDashboard = (window as any).__emptyWorkspaceMode || (window as any).__workspaceStatusMode;
   app.innerHTML = buildTopBar() + buildSideBar() + buildSidePanel() + buildMainArea() + buildStatusBar();
   bindLayoutActions(app);
   initResizeHandle();
@@ -40,8 +41,11 @@ function layout(): void {
   document.querySelectorAll('.sbar .b[data-side]').forEach(b =>
     (b as HTMLElement).classList.toggle('on', (b as HTMLElement).dataset.side === activePanel));
   const pc = $('pc');
-  if (pc) renderPanel(activePanel, pc);
-  bind();
+  if (pc) {
+    if ((window as any).__workspaceStatusMode) pc.innerHTML = '';
+    else renderPanel(activePanel, pc);
+  }
+  if (!lightweightDashboard) bind();
   syncMsgScrollPadding();
   const fi = $('fi');
   if (fi && typeof ResizeObserver !== 'undefined') {
@@ -49,13 +53,15 @@ function layout(): void {
     ro.observe(fi);
   }
   // 从 UiStateStore 快照恢复会话和文件标签页。
-  (window as any).App?.Session?.restoreSessionTabs?.();
+  if (!lightweightDashboard) {
+    (window as any).App?.Session?.restoreSessionTabs?.();
+  }
   // Problems 底部栏初始化（DOM 已就绪）
   _initProblemsBar();
-  void refreshPermissionModeBadge();
+  if (!lightweightDashboard) void refreshPermissionModeBadge();
   // 空闲预加载 Monaco，让首次文件打开不卡（首屏稳定后 1s）
   setTimeout(() => {
-    if (typeof loadMonaco === 'function' && !(window as any).__monaco) {
+    if (typeof loadMonaco === 'function' && !(window as any).__monaco && !lightweightDashboard) {
       loadMonaco().catch(() => {});
     }
   }, 1000);

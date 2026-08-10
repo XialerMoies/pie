@@ -6,6 +6,11 @@
  */
 import { contextBridge, ipcRenderer } from "electron";
 
+type WorkspaceStatus =
+  | { state: "idle" }
+  | { state: "starting"; workspace: string }
+  | { state: "failed"; workspace: string; message: string };
+
 contextBridge.exposeInMainWorld("electronAPI", {
   getDesktopSessionToken: () => ipcRenderer.invoke("desktop-session-token"),
 
@@ -16,8 +21,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
   newWindow: () => ipcRenderer.invoke("window-new"),
 
   // File dialogs
-  openFile: () => ipcRenderer.invoke("dialog-open-file"),
-  openFolder: () => ipcRenderer.invoke("open-folder-dialog"),
+  openWorkspaceFolder: () => ipcRenderer.invoke("workspace-open-folder"),
+  retryWorkspace: () => ipcRenderer.invoke("workspace-retry"),
+  onWorkspaceStatus: (listener: (status: WorkspaceStatus) => void) => {
+    const wrappedListener = (_event: unknown, status: WorkspaceStatus) => listener(status);
+    ipcRenderer.on("workspace-status", wrappedListener);
+    return () => ipcRenderer.removeListener("workspace-status", wrappedListener);
+  },
+  selectFile: () => ipcRenderer.invoke("dialog-open-file"),
+  selectFolder: () => ipcRenderer.invoke("dialog-select-folder"),
 
   // File actions
   showItemInFolder: (path: string) => ipcRenderer.invoke("show-item-in-folder", path),

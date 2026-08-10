@@ -584,15 +584,15 @@ async function confirmStorageMigration(): Promise<void> {
 
 async function chooseDataRoot(): Promise<void> {
   const api = window.electronAPI;
-  if (!api?.openFolder) {
+  if (!api?.selectFolder) {
     toast('当前环境不支持选择数据目录', 'error');
     return;
   }
 
-  const selected = await api.openFolder();
-  if (!selected) return;
-
   try {
+    const selected = await api.selectFolder();
+    if (!selected) return;
+
     const response = await fetch('/api/storage-location', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

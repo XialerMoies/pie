@@ -39,6 +39,23 @@
 
 <div class="app" id="app"></div>
 
+<div class="workspace-status-overlay" id="workspace-status-overlay" hidden aria-live="polite">
+  <section class="workspace-status-panel" data-workspace-status="starting" hidden>
+    <div class="workspace-status-spinner" aria-hidden="true"></div>
+    <h1>正在启动工作区</h1>
+    <p data-workspace-status-workspace>正在准备项目...</p>
+  </section>
+  <section class="workspace-status-panel workspace-status-failed" data-workspace-status="failed" hidden>
+    <div class="workspace-status-error" aria-hidden="true">!</div>
+    <h1>工作区启动失败</h1>
+    <p data-workspace-status-message>请检查错误信息后重试。</p>
+    <div class="workspace-status-actions">
+      <button class="workspace-status-primary" type="button" data-workspace-status-action="retry">重试</button>
+      <button class="workspace-status-secondary" type="button" data-workspace-status-action="open-folder">打开文件夹</button>
+    </div>
+  </section>
+</div>
+
 <script src="./marked.umd.js"></script>
 <script src="./gen/dashboard.js"></script>
 <script src="./gen/dashboard/dashboard-startup.js"></script>

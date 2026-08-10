@@ -21,6 +21,7 @@ layout-designer.html
 scripts/patch-sdk.mjs
 .git-rewrite/
 .codex/
+.worktrees/
 AGENTS.md
 build/
 docs/

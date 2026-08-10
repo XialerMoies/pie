@@ -47,52 +47,6 @@ function closeFMOutside(ev: MouseEvent): void {
   if (!(ev.target as HTMLElement).closest('#file-menu') && !(ev.target as HTMLElement).closest('.top-tab')) closeFM();
 }
 
-function resetWorkspaceState(workspace: string): void {
-  App.ChatStream.close();
-  App.ChatState.setBusy(false);
-  App.Chat?.resetMsgKeys?.();
-  App.ChatState.clearMessages();
-  const tabs = App.Tabs;
-  if (tabs) {
-    // TabStore 自己清空兼容投影，避免新 workspace 恢复旧标签。
-    tabs.reset();
-  }
-  App.State.resetWorkspace(workspace);
-  App.Chat?.clearAttachments?.();
-  const msgsEl = $('ms');
-  if (msgsEl) { msgsEl.innerHTML = (window as any).msgs ? (window as any).msgs() : ''; msgsEl.scrollTop = 0; }
-  App.ChatTimeline?.sync();
-  const ci = $('ci') as HTMLTextAreaElement | null;
-  if (ci) { ci.disabled = false; ci.value = ''; App.Chat?.resizeComposerInput?.(ci); }
-  const cs = $('cs') as HTMLButtonElement | null;
-  if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = S('iup', 16); }
-  const m = (window as any).__monaco;
-  if (m?.dispose) m.dispose();
-  App.Tabs?.activateTab(null);
-  App.SessionTabs.renderSessionTabs();
-}
-
-function workspacePathKey(path: string): string {
-  const trimmed = path.trim();
-  if (/^[a-zA-Z]:[\\/]/.test(trimmed) || trimmed.startsWith('\\\\')) {
-    return trimmed.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
-  }
-  return trimmed.replace(/\/+$/, '');
-}
-
-async function workspaceSwitchError(response: Response): Promise<string> {
-  const body = await response.text().catch(() => '');
-  if (!body) return `HTTP ${response.status}`;
-  try {
-    const parsed = JSON.parse(body) as { error?: unknown; code?: unknown };
-    const message = typeof parsed.error === 'string' && parsed.error ? parsed.error : `HTTP ${response.status}`;
-    const code = typeof parsed.code === 'string' && parsed.code ? ` (${parsed.code})` : '';
-    return `${message}${code}`;
-  } catch {
-    return body;
-  }
-}
-
 function fileAction(action: string): void {
   const api = (window as any).electronAPI as ElectronAPI | undefined;
   if (action === 'newWindow' && api) {
@@ -100,30 +54,20 @@ function fileAction(action: string): void {
       if (result?.ok) toast('已打开新窗口', 'success');
     }).catch((error) => toast(`新窗口启动失败: ${(error as Error).message}`, 'error'));
   }
-  else if (action === 'openFile' && api) api.openFile().then((p: string | null) => { if (p) toast('已选择: ' + p); });
-  else if (action === 'openFolder' && api) api.openFolder().then(async (p: string | null) => {
-    if (p) {
-      const oldPath = App.State.getWorkspacePath();
-      if (oldPath && workspacePathKey(p) === workspacePathKey(oldPath)) return;
-      try {
-        const r = await fetch('/api/workspace/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspace: p }) });
-        if (!r.ok) throw new Error(await workspaceSwitchError(r));
-      } catch (error) {
+  else if (action === 'openFile' && api) {
+    void api.selectFile()
+      .then((p: string | null) => { if (p) toast('已选择: ' + p); })
+      .catch((error) => {
         const detail = error instanceof Error ? error.message : String(error);
-        toast(`切换工作区失败: ${p} - ${detail}`, 'error');
-        return;
-      }
-      resetWorkspaceState(p);
-      toast('工作区: ' + p);
-      // 重新渲染 Explorer
-      const pc = $('pc');
-      if (pc) renderPanel('explorer', pc);
-      // 重新加载会话列表 + 刷新 Git
-      App.Session.loadSessions();
-      const appNamespace = (window as any).App;
-      if (appNamespace?.Git?.refreshGit) setTimeout(() => appNamespace.Git.refreshGit(), 300);
-    }
-  });
+        toast(`选择文件失败: ${detail}`, 'error');
+      });
+  }
+  else if (action === 'openFolder' && api) {
+    void api.openWorkspaceFolder().catch((error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      toast(`打开工作区失败: ${detail}`, 'error');
+    });
+  }
   else if (action === 'save' && api) { /* handled by Monaco Ctrl+S */ }
   else if (action === 'saveAll' && api) { /* handled by Monaco */ }
   else if (action === 'toggleAutoSave') {
@@ -148,7 +92,6 @@ function launchCli(): void {
 window.toggleFileMenu = toggleFileMenu;
 window.closeFM = closeFM;
 window.fileAction = fileAction as any;
-window.resetWorkspaceState = resetWorkspaceState as any;
 window.launchCli = launchCli;
 
 // ─── App 命名空间绑定 ──────────────────────────────────────
@@ -157,6 +100,5 @@ if (AppFile) {
   AppFile.toggleFileMenu = toggleFileMenu;
   AppFile.closeFM = closeFM;
   AppFile.fileAction = fileAction;
-  AppFile.resetWorkspaceState = resetWorkspaceState;
   AppFile.launchCli = launchCli;
 }

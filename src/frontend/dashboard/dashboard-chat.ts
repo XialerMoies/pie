@@ -727,17 +727,22 @@ function bind(): void {
   const fileBtn = $('fi-file-btn');
   if (fileBtn) {
     fileBtn.addEventListener('click', async () => {
-      const api = (window as any).electronAPI as ElectronAPI | undefined;
-      if (api?.openFile) {
-        const p = await api.openFile();
-        if (p) {
-          const ws = ExplorerService.getWorkspacePath();
-          const relPath = ws ? p.replace(ws.replace(/\\/g, '/'), '').replace(/^\/+/, '') : p;
-          const name = p.split(/[/\\]/).pop() || p;
-          App.Chat?.addAttachment?.({ kind: 'file', path: relPath, name });
+      try {
+        const api = (window as any).electronAPI as ElectronAPI | undefined;
+        if (api?.selectFile) {
+          const p = await api.selectFile();
+          if (p) {
+            const ws = ExplorerService.getWorkspacePath();
+            const relPath = ws ? p.replace(ws.replace(/\\/g, '/'), '').replace(/^\/+/, '') : p;
+            const name = p.split(/[/\\]/).pop() || p;
+            App.Chat?.addAttachment?.({ kind: 'file', path: relPath, name });
+          }
+        } else {
+          toast('请使用 Electron 桌面版', 'info');
         }
-      } else {
-        toast('请使用 Electron 桌面版', 'info');
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        toast(`选择文件失败: ${detail}`, 'error');
       }
     });
   }

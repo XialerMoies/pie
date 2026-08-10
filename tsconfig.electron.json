@@ -13,5 +13,5 @@
     "sourceMap": false,
     "skipLibCheck": true
   },
-  "include": ["src/electron/electron-main.ts", "src/electron/preload.ts"]
+  "include": ["src/electron/*.ts"]
 }

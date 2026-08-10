@@ -1202,6 +1202,10 @@ async function main() {
   process.stdin.on("data", (chunk) => {
     if (String(chunk).split(/\r?\n/).includes("PI_SERVER_SHUTDOWN")) shutdown("stdin");
   });
+  if (process.env.PI_ELECTRON_PARENTED === "1") {
+    process.stdin.once("end", () => shutdown("stdin"));
+    process.stdin.once("close", () => shutdown("stdin"));
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -20,7 +20,9 @@ let preferenceReads = 0;
 const eventSubscriptions = new Map();
 const subscriptionRecords = [];
 let eventSourceConstructed = 0;
-let openFolderCalls = 0;
+let fileOpenFolderCalls = 0;
+let workspaceOpenCalls = 0;
+const toastCalls = [];
 const appEvents = {
   subscribe: (type, handler) => {
     let handlers = eventSubscriptions.get(type);
@@ -35,7 +37,7 @@ const appEvents = {
 };
 global.App = {
   File: {
-    fileAction: (action) => { if (action === "openFolder") openFolderCalls += 1; },
+    fileAction: (action) => { if (action === "openFolder") fileOpenFolderCalls += 1; },
   },
   State: {
     getWorkspacePath: () => workspacePath,
@@ -52,6 +54,15 @@ global.App = {
   Events: appEvents,
 };
 global.window = global;
+global.toast = (message, type) => toastCalls.push([message, type]);
+global.$ = () => null;
+global.renderPanel = () => {};
+global.electronAPI = {
+  openWorkspaceFolder: async () => {
+    workspaceOpenCalls += 1;
+    return { ok: true, action: "focused-existing", workspace: "/other-workspace" };
+  },
+};
 global.EventSource = class {
   constructor() { eventSourceConstructed += 1; }
 };
@@ -104,14 +115,104 @@ describe("ExplorerService", () => {
     });
   });
 
-  it("delegates workspace selection to the authoritative File switch flow", async () => {
+  it("delegates Explorer open-root directly to Electron workspace coordination", async () => {
     workspacePath = "/current-workspace";
-    openFolderCalls = 0;
+    fileOpenFolderCalls = 0;
+    workspaceOpenCalls = 0;
 
     await ExplorerService.applyWorkspace();
 
-    assert.strictEqual(openFolderCalls, 1);
+    assert.strictEqual(workspaceOpenCalls, 1);
+    assert.strictEqual(fileOpenFolderCalls, 0);
     assert.strictEqual(workspacePath, "/current-workspace");
+  });
+
+  it("switches the server workspace and reloads the page in Web mode", async () => {
+    const originalApi = global.electronAPI;
+    const originalSelectWorkspace = ExplorerService.selectWorkspace;
+    const originalFetch = global.fetch;
+    const originalLocation = global.location;
+    const fetchCalls = [];
+    let reloadCalls = 0;
+    workspacePath = "/current-workspace";
+    delete global.electronAPI;
+    ExplorerService.selectWorkspace = async () => "/next-workspace";
+    global.location = { reload: () => { reloadCalls += 1; } };
+    global.fetch = async (url, init) => {
+      fetchCalls.push([url, init]);
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+    };
+
+    try {
+      await ExplorerService.applyWorkspace();
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.strictEqual(fetchCalls[0][0], "/api/workspace/switch");
+      assert.strictEqual(fetchCalls[0][1].method, "POST");
+      assert.deepStrictEqual(JSON.parse(fetchCalls[0][1].body), { workspace: "/next-workspace" });
+      assert.strictEqual(reloadCalls, 1);
+      assert.strictEqual(workspacePath, "/current-workspace", "reload should own renderer state replacement");
+    } finally {
+      global.electronAPI = originalApi;
+      ExplorerService.selectWorkspace = originalSelectWorkspace;
+      global.fetch = originalFetch;
+      global.location = originalLocation;
+    }
+  });
+
+  it("shows a Web workspace switch error without reloading", async () => {
+    const originalApi = global.electronAPI;
+    const originalSelectWorkspace = ExplorerService.selectWorkspace;
+    const originalFetch = global.fetch;
+    const originalLocation = global.location;
+    let reloadCalls = 0;
+    toastCalls.length = 0;
+    workspacePath = "/current-workspace";
+    delete global.electronAPI;
+    ExplorerService.selectWorkspace = async () => "/denied-workspace";
+    global.location = { reload: () => { reloadCalls += 1; } };
+    global.fetch = async () => ({
+      ok: false,
+      status: 403,
+      text: async () => JSON.stringify({ error: "Permission denied", code: "permission_denied" }),
+    });
+
+    try {
+      await ExplorerService.applyWorkspace();
+
+      assert.strictEqual(reloadCalls, 0);
+      assert.strictEqual(workspacePath, "/current-workspace");
+      assert.ok(toastCalls.some(([message, type]) => (
+        message.includes("Permission denied") && message.includes("permission_denied") && type === "error"
+      )), JSON.stringify(toastCalls));
+    } finally {
+      global.electronAPI = originalApi;
+      ExplorerService.selectWorkspace = originalSelectWorkspace;
+      global.fetch = originalFetch;
+      global.location = originalLocation;
+    }
+  });
+
+  it("leaves Web workspace state untouched when selection is cancelled", async () => {
+    const originalApi = global.electronAPI;
+    const originalSelectWorkspace = ExplorerService.selectWorkspace;
+    const originalFetch = global.fetch;
+    let fetchCalls = 0;
+    workspacePath = "/current-workspace";
+    delete global.electronAPI;
+    ExplorerService.selectWorkspace = async () => null;
+    global.fetch = async () => { fetchCalls += 1; throw new Error("unexpected fetch"); };
+
+    try {
+      await ExplorerService.applyWorkspace();
+
+      assert.strictEqual(fetchCalls, 0);
+      assert.strictEqual(workspacePath, "/current-workspace");
+    } finally {
+      global.electronAPI = originalApi;
+      ExplorerService.selectWorkspace = originalSelectWorkspace;
+      global.fetch = originalFetch;
+    }
   });
 
   describe("getFilterEnabled / setFilterEnabled", () => {

@@ -163,7 +163,7 @@ afterEach(async () => {
   while (fixtureRoots.length) rmSync(fixtureRoots.pop(), { recursive: true, force: true });
 });
 
-test("two project instances keep commands, writes, sessions, and shutdown isolated", { timeout: 90_000 }, async () => {
+test("two independent server processes keep commands, writes, sessions, and shutdown isolated", { timeout: 90_000 }, async () => {
   const fixture = createFixture();
   const markerA = join(fixture.workspaceA, "marker.txt");
   const markerB = join(fixture.workspaceB, "marker.txt");
@@ -265,7 +265,7 @@ test("two project instances keep commands, writes, sessions, and shutdown isolat
   }
 });
 
-test("random instance restarts persist workspace and preferences", { timeout: 120_000 }, async () => {
+test("independent server restarts persist workspace and preferences", { timeout: 120_000 }, async () => {
   const fixture = createFixture();
   const preferencePatch = {
     values: {

@@ -1,28 +1,73 @@
 /**
  * My Code Agent — Electron 主进程
- * Each process owns one workspace, one server, and one runtime.
+ * One main process owns multiple workspace windows and their server bindings.
  * Persistent data uses a configurable root; only its pointer stays in OS user data.
  *
- * 崩溃恢复：pi-server 退出时自动重启，定期健康检查
+ * Each bound window owns one server child and AgentRuntime.
  */
-import { app, BrowserWindow, ipcMain, dialog, shell, type IpcMainInvokeEvent } from "electron";
-import { spawn, execSync, type ChildProcess } from "child_process";
+import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
 import { randomUUID } from "crypto";
 import * as http from "http";
 import * as path from "path";
 import * as fs from "fs";
-import { fileURLToPath } from "url";
-import { registerDesktopIpcHandlers, TrustedDesktopRoots } from "./desktop-ipc.js";
+import { fileURLToPath, pathToFileURL } from "url";
+import {
+  resolveDesktopProcessPaths,
+  validateSecondLaunchDataRoot,
+} from "./desktop-bootstrap.js";
+import {
+  createLegacyLaunchWaiterRegistry,
+  parseDesktopLaunchRequest,
+  type DesktopLaunchRequest,
+} from "./desktop-launch.js";
+import {
+  isAllowedDesktopIpcUrl,
+  registerDesktopIpcHandlers,
+  resolveDesktopIpcContext,
+  TrustedDesktopRoots,
+  type DesktopIpcContext,
+  type WorkspaceOpenResult,
+} from "./desktop-ipc.js";
+import {
+  createExternalServerBinding,
+  createNoneServerBinding,
+  createOwnedServerBinding,
+  type ServerBinding,
+} from "./server-binding.js";
+import { resumeQuitAfterDisposal } from "./quit-coordinator.js";
+import { buildCliTerminalLaunch, launchCliTerminal } from "./cli-terminal.js";
+import {
+  WindowManager,
+  type WindowContext,
+  type WorkspaceStatus,
+  type WorkspaceOpenAction as ManagerWorkspaceOpenAction,
+} from "./window-manager.js";
+import { windowPartitionForInstance } from "./window-partition.js";
+import { resolveDataLayout } from "../data/data-layout.js";
 import { readDataRootPointer } from "../data/data-root-config.js";
 import { resolveStartupPaths } from "../server/startup-paths.js";
 import { createDesktopSessionToken } from "../server/security.js";
+import {
+  createElectronE2EDiagnostics,
+  createElectronE2EFailureDiagnostic,
+  sanitizeE2EReopenError,
+  type ElectronE2EReopenErrorDiagnostic,
+} from "./e2e-diagnostics.js";
 
+function initializeElectron(): void {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // ─── 便携路径 ──────────────────────────────────────────────────────
 const APP_ROOT = app.getAppPath();
 const RUNTIME_ROOT = app.isPackaged ? path.dirname(process.execPath) : APP_ROOT;
+const BOOTSTRAP_OS_USER_DATA = app.getPath("userData");
+const ownsSingleInstanceLock = app.requestSingleInstanceLock();
+if (!ownsSingleInstanceLock) {
+  app.quit();
+  return;
+}
+
 const E2E_RESULT_FILE = process.env.NODE_ENV === "test" && process.env.MY_CODE_AGENT_E2E_RESULT_FILE
   ? path.resolve(process.env.MY_CODE_AGENT_E2E_RESULT_FILE)
   : null;
@@ -30,34 +75,129 @@ const E2E_DATA_DIR = E2E_RESULT_FILE && process.env.MY_CODE_AGENT_E2E_DATA_DIR
   ? path.resolve(process.env.MY_CODE_AGENT_E2E_DATA_DIR)
   : null;
 const E2E_MODE = app.isPackaged && !!E2E_RESULT_FILE;
-const E2E_PHASE = E2E_MODE ? process.env.MY_CODE_AGENT_E2E_PHASE || "" : "";
-const DATA_ROOT_POINTER_FILE = path.join(app.getPath("userData"), "data-root.json");
 delete process.env.MY_CODE_AGENT_E2E_RESULT_FILE;
 delete process.env.MY_CODE_AGENT_E2E_DATA_DIR;
-delete process.env.MY_CODE_AGENT_E2E_PHASE;
-const DEFAULT_DATA_ROOT = E2E_DATA_DIR || path.join(RUNTIME_ROOT, "data");
-const CONFIGURED_DATA_ROOT = E2E_DATA_DIR || readDataRootPointer(DATA_ROOT_POINTER_FILE, DEFAULT_DATA_ROOT);
+const BOOTSTRAP_PATHS = resolveDesktopProcessPaths({
+  osUserData: BOOTSTRAP_OS_USER_DATA,
+  runtimeRoot: RUNTIME_ROOT,
+  configuredDataRoot: E2E_DATA_DIR || undefined,
+});
+const CONFIGURED_DATA_ROOT = E2E_DATA_DIR || readDataRootPointer(
+  BOOTSTRAP_PATHS.dataRootPointerFile,
+  BOOTSTRAP_PATHS.dataRoot,
+);
 const STARTUP = resolveStartupPaths({
   appRoot: APP_ROOT,
   argv: process.argv.slice(1),
   env: { ...process.env, PI_DATA_ROOT: process.env.PI_DATA_ROOT || CONFIGURED_DATA_ROOT },
 });
-const DATA_DIR = STARTUP.dataRoot;
-const PI_CONFIG_DIR = STARTUP.layout.userRoot;
+const DESKTOP_PATHS = resolveDesktopProcessPaths({
+  osUserData: BOOTSTRAP_OS_USER_DATA,
+  runtimeRoot: RUNTIME_ROOT,
+  configuredDataRoot: STARTUP.dataRoot,
+});
+const DATA_ROOT_POINTER_FILE = DESKTOP_PATHS.dataRootPointerFile;
+const DATA_DIR = DESKTOP_PATHS.dataRoot;
+const PI_CONFIG_DIR = DESKTOP_PATHS.userRoot;
 const SESSIONS_DIR = STARTUP.layout.sessionsDir;
-const AUTH_FILE = STARTUP.layout.authFile;
 const DESKTOP_SECURITY_TOKEN = (process.env.NODE_ENV === "test" || process.env.VITE_DEV_PORT)
   && process.env.MY_CODE_AGENT_DESKTOP_TOKEN
   ? process.env.MY_CODE_AGENT_DESKTOP_TOKEN
   : createDesktopSessionToken();
 delete process.env.MY_CODE_AGENT_DESKTOP_TOKEN;
-const trustedDesktopRoots = new TrustedDesktopRoots();
+const VITE_RENDERER_ORIGIN = process.env.VITE_DEV_PORT
+  ? `http://127.0.0.1:${Number(process.env.VITE_DEV_PORT)}`
+  : undefined;
+const DASHBOARD_URL = VITE_RENDERER_ORIGIN
+  ? `${VITE_RENDERER_ORIGIN}/dashboard.html`
+  : pathToFileURL(path.join(APP_ROOT, "dist", "frontend", "dashboard.html")).href;
 const electronBootStartedAt = Date.now();
 
 // Packaged E2E runs in restricted Windows environments where Chromium's GPU
 // process and default user cache may be unavailable. Keep this test-only.
-app.setPath("userData", path.join(STARTUP.layout.instanceRoot, "electron-user-data"));
-app.setPath("cache", STARTUP.layout.cacheDir);
+fs.mkdirSync(DESKTOP_PATHS.electronUserData, { recursive: true });
+fs.mkdirSync(DESKTOP_PATHS.electronCache, { recursive: true });
+app.setPath("userData", DESKTOP_PATHS.electronUserData);
+app.setPath("cache", DESKTOP_PATHS.electronCache);
+
+const pendingSecondLaunches: DesktopLaunchRequest[] = [];
+const MAX_PENDING_SECOND_LAUNCHES = 32;
+let secondLaunchHandlingReady = false;
+let pendingSecondLaunchOverflowNoticeShown = false;
+const legacyLaunchWaiters = createLegacyLaunchWaiterRegistry();
+let drainingSecondLaunches: Promise<void> | null = null;
+const e2eSecondLaunches: Array<{ electronPid: number; request: DesktopLaunchRequest; handledAt: number }> = [];
+
+function showPendingSecondLaunchNotice(): void {
+  dialog.showErrorBox("Cannot open My Code Agent", "The pending window request queue is full.");
+}
+
+function drainPendingSecondLaunches(): void {
+  if (drainingSecondLaunches) return;
+  drainingSecondLaunches = (async () => {
+    while (pendingSecondLaunches.length > 0) {
+      const request = pendingSecondLaunches.shift();
+      if (request) await processSecondLaunchRequest(request);
+    }
+    pendingSecondLaunchOverflowNoticeShown = false;
+  })().finally(() => {
+    drainingSecondLaunches = null;
+    if (pendingSecondLaunches.length > 0) drainPendingSecondLaunches();
+  });
+}
+
+function handleSecondLaunchRequest(request: DesktopLaunchRequest): void {
+  try {
+    if (E2E_MODE) e2eStage(`second-instance ${JSON.stringify(request)}`);
+    validateSecondLaunchDataRoot(DESKTOP_PATHS.dataRoot, request.dataRoot);
+    if (pendingSecondLaunches.length >= MAX_PENDING_SECOND_LAUNCHES) {
+      const message = "The pending window request queue is full.";
+      console.error(message);
+      if (request.instanceId) legacyLaunchWaiters.reject(request.instanceId, new Error(message));
+      if (!pendingSecondLaunchOverflowNoticeShown) {
+        pendingSecondLaunchOverflowNoticeShown = true;
+        showPendingSecondLaunchNotice();
+      }
+      return;
+    }
+    pendingSecondLaunches.push(request);
+    if (secondLaunchHandlingReady) drainPendingSecondLaunches();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (request.instanceId) legacyLaunchWaiters.reject(request.instanceId, new Error(message));
+    console.error(message);
+    dialog.showErrorBox("Cannot open My Code Agent", message);
+  }
+}
+
+async function processSecondLaunchRequest(request: DesktopLaunchRequest): Promise<void> {
+  try {
+    if (!request.workspace) {
+      createEmptyManagedWindow();
+    } else {
+      const existing = windowManager.contextForWorkspace(request.workspace);
+      if (existing?.lifecycle === "active") {
+        if (!existing.window.isDestroyed()) existing.window.focus();
+      } else {
+        const context = createEmptyManagedWindow();
+        await windowManager.openWorkspace(context, request.workspace);
+      }
+    }
+    if (E2E_MODE) {
+      e2eSecondLaunches.push({ electronPid: process.pid, request, handledAt: Date.now() });
+    }
+    if (request.instanceId) legacyLaunchWaiters.resolve(request.instanceId);
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    if (request.instanceId) legacyLaunchWaiters.reject(request.instanceId, failure);
+    console.error("Failed to process second launch:", failure);
+    dialog.showErrorBox("Cannot open My Code Agent", failure.message);
+  }
+}
+
+app.on("second-instance", (_event, commandLine, workingDirectory) => {
+  handleSecondLaunchRequest(parseDesktopLaunchRequest(commandLine, workingDirectory));
+});
 
 if (E2E_MODE) {
   app.disableHardwareAcceleration();
@@ -70,56 +210,104 @@ function ensureDir(dir: string) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function addPersistedWorkspaceRoots(): void {
-  trustedDesktopRoots.addPersistedWorkspaceRoots(path.join(PI_CONFIG_DIR, "ui-state.json"));
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  return host === "localhost" || host === "::1" || host === "127.0.0.1" || host.startsWith("127.");
-}
-
-function isAllowedAppUrl(rawUrl: string): boolean {
-  try {
-    const parsed = new URL(rawUrl);
-    if (parsed.protocol !== "http:") return false;
-    if (!isLoopbackHost(parsed.hostname)) return false;
-    const vitePort = process.env.VITE_DEV_PORT;
-    return parsed.port === String(serverPort) || (!!vitePort && parsed.port === String(vitePort));
-  } catch {
-    return false;
-  }
+function isAllowedAppUrl(rawUrl: string, context?: WindowContext): boolean {
+  if (!context) return false;
+  return isAllowedDesktopIpcUrl(rawUrl, context as unknown as DesktopIpcContext, {
+    dashboardUrl: DASHBOARD_URL,
+    viteOrigin: VITE_RENDERER_ORIGIN,
+  });
 }
 
 function hardenWindow(win: BrowserWindow): void {
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event, url) => {
-    if (!isAllowedAppUrl(url)) event.preventDefault();
+    let context: WindowContext | undefined;
+    try { context = windowManager.contextForSender(win.webContents.id); } catch {}
+    if (!isAllowedAppUrl(url, context)) event.preventDefault();
   });
   win.webContents.on("will-attach-webview", (event) => {
     event.preventDefault();
   });
 }
 
-trustedDesktopRoots.addRoot(APP_ROOT);
-trustedDesktopRoots.addRoot(RUNTIME_ROOT);
-trustedDesktopRoots.addRoot(DATA_DIR);
-trustedDesktopRoots.addRoot(STARTUP.workspace);
-trustedDesktopRoots.addRoot(STARTUP.layout.workspaceRoot);
-trustedDesktopRoots.addRoot(STARTUP.layout.instanceRoot);
-
 // ─── Pi 服务器进程 ────────────────────────────────────────────────
-let serverProcess: ChildProcess | null = null;
-let serverPort = 0;
 let mainWindow: BrowserWindow | null = null;
-let restartCount = 0;
-let serverStopping = false;
-let serverShutdownPromise: Promise<void> | null = null;
+let initialContext: WindowContext | null = null;
+let initialServerBinding: ServerBinding = createNoneServerBinding();
 let allowAppQuit = false;
-const MAX_RESTART_COUNT = 5;
-let healthCheckTimer: ReturnType<typeof setInterval> | null = null;
 let e2eProbeStarted = false;
 const e2eDiagnostics: string[] = [];
+const e2eRecorder = E2E_MODE
+  ? createElectronE2EDiagnostics({ electronPid: process.pid })
+  : null;
+const e2eWindowCreatedAt = new WeakMap<BrowserWindow, number>();
+const e2eRecordedContexts = new Set<string>();
+const e2eTrackedContexts = new Set<WindowContext>();
+
+function e2eFailureSnapshot() {
+  const contexts = [...e2eTrackedContexts].filter((context) => (
+    context.lifecycle !== "closed" && !context.window.isDestroyed()
+  ));
+  return e2eRecorder?.snapshot(contexts) || {
+    electronPid: process.pid,
+    windows: [],
+    timings: [],
+  };
+}
+
+function e2eFailureRedactions() {
+  const roots: Array<{ value: string; label: string }> = [];
+  const addRoot = (value: string | null | undefined, label: string) => {
+    if (!value) return;
+    roots.push({ value, label });
+    if (value.includes("\\")) roots.push({ value: value.replaceAll("\\", "/"), label });
+  };
+  addRoot(APP_ROOT, "<app-root>");
+  addRoot(RUNTIME_ROOT, "<runtime-root>");
+  addRoot(DATA_DIR, "<data-root>");
+  addRoot(E2E_DATA_DIR, "<e2e-data-root>");
+  addRoot(E2E_RESULT_FILE ? path.dirname(E2E_RESULT_FILE) : null, "<temp-root>");
+  for (const context of e2eTrackedContexts) {
+    addRoot(context.workspace, "<workspace-root>");
+    if (context.layout) {
+      for (const value of Object.values(context.layout)) addRoot(value, "<private-root>");
+    }
+  }
+  return {
+    secrets: [
+      DESKTOP_SECURITY_TOKEN,
+      ...[...e2eTrackedContexts].map((context) => context.server.token),
+    ].filter(Boolean),
+    roots,
+  };
+}
+
+function recordE2EContext(context: WindowContext): void {
+  if (!e2eRecorder || e2eRecordedContexts.has(context.id)) return;
+  e2eRecordedContexts.add(context.id);
+  e2eTrackedContexts.add(context);
+  e2eRecorder.record(
+    context,
+    "window-created",
+    e2eWindowCreatedAt.get(context.window as BrowserWindow) || Date.now(),
+  );
+}
+
+function recordE2ETiming(
+  context: WindowContext,
+  event: "shell-visible" | "server-ready" | "workbench-loaded",
+): number | null {
+  if (!e2eRecorder) return null;
+  recordE2EContext(context);
+  return e2eRecorder.record(context, event);
+}
+
+function latestE2ETiming(context: WindowContext, event: "window-created" | "shell-visible" | "server-ready" | "workbench-loaded"): number | null {
+  if (!e2eRecorder) return null;
+  return [...e2eRecorder.snapshot([]).timings].reverse().find((timing) => (
+    timing.contextId === context.id && timing.event === event
+  ))?.at || null;
+}
 
 function e2eStage(message: string): void {
   if (!E2E_MODE) return;
@@ -142,14 +330,20 @@ function requestJson(
   pathname: string,
   method = "GET",
   payload?: unknown,
-  options: { includeToken?: boolean; headers?: Record<string, string>; timeoutMs?: number } = {},
+  options: {
+    includeToken?: boolean;
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+    binding?: ServerBinding;
+  } = {},
 ): Promise<{ status: number; body: unknown }> {
   return new Promise((resolveRequest, reject) => {
+    const binding = options.binding || initialServerBinding;
     const body = payload === undefined ? "" : JSON.stringify(payload);
-    const request = http.request(`http://127.0.0.1:${serverPort}${pathname}`, {
+    const request = http.request(`http://127.0.0.1:${binding.port}${pathname}`, {
       method,
       headers: {
-        ...(options.includeToken === false ? {} : { "X-My-Code-Agent-Token": DESKTOP_SECURITY_TOKEN }),
+        ...(options.includeToken === false ? {} : { "X-My-Code-Agent-Token": binding.token }),
         ...(body ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } : {}),
         ...options.headers,
       },
@@ -193,6 +387,27 @@ async function waitForRendererReady(win: BrowserWindow): Promise<void> {
     await new Promise((resolveWait) => setTimeout(resolveWait, 100));
   }
   throw new Error(`Renderer did not finish dashboard bootstrap within 30 seconds: ${JSON.stringify(snapshot)}`);
+}
+
+async function runRendererCookieIsolationProbe(
+  first: BrowserWindow,
+  second: BrowserWindow,
+): Promise<{ firstDashboardStatus: number; secondDashboardStatus: number }> {
+  const bootstrap = (win: BrowserWindow) => win.webContents.executeJavaScript(`(async () => {
+    if (typeof window.bootstrapApi !== "function") throw new Error("Renderer bootstrap API is unavailable");
+    await window.bootstrapApi();
+  })()`, true);
+  await bootstrap(first);
+  await bootstrap(second);
+  const dashboard = (win: BrowserWindow) => win.webContents.executeJavaScript(`(async () => {
+    const response = await fetch("/api/dashboard", { credentials: "include", cache: "no-store" });
+    return response.status;
+  })()`, true);
+  const [firstDashboardStatus, secondDashboardStatus] = await Promise.all([
+    dashboard(first),
+    dashboard(second),
+  ]);
+  return { firstDashboardStatus, secondDashboardStatus };
 }
 
 async function collectRendererE2EResult(win: BrowserWindow, outsidePath: string): Promise<Record<string, unknown>> {
@@ -250,22 +465,25 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
   try {
     await waitForRendererReady(win);
     const e2eRoot = E2E_DATA_DIR || DATA_DIR;
-    const workspace = path.join(e2eRoot, "workspace");
-    const siblingWorkspace = path.join(e2eRoot, "workspace-sibling");
+    const projectA = path.join(e2eRoot, "project-a");
+    const projectB = path.join(e2eRoot, "project-b");
+    const siblingWorkspace = path.join(e2eRoot, "project-a-sibling");
     const externalRoot = path.join(path.dirname(e2eRoot), "external");
-    ensureDir(workspace);
+    ensureDir(projectA);
+    ensureDir(projectB);
     ensureDir(siblingWorkspace);
     ensureDir(externalRoot);
     fs.writeFileSync(path.join(e2eRoot, "read.txt"), "packaged-read", "utf-8");
-    fs.writeFileSync(path.join(workspace, "read.txt"), "workspace-read", "utf-8");
+    fs.writeFileSync(path.join(projectA, "read.txt"), "workspace-read", "utf-8");
+    fs.writeFileSync(path.join(projectB, "read.txt"), "workspace-b-read", "utf-8");
     fs.writeFileSync(path.join(externalRoot, "read.txt"), "external-read", "utf-8");
     fs.writeFileSync(path.join(externalRoot, ".env"), "SECRET=e2e", "utf-8");
     fs.writeFileSync(path.join(externalRoot, "ipc.txt"), "ipc-outside", "utf-8");
     fs.writeFileSync(path.join(siblingWorkspace, "read.txt"), "sibling-read", "utf-8");
 
     const renderer = await collectRendererE2EResult(win, path.join(externalRoot, "ipc.txt"));
-    const textIconStatus = await requestStatus(`http://127.0.0.1:${serverPort}/icons/file_type_text.svg`);
-    const unauthorizedApiStatus = await requestStatus(`http://127.0.0.1:${serverPort}/api/dashboard`);
+    const textIconStatus = await requestStatus(`${initialServerBinding.origin}/icons/file_type_text.svg`);
+    const unauthorizedApiStatus = await requestStatus(`${initialServerBinding.origin}/api/dashboard`);
     const wrongTokenApi = await requestJson("/api/dashboard", "GET", undefined, {
       headers: { "X-My-Code-Agent-Token": "forged-token" },
     });
@@ -306,27 +524,149 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
       sensitiveExternalReadBlocked = error instanceof Error && error.message.includes("timed out");
     }
     const persistedPreferences = await requestJson("/api/preferences");
-    const workspaceSwitch = await requestJson("/api/workspace/switch", "POST", { workspace });
-    const preferencePatch = E2E_PHASE === "first"
-      ? await requestJson("/api/preferences", "PATCH", {
-        values: { "editor-theme": "vs", "explorer-filter": "0" },
-      })
-      : null;
+
+    const contextA = initialContext;
+    if (!contextA) throw new Error("Initial Electron context is unavailable");
+    const projectASelectedAt = Date.now();
+    await windowManager.openWorkspace(contextA, projectA);
     const workspaceRead = await requestJson(
-      `/api/file/read?root=${encodeURIComponent(workspace)}&path=read.txt`,
+      `/api/file/read?root=${encodeURIComponent(projectA)}&path=read.txt`,
+      "GET",
+      undefined,
+      { binding: contextA.server },
     );
     const pathTraversal = await requestJson(
-      `/api/file/read?root=${encodeURIComponent(workspace)}&path=${encodeURIComponent("../read.txt")}`,
+      `/api/file/read?root=${encodeURIComponent(projectA)}&path=${encodeURIComponent("../read.txt")}`,
+      "GET",
+      undefined,
+      { binding: contextA.server },
     );
     const siblingTraversal = await requestJson(
-      `/api/file/read?root=${encodeURIComponent(workspace)}&path=${encodeURIComponent("../workspace-sibling/read.txt")}`,
+      `/api/file/read?root=${encodeURIComponent(projectA)}&path=${encodeURIComponent("../project-a-sibling/read.txt")}`,
+      "GET",
+      undefined,
+      { binding: contextA.server },
     );
+
+    const contextB = createEmptyManagedWindow();
+    await waitForE2ECondition("empty B shell to become visible", () => (
+      latestE2ETiming(contextB, "shell-visible") !== null
+    ));
+    const shellCreatedAt = latestE2ETiming(contextB, "window-created");
+    const shellVisibleAt = latestE2ETiming(contextB, "shell-visible");
+    if (shellCreatedAt === null || shellVisibleAt === null) {
+      throw new Error("Empty B shell timing was not recorded");
+    }
+
+    const serverChildCountBefore = countE2EOwnedServerChildren();
+    const projectAWindow = contextA.window as BrowserWindow;
+    if (E2E_MODE && !projectAWindow.isVisible()) projectAWindow.show();
+    let focusObserved = false;
+    const observeFocus = () => { focusObserved = true; };
+    projectAWindow.on("focus", observeFocus);
+    let duplicateAction: ManagerWorkspaceOpenAction;
+    try {
+      duplicateAction = await windowManager.openWorkspace(contextB, projectA);
+      await waitForE2ECondition("existing project A window focus", () => (
+        focusObserved
+          || projectAWindow.isFocused()
+          || BrowserWindow.getFocusedWindow() === projectAWindow
+      ));
+    } finally {
+      projectAWindow.off("focus", observeFocus);
+    }
+    const focusedWindow = BrowserWindow.getFocusedWindow();
+    const focusedContextId = focusedWindow === projectAWindow && projectAWindow.isFocused()
+      ? contextA.id
+      : null;
+    const duplicateWorkspace = {
+      focusedContextId,
+      action: duplicateAction,
+      attemptedContextId: contextB.id,
+      emptyContextId: contextB.id,
+      serverKindAfter: contextB.server.kind,
+      workspaceAfter: contextB.workspace,
+      windowCount: BrowserWindow.getAllWindows().length,
+      serverChildCountBefore,
+      serverChildCountAfter: countE2EOwnedServerChildren(),
+    };
+
+    const workspaceSelectedAt = Date.now();
+    const projectBAction = await windowManager.openWorkspace(contextB, projectB);
+    const projectBLoadedAt = latestE2ETiming(contextB, "workbench-loaded");
+    if (projectBLoadedAt === null) throw new Error("Project B workbench timing was not recorded");
+    const rendererCookieIsolation = await runRendererCookieIsolationProbe(
+      contextA.window as BrowserWindow,
+      contextB.window as BrowserWindow,
+    );
+
+    const projectALoadedAtBefore = latestE2ETiming(contextA, "workbench-loaded");
+    const projectBLoadedAtBeforeCrash = projectBLoadedAt;
+    const crashedChild = contextB.server.process;
+    const serverPidBefore = crashedChild?.pid || null;
+    if (!crashedChild?.pid || !crashedChild.kill()) {
+      throw new Error("Could not crash project B server child");
+    }
+    await waitForE2ECondition("project B server recovery", () => (
+      !!contextB.server.process?.pid
+        && contextB.server.process.pid !== serverPidBefore
+        && contextB.server.port > 0
+        && (latestE2ETiming(contextB, "workbench-loaded") || 0) > projectBLoadedAtBeforeCrash
+    ));
+    const serverPidAfter = contextB.server.process?.pid || null;
+    const projectALoadedAtAfter = latestE2ETiming(contextA, "workbench-loaded");
+    const projectADashboardAfterCrash = await requestJson(
+      "/api/dashboard",
+      "GET",
+      undefined,
+      { binding: contextA.server },
+    );
+
+    const closingChild = contextB.server.process;
+    (contextB.window as BrowserWindow).close();
+    const reopenedB = createEmptyManagedWindow();
+    let reopenAction: ManagerWorkspaceOpenAction | null = null;
+    let reopenError: ElectronE2EReopenErrorDiagnostic | null = null;
+    try {
+      reopenAction = await windowManager.openWorkspace(reopenedB, projectB);
+    } catch (error) {
+      reopenError = sanitizeE2EReopenError(error);
+    }
+    await waitForE2ECondition("closed B context disposal", () => (
+      contextB.lifecycle === "closed"
+        && contextB.server.process === null
+    ));
+    const closedServerExited = contextB.lifecycle === "closed" && contextB.server.process === null;
+    const projectADashboardAfterClose = await requestJson(
+      "/api/dashboard",
+      "GET",
+      undefined,
+      { binding: contextA.server },
+    );
+
+    writeE2EResult({
+      state: "awaiting-second-launch",
+      electronPid: process.pid,
+      launch: {
+        workspace: projectA,
+        dataRoot: DATA_DIR,
+        instanceId: "e2e-second-executable-launch",
+      },
+    });
+    await waitForE2ECondition("second executable single-instance handoff", () => (
+      e2eSecondLaunches.some((launch) => launch.request.instanceId === "e2e-second-executable-launch")
+    ));
+    const secondLaunch = e2eSecondLaunches.find((launch) => (
+      launch.request.instanceId === "e2e-second-executable-launch"
+    ));
+    if (!secondLaunch) throw new Error("Second executable handoff diagnostic is missing");
+
+    const diagnostics = e2eRecorder!.snapshot([contextA, reopenedB]);
     writeE2EResult({
       ok: true,
       packaged: app.isPackaged,
       STARTUP,
-      pageUrl: win.webContents.getURL(),
-      pageTitle: win.webContents.getTitle(),
+      ...diagnostics,
       renderer,
       textIconStatus,
       unauthorizedApiStatus,
@@ -340,18 +680,64 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
       externalReadStatus: externalRead.status,
       sensitiveExternalReadBlocked,
       persistedPreferences,
-      workspaceSwitchStatus: workspaceSwitch.status,
-      preferencePatch,
       workspaceReadStatus: workspaceRead.status,
       pathTraversalStatus: pathTraversal.status,
       siblingTraversalStatus: siblingTraversal.status,
-      windowCount: BrowserWindow.getAllWindows().length,
+      acceptance: {
+        workspaceA: projectA,
+        workspaceB: projectB,
+        projectASelectedAt,
+        projectBAction,
+        duplicateWorkspace,
+        crashIsolation: {
+          serverPidBefore,
+          serverPidAfter,
+          projectALoadedAtBefore,
+          projectALoadedAtAfter,
+          projectADashboardStatus: projectADashboardAfterCrash.status,
+        },
+        closeReopen: {
+          closedServerPid: closingChild?.pid || null,
+          closedServerExited,
+          projectADashboardStatus: projectADashboardAfterClose.status,
+          reopenAction,
+          reopenError,
+          windowCount: BrowserWindow.getAllWindows().length,
+        },
+        rendererCookieIsolation,
+        secondLaunch: {
+          electronPid: secondLaunch.electronPid,
+          handledAt: secondLaunch.handledAt,
+          windowCount: BrowserWindow.getAllWindows().length,
+        },
+        timing: {
+          shellContextId: contextB.id,
+          workspaceContextId: contextB.id,
+          workspaceSelectedAt,
+          shellVisibleMs: shellVisibleAt - shellCreatedAt,
+          workbenchLoadedMs: projectBLoadedAt - workspaceSelectedAt,
+        },
+      },
     });
   } catch (error) {
+    const snapshot = e2eFailureSnapshot();
+    const redactions = e2eFailureRedactions();
+    const failureDiagnostic = createElectronE2EFailureDiagnostic({
+      error,
+      diagnostics: e2eDiagnostics,
+      snapshot,
+      ...redactions,
+    });
     writeE2EResult({
       ok: false,
-      error: error instanceof Error ? error.stack || error.message : String(error),
-      diagnostics: e2eDiagnostics,
+      ...failureDiagnostic,
+      secondLaunches: e2eSecondLaunches.map((launch) => ({
+        electronPid: launch.electronPid,
+        handledAt: launch.handledAt,
+        instanceId: launch.request.instanceId || null,
+        hasWorkspace: !!launch.request.workspace,
+      })),
+      windowCount: BrowserWindow.getAllWindows().length,
     });
   } finally {
     app.quit();
@@ -366,233 +752,143 @@ function getAppIconPath(): string | undefined {
   return candidates.find((candidate) => fs.existsSync(candidate));
 }
 
-function getServerScript(): string {
-  if (app.isPackaged) {
-    return path.join(APP_ROOT, "dist", "server", "server.js");
-  }
-  return path.join(APP_ROOT, "src", "server", "server.ts");
+function createWindowOwnedServer(input: {
+  workspace: string;
+  dataRoot: string;
+  layout: typeof STARTUP.layout;
+  instanceId: string;
+  token: string;
+  context?: WindowContext;
+}) {
+  return createOwnedServerBinding({
+    workspace: input.workspace,
+    dataRoot: input.dataRoot,
+    layout: input.layout,
+    instanceId: input.instanceId,
+    token: input.token,
+    appRoot: APP_ROOT,
+    runtimeRoot: RUNTIME_ROOT,
+    isPackaged: app.isPackaged,
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+      PI_DEV_PORT: "0",
+      PI_DESKTOP_DATA_ROOT_POINTER: DATA_ROOT_POINTER_FILE,
+      PI_WORKSPACE: input.workspace,
+      PI_DATA_ROOT: input.dataRoot,
+      PI_INSTANCE_ID: input.instanceId,
+    },
+    onUnexpectedExit: ({ code, signal, error }) => {
+      const detail = error?.message || `exit code ${code ?? "unknown"}, signal ${signal ?? "none"}`;
+      console.error(`Pi server for ${input.workspace} exited unexpectedly: ${detail}`);
+    },
+  });
 }
 
-function startPiServer(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    if (serverProcess) {
-      resolve(serverPort);
-      return;
-    }
-    serverStopping = false;
-    serverShutdownPromise = null;
+async function waitForE2ECondition(
+  description: string,
+  predicate: () => boolean,
+  timeoutMs = 30_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+  }
+  throw new Error(`Timed out waiting for E2E condition: ${description}`);
+}
 
-    ensureDir(DATA_DIR);
-    ensureDir(PI_CONFIG_DIR);
-    ensureDir(SESSIONS_DIR);
-    ensureDir(STARTUP.layout.workspaceRoot);
-    ensureDir(STARTUP.layout.instanceRoot);
-    ensureDir(STARTUP.layout.cacheDir);
+function countE2EOwnedServerChildren(): number {
+  return [...e2eTrackedContexts].filter((context) => (
+    context.lifecycle === "active"
+      && context.server.kind === "owned"
+      && context.server.process?.pid
+  )).length;
+}
 
-    try {
-      fs.writeFileSync(AUTH_FILE, JSON.stringify({}, null, 2), { encoding: "utf8", flag: "wx" });
-    } catch (error: any) {
-      if (error?.code !== "EEXIST") throw error;
-    }
-
-    const script = getServerScript();
-    const env = {
-      ...process.env,
-      PI_DESKTOP_DATA: DATA_DIR,
-      PI_DESKTOP_CONFIG: PI_CONFIG_DIR,
-      PI_DESKTOP_SESSIONS: SESSIONS_DIR,
-      PI_DESKTOP_DATA_ROOT_POINTER: DATA_ROOT_POINTER_FILE,
-      PI_WORKSPACE: STARTUP.workspace,
-      PI_DATA_ROOT: STARTUP.dataRoot,
-      PI_INSTANCE_ID: STARTUP.instanceId,
-      PI_USER_CONFIG: STARTUP.layout.userRoot,
-      PI_WORKSPACE_DATA: STARTUP.layout.workspaceRoot,
-      PI_INSTANCE_DATA: STARTUP.layout.instanceRoot,
-      MY_CODE_AGENT_DESKTOP_TOKEN: DESKTOP_SECURITY_TOKEN,
-    };
-
-    if (app.isPackaged) {
-      serverProcess = spawn(process.execPath, [script], {
-        env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
-        stdio: ["pipe", "pipe", "pipe"],
-        cwd: RUNTIME_ROOT,
-        shell: false,
-      });
-    } else {
-      serverProcess = spawn(process.execPath, ["--import", "tsx", script], {
-        env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
-        stdio: ["pipe", "pipe", "pipe"],
-        cwd: APP_ROOT,
-        shell: false,
-      });
-    }
-
-    let output = "";
-    let errorOutput = "";
-    const startupTimer = setTimeout(() => {
-      if (!serverPort) reject(new Error("Pi server startup timeout\n" + output + errorOutput));
-    }, 30000);
-
-    serverProcess.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      output += text;
-      process.stdout.write(`[pi-server] ${text}`);
-
-      const portMatch = output.match(/SERVER_PORT:(\d+)/);
-      if (portMatch) {
-        clearTimeout(startupTimer);
-        const port = parseInt(portMatch[1], 10);
-        serverPort = port;
-        resolve(port);
-      }
+function createInitialServerBinding(): ServerBinding {
+  const vitePort = Number(process.env.VITE_DEV_PORT || 0);
+  if (vitePort > 0) {
+    const apiPort = Number(process.env.PI_DEV_PORT || vitePort);
+    return createExternalServerBinding({
+      port: apiPort,
+      token: DESKTOP_SECURITY_TOKEN,
+      origin: `http://127.0.0.1:${apiPort}`,
     });
-
-    serverProcess.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      errorOutput += text;
-      process.stderr.write(`[pi-server:err] ${text}`);
-    });
-
-    serverProcess.on("exit", (code) => {
-      clearTimeout(startupTimer);
-      const wasReady = serverPort > 0;
-      console.log(`Pi server exited with code ${code}`);
-      serverProcess = null;
-      serverPort = 0;
-
-      if (!wasReady) {
-        reject(new Error(`Pi server exited before ready (${code})\n${output}${errorOutput}`));
-        return;
-      }
-
-      // 崩溃自动重启（非正常退出 && 未超过最大重启次数）
-      if (!serverStopping && code !== 0 && code !== null && restartCount < MAX_RESTART_COUNT) {
-        restartCount++;
-        console.log(`🔄 正在重启 pi-server (第 ${restartCount}/${MAX_RESTART_COUNT} 次)...`);
-        startHealthCheck(); // 重启后重新建立健康检查
-        startPiServer()
-          .then((port) => {
-            console.log(`✅ Pi server restarted on port ${port}`);
-            reloadWindow(port);
-          })
-          .catch((err) => {
-            console.error(`❌ Pi server restart failed:`, err);
-          });
-      } else if (!serverStopping && code !== 0 && code !== null) {
-        console.error(`❌ Pi server crashed and reached max restart count (${MAX_RESTART_COUNT}).`);
-      }
-    });
-
-    serverProcess.on("error", (err) => {
-      clearTimeout(startupTimer);
-      reject(err);
-    });
+  }
+  return createWindowOwnedServer({
+    workspace: STARTUP.workspace,
+    dataRoot: STARTUP.dataRoot,
+    layout: STARTUP.layout,
+    instanceId: STARTUP.instanceId,
+    token: DESKTOP_SECURITY_TOKEN,
   });
+}
+
+initialServerBinding = createInitialServerBinding();
+
+// OwnedServerBinding keeps the direct dev path: spawn(process.execPath, ["--import", "tsx", script], ...).
+function startPiServer(): Promise<number> {
+  if (initialServerBinding.kind === "none") {
+    return Promise.reject(new Error("No initial Pi server binding is configured"));
+  }
+  return initialServerBinding.start();
 }
 
 function stopPiServer(): Promise<void> {
-  stopHealthCheck();
-  if (serverShutdownPromise) return serverShutdownPromise;
-  serverStopping = true;
-  const child = serverProcess;
-  serverPort = 0;
-  if (!child) return Promise.resolve();
+  return initialContext ? windowManager.disposeAll() : initialServerBinding.stop();
+}
 
-  serverShutdownPromise = new Promise((resolve) => {
-    let settled = false;
-    let forceTimer: ReturnType<typeof setTimeout> | null = null;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      if (forceTimer) clearTimeout(forceTimer);
-      resolve();
-    };
+function reloadWindow(_port: number): Promise<void> {
+  return initialContext ? loadContextApplication(initialContext) : Promise.resolve();
+}
 
-    child.once("exit", finish);
-    if (child.exitCode !== null || child.signalCode !== null) {
-      finish();
-      return;
+const windowManager = new WindowManager({
+  dataRoot: STARTUP.dataRoot,
+  createWindow: createManagedBrowserWindow,
+  createInstanceId: () => `instance-${randomUUID()}`,
+  createToken: createDesktopSessionToken,
+  createTrustedRoots: () => {
+    const roots = new TrustedDesktopRoots();
+    roots.addRoot(APP_ROOT);
+    roots.addRoot(RUNTIME_ROOT);
+    return roots;
+  },
+  createNoneServerBinding,
+  resolveDataLayout,
+  createOwnedServerBinding: (input) => createWindowOwnedServer(input),
+  switchExternalWorkspace: async (context, workspace) => {
+    const result = await requestJson("/api/workspace/switch", "POST", { workspace }, {
+      binding: context.server,
+    });
+    if (result.status < 200 || result.status >= 300) {
+      const body = result.body && typeof result.body === "object" && "error" in result.body
+        ? String((result.body as { error: unknown }).error)
+        : JSON.stringify(result.body);
+      throw new Error(`External workspace switch failed (${result.status}): ${body}`);
     }
+  },
+  showWindowStatus: showContextDashboard,
+  onServerReady: loadContextApplication,
+  onError: (error, context) => {
+    console.error(`Window ${context.id} server lifecycle failed:`, error);
+  },
+});
 
-    try { child.stdin?.write("PI_SERVER_SHUTDOWN\n"); } catch {}
-    try { child.stdin?.end(); } catch {}
-    forceTimer = setTimeout(() => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        finish();
-        return;
-      }
-      if (process.platform === "win32") {
-        try { execSync(`taskkill /F /T /PID ${child.pid}`, { stdio: "ignore" }); } catch {}
-      } else {
-        try { child.kill("SIGKILL"); } catch {}
-      }
-      finish();
-    }, 2000);
-  });
-  return serverShutdownPromise;
-}
-
-// ─── 健康检查 ──────────────────────────────────────────────────────
-
-function startHealthCheck(): void {
-  stopHealthCheck();
-  healthCheckTimer = setInterval(() => {
-    if (!serverPort) return;
-    const req = http.get(`http://127.0.0.1:${serverPort}/api/dashboard`, {
-      headers: { "X-My-Code-Agent-Token": DESKTOP_SECURITY_TOKEN },
-    }, (res) => {
-      if (res.statusCode !== 200) {
-        console.warn(`⚠️  Health check returned status ${res.statusCode}`);
-      }
-    });
-    req.on("error", () => {
-      console.warn("⚠️  Health check failed — server may be down");
-      // 如果 serverProcess 还存在但健康检查失败，尝试清理重启
-      if (serverProcess) {
-        console.log("🔄  Health check failed, attempting restart...");
-        stopPiServer();
-        restartCount = 0; // 重置计数器，让 exit handler 触发
-        // 手动触发 restart (exit handler 会处理)
-      }
-    });
-    req.setTimeout(5000, () => {
-      req.destroy();
-      console.warn("⚠️  Health check timed out");
-    });
-  }, 30000); // 每 30 秒检查一次
-}
-
-function stopHealthCheck(): void {
-  if (healthCheckTimer) {
-    clearInterval(healthCheckTimer);
-    healthCheckTimer = null;
-  }
-}
-
-function reloadWindow(port: number): void {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    const vitePort = process.env.VITE_DEV_PORT;
-    if (vitePort) {
-      mainWindow.loadURL(`http://127.0.0.1:${vitePort}`);
-    } else {
-      mainWindow.loadURL(`http://127.0.0.1:${port}`);
-    }
-  }
+function createEmptyManagedWindow(): WindowContext {
+  const context = windowManager.createEmptyWindow();
+  recordE2EContext(context);
+  return context;
 }
 
 // ─── 窗口创建 ──────────────────────────────────────────────────────
 
-function createWindow() {
+function createManagedBrowserWindow(instanceId: string): BrowserWindow {
   console.log(`[startup] electron-create-window wall=${Date.now()} total=${Date.now() - electronBootStartedAt}ms`);
-  e2eStage(`createWindow:start serverPort=${serverPort} vitePort=${process.env.VITE_DEV_PORT || ""}`);
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.focus();
-    e2eStage("createWindow:reused");
-    return;
-  }
+  e2eStage(`createWindow:start serverPort=${initialServerBinding.port} vitePort=${process.env.VITE_DEV_PORT || ""}`);
 
   const windowIcon = getAppIconPath();
-  mainWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 1100,
     height: 760,
     minWidth: 600,
@@ -607,214 +903,271 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      partition: windowPartitionForInstance(instanceId),
     },
-    show: !E2E_MODE,
+    show: false,
     autoHideMenuBar: true,
   });
+  e2eWindowCreatedAt.set(win, Date.now());
   e2eStage("createWindow:browser-window-created");
-  hardenWindow(mainWindow);
-
-  const vitePort = process.env.VITE_DEV_PORT;
-  if (vitePort) {
-    mainWindow.loadURL(`http://127.0.0.1:${vitePort}`);
-  } else if (serverPort) {
-    mainWindow.loadURL(`http://127.0.0.1:${serverPort}`);
-  }
-  e2eStage(`createWindow:loadURL ${mainWindow.webContents.getURL() || "pending"}`);
+  hardenWindow(win);
+  e2eStage(`createWindow:loadURL ${win.webContents.getURL() || "pending"}`);
 
   if (process.env.NODE_ENV === "development") {
-    mainWindow.webContents.openDevTools({ mode: "detach" });
+    win.webContents.openDevTools({ mode: "detach" });
   }
 
   console.log(`[startup] electron-ready wall=${Date.now()} total=${Date.now() - electronBootStartedAt}ms`);
   console.log("✅ Window ready");
 
-  mainWindow.webContents.on("did-finish-load", () => {
-    e2eStage(`webContents:did-finish-load ${mainWindow?.webContents.getURL() || ""}`);
-    if (mainWindow) void runPackagedE2EProbe(mainWindow);
-    console.log("📄 Page loaded:", mainWindow?.webContents.getTitle());
+  win.webContents.on("did-finish-load", () => {
+    e2eStage(`webContents:did-finish-load ${win.webContents.getURL() || ""}`);
+    if (initialContext?.window === win) void runPackagedE2EProbe(win);
+    console.log("📄 Page loaded:", win.webContents.getTitle());
   });
 
-  mainWindow.webContents.on("did-fail-load", (_event: unknown, errorCode: number, errorDescription: string, url: string) => {
+  win.webContents.on("did-fail-load", (_event: unknown, errorCode: number, errorDescription: string, url: string) => {
     e2eStage(`webContents:did-fail-load ${errorCode} ${errorDescription} ${url}`);
     console.error(`❌ Window load failed: ${errorDescription} (code: ${errorCode}) url: ${url}`);
   });
 
-  mainWindow.webContents.on("console-message", (details) => {
+  win.webContents.on("console-message", (details) => {
     if (E2E_MODE) e2eDiagnostics.push(`console[${details.level}] ${details.sourceId}:${details.lineNumber} ${details.message}`);
     if (details.message.includes("[startup]") || details.message.includes("404") || details.message.includes("Failed") || details.message.includes("Error")) {
       console.warn(`[page:${details.sourceId}:${details.lineNumber}] ${details.message}`);
     }
   });
 
-  mainWindow.webContents.on("preload-error" as any, (_event: Electron.Event, preloadPath: string, error: Error) => {
+  win.webContents.on("preload-error" as any, (_event: Electron.Event, preloadPath: string, error: Error) => {
     e2eStage(`webContents:preload-error ${preloadPath}`);
     if (E2E_MODE) e2eDiagnostics.push(`preload-error-detail ${preloadPath}: ${error.stack || error.message}`);
   });
 
-  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+  win.webContents.on("render-process-gone", (_event, details) => {
     e2eStage(`webContents:render-process-gone ${details.reason} ${details.exitCode}`);
   });
-  mainWindow.webContents.on("unresponsive", () => e2eStage("webContents:unresponsive"));
+  win.webContents.on("unresponsive", () => e2eStage("webContents:unresponsive"));
 
-  mainWindow.once("focus", () => console.log("🔲 Window focused"));
+  win.once("focus", () => console.log("🔲 Window focused"));
 
-  mainWindow.on("closed", () => {
-    mainWindow = null;
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = null;
   });
+  return win;
+}
+
+function createWindow(): WindowContext {
+  if (initialContext?.lifecycle === "active" && !initialContext.window.isDestroyed()) {
+    initialContext.window.focus();
+    e2eStage("createWindow:reused");
+    return initialContext;
+  }
+  initialContext = windowManager.createInitialWindow({
+    instanceId: STARTUP.instanceId,
+    workspace: STARTUP.workspace,
+    layout: STARTUP.layout,
+    token: DESKTOP_SECURITY_TOKEN,
+    server: initialServerBinding,
+  });
+  recordE2EContext(initialContext);
+  mainWindow = initialContext.window as BrowserWindow;
+  return initialContext;
+}
+
+interface WorkspaceStatusLoad {
+  ready: boolean;
+  status: WorkspaceStatus;
+}
+
+const workspaceStatusLoads = new WeakMap<BrowserWindow, WorkspaceStatusLoad>();
+
+function dashboardStatusUrl(status: WorkspaceStatus): string {
+  const params = new URLSearchParams();
+  if (status.state === "idle") {
+    params.set("empty-workspace", "1");
+  } else {
+    params.set("workspace-state", status.state);
+    params.set("workspace", status.workspace);
+    if (status.state === "failed") params.set("message", status.message);
+  }
+  return `${DASHBOARD_URL}?${params.toString()}`;
+}
+
+function showContextDashboard(context: WindowContext, status: WorkspaceStatus): void {
+  if (context.window.isDestroyed()) return;
+  const win = context.window as BrowserWindow;
+  recordE2EContext(context);
+  if (!E2E_MODE) win.show();
+
+  const current = workspaceStatusLoads.get(win);
+  if (current && (!current.ready || win.webContents.getURL().startsWith(DASHBOARD_URL))) {
+    current.status = status;
+    if (current.ready) win.webContents.send("workspace-status", status);
+    return;
+  }
+
+  const load: WorkspaceStatusLoad = { ready: false, status };
+  workspaceStatusLoads.set(win, load);
+  void win.loadURL(dashboardStatusUrl(status)).then(() => {
+    if (win.isDestroyed() || workspaceStatusLoads.get(win) !== load) return;
+    load.ready = true;
+    if (E2E_MODE) win.show();
+    recordE2ETiming(context, "shell-visible");
+    win.webContents.send("workspace-status", load.status);
+  }).catch((error) => {
+    console.error(`Window ${context.id} dashboard status navigation failed:`, error);
+  });
+}
+
+async function loadContextApplication(context: WindowContext): Promise<void> {
+  if (context.window.isDestroyed()) return;
+  recordE2ETiming(context, "server-ready");
+  const vitePort = context === initialContext ? Number(process.env.VITE_DEV_PORT || 0) : 0;
+  const target = vitePort > 0 ? `http://127.0.0.1:${vitePort}` : context.server.origin;
+  if (!target) return;
+  const win = context.window as BrowserWindow;
+  workspaceStatusLoads.delete(win);
+  win.show();
+  await win.loadURL(target);
+  recordE2ETiming(context, "workbench-loaded");
 }
 
 // ─── IPC 窗口控制 ────────────────────────────────────────────────
 
 // ─── IPC 文件菜单 ──────────────────────────────────────────────────
-function spawnCliTerminal(): boolean {
-  if (process.platform === "win32") {
-    execSync(`start cmd /k "npx tsx src/server/main.ts --cli"`, { cwd: APP_ROOT, stdio: "ignore" });
-  } else if (process.platform === "darwin") {
-    const escaped = APP_ROOT.replace(/'/g, `'\\''`);
-    execSync(`osascript -e 'tell application "Terminal" to do script "cd '\\''${escaped}'\\'' && exec npx tsx src/server/main.ts --cli"'`, { cwd: APP_ROOT, stdio: "ignore" });
-  } else {
-    execSync(`x-terminal-emulator -e "npx tsx src/server/main.ts --cli"`, { cwd: APP_ROOT, stdio: "ignore" });
-  }
-  return true;
-}
-
-function validateDesktopIpcSender(event: unknown): void {
-  const ipcEvent = event as IpcMainInvokeEvent;
-  const sender = ipcEvent.sender;
-  const senderUrl = ipcEvent.senderFrame?.url || sender?.getURL?.() || "";
-  if (!mainWindow || sender !== mainWindow.webContents || !isAllowedAppUrl(senderUrl)) {
-    throw new Error("Desktop IPC request is not from the trusted app window");
-  }
-}
-
-function getDesktopSessionToken(): string {
-  return DESKTOP_SECURITY_TOKEN;
-}
-
-function launchWindowForWorkspace(
-  workspace: string,
-  instanceId = `instance-${randomUUID()}`,
-): Promise<{ ok: true; workspace: string; instanceId: string }> {
-  if (!path.isAbsolute(workspace) || !fs.existsSync(workspace) || !fs.statSync(workspace).isDirectory()) {
-    throw new Error("Project workspace must be an existing absolute directory");
-  }
-
-  const appArgs = app.isPackaged ? [] : [APP_ROOT];
-  const args = [
-    ...appArgs,
-    "--workspace", path.resolve(workspace),
-    "--data-root", STARTUP.dataRoot,
-    "--instance-id", instanceId,
-  ];
-  const env = { ...process.env };
-  for (const key of [
-    "VITE_DEV_PORT",
-    "PI_DEV_PORT",
-    "SERVER_PORT",
-    "PI_WORKSPACE",
-    "PI_DATA_ROOT",
-    "PI_DESKTOP_DATA",
-    "PI_INSTANCE_ID",
-    "PI_USER_CONFIG",
-    "PI_WORKSPACE_DATA",
-    "PI_INSTANCE_DATA",
-    "MY_CODE_AGENT_DESKTOP_TOKEN",
-  ]) delete env[key];
-
-  const child = spawn(process.execPath, args, {
-    cwd: RUNTIME_ROOT,
-    env,
-    detached: true,
-    stdio: "ignore",
-    shell: false,
-    windowsHide: false,
+function spawnCliTerminal(context: DesktopIpcContext): boolean {
+  if (!context.workspace) return false;
+  const launch = buildCliTerminalLaunch({
+    platform: process.platform,
+    appRoot: APP_ROOT,
+    workspace: context.workspace,
+    dataRoot: DATA_DIR,
+    electronExecutable: process.execPath,
+    isPackaged: app.isPackaged,
+    env: process.env,
   });
-  return new Promise((resolveLaunch, rejectLaunch) => {
-    child.once("error", rejectLaunch);
-    child.once("spawn", () => {
-      child.unref();
-      resolveLaunch({ ok: true, workspace: path.resolve(workspace), instanceId });
-    });
+  return launchCliTerminal(launch);
+}
+
+function resolveDesktopContext(event: unknown): DesktopIpcContext {
+  return resolveDesktopIpcContext(event, {
+    contextForSender: (senderId) => windowManager.contextForSender(senderId) as unknown as DesktopIpcContext,
+    dashboardUrl: DASHBOARD_URL,
+    viteOrigin: VITE_RENDERER_ORIGIN,
   });
 }
 
-function launchEmptyWindow(): Promise<{ ok: true; instanceId: string }> {
-  const instanceId = `instance-${randomUUID()}`;
-  const instanceRoot = path.join(STARTUP.dataRoot, "instances", instanceId);
-  const workspace = path.join(STARTUP.dataRoot, "instances", instanceId, "empty-workspace");
-  ensureDir(workspace);
-
-  return launchWindowForWorkspace(workspace, instanceId)
-    .then(() => ({ ok: true as const, instanceId }))
-    .catch((error) => {
-      try { fs.rmSync(instanceRoot, { recursive: true, force: true }); } catch {}
-      throw error;
-    });
+async function selectDialogPath(
+  context: DesktopIpcContext,
+  property: "openFile" | "openDirectory",
+): Promise<string | null> {
+  const result = await dialog.showOpenDialog(context.window as BrowserWindow, {
+    properties: [property],
+  });
+  return result.canceled ? null : result.filePaths[0] || null;
 }
 
-registerDesktopIpcHandlers({
-  ipcMain,
-  getMainWindow: () => mainWindow,
-  showOpenDialog: (options) => dialog.showOpenDialog({ properties: options.properties }),
-  launchEmptyWindow,
-  showItemInFolder: (filePath) => shell.showItemInFolder(filePath),
-  trashItem: (filePath) => shell.trashItem(filePath),
-  spawnTerminal: spawnCliTerminal,
-  getDesktopSessionToken,
-  validateSender: validateDesktopIpcSender,
-  trustedRoots: trustedDesktopRoots,
-});
+function mapWorkspaceOpenAction(action: ManagerWorkspaceOpenAction): WorkspaceOpenResult["action"] {
+  return action === "bound" ? "binding" : action === "switched" ? "switching" : action;
+}
+
+async function openWorkspaceFolder(context: DesktopIpcContext): Promise<WorkspaceOpenResult | null> {
+  const selected = await selectDialogPath(context, "openDirectory");
+  if (!selected) return null;
+  const action = await windowManager.openWorkspace(context as unknown as WindowContext, selected);
+  return { ok: true, workspace: selected, action: mapWorkspaceOpenAction(action) };
+}
+
+if (ownsSingleInstanceLock) {
+  registerDesktopIpcHandlers({
+    ipcMain,
+    resolveContext: resolveDesktopContext,
+    createEmptyWindow: () => {
+      const context = createEmptyManagedWindow();
+      return { ok: true as const, instanceId: context.instanceId };
+    },
+    openWorkspaceFolder,
+    retryWorkspace: async (context) => {
+      await windowManager.retryWorkspace(context as unknown as WindowContext);
+    },
+    selectFolder: (context) => selectDialogPath(context, "openDirectory"),
+    selectFile: (context) => selectDialogPath(context, "openFile"),
+    showItemInFolder: (_context, filePath) => shell.showItemInFolder(filePath),
+    trashItem: (_context, filePath) => shell.trashItem(filePath),
+    spawnTerminal: spawnCliTerminal,
+  });
+}
 
 const earlyServerReady = process.env.VITE_DEV_PORT ? null : startPiServer();
 void earlyServerReady?.catch(() => undefined);
 
 app.whenReady().then(async () => {
+  if (!ownsSingleInstanceLock) return;
   e2eStage("app:when-ready");
   ensureDir(DATA_DIR);
   ensureDir(PI_CONFIG_DIR);
   ensureDir(SESSIONS_DIR);
-  addPersistedWorkspaceRoots();
 
   const isDev = process.env.VITE_DEV_PORT;
   if (isDev) {
     console.log(`📡 Dev mode: loading from Vite at http://127.0.0.1:${isDev}`);
-    createWindow();
+    const context = createWindow();
+    if (context.server.kind === "external") await loadContextApplication(context);
   } else {
     const serverReady = earlyServerReady ?? startPiServer();
     e2eStage("app:before-create-window");
-    createWindow();
+    const context = createWindow();
     e2eStage("app:after-create-window");
     try {
       const port = await serverReady;
       console.log(`✅ Pi server started on port ${port}`);
-      startHealthCheck();
-      reloadWindow(port);
+      await reloadWindow(port);
     } catch (err) {
-      dialog.showErrorBox("无法启动 My Code Agent", err instanceof Error ? err.message : String(err));
-      console.error("❌ Failed to start:", err);
-      app.quit();
+      if (windowManager.reportWorkspaceFailure(context, err)) {
+        dialog.showErrorBox("无法启动 My Code Agent", err instanceof Error ? err.message : String(err));
+        console.error("❌ Failed to start:", err);
+        if (!context.window.isDestroyed()) context.window.focus();
+      }
     }
   }
 
+  secondLaunchHandlingReady = true;
+  drainPendingSecondLaunches();
+
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createEmptyManagedWindow();
+    }
   });
 });
 
 app.on("window-all-closed", () => {
+  if (!ownsSingleInstanceLock) return;
   if (process.platform === "darwin") {
-    void stopPiServer();
+    void stopPiServer().catch((error) => {
+      console.error("Failed to stop Pi server while closing windows:", error);
+    });
   } else {
     app.quit();
   }
 });
 
 app.on("before-quit", (event) => {
+  if (!ownsSingleInstanceLock) return;
   if (allowAppQuit) return;
   event.preventDefault();
-  void stopPiServer().finally(() => {
-    allowAppQuit = true;
-    app.quit();
+  void resumeQuitAfterDisposal({
+    dispose: stopPiServer,
+    resumeQuit: () => {
+      allowAppQuit = true;
+      app.quit();
+    },
+    reportFailure: (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[electron] Shutdown failed; application remains open: ${message}`);
+    },
   });
 });
+}
+
+initializeElectron();

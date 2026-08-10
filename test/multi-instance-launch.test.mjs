@@ -25,6 +25,12 @@ import {
   registerDesktopIpcHandlers,
   TrustedDesktopRoots,
 } from "../src/electron/desktop-ipc.ts";
+import {
+  LEGACY_LAUNCH_HANDOFF_ERROR,
+  drainSecondLaunchRequests,
+  parseDesktopLaunchRequest,
+  createLegacyLaunchWaiterRegistry,
+} from "../src/electron/desktop-launch.ts";
 
 function fixture(name) {
   const root = mkdtempSync(join(tmpdir(), `multi-instance-launch-${name}-`));
@@ -45,6 +51,20 @@ class IpcMainMock {
   handle(channel, handler) { this.handles.set(channel, handler); }
   on(channel, handler) { this.listeners.set(channel, handler); }
   invoke(channel, ...args) { return this.handles.get(channel)({}, ...args); }
+}
+
+class ChildProcessMock {
+  listeners = new Map();
+  exitCode = null;
+  once(event, listener) {
+    this.listeners.set(event, listener);
+    return this;
+  }
+  emit(event, ...args) {
+    const listener = this.listeners.get(event);
+    if (listener) listener(...args);
+  }
+  unref() {}
 }
 
 function startServer({ workspace, dataRoot, instanceId, token }) {
@@ -115,6 +135,92 @@ async function waitFor(predicate, message, timeoutMs = 5_000) {
 }
 
 describe("multi-instance launch and migration UX", () => {
+  it("preserves instance-id when parsing a second-instance request", () => {
+    const request = parseDesktopLaunchRequest(
+      ["app.exe", "--workspace", "workspace-a", "--data-root", "data", "--instance-id", "legacy-1"],
+      "E:/launch-directory",
+    );
+
+    assert.deepStrictEqual(request, {
+      workspace: resolve("E:/launch-directory/workspace-a"),
+      dataRoot: resolve("E:/launch-directory/data"),
+      instanceId: "legacy-1",
+    });
+  });
+
+  it("keeps a legacy launch promise pending after child spawn", async () => {
+    const child = new ChildProcessMock();
+    const registry = createLegacyLaunchWaiterRegistry({ timeoutMs: 1_000 });
+    const launch = registry.register("legacy-spawn", child);
+    child.emit("spawn");
+
+    const result = await Promise.race([
+      launch.then(() => "resolved", () => "rejected"),
+      new Promise((resolveWait) => setTimeout(() => resolveWait("pending"), 10)),
+    ]);
+
+    assert.strictEqual(result, "pending");
+    assert.strictEqual(registry.size(), 1);
+    registry.reject("legacy-spawn", new Error(LEGACY_LAUNCH_HANDOFF_ERROR));
+    await assert.rejects(launch, new RegExp(LEGACY_LAUNCH_HANDOFF_ERROR));
+  });
+
+  it("rejects only the waiter matching a second-instance request", async () => {
+    const first = new ChildProcessMock();
+    const second = new ChildProcessMock();
+    const registry = createLegacyLaunchWaiterRegistry({ timeoutMs: 1_000 });
+    const firstLaunch = registry.register("legacy-a", first);
+    const secondLaunch = registry.register("legacy-b", second);
+    const rejected = [];
+
+    drainSecondLaunchRequests([
+      { instanceId: "legacy-a" },
+    ], {
+      rejectWaiter: (instanceId) => registry.reject(instanceId, new Error(LEGACY_LAUNCH_HANDOFF_ERROR)),
+      focus: () => rejected.push("focus"),
+      showErrorBox: () => rejected.push("modal"),
+    });
+
+    await assert.rejects(firstLaunch, new RegExp(LEGACY_LAUNCH_HANDOFF_ERROR));
+    assert.strictEqual(registry.size(), 1);
+    assert.deepStrictEqual(rejected, []);
+    registry.reject("legacy-b", new Error("cleanup"));
+    await assert.rejects(secondLaunch, /cleanup/);
+  });
+
+  it("cleans a waiter on child error, early exit, and timeout", async () => {
+    const registry = createLegacyLaunchWaiterRegistry({ timeoutMs: 5 });
+    const erroredChild = new ChildProcessMock();
+    const exitedChild = new ChildProcessMock();
+    const timedOutChild = new ChildProcessMock();
+    const errored = registry.register("legacy-error", erroredChild);
+    const exited = registry.register("legacy-exit", exitedChild);
+    const timedOut = registry.register("legacy-timeout", timedOutChild);
+
+    erroredChild.emit("error", new Error("spawn failed"));
+    exitedChild.emit("exit", 1, null);
+
+    await assert.rejects(errored, /spawn failed/);
+    await assert.rejects(exited, /exited before handoff/);
+    await assert.rejects(timedOut, /timed out/);
+    assert.strictEqual(registry.size(), 0);
+  });
+
+  it("coalesces 32 external queued requests into one notice", () => {
+    let focusCalls = 0;
+    let modalCalls = 0;
+    drainSecondLaunchRequests(Array.from({ length: 32 }, (_, index) => ({
+      workspace: `workspace-${index}`,
+    })), {
+      rejectWaiter: () => false,
+      focus: () => { focusCalls++; },
+      showErrorBox: () => { modalCalls++; },
+    });
+
+    assert.strictEqual(focusCalls, 1);
+    assert.strictEqual(modalCalls, 1);
+  });
+
   it("previews matching legacy sessions with bytes and reports collisions without writing", () => {
     const f = fixture("preview");
     try {
@@ -179,17 +285,31 @@ describe("multi-instance launch and migration UX", () => {
       const ipcMain = new IpcMainMock();
       const calls = [];
       const roots = new TrustedDesktopRoots();
+      const context = {
+        id: "sender",
+        window: {
+          webContents: { id: 1 },
+          minimize() {},
+          isMaximized: () => false,
+          maximize() {},
+          unmaximize() {},
+          close() {},
+        },
+        token: "token",
+        trustedRoots: roots,
+        server: { kind: "none", port: 0, origin: "" },
+      };
       registerDesktopIpcHandlers({
         ipcMain,
-        getMainWindow: () => null,
-        showOpenDialog: async () => { calls.push("dialog"); return { canceled: false, filePaths: [f.workspace] }; },
-        launchEmptyWindow: () => { calls.push("empty-window"); return { ok: true, instanceId: "empty-1" }; },
+        resolveContext: () => context,
+        createEmptyWindow: () => { calls.push("empty-window"); return { ok: true, instanceId: "empty-1" }; },
+        openWorkspaceFolder: async () => { calls.push("dialog"); return null; },
+        retryWorkspace: async () => { calls.push("retry"); },
+        selectFolder: async () => { calls.push("dialog"); return f.workspace; },
+        selectFile: async () => { calls.push("dialog"); return null; },
         showItemInFolder: () => {},
         trashItem: async () => {},
         spawnTerminal: () => true,
-        getDesktopSessionToken: () => "token",
-        validateSender: () => {},
-        trustedRoots: roots,
       });
 
       assert.ok(DESKTOP_IPC_INVOKE_CHANNELS.includes("window-new"));
@@ -302,6 +422,7 @@ describe("multi-instance launch and migration UX", () => {
     const declarations = readFileSync(resolve("src/frontend/dashboard.d.ts"), "utf8");
     const settings = readFileSync(resolve("src/frontend/dashboard/dashboard-settings.ts"), "utf8");
     const electronMain = readFileSync(resolve("src/electron/electron-main.ts"), "utf8");
+    const launchBridge = readFileSync(resolve("src/electron/desktop-launch.ts"), "utf8");
     const sessionRoutes = readFileSync(resolve("src/server/routes/sessions.ts"), "utf8");
 
     assert.match(preload, /newWindow:\s*\(\)\s*=>\s*ipcRenderer\.invoke\("window-new"\)/);
@@ -310,16 +431,17 @@ describe("multi-instance launch and migration UX", () => {
     assert.match(declarations, /instanceId/);
     assert.match(settings, /workspaceLock/);
     assert.match(settings, /migration/);
-    assert.match(electronMain, /function launchEmptyWindow\(/);
-    assert.match(electronMain, /path\.join\(STARTUP\.dataRoot, "instances", instanceId, "empty-workspace"\)/);
-    assert.match(electronMain, /"--workspace", path\.resolve\(workspace\)/);
-    assert.match(electronMain, /"--data-root", STARTUP\.dataRoot/);
-    assert.match(electronMain, /detached:\s*true/);
-    assert.match(electronMain, /windowsHide:\s*false/);
-    assert.match(electronMain, /"PI_DEV_PORT"/);
-    assert.match(electronMain, /"MY_CODE_AGENT_DESKTOP_TOKEN"/);
-    assert.match(electronMain, /child\.once\("error"/);
-    assert.match(electronMain, /child\.once\("spawn"/);
+    assert.match(electronMain, /new WindowManager\(/);
+    assert.match(electronMain, /windowManager\.createEmptyWindow\(\)/);
+    assert.match(electronMain, /windowManager\.createInitialWindow\(/);
+    assert.match(electronMain, /windowManager\.openWorkspace\(/);
+    assert.match(electronMain, /windowManager\.disposeAll\(\)/);
+    assert.doesNotMatch(electronMain, /function launchWindowForWorkspace\(|function launchEmptyWindow\(/);
+    assert.doesNotMatch(electronMain, /detached:\s*true/);
+    assert.match(electronMain, /PI_DEV_PORT/);
+    assert.match(electronMain, /MY_CODE_AGENT_DESKTOP_TOKEN/);
+    assert.match(launchBridge, /child\.once\("error"/);
+    assert.doesNotMatch(electronMain, /child\.once\("spawn"/);
     assert.doesNotMatch(sessionRoutes, /migrateLegacySessions/, "session listing must not bypass explicit migration confirmation");
   });
 });

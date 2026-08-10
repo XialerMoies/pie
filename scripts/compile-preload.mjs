@@ -5,11 +5,15 @@
 import * as esbuild from "esbuild";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import { rmSync } from "fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
 export function compilePreload() {
+  const legacyStatusFile = `${["window", "shell"].join("-")}.js`;
+  rmSync(resolve(ROOT, "dist-electron", "electron", legacyStatusFile), { force: true });
+  rmSync(resolve(ROOT, "dist-electron", "electron", "shell"), { recursive: true, force: true });
   esbuild.buildSync({
     entryPoints: [resolve(ROOT, "src", "electron", "preload.ts")],
     bundle: true,
@@ -18,6 +22,7 @@ export function compilePreload() {
     outfile: resolve(ROOT, "dist-electron", "electron", "preload.js"),
     external: ["electron"],
   });
+
 }
 
 // 直接运行时

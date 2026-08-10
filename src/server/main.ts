@@ -14,23 +14,28 @@ import { createInterface } from "readline";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { shellDialectFromEnv } from "../agent/tools/command/shell-parser.js";
+import { resolveCliRuntimePaths } from "./cli-startup.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const APP_ROOT = resolve(__dirname, "..");
-const PI_CONFIG_DIR = resolve(APP_ROOT, "data", "pi");
-const SESSIONS_DIR = resolve(PI_CONFIG_DIR, "sessions");
+const APP_ROOT = resolve(__dirname, "..", "..");
+const CLI_PATHS = resolveCliRuntimePaths({
+  appRoot: APP_ROOT,
+  argv: process.argv.slice(2),
+  env: process.env,
+});
 
 async function main() {
   console.log("My Code Agent — CLI 模式");
-  console.log("配置文件:", PI_CONFIG_DIR);
+  console.log("配置文件:", CLI_PATHS.agentDir);
   console.log();
 
   const { session } = await initAgent({
-    agentDir: PI_CONFIG_DIR,
-    cwd: APP_ROOT,
-    sessionsDir: SESSIONS_DIR,
-    authFile: resolve(PI_CONFIG_DIR, "auth.json"),
-    modelsFile: resolve(PI_CONFIG_DIR, "models.json"),
+    agentDir: CLI_PATHS.agentDir,
+    cwd: CLI_PATHS.cwd,
+    sessionsDir: CLI_PATHS.sessionsDir,
+    sessionsDirForWorkspace: CLI_PATHS.sessionsDirForWorkspace,
+    authFile: CLI_PATHS.authFile,
+    modelsFile: CLI_PATHS.modelsFile,
     shellDialect: shellDialectFromEnv(),
   });
 

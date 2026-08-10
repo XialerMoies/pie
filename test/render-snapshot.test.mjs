@@ -627,6 +627,30 @@ describe("shortcut modal", () => {
 });
 
 describe("dashboard refresh", () => {
+  it("renders a static empty state instead of server-backed panes without a workspace", () => {
+    const originalEmptyWorkspaceMode = win.__emptyWorkspaceMode;
+    const originalGetPane = globalThis.getPane;
+    const container = doc.createElement("div");
+    let paneCalls = 0;
+
+    try {
+      win.__emptyWorkspaceMode = true;
+      globalThis.getPane = () => () => {
+        paneCalls += 1;
+        container.innerHTML = '<div data-server-backed-pane="1"></div>';
+      };
+
+      win.renderPanel("chat", container);
+
+      assert.strictEqual(paneCalls, 0);
+      assert.ok(container.querySelector('[data-empty-workspace-panel="chat"]'));
+      assert.strictEqual(container.querySelector('[data-server-backed-pane="1"]'), null);
+    } finally {
+      win.__emptyWorkspaceMode = originalEmptyWorkspaceMode;
+      globalThis.getPane = originalGetPane;
+    }
+  });
+
   it("preserves the mounted side panel and resize handle", async () => {
     const originalFetch = globalThis.fetch;
     const originalWindowFetch = win.fetch;

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-1327%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-1534%20%E2%9C%93-34D399?style=flat&labelColor=1a1a2e" alt="Tests">
   <img src="https://img.shields.io/badge/license-AGPLv3-6366F1?style=flat&labelColor=1a1a2e" alt="License">
   <img src="https://img.shields.io/badge/electron-39-F59E0B?style=flat&labelColor=1a1a2e" alt="Electron">
   <img src="https://img.shields.io/badge/typescript-5.9-3178C6?style=flat&labelColor=1a1a2e" alt="TypeScript">
@@ -127,9 +127,9 @@ npm run dist:portable
 
 构建后默认在 exe 旁创建 `data/`。设置页可把数据根目录改到其他磁盘，修改会在重启后生效；Electron 的系统用户目录中只保留一个很小的 `data-root.json` 路径指针。
 
-### 多实例与数据目录
+### 多窗口与数据目录
 
-不同项目可以在独立 Electron 进程中同时运行。通过“文件 → 新建窗口”打开空窗口，再在新窗口中使用“打开文件夹”选择项目；每个窗口拥有独立 server、随机端口和桌面认证 token，关闭其中一个实例不会中止其他项目。
+不同项目运行在同一个 Electron 主进程管理的多个窗口中。通过“文件 → 新建窗口”打开空窗口，再在新窗口中使用“打开文件夹”选择项目；每个项目窗口拥有独立 server 子进程、随机端口、桌面认证 token 和 AgentRuntime，关闭其中一个窗口只停止该项目的 server，不影响其他项目。再次启动 executable 会将请求转发给现有 Electron 主进程，由它创建或聚焦项目窗口。
 
 ```text
 <dataRoot>/
@@ -148,16 +148,16 @@ npm run dist:portable
 ### 测试
 
 ```bash
-npm test            # 全量 1327 项测试（unit + routes + frontend）
+npm test            # 全量 1534 项测试（unit + routes + workspace-lock + frontend）
 npm run test:build  # 构建验证 + smoke test
 npm run typecheck   # TypeScript 类型检查
 ```
 
 | 套件 | 数量 | 覆盖 |
 |------|------|------|
-| unit | 765 | Shell/权限安全（含 workspace 级规则、外部删除确认、高危删除硬拦、4 种权限模式、pure-file-op fast-path）、数据布局与跨进程锁、工具、状态存储、偏好 facade、MCP、搜索替换、Agent memory |
-| routes | 315 | API、PathGuard、root provenance、桌面认证、多实例隔离与 workspace owner lock、会话/项目权限、session、SSE 重放、TS、附件与 trace、权限模式 API |
-| frontend | 247 | 消息、会话、workspace、tabs、聊天/Explorer 流生命周期、设置与权限中心、多实例启动 UI、Explorer/Search/Git/MCP、DOM 事件所有权、桌面认证与事件流增量渲染 |
+| unit | 912 | Shell/权限安全（含 workspace 级规则、外部删除确认、高危删除硬拦、4 种权限模式、pure-file-op fast-path）、数据布局与跨进程锁、工具、状态存储、偏好 facade、MCP、搜索替换、Agent memory |
+| routes | 328 + workspace-lock 13 | API、PathGuard、root provenance、桌面认证、多实例隔离与 workspace owner lock、会话/项目权限、session、SSE 重放、TS、附件与 trace、权限模式 API |
+| frontend | 281 | 消息、会话、workspace、tabs、聊天/Explorer 流生命周期、设置与权限中心、多实例启动 UI、Explorer/Search/Git/MCP、DOM 事件所有权、桌面认证与事件流增量渲染 |
 | CSS | 20+20 | 变量定义完整性扫描（dark + light 各 20 项） |
 
 ---
@@ -263,7 +263,7 @@ src/
 │   ├── services/        # TabStore / ProblemsStore / UiStateStore
 │   ├── pane/            # 5 面板（explorer / chat / search / git / mcp）
 │   └── ui/              # Tree 组件 + ContextMenu
-test/                    # 1327 项测试（另含 CSS / build smoke / packaged E2E 门禁）
+test/                    # 1534 项测试（另含 CSS / build smoke / packaged E2E 门禁）
 scripts/                 # 编译/构建/清理脚本
 ```
 

@@ -52,13 +52,9 @@ export class ExplorerService {
     App.State.setWorkspacePath(p);
   }
 
-  /** 选择文件夹（Electron 原生 / 浏览器 fallback） */
+  /** 浏览器环境下选择工作区路径 */
   static async selectWorkspace(): Promise<string | null> {
-    const api = (window as any).electronAPI as ElectronAPI | undefined;
-    if (api?.openFolder) {
-      return await api.openFolder();
-    }
-    // browser fallback: 用自定义弹窗替代 prompt()
+    // Web fallback: 用自定义弹窗替代 prompt()。
     return new Promise(resolve => {
       const ov = document.createElement('div');
       ov.className = 'modal-overlay'; ov.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
@@ -79,9 +75,33 @@ export class ExplorerService {
     });
   }
 
-  /** 应用工作区选择（设置路径 + 重新渲染 panel） */
+  /** 打开工作区；桌面端由 Electron WindowManager 负责窗口协调。 */
   static async applyWorkspace(): Promise<void> {
-    App.File.fileAction('openFolder');
+    const api = (window as any).electronAPI as ElectronAPI | undefined;
+    if (api?.openWorkspaceFolder) {
+      try {
+        await api.openWorkspaceFolder();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        toast(`打开工作区失败: ${detail}`, 'error');
+      }
+      return;
+    }
+
+    const path = await ExplorerService.selectWorkspace();
+    if (!path) return;
+    try {
+      const response = await fetch('/api/workspace/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace: path }),
+      });
+      if (!response.ok) throw new Error(await readWorkspaceSwitchFailure(response));
+      window.location.reload();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      toast(`切换工作区失败: ${detail}`, 'error');
+    }
   }
 
   /** 文件名 → icon HTML（vscode-icons SVG + fallback） */
@@ -201,6 +221,19 @@ export class ExplorerService {
 
   private static _normalizeTreePath(path: string): string {
     return String(path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  }
+}
+
+async function readWorkspaceSwitchFailure(response: Response): Promise<string> {
+  const body = await response.text().catch(() => '');
+  if (!body) return `HTTP ${response.status}`;
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown; code?: unknown };
+    const message = typeof parsed.error === 'string' && parsed.error ? parsed.error : `HTTP ${response.status}`;
+    const code = typeof parsed.code === 'string' && parsed.code ? ` (${parsed.code})` : '';
+    return `${message}${code}`;
+  } catch {
+    return body;
   }
 }
 

@@ -72,7 +72,16 @@ global.logTiming = () => {};
     },
   };
   global.App = win.App;
-  win.electronAPI = { openFolder: async () => "E:\\new-workspace" };
+  win.electronAPI = {
+    openWorkspaceFolder: async () => {
+      calls.push(["openWorkspaceFolder"]);
+      return { ok: true, action: "switching", workspace: "E:\\new-workspace" };
+    },
+    openFolder: async () => {
+      calls.push(["legacyOpenFolder"]);
+      return null;
+    },
+  };
   win.__monaco = { dispose: () => calls.push(["monacoDispose"]) };
 
   global.$ = (id) => doc.getElementById(id);
@@ -111,71 +120,95 @@ describe("workspace ui isolation", () => {
     await import(`../src/frontend/dashboard/dashboard-menus.ts?workspace-ui=${Date.now()}-${Math.random()}`);
   });
 
-  it("openFolder waits for backend switch then clears cross-workspace state", async () => {
+  it("delegates File > Open Folder to Electron exactly once without local switching", async () => {
     env.win.fileAction("openFolder");
     await new Promise((resolve) => queueMicrotask(resolve));
     await new Promise((resolve) => queueMicrotask(resolve));
 
-    assert.strictEqual(env.fetchCalls.length, 1);
-    assert.strictEqual(env.fetchCalls[0][0], "/api/workspace/switch");
-    assert.strictEqual(JSON.parse(env.fetchCalls[0][1].body).workspace, "E:\\new-workspace");
-
-    assert.strictEqual(env.oldStream.closed, true);
-    assert.strictEqual(env.oldStream.listeners.size, 0);
-    assert.strictEqual(env.win.App.ChatStream.isOpen(), false);
-    assert.strictEqual(env.win.App.ChatState.isBusy(), false);
-    assert.deepStrictEqual(env.win.App.ChatState.getMessages(), []);
-    // _fileTabs 是 TabStore 投影，不再直接清除；TabStore.reset() 和 activateTab(null) 已验证
-    assert.ok(env.calls.some((call) => call[0] === "resetTabs"));
-
-    assert.strictEqual(env.doc.getElementById("ms").innerHTML, '<div class="wl">empty</div>');
-    assert.strictEqual(env.doc.getElementById("ci").disabled, false);
-    assert.strictEqual(env.doc.getElementById("ci").value, "");
-    assert.strictEqual(env.doc.getElementById("cs").disabled, false);
-
-    assert.ok(env.calls.some((call) => call[0] === "clearAttachments"));
-    assert.ok(env.calls.some((call) => call[0] === "resetWorkspace" && call[1] === "E:\\new-workspace"));
-    assert.ok(env.calls.some((call) => call[0] === "monacoDispose"));
-    assert.ok(env.calls.some((call) => call[0] === "activateTab" && call[1] === null));
-    assert.ok(env.calls.some((call) => call[0] === "renderPanel" && call[1] === "explorer"));
-    assert.ok(env.calls.some((call) => call[0] === "loadSessions"));
-    assert.ok(env.calls.some((call) => call[0] === "refreshGit"));
-    assert.ok(env.calls.some((call) => call[0] === "syncTimeline"));
-  });
-
-  it("openFolder ignores an equivalent Windows workspace path", async () => {
-    env.win.electronAPI.openFolder = async () => "e:/old-workspace/";
-
-    env.win.fileAction("openFolder");
-    await new Promise((resolve) => queueMicrotask(resolve));
-
+    assert.strictEqual(env.calls.filter((call) => call[0] === "openWorkspaceFolder").length, 1);
+    assert.strictEqual(env.calls.filter((call) => call[0] === "legacyOpenFolder").length, 0);
     assert.strictEqual(env.fetchCalls.length, 0);
-    assert.ok(!env.calls.some((call) => call[0] === "resetWorkspace"));
+    assert.strictEqual(env.oldStream.closed, false);
+    assert.strictEqual(env.win.App.ChatStream.isOpen(), true);
+    assert.strictEqual(env.win.App.ChatState.isBusy(), true);
+    assert.deepStrictEqual(env.win.App.ChatState.getMessages(), [
+      { role: "user", content: "old" },
+      { role: "assistant", content: "stream", streaming: true },
+    ]);
+    assert.strictEqual(env.doc.getElementById("ms").innerHTML, "old messages");
+    assert.strictEqual(env.doc.getElementById("ci").disabled, true);
+    assert.strictEqual(env.doc.getElementById("ci").value, "old input");
+    assert.strictEqual(env.doc.getElementById("cs").disabled, true);
+    assert.ok(!env.calls.some((call) => [
+      "resetTabs",
+      "clearAttachments",
+      "resetWorkspace",
+      "monacoDispose",
+      "activateTab",
+      "renderPanel",
+      "loadSessions",
+      "refreshGit",
+      "syncTimeline",
+    ].includes(call[0])), JSON.stringify(env.calls));
   });
 
-  it("openFolder reports the server permission error without resetting workspace state", async () => {
-    global.fetch = async (url, init = {}) => {
-      env.fetchCalls.push([url, init]);
-      return {
-        ok: false,
-        status: 403,
-        text: async () => JSON.stringify({
-          error: "Permission confirmation denied or timed out",
-          code: "permission_denied",
-        }),
-      };
+  it("keeps the initiating page unchanged when Electron focuses an existing workspace", async () => {
+    env.win.electronAPI.openWorkspaceFolder = async () => {
+      env.calls.push(["openWorkspaceFolder"]);
+      return { ok: true, action: "focused-existing", workspace: "E:\\other-workspace" };
     };
-    env.win.fetch = global.fetch;
 
     env.win.fileAction("openFolder");
     await new Promise((resolve) => setImmediate(resolve));
 
+    assert.strictEqual(env.calls.filter((call) => call[0] === "openWorkspaceFolder").length, 1);
+    assert.strictEqual(env.calls.filter((call) => call[0] === "legacyOpenFolder").length, 0);
+    assert.strictEqual(env.fetchCalls.length, 0);
+    assert.strictEqual(env.oldStream.closed, false);
+    assert.strictEqual(env.win.App.ChatStream.isOpen(), true);
+    assert.strictEqual(env.win.App.ChatState.isBusy(), true);
+    assert.strictEqual(env.doc.getElementById("ms").innerHTML, "old messages");
+    assert.ok(!env.calls.some((call) => call[0] === "resetTabs" || call[0] === "resetWorkspace"));
+  });
+
+  it("selects a file once and reports the selected path", async () => {
+    let selectFileCalls = 0;
+    env.win.electronAPI.selectFile = async () => {
+      selectFileCalls += 1;
+      return "E:\\picked.ts";
+    };
+
+    env.win.fileAction("openFile");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.strictEqual(selectFileCalls, 1);
+    assert.ok(env.calls.some((call) => call[0] === "toast" && call[1].includes("E:\\picked.ts")));
+  });
+
+  it("does nothing after a cancelled file selection", async () => {
+    let selectFileCalls = 0;
+    env.win.electronAPI.selectFile = async () => { selectFileCalls += 1; return null; };
+
+    env.win.fileAction("openFile");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.strictEqual(selectFileCalls, 1);
+    assert.ok(!env.calls.some((call) => call[0] === "toast"));
+  });
+
+  it("shows an error when file selection rejects", async () => {
+    let selectFileCalls = 0;
+    env.win.electronAPI.selectFile = async () => {
+      selectFileCalls += 1;
+      throw new Error("picker failed");
+    };
+
+    env.win.fileAction("openFile");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.strictEqual(selectFileCalls, 1);
     assert.ok(env.calls.some((call) => (
-      call[0] === "toast" &&
-      call[1].includes("E:\\new-workspace") &&
-      call[1].includes("permission_denied") &&
-      call[2] === "error"
+      call[0] === "toast" && call[1].includes("picker failed") && call[2] === "error"
     )), JSON.stringify(env.calls));
-    assert.ok(!env.calls.some((call) => call[0] === "resetWorkspace"));
   });
 });

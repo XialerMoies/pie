@@ -10,9 +10,10 @@ export const DESKTOP_IPC_SEND_CHANNELS = [
 export const DESKTOP_IPC_INVOKE_CHANNELS = [
   "desktop-session-token",
   "window-new",
+  "workspace-open-folder",
+  "workspace-retry",
+  "dialog-select-folder",
   "dialog-open-file",
-  "dialog-open-folder",
-  "open-folder-dialog",
   "show-item-in-folder",
   "trash-item",
   "spawn-terminal",
@@ -21,22 +22,25 @@ export const DESKTOP_IPC_INVOKE_CHANNELS = [
 export type DesktopIpcSendChannel = typeof DESKTOP_IPC_SEND_CHANNELS[number];
 export type DesktopIpcInvokeChannel = typeof DESKTOP_IPC_INVOKE_CHANNELS[number];
 export type DesktopPathOperation = "reveal" | "trash";
+export type WorkspaceOpenAction =
+  | "unchanged"
+  | "focused-existing"
+  | "binding"
+  | "switching";
+
+export interface WorkspaceOpenResult {
+  ok: boolean;
+  action: WorkspaceOpenAction;
+  workspace?: string;
+}
 
 export interface DesktopWindowLike {
+  readonly webContents: unknown;
   minimize(): void;
   isMaximized(): boolean;
   maximize(): void;
   unmaximize(): void;
   close(): void;
-}
-
-export interface DesktopOpenDialogOptions {
-  properties: Array<"openFile" | "openDirectory">;
-}
-
-export interface DesktopOpenDialogResult {
-  canceled?: boolean;
-  filePaths: string[];
 }
 
 export type DesktopIpcInvokeHandler = (event: unknown, ...args: unknown[]) => unknown;
@@ -47,17 +51,36 @@ export interface DesktopIpcMainLike {
   on(channel: DesktopIpcSendChannel, handler: DesktopIpcSendHandler): void;
 }
 
+export interface DesktopIpcContext {
+  id: string;
+  window: DesktopWindowLike;
+  workspace: string | null;
+  token: string | null;
+  trustedRoots: TrustedDesktopRoots;
+  server: {
+    readonly kind: "none" | "external" | "owned";
+    readonly port: number;
+    readonly origin: string;
+  };
+}
+
+export interface DesktopIpcContextResolverDeps {
+  contextForSender(senderId: number): DesktopIpcContext;
+  dashboardUrl: string;
+  viteOrigin?: string;
+}
+
 export interface DesktopIpcHandlerDeps {
   ipcMain: DesktopIpcMainLike;
-  getMainWindow(): DesktopWindowLike | null | undefined;
-  showOpenDialog(options: DesktopOpenDialogOptions): Promise<DesktopOpenDialogResult>;
-  launchEmptyWindow(): unknown | Promise<unknown>;
-  showItemInFolder(filePath: string): void;
-  trashItem(filePath: string): Promise<void>;
-  spawnTerminal(): Promise<boolean> | boolean;
-  getDesktopSessionToken(): string;
-  validateSender(event: unknown): void;
-  trustedRoots: TrustedDesktopRoots;
+  resolveContext(event: unknown): DesktopIpcContext;
+  createEmptyWindow(): unknown | Promise<unknown>;
+  openWorkspaceFolder(context: DesktopIpcContext): Promise<WorkspaceOpenResult | null>;
+  retryWorkspace(context: DesktopIpcContext): Promise<void>;
+  selectFolder(context: DesktopIpcContext): Promise<string | null>;
+  selectFile(context: DesktopIpcContext): Promise<string | null>;
+  showItemInFolder(context: DesktopIpcContext, filePath: string): void;
+  trashItem(context: DesktopIpcContext, filePath: string): Promise<void>;
+  spawnTerminal(context: DesktopIpcContext): Promise<boolean> | boolean;
 }
 
 export class DesktopIpcValidationError extends Error {
@@ -126,84 +149,159 @@ export class TrustedDesktopRoots {
   }
 }
 
+export function resolveDesktopIpcContext(
+  event: unknown,
+  deps: DesktopIpcContextResolverDeps,
+): DesktopIpcContext {
+  const ipcEvent = event as {
+    sender?: { id?: unknown };
+    senderFrame?: { url?: unknown } | null;
+  };
+  const sender = ipcEvent?.sender;
+  if (!sender || typeof sender.id !== "number") {
+    throw new DesktopIpcValidationError("Desktop IPC request is not from a managed app window");
+  }
+
+  let context: DesktopIpcContext;
+  try {
+    context = deps.contextForSender(sender.id);
+  } catch {
+    throw new DesktopIpcValidationError("Desktop IPC request is not from a managed app window");
+  }
+
+  if (sender !== context.window.webContents) {
+    throw new DesktopIpcValidationError("Desktop IPC request is not from the trusted app window");
+  }
+
+  const senderUrl = ipcEvent.senderFrame?.url;
+  if (typeof senderUrl !== "string" || !senderUrl.trim()) {
+    throw new DesktopIpcValidationError("Desktop IPC request is not from a trusted app origin");
+  }
+  if (!isAllowedDesktopIpcUrl(senderUrl, context, deps)) {
+    throw new DesktopIpcValidationError("Desktop IPC request is not from a trusted app origin");
+  }
+  return context;
+}
+
+export function isAllowedDesktopIpcUrl(
+  rawUrl: string,
+  context: DesktopIpcContext,
+  options: Pick<DesktopIpcContextResolverDeps, "dashboardUrl" | "viteOrigin">,
+): boolean {
+  if (rawUrl === options.dashboardUrl || rawUrl.startsWith(`${options.dashboardUrl}?`)) return true;
+
+  const senderOrigin = loopbackHttpOrigin(rawUrl);
+  if (!senderOrigin) return false;
+  if (context.server.kind === "owned") {
+    return senderOrigin === loopbackHttpOrigin(context.server.origin);
+  }
+  if (context.server.kind === "external" && options.viteOrigin) {
+    return senderOrigin === loopbackHttpOrigin(options.viteOrigin);
+  }
+  return false;
+}
+
 export function registerDesktopIpcHandlers(deps: DesktopIpcHandlerDeps): void {
   deps.ipcMain.handle("desktop-session-token", (event, ...args) => {
-    deps.validateSender(event);
+    const context = deps.resolveContext(event);
     assertNoArgs("desktop-session-token", args);
-    return deps.getDesktopSessionToken();
+    if (!context.token) {
+      throw new DesktopIpcValidationError("Desktop session token is unavailable for this window");
+    }
+    return context.token;
   });
 
   deps.ipcMain.on("window-minimize", (event, ...args) => {
-    deps.validateSender(event);
+    const context = deps.resolveContext(event);
     assertNoArgs("window-minimize", args);
-    deps.getMainWindow()?.minimize();
+    context.window.minimize();
   });
 
   deps.ipcMain.on("window-maximize", (event, ...args) => {
-    deps.validateSender(event);
+    const context = deps.resolveContext(event);
     assertNoArgs("window-maximize", args);
-    const win = deps.getMainWindow();
-    if (!win) return;
+    const win = context.window;
     if (win.isMaximized()) win.unmaximize();
     else win.maximize();
   });
 
   deps.ipcMain.on("window-close", (event, ...args) => {
-    deps.validateSender(event);
+    const context = deps.resolveContext(event);
     assertNoArgs("window-close", args);
-    deps.getMainWindow()?.close();
+    context.window.close();
   });
 
   deps.ipcMain.handle("window-new", async (event, ...args) => {
-    deps.validateSender(event);
+    deps.resolveContext(event);
     assertNoArgs("window-new", args);
-    return deps.launchEmptyWindow();
+    return deps.createEmptyWindow();
   });
 
   deps.ipcMain.handle("dialog-open-file", async (event, ...args) => {
-    deps.validateSender(event);
+    const context = deps.resolveContext(event);
     assertNoArgs("dialog-open-file", args);
-    const result = await deps.showOpenDialog({ properties: ["openFile"] });
-    const selected = result.canceled ? null : result.filePaths[0] || null;
-    if (selected) deps.trustedRoots.addFile(selected);
+    const trustedRoots = context.trustedRoots;
+    const selected = await deps.selectFile(context);
+    if (context.trustedRoots !== trustedRoots) return null;
+    if (selected) trustedRoots.addFile(selected);
     return selected;
   });
 
-  const openFolder = async (channel: DesktopIpcInvokeChannel, args: unknown[]) => {
-    assertNoArgs(channel, args);
-    const result = await deps.showOpenDialog({ properties: ["openDirectory"] });
-    const selected = result.canceled ? null : result.filePaths[0] || null;
-    if (selected) deps.trustedRoots.addRoot(selected);
+  deps.ipcMain.handle("dialog-select-folder", async (event, ...args) => {
+    const context = deps.resolveContext(event);
+    assertNoArgs("dialog-select-folder", args);
+    const trustedRoots = context.trustedRoots;
+    const selected = await deps.selectFolder(context);
+    if (context.trustedRoots !== trustedRoots) return null;
+    if (selected) trustedRoots.addRoot(selected);
     return selected;
-  };
-
-  deps.ipcMain.handle("dialog-open-folder", (event, ...args) => {
-    deps.validateSender(event);
-    return openFolder("dialog-open-folder", args);
   });
-  deps.ipcMain.handle("open-folder-dialog", (event, ...args) => {
-    deps.validateSender(event);
-    return openFolder("open-folder-dialog", args);
+
+  deps.ipcMain.handle("workspace-open-folder", (event, ...args) => {
+    const context = deps.resolveContext(event);
+    assertNoArgs("workspace-open-folder", args);
+    return deps.openWorkspaceFolder(context);
+  });
+
+  deps.ipcMain.handle("workspace-retry", async (event, ...args) => {
+    const context = deps.resolveContext(event);
+    assertNoArgs("workspace-retry", args);
+    await deps.retryWorkspace(context);
   });
 
   deps.ipcMain.handle("show-item-in-folder", (event, ...args) => {
-    deps.validateSender(event);
+    const context = deps.resolveContext(event);
     const filePath = expectPathArg("show-item-in-folder", args);
-    deps.showItemInFolder(deps.trustedRoots.guardPath(filePath, "reveal"));
+    deps.showItemInFolder(context, context.trustedRoots.guardPath(filePath, "reveal"));
   });
 
   deps.ipcMain.handle("trash-item", async (event, ...args) => {
-    deps.validateSender(event);
+    const context = deps.resolveContext(event);
     const filePath = expectPathArg("trash-item", args);
-    await deps.trashItem(deps.trustedRoots.guardPath(filePath, "trash"));
+    await deps.trashItem(context, context.trustedRoots.guardPath(filePath, "trash"));
     return true;
   });
 
   deps.ipcMain.handle("spawn-terminal", async (event, ...args) => {
-    deps.validateSender(event);
+    const context = deps.resolveContext(event);
     assertNoArgs("spawn-terminal", args);
-    return deps.spawnTerminal();
+    return deps.spawnTerminal(context);
   });
+}
+
+function loopbackHttpOrigin(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "http:" || parsed.username || parsed.password) return null;
+    const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    const loopback = hostname === "localhost"
+      || hostname === "::1"
+      || hostname === "127.0.0.1"
+      || hostname.startsWith("127.");
+    return loopback ? parsed.origin : null;
+  } catch {
+    return null;
+  }
 }
 
 function assertNoArgs(channel: string, args: readonly unknown[]): void {

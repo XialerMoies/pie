@@ -95,6 +95,19 @@ function initResizeHandle(): void {
 function renderPanel(name: string, pc?: HTMLElement | null): void {
   if (!pc) pc = $('pc');
   if (!pc) return;
+  if ((window as any).__emptyWorkspaceMode && name !== 'explorer') {
+    const labels: Record<string, string> = {
+      chat: '\u4f1a\u8bdd',
+      search: '\u641c\u7d22',
+      git: 'Git',
+      mcp: 'MCP',
+    };
+    pc.innerHTML = `<div class="sg-t">${E(labels[name] || name)}</div>`
+      + `<div data-empty-workspace-panel="${E(name)}" style="padding:12px;font-size:.72rem;color:var(--tm);text-align:center">`
+      + '\u5c1a\u672a\u9009\u62e9\u5de5\u4f5c\u533a'
+      + '</div>';
+    return;
+  }
   const paneFn = getPane(name);
   if (paneFn) { paneFn(pc); return; }
   pc.innerHTML = `<div class="sg-item dim">面板 "${E(name)}" 未注册</div>`;

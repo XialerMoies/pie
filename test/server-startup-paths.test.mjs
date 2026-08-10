@@ -310,9 +310,59 @@ describe("server startup paths", () => {
 
     assert.match(electronSource, /readDataRootPointer/);
     assert.match(electronSource, /resolveStartupPaths/);
-    assert.match(electronSource, /PI_WORKSPACE:\s*STARTUP\.workspace/);
-    assert.match(electronSource, /PI_DATA_ROOT:\s*STARTUP\.dataRoot/);
-    assert.match(electronSource, /PI_INSTANCE_ID:\s*STARTUP\.instanceId/);
+    const lockIndex = electronSource.indexOf("app.requestSingleInstanceLock()");
+    const userDataPathIndex = electronSource.indexOf('app.setPath("userData", DESKTOP_PATHS.electronUserData)');
+    assert.ok(lockIndex >= 0, "Electron must acquire the singleton lock");
+    assert.ok(userDataPathIndex >= 0, "Electron must configure its userData path");
+    assert.ok(lockIndex < userDataPathIndex, "singleton lock must be acquired before userData changes");
+    assert.match(
+      electronSource,
+      /if\s*\(!ownsSingleInstanceLock\)\s*\{\s*app\.quit\(\);\s*return;\s*\}/,
+    );
+    assert.match(electronSource, /app\.setPath\("cache",\s*DESKTOP_PATHS\.electronCache\)/);
+    assert.doesNotMatch(
+      electronSource,
+      /app\.setPath\("userData",\s*path\.join\(STARTUP\.layout\.instanceRoot/,
+    );
+    assert.match(electronSource, /app\.requestSingleInstanceLock\(\)/);
+    assert.match(electronSource, /app\.on\("second-instance"/);
+    assert.match(electronSource, /pendingSecondLaunches:\s*DesktopLaunchRequest\[\]/);
+    assert.match(electronSource, /const windowManager = new WindowManager\(/);
+    assert.match(
+      electronSource,
+      /if \(!request\.workspace\) \{[\s\S]{0,160}createEmptyManagedWindow\(\)/,
+    );
+    assert.match(
+      electronSource,
+      /function createEmptyManagedWindow\(\): WindowContext \{[\s\S]{0,160}windowManager\.createEmptyWindow\(\)/,
+    );
+    assert.match(electronSource, /windowManager\.contextForWorkspace\(request\.workspace\)/);
+    assert.match(
+      electronSource,
+      /existing\?\.lifecycle === "active"[\s\S]{0,160}existing\.window\.focus\(\)/,
+    );
+    assert.match(
+      electronSource,
+      /const context = createEmptyManagedWindow\(\);[\s\S]{0,160}await windowManager\.openWorkspace\(context, request\.workspace\)/,
+    );
+    assert.match(
+      electronSource,
+      /if \(request\.instanceId\) legacyLaunchWaiters\.resolve\(request\.instanceId\)/,
+    );
+    assert.match(
+      electronSource,
+      /if \(request\.instanceId\) legacyLaunchWaiters\.reject\(request\.instanceId, failure\)/,
+    );
+    assert.match(
+      electronSource,
+      /validateSecondLaunchDataRoot\(DESKTOP_PATHS\.dataRoot, request\.dataRoot\)[\s\S]{0,500}pendingSecondLaunches\.push\(request\)/,
+    );
+    assert.match(electronSource, /let secondLaunchHandlingReady = false/);
+    assert.match(electronSource, /secondLaunchHandlingReady = true[\s\S]{0,240}drainPendingSecondLaunches\(\)/);
+    assert.match(electronSource, /if\s*\(secondLaunchHandlingReady\)[\s\S]{0,160}drainPendingSecondLaunches\(\)/);
+    assert.match(electronSource, /PI_WORKSPACE:\s*input\.workspace/);
+    assert.match(electronSource, /PI_DATA_ROOT:\s*input\.dataRoot/);
+    assert.match(electronSource, /PI_INSTANCE_ID:\s*input\.instanceId/);
     assert.match(serverSource, /resolveStartupPaths/);
     assert.match(serverSource, /cwd:\s*STARTUP\.workspace/);
     assert.doesNotMatch(serverSource, /cwd:\s*APP_ROOT/);

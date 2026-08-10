@@ -50,8 +50,12 @@ win.ExplorerService = global.ExplorerService = {
 };
 win.electronAPI = {
   newWindow: async () => { calls.push(["newWindow"]); return { ok: true }; },
-  openFile: async () => { calls.push(["openFile"]); return "E:/picked.ts"; },
-  openFolder: async () => null,
+  selectFile: async () => { calls.push(["selectFile"]); return "E:/picked.ts"; },
+  openWorkspaceFolder: async () => {
+    calls.push(["openWorkspaceFolder"]);
+    return { ok: true, action: "unchanged", workspace: "E:/my-code-agent" };
+  },
+  openFolder: async () => { calls.push(["legacyOpenFolder"]); return null; },
   close: () => calls.push(["closeWindow"]),
   spawnTerminal: () => calls.push(["spawnTerminal"]),
 };
@@ -108,6 +112,24 @@ before(async () => {
 });
 
 describe("dashboard action delegation", () => {
+  it("does not bind server-backed chat behavior in empty-workspace mode", () => {
+    const originalEmptyWorkspaceMode = win.__emptyWorkspaceMode;
+    const originalBind = global.bind;
+    let bindCalls = 0;
+
+    try {
+      win.__emptyWorkspaceMode = true;
+      global.bind = () => { bindCalls += 1; };
+
+      win.layout();
+
+      assert.strictEqual(bindCalls, 0);
+    } finally {
+      win.__emptyWorkspaceMode = originalEmptyWorkspaceMode;
+      global.bind = originalBind;
+    }
+  });
+
   it("routes layout and file-menu commands without inline handlers", async () => {
     calls.length = 0;
     win.layout();
@@ -142,7 +164,13 @@ describe("dashboard action delegation", () => {
     assert.ok(menu, "file menu should open through delegated layout action");
     assert.strictEqual(menu.querySelectorAll("[onclick], [onchange], [oninput]").length, 0);
     assert.strictEqual(menu.querySelector("[data-file-action='openProjectInNewInstance']"), null);
-    menu.querySelector("[data-file-action='newWindow']")?.click();
+    menu.querySelector("[data-file-action='openFolder']")?.click();
+    await new Promise(resolve => queueMicrotask(resolve));
+
+    app.querySelector("[data-layout-action='file-menu']")?.click();
+    const reopenedMenu = doc.getElementById("file-menu");
+    assert.ok(reopenedMenu);
+    reopenedMenu.querySelector("[data-file-action='newWindow']")?.click();
     await new Promise(resolve => queueMicrotask(resolve));
 
     assert.ok(calls.some(call => call[0] === "togglePanel" && call[1] === "search"));
@@ -150,6 +178,8 @@ describe("dashboard action delegation", () => {
     assert.ok(calls.some(call => call[0] === "spawnTerminal"));
     assert.ok(calls.some(call => call[0] === "settings"));
     assert.ok(calls.some(call => call[0] === "newWindow"));
+    assert.strictEqual(calls.filter(call => call[0] === "openWorkspaceFolder").length, 1);
+    assert.strictEqual(calls.filter(call => call[0] === "legacyOpenFolder").length, 0);
     assert.strictEqual(doc.getElementById("file-menu"), null, "file menu should close after a command");
   });
 });

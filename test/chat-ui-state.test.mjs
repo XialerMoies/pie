@@ -58,6 +58,7 @@ global.logTiming = () => {};
     recent: { sessions: {} },
   };
   const preferences = new Map();
+  const calls = [];
   const scrollState = { scrollTop: 0, scrollHeight: 0, clientHeight: 0, lastScrollTo: null };
   const messages = doc.getElementById("ms");
   Object.defineProperties(messages, {
@@ -142,7 +143,7 @@ global.logTiming = () => {};
   global.S = (name, size = 16) => `<svg width="${size}" height="${size}"><use href="#${name}"/></svg>`;
   global.E = (value) => String(value ?? "");
   global.sb = () => {};
-  global.toast = () => {};
+  global.toast = (message, type) => calls.push(["toast", message, type]);
   global.loadSessions = () => {};
   global.getD = async () => {};
   global.renderPanel = () => {};
@@ -155,6 +156,7 @@ global.logTiming = () => {};
     win,
     doc,
     state: testState,
+    calls,
     setPreference(key, value) { preferences.set(key, typeof value === "boolean" ? (value ? "1" : "0") : value); },
     setScrollMetrics(next) {
       if (next.scrollTop !== undefined) scrollState.scrollTop = Number(next.scrollTop);
@@ -194,6 +196,52 @@ describe("chat ui state", () => {
     await import(`../src/frontend/dashboard/session-activation.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${ts}`);
     env.win.bind();
+  });
+
+  it("selects one local file and adds it as an attachment", async () => {
+    const attachments = [];
+    let selectFileCalls = 0;
+    env.win.electronAPI = {
+      selectFile: async () => { selectFileCalls += 1; return "/workspace/src/picked.ts"; },
+    };
+    global.ExplorerService.getWorkspacePath = () => "/workspace";
+    env.win.App.Chat.addAttachment = (attachment) => attachments.push(attachment);
+
+    env.doc.getElementById("fi-file-btn").click();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.strictEqual(selectFileCalls, 1);
+    assert.deepStrictEqual(attachments, [{ kind: "file", path: "src/picked.ts", name: "picked.ts" }]);
+  });
+
+  it("does nothing when local file selection is cancelled", async () => {
+    const attachments = [];
+    let selectFileCalls = 0;
+    env.win.electronAPI = {
+      selectFile: async () => { selectFileCalls += 1; return null; },
+    };
+    env.win.App.Chat.addAttachment = (attachment) => attachments.push(attachment);
+
+    env.doc.getElementById("fi-file-btn").click();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.strictEqual(selectFileCalls, 1);
+    assert.deepStrictEqual(attachments, []);
+  });
+
+  it("shows an error when local file selection rejects", async () => {
+    let selectFileCalls = 0;
+    env.win.electronAPI = {
+      selectFile: async () => { selectFileCalls += 1; throw new Error("attachment picker failed"); },
+    };
+
+    env.doc.getElementById("fi-file-btn").click();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.strictEqual(selectFileCalls, 1);
+    assert.ok(env.calls.some((call) => (
+      call[0] === "toast" && call[1].includes("attachment picker failed") && call[2] === "error"
+    )), JSON.stringify(env.calls));
   });
 
   it("消息未变化时 updateUI 不重绘消息区", () => {

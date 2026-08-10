@@ -70,18 +70,31 @@ interface ProviderKeyInfo {
   keyPreview: string;
 }
 
+interface WorkspaceOpenResult {
+  ok: boolean;
+  action: 'unchanged' | 'focused-existing' | 'binding' | 'switching';
+  workspace?: string;
+}
+
 interface ElectronAPI {
+  onWorkspaceStatus(listener: (status: WorkspaceStatus) => void): () => void;
   getDesktopSessionToken(): Promise<string>;
   minimize(): void;
   maximize(): void;
   close(): void;
   newWindow(): Promise<{ ok: boolean; workspace?: string; instanceId?: string } | null>;
-  openFile(): Promise<string | null>;
-  openFolder(): Promise<string | null>;
+  openWorkspaceFolder(): Promise<WorkspaceOpenResult | null>;
+  selectFile(): Promise<string | null>;
+  selectFolder(): Promise<string | null>;
   showItemInFolder(path: string): Promise<void>;
   trashItem(path: string): Promise<boolean>;
   spawnTerminal(): Promise<boolean>;
 }
+
+type WorkspaceStatus =
+  | { state: 'idle' }
+  | { state: 'starting'; workspace: string }
+  | { state: 'failed'; workspace: string; message: string };
 
 interface StorageLocationInfo {
   dataRoot: string;

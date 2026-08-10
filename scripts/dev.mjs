@@ -18,6 +18,12 @@ import * as path from "path";
 import * as fs from "fs";
 import { fileURLToPath } from "url";
 import { compilePreload } from "./compile-preload.mjs";
+import {
+  createElectronRebuildScheduler,
+  createIntentionalProcessStops,
+  handleElectronChildError,
+  runElectronBuild,
+} from "./dev-electron-reload.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -112,13 +118,12 @@ function removePid() {
 // ─── 编译 Electron ────────────────────────────────────────────
 function buildElectron() {
   console.log("🔨 Compiling electron main...");
-  try {
-    execSync("npx tsc -p tsconfig.electron.json", { cwd: ROOT, stdio: "pipe" });
-    compilePreload();
-    console.log("✅ Electron compiled");
-  } catch (err) {
-    console.error("❌ Compile failed:", err.stderr?.toString() || err.message);
-  }
+  return runElectronBuild({
+    compileMain: () => execSync("npx tsc -p tsconfig.electron.json", { cwd: ROOT, stdio: "pipe" }),
+    compileBundles: compilePreload,
+    onSuccess: () => console.log("✅ Electron compiled"),
+    onError: (err) => console.error("❌ Compile failed:", err.stderr?.toString() || err.message),
+  });
 }
 
 // ─── 进程管理 ─────────────────────────────────────────────────
@@ -129,7 +134,7 @@ let serverStartPromise = null;
 let serverRestartTimer = null;
 let pendingServerRestartFile = null;
 let frontendCompileTimer = null;
-let intentionalElectronStop = false;
+const intentionalElectronStops = createIntentionalProcessStops();
 
 function isNonRetryableServerStartupError(errorOutput) {
   return /WorkspaceLockConflictError|workspace_locked/.test(errorOutput);
@@ -137,6 +142,26 @@ function isNonRetryableServerStartupError(errorOutput) {
 
 function createServerStartupError(code) {
   return new Error(`pi-server exited before ready (${code})`);
+}
+
+function createDevServerEnv() {
+  const env = {
+    ...process.env,
+    VITE_DEV_PORT: String(VITE_PORT),
+    PI_DEV_PORT: String(DEV_PORT),
+    MY_CODE_AGENT_DESKTOP_TOKEN: DESKTOP_SECURITY_TOKEN,
+    MY_CODE_AGENT_ALLOWED_ORIGINS: DEV_APP_ORIGIN,
+  };
+  if (process.platform === "win32") {
+    const tempDir = path.resolve(ROOT, "node_modules", ".cache", "my-code-agent-dev");
+    fs.mkdirSync(tempDir, { recursive: true });
+    env.TEMP = tempDir;
+    env.TMP = tempDir;
+    env.TMPDIR = tempDir;
+    const preload = path.resolve(ROOT, "scripts", "tsx-windows-sandbox.cjs");
+    env.NODE_OPTIONS = [env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" ");
+  }
+  return env;
 }
 
 async function startVite() {
@@ -176,14 +201,13 @@ async function startServerInner(onSpawn = () => {}) {
     }
     console.log("⚙️  Starting pi-server...");
     const started = Date.now();
-    serverProcess = spawn("npx", ["tsx", "src/server/server.ts"], {
-      cwd: ROOT, stdio: ["pipe", "pipe", "pipe"], shell: true,
-      env: {
-        ...process.env,
-        PI_DEV_PORT: String(DEV_PORT),
-        MY_CODE_AGENT_DESKTOP_TOKEN: DESKTOP_SECURITY_TOKEN,
-        MY_CODE_AGENT_ALLOWED_ORIGINS: DEV_APP_ORIGIN,
-      },
+    serverProcess = spawn(process.execPath, [
+      "--import",
+      "tsx",
+      path.resolve(ROOT, "src", "server", "server.ts"),
+    ], {
+      cwd: ROOT, stdio: ["pipe", "pipe", "pipe"], shell: false,
+      env: createDevServerEnv(),
     });
     onSpawn();
     let resolved = false;
@@ -245,7 +269,7 @@ function stopServer() {
 function startElectron() {
   if (electronProcess) {
     // 先关闭所有旧 Electron 窗口
-    intentionalElectronStop = true;
+    intentionalElectronStops.mark(electronProcess);
     killProcessTree(electronProcess.pid);
     electronProcess = null;
   }
@@ -259,20 +283,28 @@ function startElectron() {
       ...electronEnv,
       NODE_ENV: "development",
       VITE_DEV_PORT: String(VITE_PORT),
+      PI_DEV_PORT: String(DEV_PORT),
       MY_CODE_AGENT_DESKTOP_TOKEN: DESKTOP_SECURITY_TOKEN,
     },
   });
   electronProcess = child;
   registerPid(electronProcess.pid);
+  child.on("error", (error) => {
+    handleElectronChildError({
+      child,
+      currentChild: electronProcess,
+      error,
+      clearCurrent: () => { electronProcess = null; },
+      reportError: (failure) => console.error("Electron failed to start:", failure),
+      cleanup,
+      exit: (code) => process.exit(code),
+    });
+  });
   child.on("exit", (code) => {
     if (electronProcess === child) electronProcess = null;
-    if (intentionalElectronStop) {
-      intentionalElectronStop = false;
-      return;
-    }
-    if (code !== 0 && code !== null) {
-      setTimeout(startElectron, 1000);
-    }
+    if (intentionalElectronStops.consume(child)) return;
+    cleanup();
+    process.exit(code ?? 1);
   });
 }
 
@@ -296,15 +328,24 @@ function setupWatcher() {
     }, 150);
   });
 
-  const electronWatcher = watch([
-    path.join(ELECTRON_SRC, "electron", "electron-main.ts"),
-    path.join(ELECTRON_SRC, "electron", "preload.ts"),
-  ], { ignoreInitial: true });
+  const electronRoot = path.join(ELECTRON_SRC, "electron");
+  const electronWatcher = watch(electronRoot, {
+    ignoreInitial: true,
+    ignored: (file) => {
+      if (file === electronRoot) return false;
+      return !file.endsWith(".ts");
+    },
+  });
+  const electronRebuild = createElectronRebuildScheduler({
+    buildElectron,
+    restartElectron: startElectron,
+    onRebuild: (file) => {
+      console.log(`📝 ${path.relative(ROOT, file)} changed — rebuilding & restarting Electron`);
+    },
+  });
 
   electronWatcher.on("change", (f) => {
-    console.log(`📝 ${path.relative(ROOT, f)} changed — rebuilding & restarting Electron`);
-    buildElectron();
-    setTimeout(startElectron, 300);
+    electronRebuild.schedule(f);
   });
 
   const frontendRoot = path.join(ELECTRON_SRC, "frontend");
@@ -346,7 +387,7 @@ async function main() {
 
   // 1. 编译 Electron
   const electronCompileStartedAt = Date.now();
-  buildElectron();
+  if (!buildElectron()) throw new Error("Electron compilation failed");
   logStartupStage("electron-compiled", electronCompileStartedAt);
 
   // 2. 编译 TS→JS（Vite dev server 需要 .js 文件）
