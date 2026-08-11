@@ -153,7 +153,7 @@ interface AppUI {
   renderTabs(): void;
   renderSessionTabs(activeId?: string): void;
   closeChatTab(): void;
-  openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video'): void;
+  openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video', options?: { activate?: boolean }): void;
   saveCurrentFile(): Promise<void>;
 }
 interface AppChat {
@@ -525,7 +525,7 @@ declare function provDragOver(ev: DragEvent, idx: number): void;
 declare function provDrop(ev: DragEvent, idx: number): void;
 declare function isConversationSearchActive(): boolean;
 declare function loadMonaco(): Promise<void>;
-declare function openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video'): void;
+declare function openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video', options?: { activate?: boolean }): void;
 declare function renderTabs(): void;
 declare function registerPane(name: string, render: (container: HTMLElement) => void): void;
 declare function saveCurrentFile(): Promise<void>;

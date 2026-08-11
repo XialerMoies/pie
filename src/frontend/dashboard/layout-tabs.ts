@@ -59,7 +59,13 @@ function _saveFileTabs(): void {
   _syncTabsToStore();
 }
 
-function openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video'): void {
+function openFileTab(
+  id: string,
+  content: string,
+  lang?: string,
+  renderer?: 'text' | 'image' | 'video',
+  options: { activate?: boolean } = {},
+): void {
   const label = id.split('/').pop() || id;
   const tabs = App.Tabs;
   // 写入 TabStore（含 content/lang 缓存）
@@ -69,7 +75,7 @@ function openFileTab(id: string, content: string, lang?: string, renderer?: 'tex
     else tabs.openTab({ kind: 'file', id, title: label, path: id, content, lang: lang || '', renderer });
   }
   _saveFileTabs();
-  (window as any).App?.Tabs?.activate(id);
+  if (options.activate !== false) (window as any).App?.Tabs?.activate(id);
 }
 
 /** App.Tabs.close 的降级入口 */

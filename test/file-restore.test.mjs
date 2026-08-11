@@ -76,6 +76,7 @@ describe("File tab restore", () => {
     global.fetch = async () => ({ ok: true, json: async () => ({ content: "file content" }) });
     await import("../src/frontend/dashboard/dashboard-layout.ts");
     await import("../src/frontend/dashboard/layout-tabs.ts");
+    global.openFileTab = (...args) => win.openFileTab(...args);
   });
 
   beforeEach(() => {
@@ -119,6 +120,21 @@ describe("File tab restore", () => {
     assert.ok(tabs.some(function(t) { return t.id === "/img/photo.png"; }), "tab 应被打开");
     const ft = tabs.find(function(t) { return t.id === "/img/photo.png"; });
     assert.strictEqual(ft && ft.renderer, "image", "renderer 应保留为 image");
+  });
+
+  it("restores file tabs without replacing the persisted active session", async () => {
+    raw.activeView = { type: "session", id: "sess-restore" };
+    raw.tabs.items = [
+      { kind: "session", id: "sess-restore", title: "Session", order: 0 },
+      { kind: "file", id: "/src/one.ts", title: "one.ts", order: 1 },
+      { kind: "file", id: "/src/two.ts", title: "two.ts", order: 2 },
+    ];
+
+    win.restoreFileTabs();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.deepStrictEqual(win.__state._fileTabs.map(tab => tab.id), ["/src/one.ts", "/src/two.ts"], "both file tabs should be restored");
+    assert.deepStrictEqual(activateCalls, ["sess-restore"], "restored files must not activate before the persisted session");
   });
 
 });
