@@ -43,6 +43,7 @@ globalThis.localStorage = global.localStorage;
 global.fetch = async () => ({ ok: true, json: async () => ({}) });
 global.AbortController = class { constructor() { this.signal = {}; } abort() {} };
 globalThis.toast = () => {};
+win.toast = globalThis.toast;
 globalThis.confirmAsync = async () => true;
 globalThis.winCtrl = () => {};
 globalThis.refresh = async () => {};
@@ -287,6 +288,25 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes("OUT"), "结果保留在 OUT 卡中");
   });
 
+  it("normal tool events share one IN/OUT card", () => {
+    state.M = [{
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        status: "success",
+        name: "file-read",
+        input: { path: "src/app.ts" },
+        output: "read complete",
+        blockId: "io-1",
+        seq: 1,
+      }],
+    }];
+    const html = win.msgs();
+    assert.strictEqual((html.match(/class="trace-card"/g) || []).length, 1, "IN and OUT should share one card");
+    assert.ok(html.includes('class="trace-card-section trace-card-in"'), "input should be an IN section");
+    assert.ok(html.includes('class="trace-card-section trace-card-out"'), "output should be an OUT section");
+  });
+
   it("renders structured file diff metadata inside a tool event node", () => {
     state.M = [{
       role: "assistant",
@@ -297,7 +317,7 @@ describe("msgs() 渲染", () => {
         toolCallId: "call1",
         blockId: "b1",
         seq: 1,
-        output: "updated",
+        output: "updated\nconst a = 1;\nconst a = 2;",
         metadata: {
           diff: {
             filePath: "src/app.ts",
@@ -318,14 +338,84 @@ describe("msgs() 渲染", () => {
 
     const html = win.msgs();
     assert.ok(html.includes("trace-diff"), "diff should render as a trace node section");
+    assert.ok(html.includes("trace-diff-event"), "diff should use its specialized event content");
+    assert.strictEqual((html.match(/class="trace-card"/g) || []).length, 0, "diff should not use the generic IN/OUT card");
+    assert.ok(html.includes('<div class="trace-diff-summary">updated</div>'), "diff should keep only the concise output summary");
+    assert.strictEqual((html.match(/const a = 1;/g) || []).length, 1, "diff should not repeat the file preview from output");
     assert.ok(html.includes("trace-diff-sign"), "diff should show a dedicated sign column");
     assert.ok(html.includes('<span class="trace-diff-text">const a = 1;</span>'), "diff should render line text in its own unboxed cell");
     assert.ok(!html.includes("<code>const a = 1;</code>"), "diff line text should not inherit inline code chip styling");
-    assert.ok(html.includes("src/app.ts"), "diff should show file path");
+    assert.ok(html.includes('data-diff-file-path="src/app.ts"'), "diff path should be an actionable file target");
     assert.ok(html.includes("+1"), "diff should show additions");
     assert.ok(html.includes("-1"), "diff should show deletions");
     assert.ok(html.includes("const a = 1;"), "diff should show removed line");
     assert.ok(html.includes("const a = 2;"), "diff should show added line");
+  });
+
+  it("clicking a diff path opens the workspace-relative file tab", async () => {
+    const originalWorkspace = global.ExplorerService.getWorkspacePath;
+    const originalFetch = globalThis.fetch;
+    global.ExplorerService.getWorkspacePath = () => "C:/repo";
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: "const a = 2;" }) });
+    state.M = [{
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        status: "success",
+        name: "str_replace_editor",
+        output: "updated",
+        metadata: { diff: {
+          filePath: "C:/repo/src/app.ts",
+          type: "update",
+          structuredPatch: [{ lines: ["-const a = 1;", "+const a = 2;"] }],
+        } },
+        blockId: "diff-click-1",
+        seq: 1,
+      }],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    panel.querySelector("[data-diff-file-path]").dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(win.App.Tabs.getTab("src/app.ts"), "click should open a workspace-relative file tab");
+    global.ExplorerService.getWorkspacePath = originalWorkspace;
+    globalThis.fetch = originalFetch;
+  });
+
+  it("clicking a diff path outside the workspace is rejected without opening a tab", async () => {
+    const originalWorkspace = global.ExplorerService.getWorkspacePath;
+    const originalFetch = globalThis.fetch;
+    const originalToast = globalThis.toast;
+    const toastCalls = [];
+    global.ExplorerService.getWorkspacePath = () => "C:/repo";
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: "secret" }) });
+    globalThis.toast = (msg) => toastCalls.push(String(msg));
+    win.toast = globalThis.toast;
+    state.M = [{
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        status: "success",
+        name: "str_replace_editor",
+        output: "updated",
+        metadata: { diff: {
+          filePath: "C:/outside/secret.txt",
+          type: "update",
+          structuredPatch: [{ lines: ["-a", "+b"] }],
+        } },
+        blockId: "diff-click-outside",
+        seq: 1,
+      }],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    panel.querySelector("[data-diff-file-path]").dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(toastCalls.some((msg) => msg.includes("工作区外") || msg.includes("不在当前工作区")), "outside-workspace path should toast a rejection");
+    assert.strictEqual(win.App.Tabs.getTab("secret.txt"), undefined, "outside-workspace file must not be opened");
+    global.ExplorerService.getWorkspacePath = originalWorkspace;
+    globalThis.fetch = originalFetch;
+    globalThis.toast = originalToast;
   });
 
   it("block tool_result 错误时显示 error 标记", () => {

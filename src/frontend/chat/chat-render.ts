@@ -102,8 +102,78 @@ function renderFileDiffMetadata(diff: any): string {
   const hiddenLines = rawLines.length - visibleLines.length + (diff.truncated ? metadataOmitted : 0);
   const empty = rows || '<div class="trace-diff-empty">无文本变更</div>';
   const more = truncated || diff.truncated ? `<div class="trace-diff-more">已隐藏 ${hiddenLines} 行</div>` : '';
-  return `<div class="trace-diff"><div class="trace-diff-head"><span class="trace-diff-path">${E(diff.filePath)}</span><span class="trace-diff-stat add">+${added}</span><span class="trace-diff-stat del">-${removed}</span></div><div class="trace-diff-code">${empty}${more}</div></div>`;
+  return `<div class="trace-diff"><div class="trace-diff-head"><button type="button" class="trace-diff-path" data-diff-file-path="${E(diff.filePath)}" title="打开文件">${E(diff.filePath)}</button><span class="trace-diff-stat add">+${added}</span><span class="trace-diff-stat del">-${removed}</span></div><div class="trace-diff-code">${empty}${more}</div></div>`;
 }
+
+function firstSummaryLine(value: string, max = 220): string {
+  const line = value.split(/\r?\n/).find(item => item.trim())?.trim() || '';
+  return line.length > max ? line.slice(0, max) + '...' : line;
+}
+
+function normalizeDiffPath(value: string): string {
+  return value.replaceAll('\\', '/').replace(/\/+/g, '/').replace(/\/\.\//g, '/').replace(/\/$/, '').toLowerCase();
+}
+
+function diffRelativePath(workspace: string, filePath: string): string | null {
+  const root = normalizeDiffPath(workspace);
+  let target = filePath.trim().replaceAll('\\', '/').replace(/^\.\//, '');
+  if (!root || !target) return null;
+  const normalizedTarget = normalizeDiffPath(target);
+  const isAbsolute = /^[a-z]:\//i.test(target) || target.startsWith('/') || target.startsWith('//');
+  if (isAbsolute) {
+    if (normalizedTarget === root) return null;
+    if (!normalizedTarget.startsWith(root + '/')) return null;
+    target = target.slice(workspace.replaceAll('\\', '/').replace(/\/$/, '').length + 1);
+  }
+  target = target.replace(/^\/+/, '').replace(/\/+/g, '/');
+  if (!target || target === '.' || target.split('/').some(part => part === '..')) return null;
+  return target;
+}
+
+async function openDiffFile(filePath: string): Promise<void> {
+  const workspace = (globalThis as any).ExplorerService?.getWorkspacePath?.()
+    || (globalThis as any).App?.State?.getWorkspacePath?.()
+    || '';
+  const relativePath = diffRelativePath(String(workspace), filePath);
+  if (!relativePath) {
+    (window as any).toast?.('文件不在当前工作区内', 'error');
+    return;
+  }
+  const tabs = (window as any).App?.Tabs;
+  const existing = tabs?.getTab?.(relativePath) || tabs?.getTab?.(filePath);
+  if (existing) {
+    tabs.activate?.(existing.id);
+    return;
+  }
+  try {
+    const response = await fetch(`/api/file/read?root=${encodeURIComponent(String(workspace))}&path=${encodeURIComponent(relativePath)}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.error || '文件读取失败');
+    const lang = relativePath.split('.').pop() || '';
+    (window as any).openFileTab?.(relativePath, String(data?.content || ''), lang);
+  } catch (error) {
+    (window as any).toast?.(error instanceof Error ? error.message : '文件读取失败', 'error');
+  }
+}
+
+let diffFileLinksBound = false;
+
+function bindDiffFileLinks(): void {
+  const guardedDocument = document as Document;
+  if (diffFileLinksBound) return;
+  diffFileLinksBound = true;
+  document.addEventListener('click', (event: MouseEvent) => {
+    const eventTarget = event.target as Element | null;
+    const target = typeof eventTarget?.closest === 'function'
+      ? eventTarget.closest<HTMLElement>('[data-diff-file-path]')
+      : null;
+    if (!target) return;
+    event.preventDefault();
+    void openDiffFile(target.dataset.diffFilePath || '');
+  });
+}
+
+bindDiffFileLinks();
 
 function toolTitle(name: string): string {
   const lower = String(name || 'tool').toLowerCase().replace(/[-_]+/g, '-');
@@ -224,20 +294,24 @@ function renderTraceItem(t: any, defaultOpen?: boolean): string {
     const input = hasTraceValue(t.input) ? shortText(t.input, 900) : '';
     const result = t.error || t.output;
     const output = hasTraceValue(result) ? shortText(result, 1200) : '';
-    const inputBlock = input ? `<div class="trace-card"><div class="trace-card-label">IN</div><pre>${E(input)}</pre></div>` : '';
-    const outputLabel = t.status === 'error' ? 'ERROR' : 'OUT';
-    const outputBlock = output ? `<div class="trace-card"><div class="trace-card-label${t.status === 'error' ? ' error' : ''}">${outputLabel}</div><pre>${E(output)}</pre></div>` : '';
     const diffBlock = renderFileDiffMetadata(t.metadata?.diff);
+    const inputSection = input ? `<div class="trace-card-section trace-card-in"><div class="trace-card-label">IN</div><pre>${E(input)}</pre></div>` : '';
+    const outputLabel = t.status === 'error' ? 'ERROR' : 'OUT';
+    const outputSection = output ? `<div class="trace-card-section trace-card-out"><div class="trace-card-label${t.status === 'error' ? ' error' : ''}">${outputLabel}</div><pre>${E(output)}</pre></div>` : '';
+    const ioBlock = inputSection || outputSection ? `<div class="trace-card">${inputSection}${outputSection}</div>` : '';
+    const diffSummaryText = diffBlock ? firstSummaryLine(output) : '';
+    const diffSummary = diffSummaryText ? `<div class="trace-diff-summary">${E(diffSummaryText)}</div>` : '';
+    const eventContent = diffBlock ? `<div class="trace-diff-event">${diffSummary}${diffBlock}</div>` : ioBlock;
     const collapsed = shouldCollapseTrace(t, output);
     const title = toolTitle(t.name);
     const rawSummary = traceSummaryText(t, input, output);
     const summary = rawSummary !== title && (!output || collapsed || !output.includes(rawSummary)) ? rawSummary : '';
     const summaryBlock = summary ? `<div class="trace-summary-text">${E(summary)}</div>` : '';
     const head = `<div class="trace-head"><div class="trace-title"><span class="trace-summary-title">${E(title)}</span></div>${summaryBlock}</div>`;
-    if (!inputBlock && !outputBlock && !diffBlock) {
+    if (!eventContent) {
       return `<div class="trace-node trace-tool trace-${status}"><div class="trace-dot"></div>${head}</div>`;
     }
-    return `<details class="trace-node trace-tool trace-${status} trace-details"${collapsed ? '' : ' open'}><summary class="trace-summary"><div class="trace-dot"></div>${head}</summary><div class="trace-body">${inputBlock}${outputBlock}${diffBlock}</div></details>`;
+    return `<details class="trace-node trace-tool trace-${status} trace-details"${collapsed ? '' : ' open'}><summary class="trace-summary"><div class="trace-dot"></div>${head}</summary><div class="trace-body">${eventContent}</div></details>`;
   }
   if (t.type === 'step') {
     return `<div class="trace-node trace-step trace-${t.status || 'info'}"><div class="trace-dot"></div><div class="trace-body"><div class="trace-title"><span class="trace-summary-title">${E(t.text || '')}</span></div></div></div>`;
