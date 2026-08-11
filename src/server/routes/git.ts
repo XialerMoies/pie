@@ -5,8 +5,10 @@
  */
 import type { RouteHandler } from "./types.js";
 import { execFileSync } from "child_process";
+import { existsSync, readFileSync } from "fs";
+import { relative } from "path";
 import { parseBody } from "./parse-body.js";
-import { findGitRoot, parsePorcelain, parseLog } from "./git-core.js";
+import { createFileDiff, findGitRoot, parsePorcelain, parseLog, parseUnifiedDiff } from "./git-core.js";
 import { writePathGuardError } from "./path-guard.js";
 import { authorizeRoutePath, writeServerPermissionError } from "../permission-service.js";
 
@@ -33,6 +35,53 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
   const queryRoot = u.searchParams.get("root") || "";
 
   try {
+    // GET /api/git/diff
+    if (url.startsWith("/api/git/diff")) {
+      const root = (await authorizeRoutePath(ctx, queryRoot || p.APP_ROOT, "", "read", "git.diff.root")).path;
+      const gitRoot = findGitRoot(root);
+      if (!gitRoot) {
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ error: "not_a_repo", message: "Current workspace is not a Git repository" }));
+        return true;
+      }
+      const requestedPath = u.searchParams.get("path") || "";
+      if (!requestedPath) {
+        res.writeHead(400, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ error: "missing_path", message: "Missing file path" }));
+        return true;
+      }
+      const guarded = await authorizeRoutePath(ctx, gitRoot, requestedPath, "read", "git.diff");
+      const filePath = relative(gitRoot, guarded.path).replace(/\\/g, "/");
+      let hasHead = true;
+      try { git(["rev-parse", "--verify", "HEAD"], gitRoot, 5000); } catch { hasHead = false; }
+      let untracked = !hasHead;
+      let diffPaths = [filePath];
+      if (hasHead) {
+        const status = git(["status", "--porcelain", "--untracked-files=all"], gitRoot, 5000);
+        const entries = parsePorcelain(status);
+        const requestedEntry = entries.find(entry => entry.path === filePath || entry.renamePath === filePath);
+        untracked = requestedEntry?.x === "?" || requestedEntry?.y === "?";
+        const rename = requestedEntry?.renamePath === filePath ? requestedEntry : undefined;
+        if (rename) diffPaths = [rename.path, filePath];
+      }
+
+      let diff;
+      if (untracked && existsSync(guarded.path)) {
+        const content = readFileSync(guarded.path);
+        diff = content.includes(0)
+          ? { filePath, type: "create", linesAdded: 0, linesRemoved: 0, structuredPatch: [], binary: true, message: "二进制文件已更改" }
+          : createFileDiff(filePath, content.toString("utf8"));
+      } else {
+        const output = hasHead
+          ? git(["diff", "--no-color", "--no-ext-diff", "--find-renames", "HEAD", "--", ...diffPaths], gitRoot, 10000)
+          : "";
+        diff = parseUnifiedDiff(output, filePath);
+      }
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ gitRoot, ...diff }));
+      return true;
+    }
+
     // GET /api/git/status
     if (url.startsWith("/api/git/status")) {
       const root = (await authorizeRoutePath(ctx, queryRoot || p.APP_ROOT, "", "read", "git.status")).path;

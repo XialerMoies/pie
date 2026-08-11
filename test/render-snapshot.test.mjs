@@ -99,6 +99,7 @@ before(async () => {
   await import(`../src/frontend/services/tab-store.ts?t=${ts}`);
   global.App = win.App;
   await import(`../src/frontend/service/explorer-service.ts?t=${ts}`);
+  await import(`../src/frontend/services/file-diff-render.ts?t=${ts}`);
   await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-layout.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/layout-tabs.ts?t=${ts}`);
@@ -340,6 +341,7 @@ describe("msgs() 渲染", () => {
     const html = win.msgs();
     assert.ok(html.includes("trace-diff"), "diff should render as a trace node section");
     assert.ok(html.includes("trace-diff-event"), "diff should use its specialized event content");
+    assert.ok(!html.includes("trace-diff-toggle"), "chat diffs should not opt into the Git-only disclosure control");
     assert.strictEqual((html.match(/class="trace-card"/g) || []).length, 0, "diff should not use the generic IN/OUT card");
     assert.ok(html.includes('<div class="trace-diff-summary">updated</div>'), "diff should keep only the concise output summary");
     assert.strictEqual((html.match(/const a = 1;/g) || []).length, 1, "diff should not repeat the file preview from output");
@@ -448,6 +450,23 @@ describe("msgs() 渲染", () => {
     panel.innerHTML = html;
     const summary = panel.querySelector(".trace-edit-summary");
     assert.ok(summary?.parentElement?.lastElementChild === summary, "summary should be the last item in the event flow");
+  });
+
+  it("counts created-file content when diff statistics are omitted", () => {
+    state.M = [{
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        status: "success",
+        name: "write",
+        output: "created",
+        metadata: { diff: { filePath: "src/new.ts", type: "create", content: "one\ntwo\n" } },
+        blockId: "create-1",
+        seq: 1,
+      }],
+    }];
+    const html = win.msgs();
+    assert.ok(html.includes(">+2</span>"), "created-file summary should derive its added line count");
   });
 
   it("edited file summary masks the event-flow line below the final node", () => {

@@ -63,48 +63,6 @@ function shortText(value: unknown, max = 1200): string {
   return text.length > max ? text.slice(0, max) + '\n... truncated' : text;
 }
 
-function chatDiffLineCount(text: string): number {
-  if (!text) return 0;
-  const lines = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
-  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-  return lines.length;
-}
-
-function chatDiffLines(diff: any): string[] {
-  if (diff?.type === 'create' && typeof diff.content === 'string') {
-    return diff.content
-      .replaceAll('\r\n', '\n')
-      .replaceAll('\r', '\n')
-      .split('\n')
-      .filter((line: string, index: number, lines: string[]) => index < lines.length - 1 || line !== '')
-      .map((line: string) => '+' + line);
-  }
-  const hunks = Array.isArray(diff?.structuredPatch) ? diff.structuredPatch : [];
-  return hunks.flatMap((hunk: any) => Array.isArray(hunk?.lines) ? hunk.lines : []);
-}
-
-function renderFileDiffMetadata(diff: any): string {
-  if (!diff || typeof diff !== 'object' || typeof diff.filePath !== 'string') return '';
-  const added = Number.isFinite(Number(diff.linesAdded))
-    ? Number(diff.linesAdded)
-    : (diff.type === 'create' ? chatDiffLineCount(String(diff.content || '')) : 0);
-  const removed = Number.isFinite(Number(diff.linesRemoved)) ? Number(diff.linesRemoved) : 0;
-  const rawLines = chatDiffLines(diff);
-  const visibleLines = rawLines.slice(0, 160);
-  const truncated = rawLines.length > visibleLines.length;
-  const rows = visibleLines.map((line: string) => {
-    const marker = line[0] === '+' || line[0] === '-' || line[0] === ' ' ? line[0] : ' ';
-    const body = marker === ' ' ? line.slice(1) : line.slice(1);
-    const kind = marker === '+' ? 'add' : marker === '-' ? 'del' : 'ctx';
-    return `<div class="trace-diff-line trace-diff-${kind}"><span class="trace-diff-sign">${E(marker)}</span><span class="trace-diff-text">${E(body)}</span></div>`;
-  }).join('');
-  const metadataOmitted = Number.isFinite(Number(diff.omittedLines)) ? Number(diff.omittedLines) : 0;
-  const hiddenLines = rawLines.length - visibleLines.length + (diff.truncated ? metadataOmitted : 0);
-  const empty = rows || '<div class="trace-diff-empty">无文本变更</div>';
-  const more = truncated || diff.truncated ? `<div class="trace-diff-more">已隐藏 ${hiddenLines} 行</div>` : '';
-  return `<div class="trace-diff"><div class="trace-diff-head"><button type="button" class="trace-diff-path" data-diff-file-path="${E(diff.filePath)}" title="打开文件">${E(diff.filePath)}</button><span class="trace-diff-stat add">+${added}</span><span class="trace-diff-stat del">-${removed}</span></div><div class="trace-diff-code">${empty}${more}</div></div>`;
-}
-
 function diffForBlock(block: any, blocks: any[]): any | null {
   if (block.type === 'tool') return block.metadata?.diff || null;
   if (block.type === 'tool_use') {
@@ -127,7 +85,7 @@ function collectEditedFiles(blocks: any[]): Array<{ filePath: string; linesAdded
     const key = normalizeDiffPath(filePath);
     const added = Number.isFinite(Number(diff.linesAdded))
       ? Number(diff.linesAdded)
-      : (diff.type === 'create' ? chatDiffLineCount(String(diff.content || '')) : 0);
+      : (diff.type === 'create' ? App.FileDiff.countContentLines(String(diff.content || '')) : 0);
     const removed = Number.isFinite(Number(diff.linesRemoved)) ? Number(diff.linesRemoved) : 0;
     const current = files.get(key);
     if (current) {
@@ -366,7 +324,7 @@ function renderTraceItem(t: any, defaultOpen?: boolean): string {
     const input = hasTraceValue(t.input) ? shortText(t.input, 900) : '';
     const result = t.error || t.output;
     const output = hasTraceValue(result) ? shortText(result, 1200) : '';
-    const diffBlock = renderFileDiffMetadata(t.metadata?.diff);
+    const diffBlock = App.FileDiff.render(t.metadata?.diff);
     const inputSection = input ? `<div class="trace-card-section trace-card-in"><div class="trace-card-label">IN</div><pre>${E(input)}</pre></div>` : '';
     const outputLabel = t.status === 'error' ? 'ERROR' : 'OUT';
     const outputSection = output ? `<div class="trace-card-section trace-card-out"><div class="trace-card-label${t.status === 'error' ? ' error' : ''}">${outputLabel}</div><pre>${E(output)}</pre></div>` : '';

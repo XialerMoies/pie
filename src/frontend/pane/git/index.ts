@@ -42,6 +42,11 @@ interface GitLogResponse {
   message?: string;
 }
 
+interface GitDiffResponse extends FileDiffMetadata {
+  gitRoot: string;
+  error?: string;
+}
+
 // ─── State ───────────────────────────────────────────────────────
 
 let _statusData: GitStatusResponse | null = null;
@@ -49,6 +54,11 @@ let _logData: GitLogResponse | null = null;
 let _loading = false;
 let _error: string | null = null;
 let _notRepo = false;
+let _diffData: GitDiffResponse | null = null;
+let _diffLoading = false;
+let _diffError: string | null = null;
+let _selectedDiffPath: string | null = null;
+let _diffExpanded = true;
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
@@ -103,6 +113,13 @@ async function fetchStatus(root: string): Promise<GitStatusResponse> {
 async function fetchLog(root: string, count = 10): Promise<GitLogResponse> {
   const r = await fetch(`/api/git/log?root=${encodeURIComponent(root)}&count=${count}`);
   return r.json();
+}
+
+async function fetchDiff(root: string, filePath: string): Promise<GitDiffResponse> {
+  const r = await fetch(`/api/git/diff?root=${encodeURIComponent(root)}&path=${encodeURIComponent(filePath)}`);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.message || data.error || "Diff 加载失败");
+  return data;
 }
 
 // ─── Render ─────────────────────────────────────────────────────
@@ -171,16 +188,35 @@ function renderGit(): void {
 
     for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
       const e = entries[entryIndex];
+      const diffPath = e.renamePath || e.path;
       const iconClass = statusIconClass(e.x, e.y);
       const label = statusLabel(e.x, e.y);
       const fileName = e.path.split("/").pop() || e.path;
       const iconHtml = (window as any).ExplorerService?.iconFor(fileName, false) || "";
-      html += `<div class="git-file" data-git-action="open-file" data-entry-index="${entryIndex}">`;
+      html += `<div class="git-file${_selectedDiffPath === diffPath ? " is-active" : ""}" data-git-action="show-diff" data-entry-index="${entryIndex}">`;
       html += `<span class="git-status-badge ${iconClass}">${label}</span>`;
       html += `${iconHtml} `;
       html += `<span class="git-file-name">${E(e.path)}</span>`;
       if (e.renamePath) html += `<span class="git-rename"> → ${E(e.renamePath)}</span>`;
+      if (_selectedDiffPath === diffPath) {
+        const disclosureIcon = _svg(_diffExpanded ? "itriangle-down" : "itriangle-up", 12);
+        const disclosureLabel = _diffExpanded ? "收起" : "展开";
+        html += `<button type="button" class="git-file-disclosure" data-git-action="toggle-diff" aria-expanded="${_diffExpanded}" aria-label="${disclosureLabel} diff" title="${disclosureLabel}">${disclosureIcon}</button>`;
+      }
       html += "</div>";
+      if (_selectedDiffPath === diffPath && _diffExpanded) {
+        html += '<div class="git-diff-preview">';
+        if (_diffLoading) {
+          html += '<div class="git-diff-state">正在加载改动...</div>';
+        } else if (_diffError) {
+          html += `<div class="git-diff-state error">${E(_diffError)}</div>`;
+        } else if (_diffData) {
+          html += App.FileDiff.render(_diffData, {
+            pathAction: "open-diff-file",
+          });
+        }
+        html += "</div>";
+      }
     }
   }
 
@@ -245,11 +281,48 @@ async function refreshGit(): Promise<void> {
     _logData = logRes;
   }
 
+  const selectedStillPresent = !!_selectedDiffPath && !!_statusData?.entries.some(
+    entry => (entry.renamePath || entry.path) === _selectedDiffPath,
+  );
+  if (!selectedStillPresent) {
+    _selectedDiffPath = null;
+    _diffData = null;
+    _diffError = null;
+    _diffLoading = false;
+    _diffExpanded = true;
+  }
+
   _loading = false;
   renderGit();
+  if (selectedStillPresent && _selectedDiffPath) void loadGitDiff(_selectedDiffPath);
 }
 
 // ─── Open file from git status ──────────────────────────────────
+
+async function loadGitDiff(filePath: string): Promise<void> {
+  const root = getRoot();
+  if (!root) return;
+  if (_selectedDiffPath !== filePath) _diffExpanded = true;
+  _selectedDiffPath = filePath;
+  _diffData = null;
+  _diffError = null;
+  _diffLoading = true;
+  renderGit();
+  try {
+    const data = await fetchDiff(root, filePath);
+    if (_selectedDiffPath !== filePath) return;
+    if (data.error) throw new Error(data.message || data.error);
+    _diffData = data;
+  } catch (error: unknown) {
+    if (_selectedDiffPath !== filePath) return;
+    _diffError = error instanceof Error ? error.message : String(error);
+  } finally {
+    if (_selectedDiffPath === filePath) {
+      _diffLoading = false;
+      renderGit();
+    }
+  }
+}
 
 async function openGitFile(filePath: string): Promise<void> {
   const root = getRoot();
@@ -336,12 +409,21 @@ function handleGitPaneClick(event: Event): void {
   if (!target) return;
 
   switch (target.dataset.gitAction) {
-    case "open-file": {
+    case "show-diff": {
       const entryIndex = Number(target.dataset.entryIndex);
       const entry = Number.isInteger(entryIndex) ? _statusData?.entries[entryIndex] : undefined;
-      if (entry) void openGitFile(entry.path);
+      if (entry) void loadGitDiff(entry.renamePath || entry.path);
       break;
     }
+    case "open-diff-file": {
+      const filePath = target.dataset.diffFilePath;
+      if (filePath) void openGitFile(filePath);
+      break;
+    }
+    case "toggle-diff":
+      _diffExpanded = !_diffExpanded;
+      renderGit();
+      break;
     case "commit":
       void commit();
       break;

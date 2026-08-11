@@ -365,6 +365,35 @@ interface AppGit {
   push(): Promise<void>;
   pull(): Promise<void>;
 }
+interface FileDiffHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+}
+interface FileDiffMetadata {
+  filePath: string;
+  type: 'update' | 'create' | 'delete' | 'rename';
+  linesAdded?: number;
+  linesRemoved?: number;
+  structuredPatch?: FileDiffHunk[];
+  content?: string;
+  binary?: boolean;
+  truncated?: boolean;
+  omittedLines?: number;
+  message?: string;
+}
+interface FileDiffRenderOptions {
+  pathAction?: string;
+  collapsible?: boolean;
+  expanded?: boolean;
+  toggleAction?: string;
+}
+interface AppFileDiff {
+  countContentLines(content: string): number;
+  render(diff: FileDiffMetadata, options?: FileDiffRenderOptions): string;
+}
 type McpConnectionState = 'connected' | 'connecting' | 'disconnected' | 'error';
 interface AppMcpState {
   normalize(value: unknown): McpConnectionState;
@@ -421,6 +450,7 @@ interface AppNamespace {
   Permissions: AppPermissions;
   Settings: AppSettings;
   Git: AppGit;
+  FileDiff: AppFileDiff;
   McpState: AppMcpState;
   Tabs: AppTabs;
 }

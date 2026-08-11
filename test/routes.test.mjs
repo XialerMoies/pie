@@ -8,6 +8,7 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
 import { createServer } from "node:http";
+import { execFileSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
@@ -799,6 +800,104 @@ describe("chat routes", () => {
       assert.deepStrictEqual(await response.json(), { ok: true, workspace, switched: true });
     } finally {
       server.close();
+    }
+  });
+});
+
+describe("git workspace diff", () => {
+  it("returns HEAD-to-worktree changes for tracked and untracked files", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "git-diff-route-"));
+    try {
+      execFileSync("git", ["init"], { cwd: root });
+      execFileSync("git", ["config", "user.name", "Route Test"], { cwd: root });
+      execFileSync("git", ["config", "user.email", "route@test.invalid"], { cwd: root });
+      writeFileSync(resolve(root, "tracked.txt"), "before\nkeep\n", "utf8");
+      writeFileSync(resolve(root, "old-name.txt"), "renamed\n", "utf8");
+      execFileSync("git", ["add", "tracked.txt", "old-name.txt"], { cwd: root });
+      execFileSync("git", ["commit", "-m", "initial"], { cwd: root });
+      writeFileSync(resolve(root, "tracked.txt"), "staged\nkeep\n", "utf8");
+      execFileSync("git", ["add", "tracked.txt"], { cwd: root });
+      writeFileSync(resolve(root, "tracked.txt"), "after\nkeep\n", "utf8");
+      writeFileSync(resolve(root, "new.txt"), "first\nsecond\n", "utf8");
+      execFileSync("git", ["mv", "old-name.txt", "new-name.txt"], { cwd: root });
+
+      const ctx = mockContext({ paths: { ...mockPaths(), APP_ROOT: root } });
+      const trackedResult = await callHandler(
+        handleGit,
+        "GET",
+        `/api/git/diff?root=${encodeURIComponent(root)}&path=${encodeURIComponent("tracked.txt")}`,
+        undefined,
+        ctx,
+      );
+      assert.strictEqual(trackedResult.status, 200);
+      const tracked = parseJSON(trackedResult.body);
+      assert.strictEqual(tracked.type, "update");
+      assert.strictEqual(tracked.filePath, "tracked.txt");
+      assert.strictEqual(tracked.linesAdded, 1);
+      assert.strictEqual(tracked.linesRemoved, 1);
+      assert.deepStrictEqual(tracked.structuredPatch[0].lines, ["-before", "+after", " keep"]);
+
+      const untrackedResult = await callHandler(
+        handleGit,
+        "GET",
+        `/api/git/diff?root=${encodeURIComponent(root)}&path=${encodeURIComponent("new.txt")}`,
+        undefined,
+        ctx,
+      );
+      const untracked = parseJSON(untrackedResult.body);
+      assert.strictEqual(untracked.type, "create");
+      assert.strictEqual(untracked.linesAdded, 2);
+      assert.deepStrictEqual(untracked.structuredPatch[0].lines, ["+first", "+second"]);
+
+      const renameResult = await callHandler(
+        handleGit,
+        "GET",
+        `/api/git/diff?root=${encodeURIComponent(root)}&path=${encodeURIComponent("new-name.txt")}`,
+        undefined,
+        ctx,
+      );
+      const renamed = parseJSON(renameResult.body);
+      assert.strictEqual(renamed.type, "rename");
+      assert.strictEqual(renamed.filePath, "new-name.txt");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("handles deleted and binary files and rejects traversal", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "git-diff-edge-"));
+    try {
+      execFileSync("git", ["init"], { cwd: root });
+      execFileSync("git", ["config", "user.name", "Route Test"], { cwd: root });
+      execFileSync("git", ["config", "user.email", "route@test.invalid"], { cwd: root });
+      writeFileSync(resolve(root, "deleted.txt"), "gone\n", "utf8");
+      writeFileSync(resolve(root, "binary.bin"), Buffer.from([0, 1, 2, 3]));
+      execFileSync("git", ["add", "deleted.txt", "binary.bin"], { cwd: root });
+      execFileSync("git", ["commit", "-m", "initial"], { cwd: root });
+      rmSync(resolve(root, "deleted.txt"));
+      writeFileSync(resolve(root, "binary.bin"), Buffer.from([0, 4, 5, 6]));
+
+      const ctx = mockContext({ paths: { ...mockPaths(), APP_ROOT: root } });
+      const deletedResult = await callHandler(handleGit, "GET", `/api/git/diff?root=${encodeURIComponent(root)}&path=deleted.txt`, undefined, ctx);
+      const deleted = parseJSON(deletedResult.body);
+      assert.strictEqual(deleted.type, "delete");
+      assert.strictEqual(deleted.linesRemoved, 1);
+
+      const binaryResult = await callHandler(handleGit, "GET", `/api/git/diff?root=${encodeURIComponent(root)}&path=binary.bin`, undefined, ctx);
+      const binary = parseJSON(binaryResult.body);
+      assert.strictEqual(binary.binary, true);
+      assert.match(binary.message, /二进制/);
+
+      const traversalResult = await callHandler(
+        handleGit,
+        "GET",
+        `/api/git/diff?root=${encodeURIComponent(root)}&path=${encodeURIComponent("../outside.txt")}`,
+        undefined,
+        ctx,
+      );
+      assert.strictEqual(traversalResult.status, 403);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
