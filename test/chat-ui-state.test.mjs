@@ -113,6 +113,7 @@ global.logTiming = () => {};
       buildInstruction: (message) => message,
     },
     File: {},
+    FileDiff: { render: () => "" },   // 渲染路径会调 App.FileDiff.render（bundle 里 file-diff-render.ts 总绑定）；测试不测 diff，空 mock 防崩
     Session: {},
     Settings: {},
     Git: {},
