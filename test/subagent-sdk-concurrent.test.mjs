@@ -110,19 +110,13 @@ describe("④-B 子 agent 真实并发执行", () => {
   });
 
   it("流式中止 A 不影响 B 完成", async () => {
-    // 新 provider：A 长流 10 块 ×100ms（可中途 abort），B 用并发 provider 快速完成
+    // A 用独立 api 类型注册长流（不覆盖 CONCURRENT，A 真走 10×100ms 长流，可中途 abort）。
+    // B 用 CONCURRENT（150ms 单块）快速完成。
     registry.registerProvider(ABORT_PROVIDER, {
-      api: "anthropic-messages", baseUrl: "https://fake-abort.local", apiKey: "fake-key",
+      // 独立 api 类型：确保 resolveApiProvider 解析到 A 自己的长流 handler，不被 CONCURRENT 覆盖
+      api: "anthropic-messages-abort", baseUrl: "https://fake-abort.local", apiKey: "fake-key",
       models: [{ id: "ab-1", name: "Abort", input: ["text"], contextWindow: 100000, maxTokens: 4000, thinkingLevelMap: { off: null, low: "low", medium: "medium", high: "high" } }],
       streamSimple: makeStreamSimple("[ABORT] 长流", { blockMs: 100, blocks: 10 }),
-    });
-    // 重要：registerApiProvider 按 api 类型互斥（进程级全局）。
-    // ABORT 覆盖了 CONCURRENT（同属 anthropic-messages），所以这里重新注册
-    // CONCURRENT 让它成为最终生效的 provider，B 才能解析到"并发回复"。
-    registry.registerProvider(CONCURRENT_PROVIDER, {
-      api: "anthropic-messages", baseUrl: "https://fake-conc.local", apiKey: "fake-key",
-      models: [{ id: "c-1", name: "Conc", input: ["text"], contextWindow: 100000, maxTokens: 4000, thinkingLevelMap: { off: null, low: "low", medium: "medium", high: "high" } }],
-      streamSimple: makeStreamSimple("并发回复", { blockMs: 150, blocks: 1 }),
     });
 
     const settingsA = SettingsManager.inMemory({ defaultProvider: ABORT_PROVIDER, defaultModel: "ab-1", defaultThinkingLevel: "off" });
@@ -138,10 +132,16 @@ describe("④-B 子 agent 真实并发执行", () => {
     const pa = a.prompt("A 长任务");
     const pb = b.prompt("B 短任务");
 
-    await new Promise((r) => setTimeout(r, 300)); // A 流式中（10×100ms）
+    await new Promise((r) => setTimeout(r, 300)); // A 流式中（10×100ms 才 3 块，仍在流式）
+    assert.strictEqual(a.isStreaming, true, "abort 前 A 应仍在流式（未完成）");
     await a.abort();
     await Promise.allSettled([pa, pb]);
 
+    // A 被中止：最终 assistant 消息的 stopReason 应为 "aborted"（而非完整走完的 "stop"）
+    const aAssistant = a.messages.filter((m) => m.role === "assistant");
+    const aFinal = aAssistant[aAssistant.length - 1];
+    assert.strictEqual(aFinal?.stopReason, "aborted", "A 应被中止（stopReason=aborted）而非正常完成");
+    // B 不受影响，完成且带回复
     const bHas = b.messages.some((m) => m.role === "assistant" && JSON.stringify(m.content).includes("并发回复"));
     assert.ok(bHas, "A 中止后 B 应继续完成");
     assert.strictEqual(b.sessionFile, undefined, "B 不写磁盘");

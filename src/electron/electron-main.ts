@@ -32,6 +32,8 @@ import {
   createExternalServerBinding,
   createNoneServerBinding,
   createOwnedServerBinding,
+  type OwnedServerBinding,
+  type ExternalServerBinding,
   type ServerBinding,
 } from "./server-binding.js";
 import { resumeQuitAfterDisposal } from "./quit-coordinator.js";
@@ -459,11 +461,28 @@ function writeE2EResult(result: Record<string, unknown>): void {
   fs.writeFileSync(E2E_RESULT_FILE, JSON.stringify(result, null, 2), "utf-8");
 }
 
+async function waitForServerOrigin(binding: ServerBinding, timeoutMs = 30_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const origin = (binding as OwnedServerBinding).origin || (binding as ExternalServerBinding).origin || "";
+    if (origin) return origin;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  }
+  return (binding as OwnedServerBinding).origin || (binding as ExternalServerBinding).origin || "";
+}
+
 async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
   if (!E2E_MODE || e2eProbeStarted) return;
   e2eProbeStarted = true;
   try {
     await waitForRendererReady(win);
+    // E2E 探测用 initialServerBinding.origin 发所有请求。若 server 尚未上报
+    // SERVER_PORT:（start() 未 resolve、origin 为空串），探测请求会 Failed to fetch。
+    // 必须等 server 就绪（origin 非空）再开始探测。
+    const origin = await waitForServerOrigin(initialServerBinding);
+    if (!origin) {
+      throw new Error(`E2E probe failed to wait for server origin (initialServerBinding.origin is empty)`);
+    }
     const e2eRoot = E2E_DATA_DIR || DATA_DIR;
     const projectA = path.join(e2eRoot, "project-a");
     const projectB = path.join(e2eRoot, "project-b");
@@ -482,8 +501,8 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
     fs.writeFileSync(path.join(siblingWorkspace, "read.txt"), "sibling-read", "utf-8");
 
     const renderer = await collectRendererE2EResult(win, path.join(externalRoot, "ipc.txt"));
-    const textIconStatus = await requestStatus(`${initialServerBinding.origin}/icons/file_type_text.svg`);
-    const unauthorizedApiStatus = await requestStatus(`${initialServerBinding.origin}/api/dashboard`);
+    const textIconStatus = await requestStatus(`${origin}/icons/file_type_text.svg`);
+    const unauthorizedApiStatus = await requestStatus(`${origin}/api/dashboard`);
     const wrongTokenApi = await requestJson("/api/dashboard", "GET", undefined, {
       headers: { "X-My-Code-Agent-Token": "forged-token" },
     });
