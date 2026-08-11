@@ -105,6 +105,62 @@ function renderFileDiffMetadata(diff: any): string {
   return `<div class="trace-diff"><div class="trace-diff-head"><button type="button" class="trace-diff-path" data-diff-file-path="${E(diff.filePath)}" title="打开文件">${E(diff.filePath)}</button><span class="trace-diff-stat add">+${added}</span><span class="trace-diff-stat del">-${removed}</span></div><div class="trace-diff-code">${empty}${more}</div></div>`;
 }
 
+function diffForBlock(block: any, blocks: any[]): any | null {
+  if (block.type === 'tool') return block.metadata?.diff || null;
+  if (block.type === 'tool_use') {
+    const result = blocks.find(item => item.type === 'tool_result' && item.toolUseId && item.toolUseId === block.toolCallId);
+    return result?.metadata?.diff || block.metadata?.diff || null;
+  }
+  if (block.type === 'tool_result') {
+    const toolUse = blocks.find(item => item.type === 'tool_use' && item.toolCallId && item.toolCallId === block.toolUseId);
+    return toolUse ? null : block.metadata?.diff || null;
+  }
+  return null;
+}
+
+function collectEditedFiles(blocks: any[]): Array<{ filePath: string; linesAdded: number; linesRemoved: number }> {
+  const files = new Map<string, { filePath: string; linesAdded: number; linesRemoved: number }>();
+  for (const block of [...blocks].sort((a: any, b: any) => a.seq - b.seq)) {
+    const diff = diffForBlock(block, blocks);
+    if (!diff || typeof diff.filePath !== 'string' || !diff.filePath.trim()) continue;
+    const filePath = diff.filePath.trim();
+    const key = normalizeDiffPath(filePath);
+    const added = Number.isFinite(Number(diff.linesAdded))
+      ? Number(diff.linesAdded)
+      : (diff.type === 'create' ? chatDiffLineCount(String(diff.content || '')) : 0);
+    const removed = Number.isFinite(Number(diff.linesRemoved)) ? Number(diff.linesRemoved) : 0;
+    const current = files.get(key);
+    if (current) {
+      current.linesAdded += added;
+      current.linesRemoved += removed;
+    } else {
+      files.set(key, { filePath, linesAdded: added, linesRemoved: removed });
+    }
+  }
+  return [...files.values()];
+}
+
+function renderEditSummary(blocks: any[], expanded = true): string {
+  const files = collectEditedFiles(blocks);
+  if (files.length === 0) return '';
+  const added = files.reduce((total, file) => total + file.linesAdded, 0);
+  const removed = files.reduce((total, file) => total + file.linesRemoved, 0);
+  const rows = files.map(file => `<button type="button" class="trace-edit-file" data-diff-file-path="${E(file.filePath)}" title="打开文件"><span class="trace-edit-file-path">${E(file.filePath)}</span><span class="trace-edit-file-stat"><span class="add">+${file.linesAdded}</span> <span class="del">-${file.linesRemoved}</span></span></button>`).join('');
+  const collapseIcon = typeof S === 'function' ? S(expanded ? 'ich-down' : 'ich-right', 16) : '';
+  return `<section class="trace-edit-summary" data-edit-summary><div class="trace-edit-summary-head"><div class="trace-edit-summary-title"><span class="trace-edit-summary-icon">${typeof S === 'function' ? S('iedit', 22) : ''}</span><div><div class="trace-edit-summary-label">已编辑 ${files.length} 个文件</div><div class="trace-edit-summary-total"><span class="add">+${added}</span> <span class="del">-${removed}</span></div></div></div><button type="button" class="trace-edit-toggle" data-edit-summary-toggle aria-expanded="${expanded}" aria-label="${expanded ? '收起' : '展开'}已编辑文件" title="${expanded ? '收起' : '展开'}">${collapseIcon}</button></div><div class="trace-edit-files" data-edit-summary-files${expanded ? '' : ' hidden'}>${rows}</div></section>`;
+}
+
+function refreshEditSummary(flow: HTMLElement, blocks: any[]): void {
+  const trace = flow.querySelector<HTMLElement>('.trace.block-trace');
+  if (!trace) return;
+  const current = trace.querySelector<HTMLElement>('[data-edit-summary]');
+  const expanded = current?.querySelector<HTMLElement>('[data-edit-summary-toggle]')?.getAttribute('aria-expanded') !== 'false';
+  const html = renderEditSummary(blocks, expanded);
+  if (!html) { current?.remove(); return; }
+  if (current) current.outerHTML = html;
+  else trace.insertAdjacentHTML('beforeend', html);
+}
+
 function firstSummaryLine(value: string, max = 220): string {
   const line = value.split(/\r?\n/).find(item => item.trim())?.trim() || '';
   return line.length > max ? line.slice(0, max) + '...' : line;
@@ -164,6 +220,22 @@ function bindDiffFileLinks(): void {
   diffFileLinksBound = true;
   document.addEventListener('click', (event: MouseEvent) => {
     const eventTarget = event.target as Element | null;
+    const toggle = typeof eventTarget?.closest === 'function'
+      ? eventTarget.closest<HTMLElement>('[data-edit-summary-toggle]')
+      : null;
+    if (toggle) {
+      const summary = toggle.closest<HTMLElement>('[data-edit-summary]');
+      const files = summary?.querySelector<HTMLElement>('[data-edit-summary-files]');
+      if (!files) return;
+      const expanded = toggle.getAttribute('aria-expanded') === 'true';
+      const nextExpanded = !expanded;
+      files.hidden = !nextExpanded;
+      toggle.setAttribute('aria-expanded', String(nextExpanded));
+      toggle.setAttribute('aria-label', nextExpanded ? '收起已编辑文件' : '展开已编辑文件');
+      toggle.title = nextExpanded ? '收起' : '展开';
+      toggle.innerHTML = typeof S === 'function' ? S(nextExpanded ? 'ich-down' : 'ich-right', 16) : '';
+      return;
+    }
     const target = typeof eventTarget?.closest === 'function'
       ? eventTarget.closest<HTMLElement>('[data-diff-file-path]')
       : null;
@@ -428,6 +500,11 @@ function renderBlocks(blocks: any[]): string {
     }
   }
   flushEvents();
+  const editSummary = renderEditSummary(sorted);
+  if (editSummary) {
+    const trace = parts[parts.length - 1];
+    parts[parts.length - 1] = trace.replace(/<\/div>$/, `${editSummary}</div>`);
+  }
   return `<div class="assistant-blocks">${parts.join('')}</div>`;
 }
 
@@ -519,24 +596,28 @@ function updateLastBlock(block: any): boolean {
     contentElement.innerHTML = renderBlocks(message.blocks);
     return true;
   }
+  refreshEditSummary(flow, message.blocks);
 
   const target = Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
     .find(element => element.dataset.blockId === blockId(block));
   if (target && block.type === 'text') {
     const textBody = target.querySelector('.trace-text-body') as HTMLElement | null;
-    if (textBody) textBody.innerHTML = mdRender(block.text || '');
-    else replaceBlockContents(target, renderEventBlock(block, message.blocks));
-    return true;
+      if (textBody) textBody.innerHTML = mdRender(block.text || '');
+      else replaceBlockContents(target, renderEventBlock(block, message.blocks));
+      refreshEditSummary(flow, message.blocks);
+      return true;
   }
   if (target && block.type === 'thinking') {
     const textElement = target.querySelector('.trace-thinking-text') as HTMLElement | null;
-    if (textElement) {
-      textElement.innerHTML = mdRender(block.text || '');
-      return true;
+      if (textElement) {
+        textElement.innerHTML = mdRender(block.text || '');
+        refreshEditSummary(flow, message.blocks);
+        return true;
     }
   }
   if (target && (block.type === 'tool' || block.type === 'tool_use' || block.type === 'tool_result' || block.type === 'step' || block.type === 'user_note')) {
     replaceBlockContents(target, renderEventBlock(block, message.blocks));
+    refreshEditSummary(flow, message.blocks);
     return true;
   }
   if (block.type === 'tool_result') {
@@ -546,12 +627,15 @@ function updateLastBlock(block: any): boolean {
         .find(element => element.dataset.blockId === blockId(toolUse));
       if (toolTarget) {
         replaceBlockContents(toolTarget, renderEventBlock(toolUse, message.blocks));
+        refreshEditSummary(flow, message.blocks);
         return true;
       }
     }
   }
 
-  return insertBlockNode(flow, block, message.blocks);
+  const inserted = insertBlockNode(flow, block, message.blocks);
+  refreshEditSummary(flow, message.blocks);
+  return inserted;
 }
 
 function finalizeLastMessage(): boolean {
@@ -602,6 +686,7 @@ function finalizeLastMessage(): boolean {
       }
     }
     if (!fullySynced) contentElement.innerHTML = renderBlocks(message.blocks);
+    else refreshEditSummary(flow, message.blocks);
     return true;
   }
 

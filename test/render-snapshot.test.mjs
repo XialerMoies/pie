@@ -8,6 +8,7 @@
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 import * as marked from "marked";
 
@@ -416,6 +417,59 @@ describe("msgs() 渲染", () => {
     global.ExplorerService.getWorkspacePath = originalWorkspace;
     globalThis.fetch = originalFetch;
     globalThis.toast = originalToast;
+  });
+
+  it("aggregates edited files below the end of the event flow", () => {
+    state.M = [{
+      role: "assistant",
+      blocks: [
+        { type: "tool", status: "success", name: "edit", output: "updated", metadata: { diff: {
+          filePath: "src/one.ts", linesAdded: 2, linesRemoved: 1, structuredPatch: [],
+        } }, blockId: "edit-1", seq: 1 },
+        { type: "tool", status: "success", name: "edit", output: "updated", metadata: { diff: {
+          filePath: "src/two.ts", linesAdded: 3, linesRemoved: 0, structuredPatch: [],
+        } }, blockId: "edit-2", seq: 2 },
+        { type: "tool", status: "success", name: "edit", output: "updated", metadata: { diff: {
+          filePath: "src/one.ts", linesAdded: 4, linesRemoved: 2, structuredPatch: [],
+        } }, blockId: "edit-3", seq: 3 },
+      ],
+    }];
+    const html = win.msgs();
+    assert.ok(html.includes('class="trace-edit-summary"'), "edited file summary should render");
+    assert.ok(html.includes("已编辑 2 个文件"), "summary should count unique files");
+    assert.ok(html.includes(">+9</span>"), "summary should total added lines");
+    assert.ok(html.includes(">-3</span>"), "summary should total removed lines");
+    assert.strictEqual((html.match(/class="trace-edit-file"/g) || []).length, 2, "summary should list each unique file once");
+    assert.ok(html.includes('data-edit-summary-toggle'), "summary should have an icon toggle");
+    assert.ok(html.includes('aria-expanded="true"'), "summary should be expanded by default");
+    assert.ok(!html.includes("撤销"), "summary should not show undo action");
+    assert.ok(!html.includes("审核"), "summary should not show review action");
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = html;
+    const summary = panel.querySelector(".trace-edit-summary");
+    assert.ok(summary?.parentElement?.lastElementChild === summary, "summary should be the last item in the event flow");
+  });
+
+  it("edited file summary masks the event-flow line below the final node", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    assert.match(css, /\.trace-edit-summary::before\s*\{[^}]*background:var\(--bg\)/, "summary should mask the trace line");
+    assert.match(css, /\.trace-edit-summary\s*\{[^}]*overflow:visible/, "summary should not clip its trace-line mask");
+    assert.match(css, /\.trace \.block-event:last-of-type \.trace-node::after/, "the final event node should terminate the trace before the summary");
+  });
+
+  it("edited file summary toggles with SVG icon state", () => {
+    const panel = doc.getElementById("ms");
+    const toggle = panel.querySelector("[data-edit-summary-toggle]");
+    const files = panel.querySelector("[data-edit-summary-files]");
+    assert.ok(toggle && files);
+    toggle.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    assert.strictEqual(toggle.getAttribute("aria-expanded"), "false");
+    assert.strictEqual(files.hidden, true);
+    assert.ok(toggle.innerHTML.includes("#ich-right"), "collapsed state should use a right-facing disclosure icon");
+    toggle.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    assert.strictEqual(toggle.getAttribute("aria-expanded"), "true");
+    assert.strictEqual(files.hidden, false);
+    assert.ok(toggle.innerHTML.includes("#ich-down"), "expanded state should use a down-facing disclosure icon");
   });
 
   it("block tool_result 错误时显示 error 标记", () => {
