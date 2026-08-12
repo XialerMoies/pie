@@ -238,6 +238,40 @@ describe("subagent event replay reducer", () => {
     assert.deepEqual(replay.batches[0].events, [queued]);
   });
 
+  it("rebuilds render-safe task details from queued and completed payloads", () => {
+    const queued = event({
+      seq: 1,
+      kind: "task_queued",
+      status: "queued",
+      payload: { profile: "reviewer", prompt: "Review replay boundaries" },
+    });
+    const completed = event({
+      seq: 2,
+      kind: "task_completed",
+      status: "completed",
+      payload: {
+        result: {
+          summary: "Replay is bounded",
+          findings: ["Lifecycle events are retained"],
+          evidence: ["subagent-events.ts:266"],
+        },
+      },
+    });
+
+    const replay = reduceSubagentEventReplay([queued, completed]);
+
+    assert.deepEqual(replay.batches[0].tasks[0], {
+      taskId: "task-1",
+      status: "completed",
+      profile: "reviewer",
+      prompt: "Review replay boundaries",
+      summary: "Replay is bounded",
+      findings: ["Lifecycle events are retained"],
+      evidence: ["subagent-events.ts:266"],
+      events: [queued, completed],
+    });
+  });
+
   it("marks an unfinished restored batch and its inactive tasks as interrupted", () => {
     const replay = reduceSubagentEventReplay([
       event({ taskId: null, seq: 1, kind: "batch_started", status: "running" }),

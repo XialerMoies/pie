@@ -370,22 +370,105 @@ function subagentStatusText(status: string): string {
   return labels[status] || status;
 }
 
-function renderSubagentBatches(batches: readonly FrontendSubagentBatch[] | undefined, toolCallId?: string): string {
-  const owned = selectSubagentBatchesForTool(batches, toolCallId);
-  if (owned.length === 0) return '';
-  return owned.map((batch) => {
-    const running = batch.status === 'running' || batch.status === 'queued';
-    const tasks = batch.tasks.map((task, index) => {
-      const title = task.prompt || `${task.profile || 'agent'} ${index + 1}`;
-      const details = [
-        task.summary ? `<div class="subagent-task-summary">${mdRender(task.summary)}</div>` : '',
-        task.findings.length ? `<ul class="subagent-task-list">${task.findings.map((item) => `<li>${E(item)}</li>`).join('')}</ul>` : '',
-        task.evidence.length ? `<div class="subagent-evidence">${task.evidence.map((item) => `<div>${E(item)}</div>`).join('')}</div>` : '',
-      ].join('');
-      return `<details class="subagent-task subagent-${E(task.status)}"${task.status === 'running' ? ' open' : ''}><summary><span class="subagent-status-dot"></span><span class="subagent-task-title">${E(title)}</span><span class="subagent-task-status">${E(subagentStatusText(task.status))}</span></summary>${details ? `<div class="subagent-task-body">${details}</div>` : ''}</details>`;
-    }).join('');
-    return `<section class="subagent-batch subagent-${E(batch.status)}" data-subagent-batch-id="${E(batch.batchId)}"><div class="subagent-batch-head"><span>子任务</span><span>${batch.tasks.length} 项 · ${E(subagentStatusText(batch.status))}</span></div><div class="subagent-tasks"${running ? '' : ' data-settled="true"'}>${tasks}</div></section>`;
+interface DelegateTaskInput {
+  profile?: string;
+  prompt?: string;
+}
+
+function delegateTaskInput(input: unknown): { tasks: DelegateTaskInput[]; maxConcurrent: number } {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return { tasks: [], maxConcurrent: 2 };
+  const value = input as Record<string, unknown>;
+  const tasks = Array.isArray(value.tasks) ? value.tasks.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const task = item as Record<string, unknown>;
+    return [{
+      profile: typeof task.profile === 'string' ? task.profile : undefined,
+      prompt: typeof task.prompt === 'string' ? task.prompt : undefined,
+    }];
+  }) : [];
+  const requestedConcurrency = Number(value.maxConcurrent);
+  const maxConcurrent = Number.isFinite(requestedConcurrency)
+    ? Math.min(4, Math.max(1, Math.trunc(requestedConcurrency)))
+    : 2;
+  return { tasks, maxConcurrent };
+}
+
+function subagentProfileText(profile: string | undefined): string {
+  const labels: Record<string, string> = {
+    explorer: '探索', reviewer: '审查', planner: '规划', general: '通用',
+  };
+  return labels[profile || ''] || profile || '子 Agent';
+}
+
+function delegateStatus(status: string | undefined, batches: readonly FrontendSubagentBatch[]): string {
+  if (batches.length > 0) return batches[batches.length - 1].status;
+  if (status === 'success') return 'completed';
+  if (status === 'error') return 'failed';
+  return status === 'queued' ? 'queued' : 'running';
+}
+
+function delegateTraceStatus(status: string): 'running' | 'success' | 'error' {
+  if (status === 'running' || status === 'queued') return 'running';
+  if (status === 'completed' || status === 'partial') return 'success';
+  return 'error';
+}
+
+function renderDelegateRawDetails(input: unknown, output: unknown, error: unknown): string {
+  const inputText = hasTraceValue(input) ? shortText(input, 4000) : '';
+  const result = error || output;
+  const outputText = hasTraceValue(result) ? shortText(result, 4000) : '';
+  if (!inputText && !outputText) return '';
+  const sections = [
+    inputText ? `<div class="subagent-raw-section"><div class="subagent-raw-label">输入</div><pre>${E(inputText)}</pre></div>` : '',
+    outputText ? `<div class="subagent-raw-section"><div class="subagent-raw-label">${error ? '错误' : '结果'}</div><pre>${E(outputText)}</pre></div>` : '',
+  ].join('');
+  return `<details class="subagent-raw"><summary>原始详情</summary><div class="subagent-raw-body">${sections}</div></details>`;
+}
+
+function renderDelegateTasksBlock(options: {
+  input: unknown;
+  output?: unknown;
+  error?: unknown;
+  status?: string;
+  toolCallId?: string;
+  batches?: readonly FrontendSubagentBatch[];
+}): string {
+  const owned = selectSubagentBatchesForTool(options.batches, options.toolCallId);
+  const latestBatch = owned[owned.length - 1];
+  const input = delegateTaskInput(options.input);
+  const eventTasks = latestBatch?.tasks ?? [];
+  const taskCount = Math.max(input.tasks.length, eventTasks.length);
+  const status = delegateStatus(options.status, owned);
+  const raw = renderDelegateRawDetails(options.input, options.output, options.error);
+  const errorText = String(options.error || options.output || '');
+  const unconfirmed = options.status === 'error' && /not confirmed|requires explicit user confirmation|delegation_not_confirmed|用户拒绝|未确认/i.test(errorText);
+
+  if (unconfirmed) {
+    return `<section class="trace-node trace-tool trace-error subagent-delegation subagent-delegation-warning"><div class="trace-dot"></div><div class="subagent-delegation-panel"><div class="subagent-warning-row"><span class="subagent-warning-title">子任务未启动</span><span class="subagent-warning-reason">未确认</span></div>${raw}</div></section>`;
+  }
+
+  const tasks = Array.from({ length: taskCount }, (_, index) => {
+    const spec = input.tasks[index];
+    const task = eventTasks[index];
+    const taskStatus = task?.status
+      || (status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'queued');
+    const profile = task?.profile || spec?.profile;
+    const title = task?.prompt || spec?.prompt || `${profile || 'agent'} ${index + 1}`;
+    const findings = Array.isArray(task?.findings) ? task.findings : [];
+    const evidence = Array.isArray(task?.evidence) ? task.evidence : [];
+    const details = [
+      task?.summary ? `<div class="subagent-task-summary">${mdRender(task.summary)}</div>` : '',
+      findings.length ? `<ul class="subagent-task-list">${findings.map((item) => `<li>${E(item)}</li>`).join('')}</ul>` : '',
+      evidence.length ? `<div class="subagent-evidence">${evidence.map((item) => `<div>${E(item)}</div>`).join('')}</div>` : '',
+    ].join('');
+    const row = `<span class="subagent-status-dot"></span><span class="subagent-task-profile" title="${E(profile || 'agent')}">${E(subagentProfileText(profile))}</span><span class="subagent-task-title">${E(title)}</span><span class="subagent-task-status">${E(subagentStatusText(taskStatus))}</span><span class="subagent-task-disclosure${details ? '' : ' subagent-task-disclosure-placeholder'}" aria-hidden="true"></span>`;
+    return details
+      ? `<details class="subagent-task subagent-${E(taskStatus)}" data-subagent-task-index="${index}"><summary>${row}</summary><div class="subagent-task-body">${details}</div></details>`
+      : `<div class="subagent-task subagent-${E(taskStatus)}" data-subagent-task-index="${index}"><div class="subagent-task-row">${row}</div></div>`;
   }).join('');
+  const summary = `${taskCount} 个子任务 · 并发 ${input.maxConcurrent} · ${subagentStatusText(status)}`;
+  const batchId = latestBatch?.batchId;
+  return `<section class="trace-node trace-tool trace-${delegateTraceStatus(status)} subagent-delegation subagent-${E(status)}"${batchId ? ` data-subagent-batch-id="${E(batchId)}"` : ''}><div class="trace-dot"></div><div class="subagent-delegation-panel"><div class="subagent-delegation-head"><span class="subagent-delegation-title">委派子任务</span><span class="subagent-delegation-summary">${E(summary)}</span></div><div class="subagent-tasks">${tasks}</div>${raw}</div></section>`;
 }
 
 function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean, subagentBatches?: readonly FrontendSubagentBatch[]): string {
@@ -398,8 +481,18 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean, subagent
     }, defaultOpen);
   }
   if (b.type === 'tool') {
+    if (b.name === 'delegate_tasks') {
+      return renderDelegateTasksBlock({
+        input: b.input,
+        output: b.error ? undefined : b.output,
+        error: b.error,
+        status: b.status || 'running',
+        toolCallId: b.toolCallId,
+        batches: subagentBatches,
+      });
+    }
     // B-5：tool 合并 block——直接渲染（含 input/output/error/status）
-    const tool = renderTraceItem({
+    return renderTraceItem({
       type: 'tool',
       status: b.status || 'running',
       name: b.name || 'tool',
@@ -409,12 +502,21 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean, subagent
       metadata: b.metadata,
       id: blockId(b),
     });
-    return tool.replace(/(<\/details>|<\/div>)$/, `${b.name === 'delegate_tasks' ? renderSubagentBatches(subagentBatches, b.toolCallId) : ''}$1`);
   }
   if (b.type === 'tool_use') {
     const result = blocks.find(item => item.type === 'tool_result' && item.toolUseId && item.toolUseId === b.toolCallId);
     const status = result ? (result.isError ? 'error' : 'success') : (b.status || 'running');
-    const tool = renderTraceItem({
+    if (b.name === 'delegate_tasks') {
+      return renderDelegateTasksBlock({
+        input: b.input,
+        output: result?.isError ? undefined : (result?.output || b.output),
+        error: result?.isError ? result?.output : undefined,
+        status,
+        toolCallId: b.toolCallId,
+        batches: subagentBatches,
+      });
+    }
+    return renderTraceItem({
       type: 'tool',
       status,
       name: b.name || 'tool',
@@ -424,7 +526,6 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean, subagent
       metadata: result?.metadata || b.metadata,
       id: blockId(b),
     });
-    return tool.replace(/(<\/details>|<\/div>)$/, `${b.name === 'delegate_tasks' ? renderSubagentBatches(subagentBatches, b.toolCallId) : ''}$1`);
   }
   if (b.type === 'tool_result') {
     const toolUse = blocks.find(item => item.type === 'tool_use' && item.toolCallId && item.toolCallId === b.toolUseId);
@@ -505,10 +606,22 @@ function renderBlockNode(block: any, blocks: any[]): HTMLElement | null {
 }
 
 function replaceBlockContents(target: HTMLElement, html: string): void {
-  const details = target.querySelector('details');
-  const wasOpen = details?.open === true;
+  const traceDetails = target.firstElementChild?.matches('details.trace-details')
+    ? target.firstElementChild as HTMLDetailsElement
+    : null;
+  const traceWasOpen = traceDetails?.open === true;
+  const openSubagentTasks = new Set(Array.from(target.querySelectorAll<HTMLDetailsElement>('.subagent-task[open]'))
+    .map((item) => item.dataset.subagentTaskIndex)
+    .filter((value): value is string => value !== undefined));
+  const rawWasOpen = target.querySelector<HTMLDetailsElement>('.subagent-raw')?.open === true;
   target.innerHTML = html;
-  if (wasOpen) target.querySelector('details')?.setAttribute('open', '');
+  if (traceWasOpen && target.firstElementChild?.matches('details.trace-details')) {
+    target.firstElementChild.setAttribute('open', '');
+  }
+  for (const taskIndex of openSubagentTasks) {
+    target.querySelector<HTMLDetailsElement>(`.subagent-task[data-subagent-task-index="${taskIndex}"]`)?.setAttribute('open', '');
+  }
+  if (rawWasOpen) target.querySelector<HTMLDetailsElement>('.subagent-raw')?.setAttribute('open', '');
 }
 
 function insertBlockNode(flow: HTMLElement, block: any, blocks: any[]): boolean {
@@ -660,12 +773,12 @@ function finalizeLastMessage(): boolean {
         if (textElement) textElement.innerHTML = mdRender(block.text || '');
         else fullySynced = false;
       } else if (target && block.type === 'tool_use') {
-        target.innerHTML = renderEventBlock(block, message.blocks, undefined, message.subagentBatches);
+        replaceBlockContents(target, renderEventBlock(block, message.blocks, undefined, message.subagentBatches));
       } else if (block.type === 'tool_result') {
         const toolUse = message.blocks.find((item: any) => item.type === 'tool_use' && item.toolCallId && item.toolCallId === block.toolUseId);
         const toolTarget = toolUse ? Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
           .find(element => element.dataset.blockId === blockId(toolUse)) : null;
-        if (toolTarget) toolTarget.innerHTML = renderEventBlock(toolUse, message.blocks, undefined, message.subagentBatches);
+        if (toolTarget) replaceBlockContents(toolTarget, renderEventBlock(toolUse, message.blocks, undefined, message.subagentBatches));
         else fullySynced = false;
       } else {
         fullySynced = false;

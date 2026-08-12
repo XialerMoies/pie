@@ -115,6 +115,7 @@ interface StorageLocationInfo {
 type TabKind = 'chat' | 'session' | 'file';
 
 interface AppTab {
+  workspace?: string;
   id: string;                    // file path / session id / chat:<ts>-<rand>
   kind: TabKind;
   title: string;
@@ -279,7 +280,7 @@ interface AppSessionRestore {
   hasUserInteracted(): boolean;
 }
 interface SessionActivationCallbacks {
-  rememberSessionTab(id: string): void;
+  rememberSessionTab(id: string, workspace?: string): void;
   loadSessions(): Promise<void> | void;
   setupDraftSession(id: string): void;
 }
@@ -322,6 +323,7 @@ interface AppSettings {
 // ─── TabBehavior / TabStoreAPI ──────────────────────
 /** Options 透传至 _applySessionMessages，控制会话激活后的副作用 */
 interface SessionActivationOptions {
+  workspace?: string;
   scroll?: 'bottom' | 'none';
   refreshSessions?: boolean;
   silent?: boolean;

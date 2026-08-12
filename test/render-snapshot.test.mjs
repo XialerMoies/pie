@@ -716,8 +716,151 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes('data-message-index="4"'));
   });
 
-  it("renders collapsible subagent tasks inside their delegate tool node", () => {
+  it("renders delegate_tasks as a compact orchestration node", () => {
     const html = win.App.Chat.renderMessage({
+      role: "assistant",
+      content: "done",
+      blocks: [{
+        type: "tool",
+        name: "delegate_tasks",
+        toolCallId: "delegate-call-1",
+        status: "success",
+        input: {
+          maxConcurrent: 2,
+          tasks: [
+            { profile: "reviewer", prompt: "Review lifecycle" },
+            { profile: "explorer", prompt: "Inspect event replay" },
+            { profile: "planner", prompt: "Plan the next stage" },
+          ],
+        },
+        output: "Subagent batch batch-1 finished with status completed",
+        blockId: "tool-1",
+        seq: 1,
+      }],
+      subagentBatches: [{
+        batchId: "batch-1",
+        parentToolCallId: "delegate-call-1",
+        status: "completed",
+        events: [],
+        tasks: [
+          { taskId: "task-1", status: "completed", profile: "reviewer", prompt: "Review lifecycle", summary: "No blocker", findings: ["One finding"], evidence: [], events: [] },
+          { taskId: "task-2", status: "completed", profile: "explorer", prompt: "Inspect event replay", summary: "Replay is stable", findings: [], evidence: ["src/server/subagent-events.ts:1"], events: [] },
+          { taskId: "task-3", status: "completed", profile: "planner", prompt: "Plan the next stage", summary: "Three steps", findings: [], evidence: [], events: [] },
+        ],
+      }],
+    });
+
+    assert.ok(html.includes("subagent-delegation"));
+    assert.ok(html.includes("3 个子任务"));
+    assert.ok(html.includes("并发 2"));
+    assert.ok(html.includes("已完成"));
+    assert.ok(html.includes("subagent-task"));
+    assert.ok(html.includes("subagent-task-profile"));
+    assert.ok(html.includes("No blocker"));
+    assert.ok(html.includes("原始详情"));
+    assert.ok(!html.includes('class="trace-card"'), "delegate_tasks 不再套用通用 IN/OUT 卡片");
+    assert.equal((html.match(/data-block-id=/g) || []).length, 1, "subagent tasks must not become main timeline blocks");
+  });
+
+  it("renders queued delegate tasks from tool input before subagent events arrive", () => {
+    const html = win.App.Chat.renderMessage({
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        name: "delegate_tasks",
+        toolCallId: "delegate-call-running",
+        status: "running",
+        input: {
+          tasks: [
+            { profile: "explorer", prompt: "Inspect queue behavior" },
+            { profile: "reviewer", prompt: "Review cancellation" },
+          ],
+          maxConcurrent: 1,
+        },
+        blockId: "tool-running",
+        seq: 1,
+      }],
+      subagentBatches: [],
+    });
+
+    assert.ok(html.includes("subagent-delegation"));
+    assert.ok(html.includes("2 个子任务"));
+    assert.ok(html.includes("并发 1"));
+    assert.ok(html.includes("Inspect queue behavior"));
+    assert.ok(html.includes("Review cancellation"));
+    assert.ok(html.includes("排队中"));
+  });
+
+  it("preserves expanded delegate task details during live updates", () => {
+    const block = {
+      type: "tool",
+      name: "delegate_tasks",
+      toolCallId: "delegate-call-live",
+      status: "running",
+      input: {
+        tasks: [
+          { profile: "explorer", prompt: "Inspect queue behavior" },
+          { profile: "reviewer", prompt: "Review cancellation" },
+        ],
+        maxConcurrent: 2,
+      },
+      blockId: "tool-live",
+      seq: 1,
+    };
+    state.M = [{
+      role: "assistant",
+      streaming: true,
+      blocks: [block],
+      subagentBatches: [{
+        batchId: "batch-live",
+        parentToolCallId: "delegate-call-live",
+        status: "running",
+        events: [],
+        tasks: [
+          { taskId: "task-1", status: "running", profile: "explorer", prompt: "Inspect queue behavior", summary: "First update", findings: [], evidence: [], events: [] },
+          { taskId: "task-2", status: "queued", profile: "reviewer", prompt: "Review cancellation", findings: [], evidence: [], events: [] },
+        ],
+      }],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    const task = panel.querySelector('[data-subagent-task-index="0"]');
+    const raw = panel.querySelector('.subagent-raw');
+    task.open = true;
+    raw.open = true;
+
+    state.M[0].subagentBatches[0].tasks[0].summary = "Second update";
+    assert.strictEqual(win.App.Chat.updateLastBlock(block), true);
+
+    assert.strictEqual(panel.querySelector('[data-subagent-task-index="0"]').open, true);
+    assert.strictEqual(panel.querySelector('.subagent-raw').open, true);
+    assert.ok(panel.textContent.includes("Second update"));
+  });
+
+  it("collapses an unconfirmed delegation into one warning row", () => {
+    const html = win.App.Chat.renderMessage({
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        name: "delegate_tasks",
+        toolCallId: "delegate-call-denied",
+        status: "error",
+        input: { tasks: [{ profile: "reviewer", prompt: "Review security" }], maxConcurrent: 2 },
+        error: "Subagent delegation was not confirmed",
+        blockId: "tool-denied",
+        seq: 1,
+      }],
+    });
+
+    assert.ok(html.includes("subagent-delegation-warning"));
+    assert.ok(html.includes("子任务未启动"));
+    assert.ok(html.includes("未确认"));
+    assert.equal((html.match(/class="subagent-task /g) || []).length, 0);
+    assert.ok(!html.includes('class="trace-card"'));
+  });
+
+  it("renders restored subagent tasks when optional result arrays are absent", () => {
+    assert.doesNotThrow(() => win.App.Chat.renderMessage({
       role: "assistant",
       content: "done",
       blocks: [{ type: "tool", name: "delegate_tasks", toolCallId: "delegate-call-1", status: "success", blockId: "tool-1", seq: 1 }],
@@ -726,15 +869,9 @@ describe("msgs() 渲染", () => {
         parentToolCallId: "delegate-call-1",
         status: "completed",
         events: [],
-        tasks: [{ taskId: "task-1", status: "completed", profile: "reviewer", prompt: "Review lifecycle", summary: "No blocker", findings: ["One finding"], evidence: [], events: [] }],
+        tasks: [{ taskId: "task-1", status: "completed", events: [] }],
       }],
-    });
-
-    assert.ok(html.includes("subagent-batch"));
-    assert.ok(html.includes("subagent-task"));
-    assert.ok(html.includes("<details"));
-    assert.ok(html.includes("No blocker"));
-    assert.equal((html.match(/data-block-id=/g) || []).length, 1, "subagent tasks must not become main timeline blocks");
+    }));
   });
 
   it("renders subagent tasks for legacy delegate tool_use blocks", () => {

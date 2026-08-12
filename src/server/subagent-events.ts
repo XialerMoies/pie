@@ -49,6 +49,11 @@ export type SubagentReplayStatus = SubagentEventStatus | "interrupted";
 export interface SubagentReplayTask {
   taskId: string;
   status: SubagentReplayStatus;
+  profile?: string;
+  prompt?: string;
+  summary?: string;
+  findings: string[];
+  evidence: string[];
   events: SubagentEvent[];
 }
 
@@ -95,6 +100,10 @@ const BATCH_TERMINAL = new Set<SubagentEventStatus>([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function hasValidKindStatus(
@@ -232,7 +241,19 @@ export function reduceSubagentEventReplay(
     const tasks = [...taskEvents.entries()].map(([taskId, taskHistory]) => {
       const last = taskHistory[taskHistory.length - 1];
       const status = interrupted && !TASK_TERMINAL.has(last.status) ? "interrupted" : last.status;
-      return { taskId, status, events: taskHistory } satisfies SubagentReplayTask;
+      const queued = taskHistory.find((event) => event.kind === "task_queued");
+      const completed = [...taskHistory].reverse().find((event) => event.kind === "task_completed");
+      const result = isRecord(completed?.payload.result) ? completed.payload.result : {};
+      return {
+        taskId,
+        status,
+        profile: typeof queued?.payload.profile === "string" ? queued.payload.profile : undefined,
+        prompt: typeof queued?.payload.prompt === "string" ? queued.payload.prompt : undefined,
+        summary: typeof result.summary === "string" ? result.summary : undefined,
+        findings: stringList(result.findings),
+        evidence: stringList(result.evidence),
+        events: taskHistory,
+      } satisfies SubagentReplayTask;
     });
 
     return {

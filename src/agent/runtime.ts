@@ -108,6 +108,15 @@ function sameRuntimePath(left: string | undefined, right: string): boolean {
   return !!left && normalizePermissionPath(left) === normalizePermissionPath(right)
 }
 
+export function recoverConversationLeaf(sessionManager: SessionManager): boolean {
+  if (sessionManager.buildSessionContext().messages.length > 0) return false
+  const lastMessage = [...sessionManager.getEntries()].reverse()
+    .find((entry: any) => entry?.type === "message" && entry.id)
+  if (!lastMessage) return false
+  sessionManager.branch(lastMessage.id)
+  return sessionManager.buildSessionContext().messages.length > 0
+}
+
 export class AgentRuntime {
   private _session?: AgentSession
   modelRegistry!: ModelRegistry
@@ -469,10 +478,12 @@ export class AgentRuntime {
       // SessionManager.open(文件路径, sessionDir, cwd覆盖)
       // sessionDir 传 undefined 让 SessionManager 从文件路径推导，避免混到根目录
       this.sessionManager = SessionManager.open(existingSessionFile, undefined, cwd)
+      recoverConversationLeaf(this.sessionManager)
     } else {
       const latestFile = this.findLatestSessionFile(cwd)
       if (latestFile) {
         this.sessionManager = SessionManager.open(latestFile, undefined, cwd)
+        recoverConversationLeaf(this.sessionManager)
       } else {
         // 新 session 直接创建在 workspace 目录下
         const wsSessionsDir = this.wsSessionDir(cwd)

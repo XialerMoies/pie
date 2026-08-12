@@ -156,12 +156,15 @@ function commitSessionTab(draftId: string, sessionId: string, label?: string): v
   renderSessionTabs(sessionId);
 }
 
-function rememberSessionTab(id: string): void {
+function rememberSessionTab(id: string, workspace?: string): void {
   if (!id) return;
   const tabs = App.Tabs;
   if (tabs && !tabs.getTab(id)) {
     const isDraft = id.startsWith('draft:');
-    tabs.openTab({ kind: isDraft ? 'chat' : 'session', id, title: '新会话', ...(isDraft ? { draftId: id } : { sessionId: id }) });
+    const sessionTab = { kind: isDraft ? 'chat' as const : 'session' as const, id, title: '新会话', ...(isDraft ? { draftId: id } : { sessionId: id, workspace }) };
+    tabs.openTab(sessionTab);
+  } else if (workspace && tabs?.getTab(id)?.kind === 'session') {
+    tabs.replaceTab(id, { workspace });
   }
   const ids = readSessionTabIds();
   if (!ids.includes(id)) writeSessionTabIds([...ids, id]);
@@ -839,7 +842,8 @@ function setupSessionListHandler(): void {
     // 2. session card（搜索结果卡片由 chat pane 委托处理）
     const card = target.closest(".sess-item") as HTMLElement | null;
     if (card && card.dataset.sessionId && !card.dataset.msgIndex) {
-      App.Tabs.activate(card.dataset.sessionId);
+      const session = _sessionTabLookup.get(card.dataset.sessionId);
+      App.Tabs.activate(card.dataset.sessionId, { workspace: session?.workspace });
     }
   });
 }

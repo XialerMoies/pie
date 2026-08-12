@@ -1,5 +1,5 @@
 interface SessionActivationCallbacks {
-  rememberSessionTab(id: string): void;
+  rememberSessionTab(id: string, workspace?: string): void;
   loadSessions(): void;
   setupDraftSession(id: string): void;
 }
@@ -95,7 +95,7 @@ function applySessionMessages(
 
   const activeId = data.activeSessionId || fallbackId;
   if (activeId && !options.skipTabState) {
-    activationCallbacks?.rememberSessionTab(activeId);
+    activationCallbacks?.rememberSessionTab(activeId, options.workspace);
     sessionActivationApp.SessionTabs.setActiveSessionTabId(activeId);
     sessionActivationApp.SessionTabs.renderSessionTabs(activeId);
   }
@@ -131,14 +131,15 @@ function activateById(id: string, options: SessionActivationOptions = {}): Promi
   }
 
   const seq = ++sessionActivationSeq;
-  const workspace = sessionActivationApp.State.getWorkspacePath();
+  const workspace = options.workspace || sessionActivationApp.State.getWorkspacePath();
   return fetch('/api/sessions/activate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id, workspace }),
-  }).then(response => {
-    if (!response.ok) throw new Error('HTTP ' + response.status);
-    return response.json();
+  }).then(async response => {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.error || ('HTTP ' + response.status));
+    return data;
   }).then((data: { ok: boolean; activeSessionId?: string; messages?: any[]; error?: string }) => {
     if (seq !== sessionActivationSeq) return;
     if (!data.ok || data.error) {
@@ -150,16 +151,17 @@ function activateById(id: string, options: SessionActivationOptions = {}): Promi
     if (!options.silent) {
       toast('已切换到会话 (' + sessionActivationApp.ChatState.getMessages().length + ' 条消息');
     }
-  }).catch(() => {
+  }).catch((error: unknown) => {
     if (seq !== sessionActivationSeq || options.silent) return;
     activateFailReset();
-    toast('会话已失效');
+    const reason = error instanceof Error && error.message ? `：${error.message}` : '';
+    toast('会话加载失败' + reason);
     activationCallbacks?.loadSessions();
   });
 }
 
 function activate(tab: AppTab, options?: SessionActivationOptions): Promise<void> {
-  return activateById(tab.id, options);
+  return activateById(tab.id, { ...options, workspace: options?.workspace || tab.workspace });
 }
 
 function _switchSession(id: string, options?: SessionActivationOptions): void {

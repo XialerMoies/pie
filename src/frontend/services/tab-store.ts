@@ -14,6 +14,7 @@
 export type TabKind = 'chat' | 'session' | 'file';
 
 export interface AppTab {
+  workspace?: string;
   id: string;                    // file path / session id / chat:<ts>-<rand>
   kind: TabKind;
   title: string;

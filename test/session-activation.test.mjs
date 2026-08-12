@@ -7,6 +7,7 @@ let win;
 let calls;
 let messages;
 let pending;
+let requests;
 
 async function loadSubject() {
   await import(`../src/frontend/dashboard/session-activation.ts?test=${++importSeq}`);
@@ -32,6 +33,7 @@ beforeEach(() => {
   calls = [];
   messages = [];
   pending = new Map();
+  requests = [];
   win.document.body.innerHTML = '<div id="ms"></div><textarea id="ci"></textarea><button id="cs"></button>';
   win.msgs = () => messages.map(message => `<div class="m">${message.content}</div>`).join("");
   win.S = () => "<svg></svg>";
@@ -66,7 +68,9 @@ beforeEach(() => {
   global.$ = id => win.document.getElementById(id);
   global.toast = message => calls.push(["toast", message]);
   global.fetch = (_url, init) => {
-    const id = JSON.parse(String(init?.body || "{}")).id;
+    const body = JSON.parse(String(init?.body || "{}"));
+    requests.push(body);
+    const id = body.id;
     return new Promise(resolve => pending.set(id, resolve));
   };
   win.fetch = global.fetch;
@@ -120,6 +124,23 @@ describe("session activation", () => {
     assert.strictEqual(calls.some(call => ["remember", "setActive", "renderTabs", "saveUiState", "loadSessions"].includes(call[0])), false);
     assert.strictEqual(emitted, false);
     assert.deepStrictEqual(messages.map(message => message.content), ["message-sess-restore"]);
+  });
+
+  it("uses the session tab workspace when activating a session from another project", async () => {
+    const activation = await loadSubject();
+    activation.init({
+      rememberSessionTab: id => calls.push(["remember", id]),
+      loadSessions: () => calls.push(["loadSessions"]),
+      setupDraftSession: id => calls.push(["draft", id]),
+    });
+    win.App.Tabs.getTab = id => id === "sess-other"
+      ? { id, kind: "session", title: "Other", order: 0, workspace: "E:\\other-project" }
+      : undefined;
+
+    const result = activation.activate({ id: "sess-other", kind: "session", title: "Other", order: 0, workspace: "E:\\other-project" });
+    assert.deepStrictEqual(requests, [{ id: "sess-other", workspace: "E:\\other-project" }]);
+    resolveActivation("sess-other");
+    await result;
   });
 
   it("preserves replayed subagent batches when restoring a session", async () => {
@@ -199,5 +220,25 @@ describe("session activation", () => {
 
     assert.strictEqual(calls.filter(call => call[0] === "closeStream").length, 1);
     assert.strictEqual(calls.filter(call => call[0] === "setBusy").length, 1);
+  });
+
+  it("shows the server activation error instead of hiding it as an invalid session", async () => {
+    const activation = await loadSubject();
+    activation.init({
+      rememberSessionTab: id => calls.push(["remember", id]),
+      loadSessions: () => calls.push(["loadSessions"]),
+      setupDraftSession: id => calls.push(["draft", id]),
+    });
+    const result = activation.activateById("sess-missing");
+    const resolve = pending.get("sess-missing");
+    assert.ok(resolve);
+    resolve({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: "session not found" }),
+    });
+    pending.delete("sess-missing");
+    await result;
+    assert.ok(calls.some(call => call[0] === "toast" && call[1].includes("session not found")));
   });
 });
