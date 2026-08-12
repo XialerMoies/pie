@@ -8,6 +8,7 @@
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 import * as marked from "marked";
 
@@ -43,6 +44,7 @@ globalThis.localStorage = global.localStorage;
 global.fetch = async () => ({ ok: true, json: async () => ({}) });
 global.AbortController = class { constructor() { this.signal = {}; } abort() {} };
 globalThis.toast = () => {};
+win.toast = globalThis.toast;
 globalThis.confirmAsync = async () => true;
 globalThis.winCtrl = () => {};
 globalThis.refresh = async () => {};
@@ -97,6 +99,7 @@ before(async () => {
   await import(`../src/frontend/services/tab-store.ts?t=${ts}`);
   global.App = win.App;
   await import(`../src/frontend/service/explorer-service.ts?t=${ts}`);
+  await import(`../src/frontend/services/file-diff-render.ts?t=${ts}`);
   await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-layout.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/layout-tabs.ts?t=${ts}`);
@@ -287,6 +290,25 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes("OUT"), "结果保留在 OUT 卡中");
   });
 
+  it("normal tool events share one IN/OUT card", () => {
+    state.M = [{
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        status: "success",
+        name: "file-read",
+        input: { path: "src/app.ts" },
+        output: "read complete",
+        blockId: "io-1",
+        seq: 1,
+      }],
+    }];
+    const html = win.msgs();
+    assert.strictEqual((html.match(/class="trace-card"/g) || []).length, 1, "IN and OUT should share one card");
+    assert.ok(html.includes('class="trace-card-section trace-card-in"'), "input should be an IN section");
+    assert.ok(html.includes('class="trace-card-section trace-card-out"'), "output should be an OUT section");
+  });
+
   it("renders structured file diff metadata inside a tool event node", () => {
     state.M = [{
       role: "assistant",
@@ -297,7 +319,7 @@ describe("msgs() 渲染", () => {
         toolCallId: "call1",
         blockId: "b1",
         seq: 1,
-        output: "updated",
+        output: "updated\nconst a = 1;\nconst a = 2;",
         metadata: {
           diff: {
             filePath: "src/app.ts",
@@ -318,14 +340,155 @@ describe("msgs() 渲染", () => {
 
     const html = win.msgs();
     assert.ok(html.includes("trace-diff"), "diff should render as a trace node section");
+    assert.ok(html.includes("trace-diff-event"), "diff should use its specialized event content");
+    assert.ok(!html.includes("trace-diff-toggle"), "chat diffs should not opt into the Git-only disclosure control");
+    assert.strictEqual((html.match(/class="trace-card"/g) || []).length, 0, "diff should not use the generic IN/OUT card");
+    assert.ok(html.includes('<div class="trace-diff-summary">updated</div>'), "diff should keep only the concise output summary");
+    assert.strictEqual((html.match(/const a = 1;/g) || []).length, 1, "diff should not repeat the file preview from output");
     assert.ok(html.includes("trace-diff-sign"), "diff should show a dedicated sign column");
     assert.ok(html.includes('<span class="trace-diff-text">const a = 1;</span>'), "diff should render line text in its own unboxed cell");
     assert.ok(!html.includes("<code>const a = 1;</code>"), "diff line text should not inherit inline code chip styling");
-    assert.ok(html.includes("src/app.ts"), "diff should show file path");
+    assert.ok(html.includes('data-diff-file-path="src/app.ts"'), "diff path should be an actionable file target");
     assert.ok(html.includes("+1"), "diff should show additions");
     assert.ok(html.includes("-1"), "diff should show deletions");
     assert.ok(html.includes("const a = 1;"), "diff should show removed line");
     assert.ok(html.includes("const a = 2;"), "diff should show added line");
+  });
+
+  it("clicking a diff path opens the workspace-relative file tab", async () => {
+    const originalWorkspace = global.ExplorerService.getWorkspacePath;
+    const originalFetch = globalThis.fetch;
+    global.ExplorerService.getWorkspacePath = () => "C:/repo";
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: "const a = 2;" }) });
+    state.M = [{
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        status: "success",
+        name: "str_replace_editor",
+        output: "updated",
+        metadata: { diff: {
+          filePath: "C:/repo/src/app.ts",
+          type: "update",
+          structuredPatch: [{ lines: ["-const a = 1;", "+const a = 2;"] }],
+        } },
+        blockId: "diff-click-1",
+        seq: 1,
+      }],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    panel.querySelector("[data-diff-file-path]").dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(win.App.Tabs.getTab("src/app.ts"), "click should open a workspace-relative file tab");
+    global.ExplorerService.getWorkspacePath = originalWorkspace;
+    globalThis.fetch = originalFetch;
+  });
+
+  it("clicking a diff path outside the workspace is rejected without opening a tab", async () => {
+    const originalWorkspace = global.ExplorerService.getWorkspacePath;
+    const originalFetch = globalThis.fetch;
+    const originalToast = globalThis.toast;
+    const toastCalls = [];
+    global.ExplorerService.getWorkspacePath = () => "C:/repo";
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: "secret" }) });
+    globalThis.toast = (msg) => toastCalls.push(String(msg));
+    win.toast = globalThis.toast;
+    state.M = [{
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        status: "success",
+        name: "str_replace_editor",
+        output: "updated",
+        metadata: { diff: {
+          filePath: "C:/outside/secret.txt",
+          type: "update",
+          structuredPatch: [{ lines: ["-a", "+b"] }],
+        } },
+        blockId: "diff-click-outside",
+        seq: 1,
+      }],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    panel.querySelector("[data-diff-file-path]").dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(toastCalls.some((msg) => msg.includes("工作区外") || msg.includes("不在当前工作区")), "outside-workspace path should toast a rejection");
+    assert.strictEqual(win.App.Tabs.getTab("secret.txt"), undefined, "outside-workspace file must not be opened");
+    global.ExplorerService.getWorkspacePath = originalWorkspace;
+    globalThis.fetch = originalFetch;
+    globalThis.toast = originalToast;
+  });
+
+  it("aggregates edited files below the end of the event flow", () => {
+    state.M = [{
+      role: "assistant",
+      blocks: [
+        { type: "tool", status: "success", name: "edit", output: "updated", metadata: { diff: {
+          filePath: "src/one.ts", linesAdded: 2, linesRemoved: 1, structuredPatch: [],
+        } }, blockId: "edit-1", seq: 1 },
+        { type: "tool", status: "success", name: "edit", output: "updated", metadata: { diff: {
+          filePath: "src/two.ts", linesAdded: 3, linesRemoved: 0, structuredPatch: [],
+        } }, blockId: "edit-2", seq: 2 },
+        { type: "tool", status: "success", name: "edit", output: "updated", metadata: { diff: {
+          filePath: "src/one.ts", linesAdded: 4, linesRemoved: 2, structuredPatch: [],
+        } }, blockId: "edit-3", seq: 3 },
+      ],
+    }];
+    const html = win.msgs();
+    assert.ok(html.includes('class="trace-edit-summary"'), "edited file summary should render");
+    assert.ok(html.includes("已编辑 2 个文件"), "summary should count unique files");
+    assert.ok(html.includes(">+9</span>"), "summary should total added lines");
+    assert.ok(html.includes(">-3</span>"), "summary should total removed lines");
+    assert.strictEqual((html.match(/class="trace-edit-file"/g) || []).length, 2, "summary should list each unique file once");
+    assert.ok(html.includes('data-edit-summary-toggle'), "summary should have an icon toggle");
+    assert.ok(html.includes('aria-expanded="true"'), "summary should be expanded by default");
+    assert.ok(!html.includes("撤销"), "summary should not show undo action");
+    assert.ok(!html.includes("审核"), "summary should not show review action");
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = html;
+    const summary = panel.querySelector(".trace-edit-summary");
+    assert.ok(summary?.parentElement?.lastElementChild === summary, "summary should be the last item in the event flow");
+  });
+
+  it("counts created-file content when diff statistics are omitted", () => {
+    state.M = [{
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        status: "success",
+        name: "write",
+        output: "created",
+        metadata: { diff: { filePath: "src/new.ts", type: "create", content: "one\ntwo\n" } },
+        blockId: "create-1",
+        seq: 1,
+      }],
+    }];
+    const html = win.msgs();
+    assert.ok(html.includes(">+2</span>"), "created-file summary should derive its added line count");
+  });
+
+  it("edited file summary masks the event-flow line below the final node", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    assert.match(css, /\.trace-edit-summary::before\s*\{[^}]*background:var\(--bg\)/, "summary should mask the trace line");
+    assert.match(css, /\.trace-edit-summary\s*\{[^}]*overflow:visible/, "summary should not clip its trace-line mask");
+    assert.match(css, /\.trace \.block-event:last-of-type \.trace-node::after/, "the final event node should terminate the trace before the summary");
+  });
+
+  it("edited file summary toggles with SVG icon state", () => {
+    const panel = doc.getElementById("ms");
+    const toggle = panel.querySelector("[data-edit-summary-toggle]");
+    const files = panel.querySelector("[data-edit-summary-files]");
+    assert.ok(toggle && files);
+    toggle.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    assert.strictEqual(toggle.getAttribute("aria-expanded"), "false");
+    assert.strictEqual(files.hidden, true);
+    assert.ok(toggle.innerHTML.includes("#ich-right"), "collapsed state should use a right-facing disclosure icon");
+    toggle.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    assert.strictEqual(toggle.getAttribute("aria-expanded"), "true");
+    assert.strictEqual(files.hidden, false);
+    assert.ok(toggle.innerHTML.includes("#ich-down"), "expanded state should use a down-facing disclosure icon");
   });
 
   it("block tool_result 错误时显示 error 标记", () => {

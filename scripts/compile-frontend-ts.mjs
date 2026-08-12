@@ -152,6 +152,7 @@ const bundleOrder = [
   "gen/services/tab-store.js",
   "gen/services/problems-store.js",
   "gen/service/explorer-service.js",
+  "gen/services/file-diff-render.js",
   "gen/chat/chat-render.js",
   "gen/chat/chat-timeline.js",
   "gen/chat/chat-mode.js",

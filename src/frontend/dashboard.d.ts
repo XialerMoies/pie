@@ -153,7 +153,7 @@ interface AppUI {
   renderTabs(): void;
   renderSessionTabs(activeId?: string): void;
   closeChatTab(): void;
-  openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video'): void;
+  openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video', options?: { activate?: boolean }): void;
   saveCurrentFile(): Promise<void>;
 }
 interface AppChat {
@@ -365,6 +365,35 @@ interface AppGit {
   push(): Promise<void>;
   pull(): Promise<void>;
 }
+interface FileDiffHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+}
+interface FileDiffMetadata {
+  filePath: string;
+  type: 'update' | 'create' | 'delete' | 'rename';
+  linesAdded?: number;
+  linesRemoved?: number;
+  structuredPatch?: FileDiffHunk[];
+  content?: string;
+  binary?: boolean;
+  truncated?: boolean;
+  omittedLines?: number;
+  message?: string;
+}
+interface FileDiffRenderOptions {
+  pathAction?: string;
+  collapsible?: boolean;
+  expanded?: boolean;
+  toggleAction?: string;
+}
+interface AppFileDiff {
+  countContentLines(content: string): number;
+  render(diff: FileDiffMetadata, options?: FileDiffRenderOptions): string;
+}
 type McpConnectionState = 'connected' | 'connecting' | 'disconnected' | 'error';
 interface AppMcpState {
   normalize(value: unknown): McpConnectionState;
@@ -421,6 +450,7 @@ interface AppNamespace {
   Permissions: AppPermissions;
   Settings: AppSettings;
   Git: AppGit;
+  FileDiff: AppFileDiff;
   McpState: AppMcpState;
   Tabs: AppTabs;
 }
@@ -525,7 +555,7 @@ declare function provDragOver(ev: DragEvent, idx: number): void;
 declare function provDrop(ev: DragEvent, idx: number): void;
 declare function isConversationSearchActive(): boolean;
 declare function loadMonaco(): Promise<void>;
-declare function openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video'): void;
+declare function openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video', options?: { activate?: boolean }): void;
 declare function renderTabs(): void;
 declare function registerPane(name: string, render: (container: HTMLElement) => void): void;
 declare function saveCurrentFile(): Promise<void>;

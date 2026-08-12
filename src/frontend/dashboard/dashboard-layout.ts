@@ -378,7 +378,7 @@ function restoreFileTabs(): void {
       // 媒体 tab：直接开标签，不读取文本内容
       if (ft.renderer === 'image' || ft.renderer === 'video') {
         const ext = '.' + (ft.id.split('.').pop() || '').toLowerCase();
-        openFileTab(ft.id, '', ext, ft.renderer);
+        openFileTab(ft.id, '', ext, ft.renderer, { activate: false });
         loaded++;
         if (loaded >= total) restoreActiveTab();
         continue;
@@ -388,7 +388,7 @@ function restoreFileTabs(): void {
           .then(r => r.ok ? r.json() : null)
           .then(d => {
             if (!d) return;
-            openFileTab(ft.id, d.content, (d.path?.split('.').pop() || ''), ft.renderer);
+            openFileTab(ft.id, d.content, (d.path?.split('.').pop() || ''), ft.renderer, { activate: false });
           })
           .catch(() => {})
           .finally(() => {

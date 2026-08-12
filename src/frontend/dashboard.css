@@ -280,7 +280,7 @@ body{background:var(--bg);height:100vh}
 .trace{position:relative;margin:4px 0 10px;padding:0 0 0 22px;display:flex;flex-direction:column;gap:10px;color:var(--ts);overflow:visible;max-width:100%}
 .trace::before{content:'';position:absolute;left:5px;top:9px;bottom:9px;width:1px;background:var(--bd)}
 .trace-node{position:relative;min-width:0;max-width:100%;overflow:visible}
-.trace>.trace-node:last-child::after,.trace .block-event:last-child .trace-node::after{content:'';position:absolute;left:-18px;top:16px;bottom:-10px;width:3px;background:var(--bg);z-index:0}
+.trace>.trace-node:last-child::after,.trace .block-event:last-of-type .trace-node::after{content:'';position:absolute;left:-18px;top:16px;bottom:-10px;width:3px;background:var(--bg);z-index:0}
 .trace-dot{position:absolute;left:-22px;top:7px;width:9px;height:9px;border-radius:50%;background:var(--tm);box-shadow:0 0 0 3px var(--bg);z-index:1}
 .trace-body{display:flex;flex-direction:column;gap:7px;min-width:0;max-width:100%;overflow:visible}
 .trace-summary{list-style:none;display:flex;align-items:flex-start;gap:10px;cursor:pointer;min-width:0;padding:0 2px 0 0;margin:0}
@@ -318,16 +318,22 @@ body{background:var(--bg);height:100vh}
 .trace-thinking-text li{padding-left:.25rem}
 .trace-thinking-text li+li{margin-top:2px}
 .trace-card{border:1px solid var(--bd);border-radius:7px;background:rgba(0,0,0,.12);overflow:hidden;max-width:min(760px,100%);min-width:0}
-.trace-card+.trace-card{margin-top:2px}
+.trace-card-section+.trace-card-section{border-top:1px solid var(--bd)}
 .trace-card-label{padding:7px 10px;border-bottom:1px solid var(--bd);font-family:var(--fm);font-size:.65rem;color:var(--tm);letter-spacing:.05em;text-transform:uppercase;line-height:1.3}
 .trace-card-label.error{color:var(--rs);border-bottom-color:rgba(248,113,113,.35)}
 .trace-card pre{margin:0;padding:9px 11px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--fm);font-size:.72rem;line-height:1.6;color:var(--ts);max-width:100%}
+.trace-diff-event{display:flex;flex-direction:column;gap:5px;max-width:min(760px,100%);min-width:0}
+.trace-diff-summary{font-family:var(--fm);font-size:.7rem;color:var(--tm);white-space:pre-wrap;word-break:break-word}
 .trace-diff{border:1px solid var(--bd);border-radius:7px;background:rgba(0,0,0,.1);overflow:hidden;max-width:min(760px,100%);min-width:0}
 .trace-diff-head{display:flex;align-items:center;gap:7px;padding:7px 10px;border-bottom:1px solid var(--bd);min-width:0}
-.trace-diff-path{font-family:var(--fm);font-size:.68rem;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.trace-diff-path{appearance:none;border:0;background:transparent;padding:0;font:inherit;font-family:var(--fm);font-size:.68rem;color:var(--tx);text-align:left;text-decoration:underline;text-decoration-color:var(--tm);text-underline-offset:2px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.trace-diff-path:hover,.trace-diff-path:focus-visible{color:var(--am);text-decoration-color:currentColor;outline:none}
 .trace-diff-stat{font-family:var(--fm);font-size:.64rem;font-weight:700;line-height:1;padding:3px 5px;border-radius:4px;background:var(--bc)}
 .trace-diff-stat.add{color:var(--em)}
 .trace-diff-stat.del{color:var(--rs)}
+.trace-diff-toggle{display:grid;place-items:center;width:24px;height:24px;flex:0 0 24px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--tm);cursor:pointer}
+.trace-diff-toggle:hover,.trace-diff-toggle:focus-visible{color:var(--tx);background:var(--bh);outline:0}
+.trace-diff-toggle svg{display:block}
 .trace-diff-code{display:block;margin:0;max-height:260px;overflow:auto;padding:6px 0;background:rgba(0,0,0,.08);font-family:var(--fm);font-size:.72rem;line-height:1.55;max-width:100%}
 .trace-diff-line{display:grid;grid-template-columns:24px minmax(0,1fr);align-items:start;min-height:20px;padding:0 10px 0 0;white-space:pre-wrap;word-break:break-word}
 .trace-diff-sign{display:block;width:24px;text-align:center;border-right:1px solid rgba(148,163,184,.18);font-family:var(--fm);color:var(--tm);user-select:none}
@@ -338,6 +344,25 @@ body{background:var(--bg);height:100vh}
 .trace-diff-del .trace-diff-sign{color:var(--rs)}
 .trace-diff-ctx{color:var(--ts)}
 .trace-diff-empty,.trace-diff-more{padding:5px 10px;color:var(--tm);font-family:var(--fm);font-size:.68rem}
+.trace-edit-summary{position:relative;margin-top:3px;border:1px solid var(--bd);border-radius:8px;background:rgba(0,0,0,.08);overflow:visible;max-width:min(760px,100%);min-width:0}
+.trace-edit-summary::before{content:'';position:absolute;left:-18px;top:-10px;bottom:-10px;width:3px;background:var(--bg);z-index:1}
+.trace-edit-summary-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;min-width:0}
+.trace-edit-summary-title{display:flex;align-items:center;gap:10px;min-width:0}
+.trace-edit-summary-icon{display:grid;place-items:center;width:34px;height:34px;flex:0 0 34px;border-radius:9px;background:var(--bc);color:var(--ts)}
+.trace-edit-summary-label{font-size:.82rem;font-weight:600;line-height:1.35;color:var(--tx)}
+.trace-edit-summary-total{margin-top:2px;font-family:var(--fm);font-size:.73rem;line-height:1.3}
+.trace-edit-summary .add,.trace-edit-file-stat .add{color:var(--em)}
+.trace-edit-summary .del,.trace-edit-file-stat .del{color:var(--rs)}
+.trace-edit-toggle{display:grid;place-items:center;width:28px;height:28px;flex:0 0 28px;padding:0;border:0;border-radius:5px;background:transparent;color:var(--tm);cursor:pointer}
+.trace-edit-toggle:hover,.trace-edit-toggle:focus-visible{color:var(--tx);background:var(--bh);outline:0}
+.trace-edit-toggle svg{display:block}
+.trace-edit-files{border-top:1px solid var(--bd);border-radius:0 0 7px 7px;overflow:hidden}
+.trace-edit-file{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;width:100%;min-width:0;padding:10px 14px;border:0;border-bottom:1px solid rgba(148,163,184,.12);background:transparent;color:var(--ts);font:500 .78rem var(--fb);text-align:left;cursor:pointer}
+.trace-edit-file:last-child{border-bottom:0}
+.trace-edit-file:hover,.trace-edit-file:focus-visible{background:var(--bh);color:var(--tx);outline:0}
+.trace-edit-file-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:underline;text-decoration-color:var(--tm);text-underline-offset:2px}
+.trace-edit-file:hover .trace-edit-file-path,.trace-edit-file:focus-visible .trace-edit-file-path{text-decoration-color:currentColor}
+.trace-edit-file-stat{font-family:var(--fm);font-size:.7rem;white-space:nowrap}
 .block-flow{display:block}
 .assistant-blocks{display:flex;flex-direction:column;gap:10px;min-width:0;max-width:100%}
 .assistant-block{min-width:0;max-width:100%}
@@ -783,7 +808,16 @@ body{background:var(--bg);height:100vh}
 .git-count{font-size:.6rem;font-family:var(--fm);color:var(--tm);background:var(--bc);padding:0 6px;border-radius:4px}
 .git-file{display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:4px;cursor:pointer;transition:background .07s;font-size:.72rem}
 .git-file:hover{background:var(--bc)}
+.git-file.is-active{background:var(--bc);box-shadow:inset 2px 0 0 var(--am)}
 .git-file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ts);flex:1}
+.git-file-disclosure{display:grid;place-items:center;width:18px;height:18px;flex:0 0 18px;padding:0;border:0;border-radius:3px;background:transparent;color:var(--tm);cursor:pointer}
+.git-file-disclosure:hover{background:var(--bh);color:var(--tx)}
+.git-file-disclosure:focus-visible{outline:1px solid var(--am);outline-offset:1px}
+.git-file-disclosure svg{display:block;pointer-events:none}
+.git-diff-preview{padding:5px 4px 8px;min-width:0}
+.git-diff-preview .trace-diff{max-width:100%}
+.git-diff-state{padding:9px 10px;border:1px solid var(--bd);border-radius:6px;color:var(--tm);font-size:.68rem}
+.git-diff-state.error{color:var(--rs);border-color:rgba(248,113,113,.35)}
 .git-status-badge{font-family:var(--fm);font-size:.6rem;font-weight:700;width:16px;height:16px;display:flex;align-items:center;justify-content:center;border-radius:3px;flex-shrink:0}
 .git-status-badge.git-status-m{color:var(--am);background:rgba(245,158,11,.12)}
 .git-status-badge.git-status-a{color:var(--em);background:rgba(52,211,153,.1)}
