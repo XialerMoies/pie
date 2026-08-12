@@ -49,6 +49,12 @@ import { recordOpenedWorkspace } from "../data/user-settings.js";
 import { WorkspaceLockCoordinator } from "./workspace-lock.js";
 import { workspaceDataPaths, writeWorkspaceMetadata } from "./routes/session-dir.js";
 import { readWorkspaceUiState } from "./routes/ui-state.js";
+import {
+  createSubagentDelegationBridge,
+  createRuntimeSubagentHost,
+  type SubagentDelegationHost,
+} from "./subagent-delegation.js";
+import { createSubagentEventSink } from "./subagent-events.js";
 
 export type SessionWriteAuthorizer = (sessionFile: string, source: string) => void;
 
@@ -854,7 +860,9 @@ async function main() {
   const unsubscribeMcpEvents = attachMcpEvents(appEvents);
   const sessionPermissionState = createSessionPermissionState();
   let runtime: AgentRuntime;
-  const security = createDesktopSecurityConfig();
+  let subagentHost: SubagentDelegationHost;
+  const subagentBridge = createSubagentDelegationBridge();
+  const security = createDesktopSecurityConfig(undefined, STARTUP.instanceId);
   clearDesktopSessionTokenEnv();
   const rootRegistry = new RootRegistry();
   const permissionService = new ServerPermissionService({
@@ -886,7 +894,15 @@ async function main() {
     applyPermissionSuggestions: async (suggestions, scope) => {
       await permissionService.applyPermissionSuggestions(suggestions, scope);
     },
+    validateSubagentModel: subagentBridge.runtimeConfig.validateSubagentModel,
+    delegateTasks: subagentBridge.runtimeConfig.delegateTasks,
   });
+
+  subagentHost = createRuntimeSubagentHost({
+    runtime,
+    createEventSink: () => createSubagentEventSink({ runtime, chatStream }),
+  });
+  subagentBridge.bind(subagentHost);
 
   for (const [root, source] of [
     [APP_ROOT, "app-data"],
@@ -1155,6 +1171,11 @@ async function main() {
         await openedWorkspaceRecordTail;
       } catch (error) {
         console.warn("Failed to finish opened workspace recording:", error);
+      }
+      try {
+        await subagentHost.dispose();
+      } catch (error) {
+        console.error("Failed to dispose subagent host:", error);
       }
       runtime.dispose();
       try {

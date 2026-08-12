@@ -13,6 +13,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { workspaceDataPaths } from "../src/server/routes/session-dir.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -1076,6 +1077,70 @@ describe("sessions routes", () => {
       assert.strictEqual(status, 200);
       assert.deepStrictEqual(parseJSON(body), { ok: true, activeSessionId: "activate-me", messages: [] });
       assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["dashboard.changed", "usage.changed"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("activates a session from the authorized requested workspace", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "session-activate-workspace-"));
+    const currentWorkspace = resolve(root, "current-workspace");
+    const requestedWorkspace = resolve(root, "requested-workspace");
+    const requestedSessionsDir = workspaceDataPaths(root, requestedWorkspace).sessionsDir;
+    const sessionFile = resolve(requestedSessionsDir, "activate-requested.jsonl");
+    mkdirSync(currentWorkspace, { recursive: true });
+    mkdirSync(requestedWorkspace, { recursive: true });
+    mkdirSync(requestedSessionsDir, { recursive: true });
+    writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "activate-requested", cwd: requestedWorkspace }) + "\n");
+    let openedFile = "";
+    let openedWorkspace = "";
+    const authorizedRoots = [];
+    const runtime = mockRuntime({
+      currentWorkspace,
+      openSession: async (file, workspace) => {
+        openedFile = file;
+        openedWorkspace = workspace;
+      },
+      getActiveSession: () => openedFile ? { id: "activate-requested", file: openedFile } : null,
+    });
+    const ctx = mockContext({
+      runtime,
+      permissionService: {
+        authorizeWorkspaceRoot: async () => requestedWorkspace,
+        authorizePath: async (sessionsRoot, target, operation) => {
+          authorizedRoots.push(sessionsRoot);
+          return {
+            operation,
+            root: sessionsRoot,
+            path: target,
+            relativePath: target.slice(sessionsRoot.length),
+          };
+        },
+      },
+      paths: {
+        ...mockPaths(),
+        APP_ROOT: currentWorkspace,
+        DATA_DIR: root,
+        PI_CONFIG_DIR: resolve(root, "pi"),
+        SESSIONS_DIR: resolve(root, "pi", "sessions"),
+        STARTUP: { dataRoot: root, workspace: currentWorkspace },
+      },
+    });
+    try {
+      const { status, body } = await callHandler(
+        handleSessions,
+        "POST",
+        "/api/sessions/activate",
+        { id: "activate-requested", workspace: requestedWorkspace },
+        ctx,
+      );
+      assert.strictEqual(status, 200);
+      assert.strictEqual(parseJSON(body).activeSessionId, "activate-requested");
+      assert.strictEqual(openedFile, sessionFile);
+      assert.strictEqual(openedWorkspace, requestedWorkspace);
+      assert.ok(authorizedRoots.length > 0);
+      assert.deepStrictEqual([...new Set(authorizedRoots)], [requestedSessionsDir]);
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(ctx.paths._tmpDir, { recursive: true, force: true });

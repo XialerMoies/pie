@@ -382,4 +382,36 @@ describe("parseSessionMessages", () => {
     // B-5：tool 合并为单个 block
     assert.ok(msgs[1].blocks.some((b) => b.type === "tool"));
   });
+
+  it("replays subagent custom entries onto the matching delegate_tasks tool call", () => {
+    const subagent = (overrides = {}) => ({
+      type: "subagent_event",
+      protocolVersion: 1,
+      parentToolCallId: "delegate-call-1",
+      batchId: "batch-1",
+      taskId: null,
+      seq: 1,
+      kind: "batch_started",
+      status: "running",
+      timestamp: "2026-08-12T08:00:00.000Z",
+      payload: {},
+      ...overrides,
+    });
+    const c = [
+      JSON.stringify({ type: "session", id: "s1" }),
+      JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "delegate" }] } }),
+      JSON.stringify({ type: "assistant_block", turnId: "t1", block: { type: "tool", name: "delegate_tasks", toolCallId: "delegate-call-1", status: "success", blockId: "tool-delegate-call-1", seq: 1 } }),
+      JSON.stringify({ type: "custom", customType: "subagent_event", data: subagent() }),
+      JSON.stringify({ type: "custom", customType: "subagent_event", data: subagent({ taskId: "task-1", seq: 2, kind: "task_started" }) }),
+      JSON.stringify({ type: "custom", customType: "subagent_event", data: subagent({ taskId: "task-1", seq: 3, kind: "task_completed", status: "completed", payload: { result: { summary: "checked" } } }) }),
+      JSON.stringify({ type: "custom", customType: "subagent_event", data: subagent({ seq: 4, kind: "batch_completed", status: "completed" }) }),
+      JSON.stringify({ type: "message", id: "a1", turnId: "t1", message: { role: "assistant", content: [{ type: "text", text: "done" }] } }),
+    ].join("\n");
+
+    const msgs = mod.parseSessionMessages(c);
+
+    assert.equal(msgs[1].subagentBatches.length, 1);
+    assert.equal(msgs[1].subagentBatches[0].parentToolCallId, "delegate-call-1");
+    assert.equal(msgs[1].subagentBatches[0].tasks[0].status, "completed");
+  });
 });

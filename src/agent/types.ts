@@ -170,11 +170,83 @@ export type ToolPathAuthorizer = (
 ) => Promise<ToolPathAuthorizationResult>
 
 /** Tool 执行上下文 */
+export interface SubagentDelegationModel {
+  provider: string
+  id: string
+}
+
+export type SubagentDelegationProfile = "general" | "explorer" | "reviewer" | "planner"
+
+export interface SubagentDelegationTask {
+  profile: SubagentDelegationProfile
+  prompt: string
+  focusPaths?: string[]
+  deliverable?: string
+  model?: SubagentDelegationModel
+}
+
+export interface SubagentDelegationRequest {
+  tasks: SubagentDelegationTask[]
+  maxConcurrent: number
+  timeoutSeconds: number
+  maxTurns: number
+  maxToolCalls: number
+}
+
+export interface SubagentDelegationUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  cost: number
+  turns: number
+  toolCalls: number
+}
+
+export type SubagentDelegationTaskResultStatus =
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "limit_reached"
+  | "aborted"
+
+export type SubagentDelegationBatchResultStatus = "completed" | "partial" | "failed" | "aborted"
+
+export interface SubagentDelegationTaskResult {
+  taskId: string
+  status: SubagentDelegationTaskResultStatus
+  summary: string
+  findings: string[]
+  evidence: string[]
+  usage: SubagentDelegationUsage
+  error?: string
+  limit?: "maxTurns" | "maxToolCalls"
+}
+
+export interface SubagentDelegationBatchResult {
+  batchId: string
+  status: SubagentDelegationBatchResultStatus
+  tasks: SubagentDelegationTaskResult[]
+  usage: SubagentDelegationUsage
+}
+
+export type SubagentModelValidator = (
+  model: SubagentDelegationModel,
+) => boolean | Promise<boolean>
+
+export type SubagentDelegateExecutor = (
+  request: SubagentDelegationRequest,
+  signal?: AbortSignal,
+  parentToolCallId?: string,
+) => Promise<SubagentDelegationBatchResult>
+
 export interface ToolContext {
   cwd: string
   sessionId: string
   workspace?: string  // 当前 workspace 路径，用于工具 API 调用
   toolCallId?: string
+  /** 宿主提供的协作式中止信号 */
+  signal?: AbortSignal
   /** 中间输出回调（工具执行中产生 stdout 时调用） */
   onUpdate?: (chunk: string) => void
   /** 权限模式：由宿主/UI 设置，模型不可控 */
@@ -202,6 +274,9 @@ export interface ToolContext {
   /** One mutable, serializable authorization record shared by the tool and its path/specialized policies. */
   authorizationDecision?: ToolExecutionDecision
   desktopApiToken?: string
+  /** Host-only subagent capabilities; model tool arguments cannot provide these. */
+  validateSubagentModel?: SubagentModelValidator
+  delegateTasks?: SubagentDelegateExecutor
 }
 
 export type ToolTraceEmitter = (event: {
@@ -436,6 +511,8 @@ export interface ToolExecutionExtraContext {
   authorizePath?: ToolContext["authorizePath"]
   authorizeTool?: ToolContext["authorizeTool"]
   desktopApiToken?: ToolContext["desktopApiToken"]
+  validateSubagentModel?: ToolContext["validateSubagentModel"]
+  delegateTasks?: ToolContext["delegateTasks"]
 }
 
 export function agentToolToPIToolDefinition(
@@ -450,7 +527,12 @@ export function agentToolToPIToolDefinition(
     label: authorizedTool.name,
     description: authorizedTool.description,
     parameters: authorizedTool.parameters,
-    execute: async (_toolCallId: string, params: unknown) => {
+    execute: async (
+      _toolCallId: string,
+      params: unknown,
+      signal?: AbortSignal,
+      _onUpdate?: (partialResult: unknown) => void,
+    ) => {
       const args = params as Record<string, unknown>
       emitTrace?.({ type: "tool_execution_start", toolCallId: _toolCallId, toolName: authorizedTool.name, args })
       try {
@@ -465,6 +547,7 @@ export function agentToolToPIToolDefinition(
           sessionId: "",
           workspace,
           toolCallId: _toolCallId,
+          signal,
           onUpdate,
           ...extraCtx,
         }

@@ -28,6 +28,7 @@ import { writeAgentMdTool } from "./agent-md.js"
 import { readMemoryTool, writeMemoryTool } from "./memory.js"
 import { strReplaceEditorTool } from "./str-replace-editor.js"
 import { fileWriteTool } from "./file-write.js"
+import { delegateTasksTool } from "./delegate-tasks.js"
 
 /** 全局 Tool 注册表 */
 export const toolRegistry = new ToolRegistry()
@@ -54,6 +55,7 @@ toolRegistry.register(readMemoryTool)
 toolRegistry.register(writeMemoryTool)
 toolRegistry.register(strReplaceEditorTool)
 toolRegistry.register(fileWriteTool)
+toolRegistry.register(delegateTasksTool)
 
 export function registerTool(
   tool: Parameters<typeof toolRegistry.register>[0],
@@ -74,6 +76,8 @@ type ExtraCtx = {
   authorizePath?: ToolContext["authorizePath"]
   authorizeTool?: ToolContext["authorizeTool"]
   desktopApiToken?: ToolContext["desktopApiToken"]
+  validateSubagentModel?: ToolContext["validateSubagentModel"]
+  delegateTasks?: ToolContext["delegateTasks"]
 }
 
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */

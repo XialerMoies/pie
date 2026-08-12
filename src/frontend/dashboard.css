@@ -322,6 +322,22 @@ body{background:var(--bg);height:100vh}
 .trace-card-label{padding:7px 10px;border-bottom:1px solid var(--bd);font-family:var(--fm);font-size:.65rem;color:var(--tm);letter-spacing:.05em;text-transform:uppercase;line-height:1.3}
 .trace-card-label.error{color:var(--rs);border-bottom-color:rgba(248,113,113,.35)}
 .trace-card pre{margin:0;padding:9px 11px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--fm);font-size:.72rem;line-height:1.6;color:var(--ts);max-width:100%}
+.subagent-batch{margin-top:8px;border-top:1px solid var(--bd);padding-top:8px;min-width:0}
+.subagent-batch-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:5px;font-size:.66rem;color:var(--tm)}
+.subagent-tasks{display:flex;flex-direction:column;gap:2px}
+.subagent-task{border-left:1px solid var(--bd);padding-left:9px;min-width:0}
+.subagent-task>summary{list-style:none;display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;gap:7px;min-height:27px;cursor:pointer;color:var(--ts)}
+.subagent-task>summary::-webkit-details-marker{display:none}
+.subagent-status-dot{width:6px;height:6px;border-radius:50%;background:var(--tm)}
+.subagent-running .subagent-status-dot{background:var(--em);animation:trace-pulse 1.2s ease-in-out infinite}
+.subagent-completed .subagent-status-dot{background:var(--em)}
+.subagent-failed .subagent-status-dot,.subagent-timed_out .subagent-status-dot,.subagent-limit_reached .subagent-status-dot{background:var(--rs)}
+.subagent-task-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.72rem;color:var(--tx)}
+.subagent-task-status{font-size:.62rem;color:var(--tm);white-space:nowrap}
+.subagent-task-body{padding:2px 0 8px 15px;font-size:.72rem;line-height:1.55;color:var(--ts);overflow-wrap:anywhere}
+.subagent-task-summary p{margin:0 0 4px}
+.subagent-task-list{margin:4px 0 0;padding-left:17px}
+.subagent-evidence{margin-top:5px;font-family:var(--fm);font-size:.65rem;color:var(--tm)}
 .trace-diff-event{display:flex;flex-direction:column;gap:5px;max-width:min(760px,100%);min-width:0}
 .trace-diff-summary{font-family:var(--fm);font-size:.7rem;color:var(--tm);white-space:pre-wrap;word-break:break-word}
 .trace-diff{border:1px solid var(--bd);border-radius:7px;background:rgba(0,0,0,.1);overflow:hidden;max-width:min(760px,100%);min-width:0}

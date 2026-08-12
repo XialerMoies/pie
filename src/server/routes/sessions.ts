@@ -7,6 +7,7 @@ import { resolve, basename, dirname } from "path";
 import { randomUUID } from "crypto";
 import { parseBody } from "./parse-body.js";
 import { workspaceDataPaths, wsKey, wsDir } from "./session-dir.js";
+import { reduceSubagentEventReplay } from "../subagent-events.js";
 import { isPathGuardError, writePathGuardError } from "./path-guard.js";
 import { authorizeRoutePath, isServerPermissionError, writeServerPermissionError } from "../permission-service.js";
 import { authorizeWorkspacePath, runWithWorkspaceOwnership } from "./workspace-authorization.js";
@@ -119,25 +120,37 @@ async function findAuthorizedJsonl(ctx: ServerContext, dir: string, source: stri
   return files;
 }
 
-export async function findAuthorizedSessionFileById(ctx: ServerContext, id: string, source: string): Promise<string | null> {
+export async function findAuthorizedSessionFileById(
+  ctx: ServerContext,
+  id: string,
+  source: string,
+  workspace?: string,
+): Promise<string | null> {
   if (typeof id !== "string" || !id.trim()) return null;
-  return findAuthorizedSessionFileInDir(ctx, activeSessionsDir(ctx), id, source);
+  const sessionsRoot = workspace ? sessionsDirForWorkspace(ctx, workspace) : activeSessionsDir(ctx);
+  return findAuthorizedSessionFileInDir(ctx, sessionsRoot, id, source, sessionsRoot);
 }
 
-async function findAuthorizedSessionFileInDir(ctx: ServerContext, dir: string, id: string, source: string): Promise<string | null> {
+async function findAuthorizedSessionFileInDir(
+  ctx: ServerContext,
+  dir: string,
+  id: string,
+  source: string,
+  sessionsRoot: string,
+): Promise<string | null> {
   if (!existsSync(dir)) return null;
-  const authorizedDir = await authorizeSessionPath(ctx, dir, "read", `${source}.dir`);
+  const authorizedDir = await authorizeSessionPath(ctx, dir, "read", `${source}.dir`, sessionsRoot);
   const entries = readdirSync(authorizedDir, { withFileTypes: true });
   for (const e of entries) {
     const candidate = resolve(authorizedDir, e.name);
     if (e.isDirectory()) {
-      const found = await findAuthorizedSessionFileInDir(ctx, candidate, id, source);
+      const found = await findAuthorizedSessionFileInDir(ctx, candidate, id, source, sessionsRoot);
       if (found) return found;
       continue;
     }
     if (!e.name.endsWith(".jsonl")) continue;
 
-    const authorizedFile = await authorizeSessionPath(ctx, candidate, "read", source);
+    const authorizedFile = await authorizeSessionPath(ctx, candidate, "read", source, sessionsRoot);
     try {
       const headerLine = readFileSync(authorizedFile, "utf-8").trim().split("\n")[0];
       const header = JSON.parse(headerLine);
@@ -159,6 +172,7 @@ type SessionMessage = {
   turnId?: string;
   trace?: SessionTrace[];
   blocks?: any[];
+  subagentBatches?: ReturnType<typeof reduceSubagentEventReplay>["batches"];
   _compacted?: boolean;
 };
 
@@ -369,6 +383,7 @@ export function parseSessionMessages(content: string): SessionMessage[] {
       entries.push(JSON.parse(line));
     } catch {}
   }
+  const subagentBatches = reduceSubagentEventReplay(entries).batches;
 
   const blocksByTurn = new Map<string, any[]>();
   for (const entry of entries) {
@@ -550,6 +565,14 @@ export function parseSessionMessages(content: string): SessionMessage[] {
     if (msg.role === "assistant" && !(msg as any).blocks && msg.trace && msg.trace.length > 0) {
       (msg as any).blocks = convertTracesToBlocks(msg.trace, msg.content);
     }
+  }
+
+  for (const batch of subagentBatches) {
+    const target = messages.find((message) => message.role === "assistant" && message.blocks?.some((block) =>
+      block?.name === "delegate_tasks" && block?.toolCallId === batch.events[0]?.parentToolCallId
+    ));
+    if (!target) continue;
+    (target.subagentBatches ??= []).push(batch);
   }
 
   return messages;
@@ -803,7 +826,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       const body = await parseBody(req);
       const { id } = body;
       const workspace = await authorizeWorkspacePath(ctx, body.workspace, "sessions.activate.workspace");
-      const sessionFile = await findAuthorizedSessionFileById(ctx, id, "sessions.activate.lookup");
+      const sessionFile = await findAuthorizedSessionFileById(ctx, id, "sessions.activate.lookup", workspace);
       if (!sessionFile) {
         const activeSession = runtime.getActiveSession?.();
         if (activeSession?.id === id) {
@@ -816,7 +839,14 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
         return true;
       }
       // openSession 会重建 session，同 workspace 下切换不同 session 文件
-      const authorizedFile = await authorizeSessionPath(ctx, sessionFile, "read", "sessions.activate");
+      const targetSessionsDir = sessionsDirForWorkspace(ctx, workspace || runtime.currentWorkspace);
+      const authorizedFile = await authorizeSessionPath(
+        ctx,
+        sessionFile,
+        "read",
+        "sessions.activate",
+        targetSessionsDir,
+      );
       const targetWorkspace = workspace || runtime.currentWorkspace;
       await runWithWorkspaceOwnership(
         ctx,

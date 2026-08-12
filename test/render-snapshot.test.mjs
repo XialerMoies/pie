@@ -100,6 +100,7 @@ before(async () => {
   global.App = win.App;
   await import(`../src/frontend/service/explorer-service.ts?t=${ts}`);
   await import(`../src/frontend/services/file-diff-render.ts?t=${ts}`);
+  Object.assign(globalThis, await import(`../src/frontend/chat/subagent-state.ts?t=${ts}`));
   await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-layout.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/layout-tabs.ts?t=${ts}`);
@@ -713,6 +714,48 @@ describe("msgs() 渲染", () => {
     }, 4);
 
     assert.ok(html.includes('data-message-index="4"'));
+  });
+
+  it("renders collapsible subagent tasks inside their delegate tool node", () => {
+    const html = win.App.Chat.renderMessage({
+      role: "assistant",
+      content: "done",
+      blocks: [{ type: "tool", name: "delegate_tasks", toolCallId: "delegate-call-1", status: "success", blockId: "tool-1", seq: 1 }],
+      subagentBatches: [{
+        batchId: "batch-1",
+        parentToolCallId: "delegate-call-1",
+        status: "completed",
+        events: [],
+        tasks: [{ taskId: "task-1", status: "completed", profile: "reviewer", prompt: "Review lifecycle", summary: "No blocker", findings: ["One finding"], evidence: [], events: [] }],
+      }],
+    });
+
+    assert.ok(html.includes("subagent-batch"));
+    assert.ok(html.includes("subagent-task"));
+    assert.ok(html.includes("<details"));
+    assert.ok(html.includes("No blocker"));
+    assert.equal((html.match(/data-block-id=/g) || []).length, 1, "subagent tasks must not become main timeline blocks");
+  });
+
+  it("renders subagent tasks for legacy delegate tool_use blocks", () => {
+    const html = win.App.Chat.renderMessage({
+      role: "assistant",
+      content: "done",
+      blocks: [
+        { type: "tool_use", name: "delegate_tasks", toolCallId: "delegate-call-legacy", blockId: "tool-use-1", seq: 1 },
+        { type: "tool_result", toolUseId: "delegate-call-legacy", output: "done", blockId: "tool-result-1", seq: 2 },
+      ],
+      subagentBatches: [{
+        batchId: "batch-legacy",
+        parentToolCallId: "delegate-call-legacy",
+        status: "completed",
+        events: [],
+        tasks: [{ taskId: "task-1", status: "completed", prompt: "Legacy replay", findings: [], evidence: [], events: [] }],
+      }],
+    });
+
+    assert.ok(html.includes("subagent-batch"));
+    assert.ok(html.includes("Legacy replay"));
   });
 
   it("blocks 中 text block 渲染在事件流内", () => {

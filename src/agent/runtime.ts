@@ -11,7 +11,7 @@ import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, Default
 import { resolveSystemPrompt } from "./prompts.js"
 import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools/index.js"
 import type { SessionPermissionState, ToolContext } from "./types.js"
-import { applySessionPermissionSuggestions, resetSessionPermissionState } from "./permissions.js"
+import { applySessionPermissionSuggestions, normalizePermissionPath, resetSessionPermissionState } from "./permissions.js"
 import { wsDir } from "../server/routes/session-dir.js"
 
 import { setCurrentRuntime as _setGlobalRuntime, getCurrentRuntime as _getGlobalRuntime } from "./globals.js";
@@ -38,6 +38,8 @@ export interface RuntimeConfig {
   authorizeTool?: ToolContext["authorizeTool"]
   applyPermissionSuggestions?: ToolContext["applyPermissionSuggestions"]
   desktopApiToken?: string
+  validateSubagentModel?: ToolContext["validateSubagentModel"]
+  delegateTasks?: ToolContext["delegateTasks"]
 }
 
 type RuntimeToolExtraContext = Pick<
@@ -54,11 +56,13 @@ type RuntimeToolExtraContext = Pick<
   | "authorizePath"
   | "authorizeTool"
   | "desktopApiToken"
+  | "validateSubagentModel"
+  | "delegateTasks"
 >
 
 export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraContext | undefined {
   const permissionState = config.sessionPermissionState
-  if (!config.permissionMode && !config.getPermissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken) return undefined
+  if (!config.permissionMode && !config.getPermissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken && !config.validateSubagentModel && !config.delegateTasks) return undefined
   return {
     permissionMode: config.permissionMode,
     getPermissionMode: config.getPermissionMode,
@@ -76,6 +80,8 @@ export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraCo
     authorizePath: config.authorizePath,
     authorizeTool: config.authorizeTool,
     desktopApiToken: config.desktopApiToken,
+    validateSubagentModel: config.validateSubagentModel,
+    delegateTasks: config.delegateTasks,
   }
 }
 
@@ -96,6 +102,10 @@ interface SessionToolTraceEmitter {
 interface SessionRecoveryPoint {
   workspace: string
   sessionFile?: string
+}
+
+function sameRuntimePath(left: string | undefined, right: string): boolean {
+  return !!left && normalizePermissionPath(left) === normalizePermissionPath(right)
 }
 
 export class AgentRuntime {
@@ -165,7 +175,7 @@ export class AgentRuntime {
    */
   async openSession(sessionFile: string, workspace: string): Promise<void> {
     // 相同参数在本 runtime 内复用同一个排队任务，不影响其他 runtime 实例。
-    const key = sessionFile + "::" + workspace
+    const key = normalizePermissionPath(sessionFile) + "::" + normalizePermissionPath(workspace)
     const pendingOpens = this._pendingOpens ??= new Map<string, Promise<void>>()
     const inFlight = pendingOpens.get(key)
     if (inFlight) {
@@ -185,14 +195,15 @@ export class AgentRuntime {
 
   /** 在串行队列中打开 session，执行时再判断最终 runtime 状态。 */
   private async _doOpenSession(sessionFile: string, workspace: string): Promise<void> {
-    if (this._session?.sessionFile === sessionFile && this.currentWorkspace === workspace) {
+    if (sameRuntimePath(this._session?.sessionFile, sessionFile)
+      && sameRuntimePath(this.currentWorkspace, workspace)) {
       console.log(`[runtime] ⏭ Skipping duplicate openSession: "${sessionFile}"`)
       return
     }
     console.log(`[runtime] Opening session: "${sessionFile}"`)
     this.resetSessionPermissions()
     // 记录是否同 workspace（在更新 currentWorkspace 之前判断）
-    const sameWs = workspace === this.currentWorkspace
+    const sameWs = sameRuntimePath(this.currentWorkspace, workspace)
     await this._replaceSessionWithRollback(workspace, sameWs, sessionFile)
     console.log(`[runtime] ✅ Session opened: "${sessionFile}"`)
   }

@@ -12,11 +12,19 @@ export function getLocalApiBaseUrl(): string {
 
 export function localApiFetch(url: string, ctx: ToolContext, init?: RequestInit): Promise<Response> {
   const token = ctx.desktopApiToken
-  if (!token) return fetch(url, init)
+  const signal = combineSignals(ctx.signal, init?.signal)
+  const requestInit = signal ? { ...init, signal } : init
+  if (!token) return fetch(url, requestInit)
   return fetch(url, {
-    ...init,
-    headers: withDesktopApiToken(init?.headers, token),
+    ...requestInit,
+    headers: withDesktopApiToken(requestInit?.headers, token),
   })
+}
+
+function combineSignals(hostSignal?: AbortSignal, requestSignal?: AbortSignal | null): AbortSignal | undefined {
+  if (!hostSignal) return requestSignal ?? undefined
+  if (!requestSignal || requestSignal === hostSignal) return hostSignal
+  return AbortSignal.any([hostSignal, requestSignal])
 }
 
 function withDesktopApiToken(headers: HeadersInit | undefined, token: string): HeadersInit {
