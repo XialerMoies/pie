@@ -36,6 +36,8 @@ interface Message {
   streaming?: boolean;
   error?: ChatErrorState;
   blocks?: AssistantBlock[];
+  subagentEvents?: FrontendSubagentEvent[];
+  subagentBatches?: FrontendSubagentBatch[];
   _compacted?: boolean;        // 服务端标记：来自 session JSONL 的 compaction 摘要
 }
 
@@ -160,6 +162,7 @@ interface AppChat {
   msgs(): string;
   appendDelta(text: string): void;
   updateLastBlock(block: Record<string, unknown>): boolean;
+  updateSubagentEvent(event: FrontendSubagentEvent): boolean;
   finalizeLastMessage(): boolean;
   bind(): void;
   updateUI(): void;

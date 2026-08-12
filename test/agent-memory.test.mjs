@@ -433,6 +433,23 @@ describe("runtime session transition serialization", () => {
     assert.strictEqual(runtime.session.id, "opened");
   });
 
+  it("skips reopening the active session when Windows path casing differs", async () => {
+    const runtime = await makeRuntime("e:\\my-code-agent", "active");
+    runtime.session = makeSession("active", "E:\\my-code-agent\\data\\session.jsonl");
+    let initCalls = 0;
+    runtime._initSession = async () => {
+      initCalls += 1;
+    };
+
+    await runtime.openSession(
+      "e:\\my-code-agent\\data\\session.jsonl",
+      "E:\\my-code-agent",
+    );
+
+    assert.strictEqual(initCalls, 0);
+    assert.strictEqual(runtime.session.id, "active");
+  });
+
   it("serializes switchWorkspace followed by createNewSession in invocation order", async () => {
     const runtime = await makeRuntime("/original", "old");
     const switchGate = deferred();

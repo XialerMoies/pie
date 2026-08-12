@@ -521,7 +521,12 @@ function bind(): void {
         if (!window.___sseFirst) { window.___sseFirst = true; mark('sse_first_event'); } const d = JSON.parse(e.data) as { type: string; id?: string; command?: string; reason?: string; permissionSuggestions?: any[]; text?: string; thinking?: boolean; turnId?: string; sessionId?: string; message?: string; block?: any; blocks?: any[] };
         const messages = App.ChatState.getMessages();
         const last = messages[messages.length - 1];
-        if (d.type === 'command_confirm') {
+        if (d.type === 'subagent_event' && (d as any).event) {
+          const updated = App.Chat?.updateSubagentEvent?.((d as any).event) || false;
+          if (!updated) scheduleMessagesRender();
+          else sb('ms');
+          return;
+        } else if (d.type === 'command_confirm') {
           const id = d.id || '';
           if (!id) return;
           void (async () => {

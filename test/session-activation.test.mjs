@@ -122,6 +122,47 @@ describe("session activation", () => {
     assert.deepStrictEqual(messages.map(message => message.content), ["message-sess-restore"]);
   });
 
+  it("preserves replayed subagent batches when restoring a session", async () => {
+    const activation = await loadSubject();
+    activation.init({
+      rememberSessionTab: id => calls.push(["remember", id]),
+      loadSessions: () => calls.push(["loadSessions"]),
+      setupDraftSession: id => calls.push(["draft", id]),
+    });
+
+    const result = activation.activateById("sess-subagents", {
+      silent: true,
+      skipTabState: true,
+      refreshSessions: false,
+    });
+    const resolve = pending.get("sess-subagents");
+    assert.ok(resolve, "pending activation for sess-subagents");
+    const subagentBatches = [{
+      batchId: "batch-1",
+      parentToolCallId: "delegate-call-1",
+      status: "completed",
+      events: [],
+      tasks: [{ taskId: "task-1", status: "completed", events: [] }],
+    }];
+    resolve({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        activeSessionId: "sess-subagents",
+        messages: [{
+          role: "assistant",
+          content: "done",
+          blocks: [{ type: "tool", name: "delegate_tasks", toolCallId: "delegate-call-1" }],
+          subagentBatches,
+        }],
+      }),
+    });
+    pending.delete("sess-subagents");
+    await result;
+
+    assert.deepStrictEqual(messages[0].subagentBatches, subagentBatches);
+  });
+
   it("preserves normal activation side effects and emits once", async () => {
     const activation = await loadSubject();
     activation.init({

@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, timingSafeEqual } from "crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import { readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "http";
 import { join, resolve } from "node:path";
@@ -34,11 +34,14 @@ export interface InstanceMetadata {
 
 const INVALID_INSTANCE_GRACE_MS = 24 * 60 * 60 * 1000;
 
-export function createDesktopSecurityConfig(token?: string): DesktopSecurityConfig {
+export function createDesktopSecurityConfig(token?: string, instanceId?: string): DesktopSecurityConfig {
   const configuredToken = token === undefined ? process.env[DESKTOP_TOKEN_ENV] : token;
+  const cookieName = instanceId
+    ? `mca_token_${createHash("sha256").update(instanceId).digest("hex").slice(0, 16)}`
+    : DEFAULT_COOKIE_NAME;
   return {
     token: configuredToken?.trim() || createDesktopSessionToken(),
-    cookieName: DEFAULT_COOKIE_NAME,
+    cookieName,
     cookieMaxAgeSeconds: DEFAULT_COOKIE_MAX_AGE_SECONDS,
     allowedOrigins: parseAllowedOrigins(process.env[DESKTOP_ALLOWED_ORIGINS_ENV]),
   };

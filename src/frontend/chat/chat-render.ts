@@ -362,7 +362,33 @@ function blockId(b: any): string {
   return String(b.blockId || `${b.type || 'block'}-${b.seq || 0}`);
 }
 
-function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean): string {
+function subagentStatusText(status: string): string {
+  const labels: Record<string, string> = {
+    queued: '排队中', running: '运行中', completed: '已完成', partial: '部分完成',
+    failed: '失败', aborted: '已中止', timed_out: '已超时', limit_reached: '达到限制', interrupted: '已中断',
+  };
+  return labels[status] || status;
+}
+
+function renderSubagentBatches(batches: readonly FrontendSubagentBatch[] | undefined, toolCallId?: string): string {
+  const owned = selectSubagentBatchesForTool(batches, toolCallId);
+  if (owned.length === 0) return '';
+  return owned.map((batch) => {
+    const running = batch.status === 'running' || batch.status === 'queued';
+    const tasks = batch.tasks.map((task, index) => {
+      const title = task.prompt || `${task.profile || 'agent'} ${index + 1}`;
+      const details = [
+        task.summary ? `<div class="subagent-task-summary">${mdRender(task.summary)}</div>` : '',
+        task.findings.length ? `<ul class="subagent-task-list">${task.findings.map((item) => `<li>${E(item)}</li>`).join('')}</ul>` : '',
+        task.evidence.length ? `<div class="subagent-evidence">${task.evidence.map((item) => `<div>${E(item)}</div>`).join('')}</div>` : '',
+      ].join('');
+      return `<details class="subagent-task subagent-${E(task.status)}"${task.status === 'running' ? ' open' : ''}><summary><span class="subagent-status-dot"></span><span class="subagent-task-title">${E(title)}</span><span class="subagent-task-status">${E(subagentStatusText(task.status))}</span></summary>${details ? `<div class="subagent-task-body">${details}</div>` : ''}</details>`;
+    }).join('');
+    return `<section class="subagent-batch subagent-${E(batch.status)}" data-subagent-batch-id="${E(batch.batchId)}"><div class="subagent-batch-head"><span>子任务</span><span>${batch.tasks.length} 项 · ${E(subagentStatusText(batch.status))}</span></div><div class="subagent-tasks"${running ? '' : ' data-settled="true"'}>${tasks}</div></section>`;
+  }).join('');
+}
+
+function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean, subagentBatches?: readonly FrontendSubagentBatch[]): string {
   if (b.type === 'thinking') {
     return renderTraceItem({
       type: 'thinking',
@@ -373,7 +399,7 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean): string 
   }
   if (b.type === 'tool') {
     // B-5：tool 合并 block——直接渲染（含 input/output/error/status）
-    return renderTraceItem({
+    const tool = renderTraceItem({
       type: 'tool',
       status: b.status || 'running',
       name: b.name || 'tool',
@@ -383,11 +409,12 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean): string 
       metadata: b.metadata,
       id: blockId(b),
     });
+    return tool.replace(/(<\/details>|<\/div>)$/, `${b.name === 'delegate_tasks' ? renderSubagentBatches(subagentBatches, b.toolCallId) : ''}$1`);
   }
   if (b.type === 'tool_use') {
     const result = blocks.find(item => item.type === 'tool_result' && item.toolUseId && item.toolUseId === b.toolCallId);
     const status = result ? (result.isError ? 'error' : 'success') : (b.status || 'running');
-    return renderTraceItem({
+    const tool = renderTraceItem({
       type: 'tool',
       status,
       name: b.name || 'tool',
@@ -397,6 +424,7 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean): string 
       metadata: result?.metadata || b.metadata,
       id: blockId(b),
     });
+    return tool.replace(/(<\/details>|<\/div>)$/, `${b.name === 'delegate_tasks' ? renderSubagentBatches(subagentBatches, b.toolCallId) : ''}$1`);
   }
   if (b.type === 'tool_result') {
     const toolUse = blocks.find(item => item.type === 'tool_use' && item.toolCallId && item.toolCallId === b.toolUseId);
@@ -437,7 +465,7 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean): string 
   return '';
 }
 
-function renderBlocks(blocks: any[]): string {
+function renderBlocks(blocks: any[], subagentBatches?: readonly FrontendSubagentBatch[]): string {
   const sorted = [...blocks].sort((a: any, b: any) => a.seq - b.seq);
   const parts: string[] = [];
   let eventBlocks: string[] = [];
@@ -452,7 +480,7 @@ function renderBlocks(blocks: any[]): string {
     const id = E(blockId(block));
     const defaultOpen = block.type === 'thinking' && firstThinking;
     if (block.type === 'thinking') firstThinking = false;
-    const eventHtml = renderEventBlock(block, sorted, defaultOpen);
+    const eventHtml = renderEventBlock(block, sorted, defaultOpen, subagentBatches);
     if (eventHtml) {
       eventBlocks.push(`<div class="assistant-block block-event" data-block-id="${id}">${eventHtml}</div>`);
     }
@@ -523,7 +551,7 @@ function renderMessage(m: any, messageIndex = -1): string {
   }
 
   if (m.blocks && m.blocks.length > 0) {
-    return `<div class="m ${c}${m.error ? ' error' : ''}"${indexAttr}><div class="ml">${lb}</div>${error}<div class="mt block-flow">${renderBlocks(m.blocks)}</div>${ty}</div>`;
+    return `<div class="m ${c}${m.error ? ' error' : ''}"${indexAttr}><div class="ml">${lb}</div>${error}<div class="mt block-flow">${renderBlocks(m.blocks, m.subagentBatches)}</div>${ty}</div>`;
   }
 
   const content = m.content ? mdRender(m.content) : '';
@@ -551,7 +579,7 @@ function updateLastBlock(block: any): boolean {
     const contentElement = lastMessageElement.querySelector('.mt') as HTMLElement | null;
     if (!contentElement) return false;
     contentElement.classList.add('block-flow');
-    contentElement.innerHTML = renderBlocks(message.blocks);
+    contentElement.innerHTML = renderBlocks(message.blocks, message.subagentBatches);
     return true;
   }
   refreshEditSummary(flow, message.blocks);
@@ -561,7 +589,7 @@ function updateLastBlock(block: any): boolean {
   if (target && block.type === 'text') {
     const textBody = target.querySelector('.trace-text-body') as HTMLElement | null;
       if (textBody) textBody.innerHTML = mdRender(block.text || '');
-      else replaceBlockContents(target, renderEventBlock(block, message.blocks));
+      else replaceBlockContents(target, renderEventBlock(block, message.blocks, undefined, message.subagentBatches));
       refreshEditSummary(flow, message.blocks);
       return true;
   }
@@ -574,7 +602,7 @@ function updateLastBlock(block: any): boolean {
     }
   }
   if (target && (block.type === 'tool' || block.type === 'tool_use' || block.type === 'tool_result' || block.type === 'step' || block.type === 'user_note')) {
-    replaceBlockContents(target, renderEventBlock(block, message.blocks));
+    replaceBlockContents(target, renderEventBlock(block, message.blocks, undefined, message.subagentBatches));
     refreshEditSummary(flow, message.blocks);
     return true;
   }
@@ -584,7 +612,7 @@ function updateLastBlock(block: any): boolean {
       const toolTarget = Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
         .find(element => element.dataset.blockId === blockId(toolUse));
       if (toolTarget) {
-        replaceBlockContents(toolTarget, renderEventBlock(toolUse, message.blocks));
+        replaceBlockContents(toolTarget, renderEventBlock(toolUse, message.blocks, undefined, message.subagentBatches));
         refreshEditSummary(flow, message.blocks);
         return true;
       }
@@ -615,7 +643,7 @@ function finalizeLastMessage(): boolean {
     contentElement.classList.add('block-flow');
     const flow = contentElement.querySelector('.assistant-blocks') as HTMLElement | null;
     if (!flow) {
-      contentElement.innerHTML = renderBlocks(message.blocks);
+      contentElement.innerHTML = renderBlocks(message.blocks, message.subagentBatches);
       return true;
     }
 
@@ -626,24 +654,24 @@ function finalizeLastMessage(): boolean {
       if (target && block.type === 'text') {
         const textBody = target.querySelector('.trace-text-body') as HTMLElement | null;
         if (textBody) textBody.innerHTML = mdRender(block.text || '');
-        else replaceBlockContents(target, renderEventBlock(block, message.blocks));
+        else replaceBlockContents(target, renderEventBlock(block, message.blocks, undefined, message.subagentBatches));
       } else if (target && block.type === 'thinking') {
         const textElement = target.querySelector('.trace-thinking-text') as HTMLElement | null;
         if (textElement) textElement.innerHTML = mdRender(block.text || '');
         else fullySynced = false;
       } else if (target && block.type === 'tool_use') {
-        target.innerHTML = renderEventBlock(block, message.blocks);
+        target.innerHTML = renderEventBlock(block, message.blocks, undefined, message.subagentBatches);
       } else if (block.type === 'tool_result') {
         const toolUse = message.blocks.find((item: any) => item.type === 'tool_use' && item.toolCallId && item.toolCallId === block.toolUseId);
         const toolTarget = toolUse ? Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
           .find(element => element.dataset.blockId === blockId(toolUse)) : null;
-        if (toolTarget) toolTarget.innerHTML = renderEventBlock(toolUse, message.blocks);
+        if (toolTarget) toolTarget.innerHTML = renderEventBlock(toolUse, message.blocks, undefined, message.subagentBatches);
         else fullySynced = false;
       } else {
         fullySynced = false;
       }
     }
-    if (!fullySynced) contentElement.innerHTML = renderBlocks(message.blocks);
+    if (!fullySynced) contentElement.innerHTML = renderBlocks(message.blocks, message.subagentBatches);
     else refreshEditSummary(flow, message.blocks);
     return true;
   }
@@ -659,6 +687,29 @@ function finalizeLastMessage(): boolean {
     thinkingElement?.remove();
   }
   return true;
+}
+
+function updateSubagentEvent(event: FrontendSubagentEvent): boolean {
+  const messages = App.ChatState.getMessages();
+  let messageIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].blocks?.some((candidate) =>
+      candidate.name === 'delegate_tasks' && candidate.toolCallId === event.parentToolCallId
+    )) {
+      messageIndex = index;
+      break;
+    }
+  }
+  if (messageIndex < 0) messageIndex = messages.length - 1;
+  const message = messages[messageIndex];
+  if (!message || event.type !== 'subagent_event') return false;
+  message.subagentEvents = [...(message.subagentEvents ?? []), event];
+  message.subagentBatches = reduceFrontendSubagentEvents(message.subagentEvents);
+  message._rv = (message._rv || 0) + 1;
+  const block = message.blocks?.find((candidate) =>
+    candidate.name === 'delegate_tasks' && candidate.toolCallId === event.parentToolCallId
+  );
+  return block && messageIndex === messages.length - 1 ? updateLastBlock(block) : false;
 }
 
 function appendDelta(text: string): void {
@@ -699,5 +750,6 @@ window.msgs = msgs;
   AppChat.renderMessage = renderMessage;
   AppChat.appendDelta = appendDelta;
   AppChat.updateLastBlock = updateLastBlock;
+  AppChat.updateSubagentEvent = updateSubagentEvent;
   AppChat.finalizeLastMessage = finalizeLastMessage;
 } }

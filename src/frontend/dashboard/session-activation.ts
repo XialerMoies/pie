@@ -67,6 +67,8 @@ function mapMessages(raw: any[]): Message[] {
     _compacted: message._compacted || false,
     turnId: message.turnId || undefined,
     blocks: message.blocks || undefined,
+    subagentEvents: message.subagentEvents || undefined,
+    subagentBatches: message.subagentBatches || undefined,
   }));
 }
 

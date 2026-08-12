@@ -79,6 +79,22 @@ describe("server desktop security", () => {
     }
   });
 
+  it("uses instance-scoped cookie names so multiple loopback servers do not overwrite each other", () => {
+    const first = createDesktopSecurityConfig("token-a", "instance-a");
+    const second = createDesktopSecurityConfig("token-b", "instance-b");
+
+    assert.notStrictEqual(first.cookieName, second.cookieName);
+    const sharedCookieJar = `${first.cookieName}=token-a; ${second.cookieName}=token-b`;
+    assert.strictEqual(authorizeLocalApiRequest(
+      req("POST", "/api/sessions/activate", { cookie: sharedCookieJar }),
+      first,
+    ).ok, true);
+    assert.strictEqual(authorizeLocalApiRequest(
+      req("POST", "/api/sessions/activate", { cookie: sharedCookieJar }),
+      second,
+    ).ok, true);
+  });
+
   it("requires a desktop token for sensitive read API requests", () => {
     const sensitiveCases = [
       "/api/file/read?root=/repo&path=README.md",

@@ -189,6 +189,8 @@ describe("chat ui state", () => {
     await import(`../src/frontend/services/chat-runtime-store.ts?t=${ts}`);
     env.win.App.ChatState.replaceMessages([{ role: "assistant", content: "hello" }]);
     await import(`../src/frontend/services/chat-stream.ts?t=${ts}`);
+    await import(`../src/frontend/services/file-diff-render.ts?t=${ts}`);
+    Object.assign(globalThis, await import(`../src/frontend/chat/subagent-state.ts?t=${ts}`));
     await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-timeline.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/dashboard-chat.ts?t=${ts}`);
@@ -515,6 +517,70 @@ describe("chat ui state", () => {
     assert.strictEqual(blockUpdates, 1);
     assert.strictEqual(redraws, 0, "block 更新不能重绘整个消息区");
     Object.defineProperty(panel, "innerHTML", descriptor);
+  });
+
+  it("subagent SSE updates the matching nested task node without becoming a main block", () => {
+    let subagentUpdates = 0;
+    env.win.App.Chat.updateSubagentEvent = () => {
+      subagentUpdates += 1;
+      return true;
+    };
+    const streams = [];
+    class MockEventSource {
+      constructor() { this.onmessage = null; this.onerror = null; attachEventListeners(this); streams.push(this); }
+      close() {}
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "delegate";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    streams[0].onmessage({
+      data: JSON.stringify({ type: "subagent_event", event: {
+        type: "subagent_event", protocolVersion: 1, parentToolCallId: "delegate-call-1",
+        batchId: "batch-1", taskId: "task-1", seq: 1, kind: "task_started",
+        status: "running", timestamp: "2026-08-12T08:00:00.000Z", payload: {},
+      } }),
+    });
+
+    assert.equal(subagentUpdates, 1);
+    assert.equal(env.state.M.at(-1).blocks?.length ?? 0, 0);
+  });
+
+  it("subagent events stay attached to the assistant message that owns the delegate tool", () => {
+    const owner = {
+      role: "assistant",
+      content: "delegating",
+      blocks: [{
+        type: "tool",
+        name: "delegate_tasks",
+        toolCallId: "delegate-call-1",
+        blockId: "tool-delegate-call-1",
+        seq: 1,
+        status: "running",
+      }],
+    };
+    const later = { role: "assistant", content: "later message", blocks: [] };
+    env.win.App.ChatState.replaceMessages([owner, later]);
+
+    const updated = env.win.App.Chat.updateSubagentEvent({
+      type: "subagent_event",
+      protocolVersion: 1,
+      parentToolCallId: "delegate-call-1",
+      batchId: "batch-1",
+      taskId: "task-1",
+      seq: 1,
+      kind: "task_started",
+      status: "running",
+      timestamp: "2026-08-12T08:00:00.000Z",
+      payload: {},
+    });
+
+    assert.equal(updated, false, "an earlier message requires a scheduled full render");
+    assert.equal(owner.subagentEvents?.length, 1);
+    assert.equal(owner.subagentBatches?.[0]?.parentToolCallId, "delegate-call-1");
+    assert.equal(later.subagentEvents, undefined);
   });
 
   it("done SSE 不替换最后一条 assistant 消息", () => {

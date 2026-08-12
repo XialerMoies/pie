@@ -8,7 +8,16 @@ import { execFileSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { relative } from "path";
 import { parseBody } from "./parse-body.js";
-import { createFileDiff, findGitRoot, parsePorcelain, parseLog, parseUnifiedDiff } from "./git-core.js";
+import {
+  createFileDiff,
+  findGitRoot,
+  gitWorkspacePathspec,
+  literalGitPathspec,
+  parsePorcelain,
+  parseLog,
+  parseUnifiedDiff,
+  scopeGitStatusEntries,
+} from "./git-core.js";
 import { writePathGuardError } from "./path-guard.js";
 import { authorizeRoutePath, writeServerPermissionError } from "../permission-service.js";
 
@@ -91,8 +100,10 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ error: "not_a_repo", message: "当前工作区不是 Git 仓库" }));
         return true;
       }
-      const output = git(["status", "--porcelain"], gitRoot);
-      const entries = parsePorcelain(output);
+      const pathspec = gitWorkspacePathspec(gitRoot, root);
+      const gitPathspec = literalGitPathspec(pathspec);
+      const output = git(["status", "--porcelain", ...(gitPathspec ? ["--", gitPathspec] : [])], gitRoot);
+      const entries = scopeGitStatusEntries(parsePorcelain(output), pathspec);
       // 附加信息：分支 / 远程差异 / 最新 commit
       let branch = "HEAD";
       try { branch = git(["rev-parse", "--abbrev-ref", "HEAD"], gitRoot, 5000).trim(); } catch {}
@@ -104,7 +115,9 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
         behind = parseInt(parts[1] || "0", 10);
       } catch {}
       let lastCommit = "";
-      try { lastCommit = git(["log", "-1", "--format=%h %s"], gitRoot, 5000).trim(); } catch {}
+      try {
+        lastCommit = git(["log", "-1", "--format=%h %s", ...(gitPathspec ? ["--", gitPathspec] : [])], gitRoot, 5000).trim();
+      } catch {}
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({
         gitRoot,
@@ -130,9 +143,11 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ error: "not_a_repo", message: "当前工作区不是 Git 仓库" }));
         return true;
       }
+      const pathspec = gitWorkspacePathspec(gitRoot, root);
+      const gitPathspec = literalGitPathspec(pathspec);
       const rawCount = parseInt(u.searchParams.get("count") || "10", 10);
       const count = Number.isFinite(rawCount) ? Math.max(1, Math.min(rawCount, 100)) : 10;
-      const output = git(["log", "--oneline", `-${count}`], gitRoot);
+      const output = git(["log", "--oneline", `-${count}`, ...(gitPathspec ? ["--", gitPathspec] : [])], gitRoot);
       const entries = parseLog(output);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ gitRoot, entries }));

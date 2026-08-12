@@ -2,7 +2,7 @@
  * Git core — Git 状态/日志解析纯逻辑，无 HTTP 依赖
  */
 import { execSync } from "child_process";
-import { resolve } from "path";
+import { isAbsolute, relative, resolve } from "path";
 import { existsSync } from "fs";
 
 // ─── Types ───────────────────────────────────────────────────────
@@ -52,6 +52,46 @@ export function findGitRoot(dir: string): string | null {
     current = parent;
   }
   return null;
+}
+
+export function gitWorkspacePathspec(gitRoot: string, workspaceRoot: string): string | undefined {
+  const pathspec = relative(resolve(gitRoot), resolve(workspaceRoot));
+  if (!pathspec) return undefined;
+  if (isAbsolute(pathspec) || pathspec === ".." || pathspec.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
+    throw new Error("Workspace is outside Git repository");
+  }
+  return pathspec.replace(/\\/g, "/");
+}
+
+export function literalGitPathspec(pathspec?: string): string | undefined {
+  return pathspec ? `:(literal)${pathspec}` : undefined;
+}
+
+export function scopeGitStatusEntries(entries: GitStatusEntry[], pathspec?: string): GitStatusEntry[] {
+  if (!pathspec) return entries;
+  const prefix = pathspec.replace(/\/+$/, "") + "/";
+  const comparablePrefix = process.platform === "win32" ? prefix.toLowerCase() : prefix;
+  const isWithinWorkspace = (path: string | undefined): path is string => {
+    if (!path) return false;
+    const comparablePath = process.platform === "win32" ? path.toLowerCase() : path;
+    return comparablePath.startsWith(comparablePrefix);
+  };
+  const makeRelative = (path: string): string => path.slice(prefix.length);
+  return entries.flatMap((entry) => {
+    const { renamePath: originalRenamePath, ...scopedEntry } = entry;
+    const sourceInside = isWithinWorkspace(entry.path);
+    const destinationInside = isWithinWorkspace(originalRenamePath);
+    if (!sourceInside && !destinationInside) return [];
+    const path = sourceInside ? makeRelative(entry.path) : makeRelative(originalRenamePath!);
+    const renamePath = sourceInside && destinationInside
+      ? makeRelative(originalRenamePath!)
+      : undefined;
+    return [{
+      ...scopedEntry,
+      path,
+      ...(renamePath ? { renamePath } : {}),
+    }];
+  });
 }
 
 export function parsePorcelain(output: string): GitStatusEntry[] {
