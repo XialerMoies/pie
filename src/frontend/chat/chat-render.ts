@@ -324,7 +324,7 @@ function renderTraceItem(t: any, defaultOpen?: boolean): string {
     const input = hasTraceValue(t.input) ? shortText(t.input, 900) : '';
     const result = t.error || t.output;
     const output = hasTraceValue(result) ? shortText(result, 1200) : '';
-    const diffBlock = App.FileDiff.render(t.metadata?.diff);
+    const diffBlock = App.FileDiff?.render?.(t.metadata?.diff) || '';
     const inputSection = input ? `<div class="trace-card-section trace-card-in"><div class="trace-card-label">IN</div><pre>${E(input)}</pre></div>` : '';
     const outputLabel = t.status === 'error' ? 'ERROR' : 'OUT';
     const outputSection = output ? `<div class="trace-card-section trace-card-out"><div class="trace-card-label${t.status === 'error' ? ' error' : ''}">${outputLabel}</div><pre>${E(output)}</pre></div>` : '';
