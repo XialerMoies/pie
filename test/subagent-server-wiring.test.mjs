@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { createRuntimeSubagentHost } from "../src/server/subagent-delegation.ts";
 
 const serverSource = readFileSync(resolve("src/server/server.ts"), "utf8");
+const agentEventRouterSource = readFileSync(resolve("src/server/agent-event-router.ts"), "utf8");
 
 describe("subagent server wiring", () => {
   it("assembles and rotates real runtime host dependencies by workspace", async () => {
@@ -103,8 +104,9 @@ describe("subagent server wiring", () => {
   it("bridges subagent events through a per-batch sink without weakening main-session filtering", () => {
     assert.match(serverSource, /createSubagentEventSink/);
     assert.match(serverSource, /createEventSink:\s*\(\)\s*=>\s*createSubagentEventSink\(\{\s*runtime,\s*chatStream\s*\}\)/s);
+    assert.match(agentEventRouterSource, /runtime\.onEvent\(\(event: any, sourceSession\) =>/);
     assert.match(
-      serverSource,
+      agentEventRouterSource,
       /if \(sourceSession && runtime\.session !== sourceSession\) return;/,
       "child session events must not enter the main runtime event handler",
     );

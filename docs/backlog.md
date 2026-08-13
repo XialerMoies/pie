@@ -1,6 +1,6 @@
 # 功能与缺陷 Backlog
 
-> 更新时间：2026-08-09
+> 更新时间：2026-08-14
 > 维护：每项完成 / 定稿后更新状态
 
 ## ① 待修缺陷（正确性 / UI 定位，先清）
@@ -218,6 +218,8 @@ server 与 AgentRuntime 仍按项目隔离在独立子进程内，因此 server 
 （每完成一项，在此追加一行：日期 / ID / 简述 / 验证）
 
 - 2026-08-09 / ④-A Task 8 / 单 Electron 主进程多窗口迁移：每项目独立 server child/AgentRuntime；duplicate workspace 聚焦、close/crash/reopen 隔离、second-instance 转发与 E2E-only diagnostics / Windows packaged E2E 通过，shell 124 ms、workbench 1564 ms
+- 2026-08-14 / 技术债 / server 事件路由抽离：`runtime.onEvent`、trace/block 持久化、assistant block 组装移入 `agent-event-router.ts`，`server.ts` 保持启动编排入口；新增结构防回流测试 / typecheck、事件定向 49 项、unit 1016 项、全量 npm test 通过
+- 2026-08-14 / 技术债 / `settings.ts` 路由职责拆分：入口降为薄 dispatcher，auth/models/preferences/storage/subagents/thinking/layout 分模块；新增 settings-route-structure 防回流 / typecheck、settings 定向 27 项、unit 1015 项通过
 - 2026-08-08 / 设置页 / 文案中文化 + 弹窗尺寸自适应 + 存储布局重构：Permissions→权限、Smooth/Immediate→平滑滚动/立即到达、标题"回到最新位置效果"；弹窗随窗口 78vw/82vh（全屏 1280×880）；存储位置 grid 布局 + 长路径省略 + 按钮不折行 + 移动端适配 / 前端 261 项 + 实机验收
 - 2026-08-08 / 性能 / dev 启动并行化 + 可观测化：移除双编译、Monaco 纯文本兜底、content-ready 埋点；server 提前 spawn 与编译并行、bootstrap 对 5xx/网络退避重试（403 仍即时失败）/ 窗口 6.4s→3.1s、内容可用 ~3.5s，前端 260 项 + 实机验收
 - 2026-08-08 / 测试 / 测试并行化：routes 并发度 4 + workspace-lock 独立串行（跨进程锁测试不能并行）、防回流门禁 / 全量 1:44→1:06，routes 330 项
