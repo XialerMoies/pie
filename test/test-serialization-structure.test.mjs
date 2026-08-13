@@ -13,4 +13,8 @@ describe("timing-sensitive test serialization", () => {
     assert.doesNotMatch(stages[0], /test\/file-lock\.test\.mjs/);
     assert.match(stages[1], /--test-concurrency=1\s+test\/file-lock\.test\.mjs$/);
   });
+
+  it("runs frontend tests with file-level concurrency one", () => {
+    assert.match(packageJson.scripts["test:frontend"], /--test-concurrency=1/);
+  });
 });
