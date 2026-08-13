@@ -5,6 +5,7 @@
 let _st: string = 'model';
 let _selectedProvider: string | null = null;
 let _provKeys: Record<string, ProviderKeyInfo> = {};
+let _revealRequestId = 0;
 type CustomSubagent = {
   id: string;
   name: string;
@@ -404,14 +405,34 @@ function selectProvider(prov: string): void {
     <div class="rp-key-section">
       <div class="rp-key-label">API Key</div>
       <div class="rp-key-row">
-        <input class="rp-key-input" type="password" id="key-input" data-provider="${E(prov)}" placeholder="${E(placeholder)}" value=""/>
+        <input class="rp-key-input" type="${info.hasKey ? 'text' : 'password'}" id="key-input" data-provider="${E(prov)}" placeholder="${E(placeholder)}" value="${E(info.keyPreview || '')}"/>
         <button type="button" class="rp-key-toggle" data-settings-action="toggle-key" data-provider="${E(prov)}" aria-label="显示或隐藏 API Key">👁</button>
         <button type="button" class="rp-save-btn" data-settings-action="save-key" data-provider="${E(prov)}">保存</button>
       </div>
     </div>
   `;
   rc.innerHTML = html;
-  if (info.hasKey) loadProviderModels(prov);
+  if (info.hasKey) {
+    void revealProviderKey(prov);
+    loadProviderModels(prov);
+  }
+}
+
+async function revealProviderKey(prov: string): Promise<void> {
+  const requestId = ++_revealRequestId;
+  try {
+    const response = await fetch('/api/auth/reveal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: prov }),
+    });
+    if (!response.ok) return;
+    const data = await response.json() as { apiKey?: string };
+    const input = $('key-input') as HTMLInputElement | null;
+    if (requestId === _revealRequestId && _selectedProvider === prov && input?.dataset.provider === prov && typeof data.apiKey === 'string') {
+      input.value = data.apiKey;
+    }
+  } catch {}
 }
 
 function toggleKeyVis(prov: string): void {

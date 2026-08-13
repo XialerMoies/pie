@@ -113,6 +113,7 @@ function updateRail(data: UsageCurrentResponse): void {
 
 let _usageModalEl: HTMLElement | null = null;
 let _usageTab: 'current' | 'summary' = 'current';
+let _usageSummaryFetchInFlight: Promise<void> | null = null;
 
 function openUsagePanel(): void {
   closeUsagePanel(); // 关闭已有
@@ -120,6 +121,7 @@ function openUsagePanel(): void {
   // 重置为默认 Tab
   _usageTab = 'current';
   _lastSummary = null;
+  _usageSummaryFetchInFlight = null;
 
   const overlay = document.createElement('div');
   overlay.className = 'usage-modal';
@@ -135,7 +137,10 @@ function openUsagePanel(): void {
         <button class="usage-tab active" data-tab="current">当前会话</button>
         <button class="usage-tab" data-tab="summary">全部会话</button>
       </div>
-      <div class="usage-body" id="usage-body"></div>
+      <div class="usage-body" id="usage-body">
+        <div class="usage-view" id="usage-view-current"></div>
+        <div class="usage-view" id="usage-view-summary" hidden></div>
+      </div>
     </div>`;
 
   document.body.appendChild(overlay);
@@ -148,7 +153,6 @@ function openUsagePanel(): void {
       overlay.querySelectorAll('.usage-tab').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       _usageTab = (btn as HTMLElement).dataset.tab as 'current' | 'summary';
-      if (_usageTab === 'summary') _lastSummary = null;
       renderUsagePanel();
     });
   });
@@ -163,14 +167,22 @@ function closeUsagePanel(): void {
   }
 }
 
-function renderUsagePanel(): void {
-  const body = document.getElementById('usage-body');
-  if (!body) return;
+function renderUsagePanel(refreshActive = false): void {
+  const currentView = document.getElementById('usage-view-current');
+  const summaryView = document.getElementById('usage-view-summary');
+  if (!currentView || !summaryView) return;
+
+  currentView.hidden = _usageTab !== 'current';
+  summaryView.hidden = _usageTab !== 'summary';
 
   if (_usageTab === 'current') {
-    renderCurrentSessionUsage(body);
-  } else {
-    renderSummaryUsage(body);
+    if (refreshActive || !currentView.dataset.rendered) {
+      renderCurrentSessionUsage(currentView);
+      currentView.dataset.rendered = 'true';
+    }
+  } else if (!summaryView.dataset.rendered) {
+    renderSummaryUsage(summaryView);
+    summaryView.dataset.rendered = 'true';
   }
 }
 
@@ -249,17 +261,23 @@ interface SummaryResponse {
 let _lastSummary: SummaryResponse | null = null;
 
 async function fetchSummary(): Promise<void> {
-  try {
-    const r = await fetch('/api/usage/summary');
-    _lastSummary = await r.json();
-  } catch { _lastSummary = null; }
+  if (_usageSummaryFetchInFlight) return _usageSummaryFetchInFlight;
+  _usageSummaryFetchInFlight = (async () => {
+    try {
+      const r = await fetch('/api/usage/summary');
+      _lastSummary = await r.json();
+    } catch { _lastSummary = null; }
+  })().finally(() => {
+    _usageSummaryFetchInFlight = null;
+  });
+  return _usageSummaryFetchInFlight;
 }
 
 function renderSummaryUsage(container: HTMLElement): void {
   if (!_lastSummary) {
     container.innerHTML = '<div class="usage-none">加载中...</div>';
     fetchSummary().then(() => {
-      if (_lastSummary && document.getElementById('usage-body')) renderSummaryUsage(container);
+      if (_lastSummary && container.isConnected && _usageTab === 'summary') renderSummaryUsage(container);
     });
     return;
   }
@@ -349,7 +367,7 @@ async function refreshTokenUsage(): Promise<void> {
         const data: UsageCurrentResponse = await r.json();
         _lastUsageData = data;
         updateRail(data);
-        if (_usageModalEl) renderUsagePanel();
+        if (_usageModalEl) renderUsagePanel(true);
       } catch { /* ignore */ }
     } while (_tokenRefreshQueued);
   })().finally(() => {

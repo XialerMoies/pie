@@ -251,6 +251,22 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     assert.doesNotMatch(tokenCode, /rail\.style\.top\s*=\s*top\s*\+\s*'px'/);
   });
 
+  it("usage tabs keep persistent views inside a stable panel", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    const tokenCode = readFileSync(new URL("../src/frontend/chat/chat-token.ts", import.meta.url), "utf8");
+    const panelCss = cssBlocks(css, ".usage-panel");
+    const bodyCss = cssBlocks(css, ".usage-body");
+
+    assertCssDecl(panelCss, "height", "min(620px,80vh)");
+    assertCssDecl(panelCss, "overflow", "hidden");
+    assertCssDecl(bodyCss, "overflow-y", "auto");
+    assert.match(tokenCode, /usage-view-current/);
+    assert.match(tokenCode, /usage-view-summary/);
+    assert.match(tokenCode, /currentView\.hidden\s*=\s*_usageTab\s*!==\s*'current'/);
+    assert.match(tokenCode, /summaryView\.hidden\s*=\s*_usageTab\s*!==\s*'summary'/);
+    assert.doesNotMatch(tokenCode, /const body = document\.getElementById\('usage-body'\)[\s\S]*?body\.innerHTML\s*=/);
+  });
+
   it("更多菜单中的会话标签使用实时标题", () => {
     const ts = win.App.Tabs;
     ts.openTab({ kind: "session", id: "sess-real-title", title: "新会话", sessionId: "sess-real-title" });

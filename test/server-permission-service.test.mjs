@@ -39,6 +39,7 @@ function routeCtx(root, permissionService) {
       openSession: async () => {},
       createNewSession: async () => "new-session",
       getActiveSession: () => null,
+      modelRegistry: { getAvailable: () => [] },
     },
     chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" },
     appEvents: new AppEventHub(),

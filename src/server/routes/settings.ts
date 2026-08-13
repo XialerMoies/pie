@@ -2,6 +2,7 @@
  * Settings routes — API keys, model switching, settings persistence
  */
 import type { RouteHandler } from "./types.js";
+import type { AgentRuntime } from "../../agent/index.js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { resolve } from "node:path";
 import { parseBody } from "./parse-body.js";
@@ -25,6 +26,36 @@ const cors = { "Access-Control-Allow-Origin": "*" };
 
 function publishDashboardChanged(ctx: Parameters<RouteHandler>[2]): void {
   try { ctx.appEvents.publish("dashboard.changed"); } catch {}
+}
+
+function storedApiKey(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  // 新格式 {type:"api_key", key} 与旧格式 {apiKey} 都兼容（旧 auth.json 数据迁移后仍可读）
+  if (record.type === "api_key" && typeof record.key === "string") return record.key;
+  return typeof record.apiKey === "string" ? record.apiKey : "";
+}
+
+function authStatus(runtime: AgentRuntime, provider: string): { configured?: boolean; source?: string } | undefined {
+  const storage = (runtime as any).authStorage;
+  if (typeof storage?.getAuthStatus !== "function") return undefined;
+  try { return storage.getAuthStatus(provider); } catch { return undefined; }
+}
+
+function hasProviderAuth(runtime: AgentRuntime, provider: string, stored: unknown): boolean {
+  const status = authStatus(runtime, provider);
+  return Boolean(storedApiKey(stored) || status?.configured || status?.source);
+}
+
+async function resolveProviderApiKey(runtime: AgentRuntime, provider: string, stored: unknown): Promise<string> {
+  const storage = (runtime as any).authStorage;
+  if (typeof storage?.getApiKey === "function") {
+    try {
+      const key = await storage.getApiKey(provider);
+      if (typeof key === "string" && key) return key;
+    } catch {}
+  }
+  return storedApiKey(stored);
 }
 
 export const handleSettings: RouteHandler = async (req, res, ctx) => {
@@ -167,22 +198,22 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/models") {
     try {
       const all = modelRegistry.getAvailable();
-      // Read auth.json to see which providers have keys configured in storage (not env vars)
-      let configuredProviders: string[] = [];
+      let authData: Record<string, unknown> = {};
       try {
         if (existsSync(p.PI_CONFIG_DIR)) {
           const authFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "auth.json", "read", "settings.models.auth")).path;
           if (existsSync(authFile)) {
             const authRaw = readFileSync(authFile, "utf-8");
-            const auth = JSON.parse(authRaw);
-            configuredProviders = Object.keys(auth).filter(k => auth[k]?.apiKey);
+            authData = JSON.parse(authRaw);
           }
         }
       } catch (err: unknown) {
         if (writeServerPermissionError(res, cors, err)) return true;
         if (writePathGuardError(res, cors, err)) return true;
-        configuredProviders = [];
+        authData = {};
       }
+      const providers = [...new Set(all.map((m: { provider: string }) => m.provider))];
+      const configuredProviders = providers.filter((provider) => hasProviderAuth(runtime, provider, authData[provider]));
       const filtered = configuredProviders.length === 0
         ? all.map((m: { provider: string; id: string }) => ({ provider: (m as { provider: string; id: string }).provider, id: (m as { provider: string; id: string }).id }))  // first run: show all
         : all.filter((m: { provider: string }) => configuredProviders.includes((m as { provider: string }).provider)).map((m: { provider: string; id: string }) => ({ provider: m.provider, id: m.id }));
@@ -223,10 +254,14 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
     try {
       const authFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "auth.json", "read", "settings.auth.read")).path;
       const authData = existsSync(authFile) ? JSON.parse(readFileSync(authFile, "utf-8")) : {};
-      const providerKeys = Object.keys(authData).map((provider) => ({
+      const availableProviders = typeof modelRegistry?.getAvailable === "function"
+        ? modelRegistry.getAvailable().map((model: { provider: string }) => model.provider)
+        : [];
+      const providers = [...new Set([...Object.keys(authData), ...availableProviders])];
+      const providerKeys = providers.map((provider) => ({
         provider,
-        hasKey: !!authData[provider]?.apiKey,
-        keyPreview: authData[provider]?.apiKey ? authData[provider].apiKey.slice(0, 8) + "..." : "",
+        hasKey: hasProviderAuth(runtime, provider, authData[provider]),
+        keyPreview: storedApiKey(authData[provider]) ? storedApiKey(authData[provider]).slice(0, 8) + "..." : "",
       }));
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ providers: providerKeys }));
@@ -239,6 +274,38 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
     return true;
   }
 
+  if (url === "/api/auth/reveal" && method === "POST") {
+    try {
+      const { provider } = await parseBody(req);
+      if (typeof provider !== "string" || !provider) {
+        res.writeHead(400, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ error: "provider required" }));
+        return true;
+      }
+      const authFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "auth.json", "read", "settings.auth.reveal")).path;
+      const authData = existsSync(authFile) ? JSON.parse(readFileSync(authFile, "utf-8")) : {};
+      if (!hasProviderAuth(runtime, provider, authData[provider])) {
+        res.writeHead(404, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ error: "provider is not configured" }));
+        return true;
+      }
+      const apiKey = await resolveProviderApiKey(runtime, provider, authData[provider]);
+      if (!apiKey) {
+        res.writeHead(404, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ error: "provider key unavailable" }));
+        return true;
+      }
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ ok: true, apiKey }));
+    } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
+      res.writeHead(400, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ error: (err as Error).message }));
+    }
+    return true;
+  }
+
   // Save auth key
   if (url === "/api/auth" && method === "POST") {
     try {
@@ -246,7 +313,7 @@ export const handleSettings: RouteHandler = async (req, res, ctx) => {
       if (!provider || !apiKey) { res.writeHead(400, { ...cors }); res.end(JSON.stringify({ error: "provider and apiKey required" })); return true; }
       const authFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "auth.json", "write", "settings.auth")).path;
       await updateLockedJson<Record<string, unknown>>(authFile, () => ({}), (authData) => {
-        authData[provider] = { apiKey };
+        authData[provider] = { type: "api_key", key: apiKey };
         return authData;
       }, { trailingNewline: false });
       res.writeHead(200, { ...cors });

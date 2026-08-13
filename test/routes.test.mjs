@@ -989,7 +989,7 @@ describe("settings routes", () => {
     try {
       mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
       writeFileSync(resolve(ctx.paths.PI_CONFIG_DIR, "auth.json"), JSON.stringify({
-        openai: { apiKey: "sk-test-secret-value" },
+        openai: { type: "api_key", key: "sk-test-secret-value" },
       }));
 
       const { status, body } = await callHandler(handleSettings, "GET", "/api/auth", undefined, ctx);
@@ -1003,6 +1003,29 @@ describe("settings routes", () => {
       assert.strictEqual(openai.keyPreview, "sk-test-...");
       assert.strictEqual(Object.hasOwn(openai, "keyFull"), false);
       assert.strictEqual(JSON.stringify(data).includes("secret-value"), false);
+    } finally {
+      if (ctx.paths._tmpDir) rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reveals a configured key only after an explicit provider request", async () => {
+    const ctx = mockContext({
+      runtime: mockRuntime({
+        authStorage: {
+          getAuthStatus: (provider) => provider === "openai" ? { configured: true, source: "stored" } : { configured: false },
+          getApiKey: async (provider) => provider === "openai" ? "sk-test-secret-value" : undefined,
+        },
+      }),
+    });
+    try {
+      mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+      writeFileSync(resolve(ctx.paths.PI_CONFIG_DIR, "auth.json"), JSON.stringify({
+        openai: { type: "api_key", key: "sk-test-secret-value" },
+      }));
+
+      const { status, body } = await callHandler(handleSettings, "POST", "/api/auth/reveal", { provider: "openai" }, ctx);
+      assert.strictEqual(status, 200);
+      assert.deepStrictEqual(parseJSON(body), { ok: true, apiKey: "sk-test-secret-value" });
     } finally {
       if (ctx.paths._tmpDir) rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
     }
