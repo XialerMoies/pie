@@ -124,138 +124,129 @@ async function fetchDiff(root: string, filePath: string): Promise<GitDiffRespons
 
 // ─── Render ─────────────────────────────────────────────────────
 
+class GitChangeRowView {
+  static render(entry: GitStatusEntry, entryIndex: number): string {
+    const diffPath = entry.renamePath || entry.path;
+    const iconClass = statusIconClass(entry.x, entry.y);
+    const label = statusLabel(entry.x, entry.y);
+    const fileName = entry.path.split("/").pop() || entry.path;
+    const iconHtml = (window as any).ExplorerService?.iconFor(fileName, false) || "";
+    let html = `<div class="git-file${_selectedDiffPath === diffPath ? " is-active" : ""}" data-git-action="show-diff" data-entry-index="${entryIndex}">`;
+    html += `<span class="git-status-badge ${iconClass}">${label}</span>`;
+    html += `${iconHtml} `;
+    html += `<span class="git-file-name">${E(entry.path)}</span>`;
+    if (entry.renamePath) html += `<span class="git-rename"> → ${E(entry.renamePath)}</span>`;
+    if (_selectedDiffPath === diffPath) {
+      const disclosureIcon = _svg(_diffExpanded ? "itriangle-down" : "itriangle-up", 12);
+      const disclosureLabel = _diffExpanded ? "收起" : "展开";
+      html += `<button type="button" class="git-file-disclosure" data-git-action="toggle-diff" aria-expanded="${_diffExpanded}" aria-label="${disclosureLabel} diff" title="${disclosureLabel}">${disclosureIcon}</button>`;
+    }
+    html += "</div>";
+    if (_selectedDiffPath === diffPath && _diffExpanded) html += GitDiffPreviewView.render();
+    return html;
+  }
+}
+
+class GitDiffPreviewView {
+  static render(): string {
+    let html = '<div class="git-diff-preview">';
+    if (_diffLoading) {
+      html += '<div class="git-diff-state">正在加载改动...</div>';
+    } else if (_diffError) {
+      html += `<div class="git-diff-state error">${E(_diffError)}</div>`;
+    } else if (_diffData) {
+      html += App.FileDiff.render(_diffData, {
+        pathAction: "open-diff-file",
+      });
+    }
+    html += "</div>";
+    return html;
+  }
+}
+
+class GitHistoryView {
+  static render(entries: GitLogEntry[]): string {
+    let html = `<div class="sg-t" style="display:flex;align-items:center;justify-content:space-between;margin-top:12px">`;
+    html += `最近提交 <span class="git-count">${entries.length}</span>`;
+    html += `</div>`;
+    if (entries.length === 0) return html + '<div class="git-clean">暂无提交记录</div>';
+    for (const entry of entries) {
+      html += `<div class="git-commit">`;
+      html += `<span class="git-hash">${E(entry.hash)}</span>`;
+      html += `<span class="git-msg">${E(entry.message)}</span>`;
+      html += "</div>";
+    }
+    return html;
+  }
+}
+
+class GitPanelView {
+  static render(): string {
+    if (_notRepo) {
+      const curPath = getRoot() || "(未设置)";
+      return `<div class="git-empty">当前工作区不是 Git 仓库</div>
+      <div style="font-size:.6rem;color:var(--tm);text-align:center;padding:0 8px;word-break:break-all">路径: ${E(curPath)}</div>
+      <div class="git-action" data-git-action="refresh" style="justify-content:center;padding:8px">${_svg("irefresh",12)} 刷新</div>`;
+    }
+    if (_error) return `<div class="git-empty error">${E(_error)}</div>`;
+    if (_loading) return '<div class="git-empty">加载中…</div>';
+
+    let html = "";
+    const branch = _statusData?.branch;
+    const ahead = _statusData?.ahead;
+    const behind = _statusData?.behind;
+    const lastCommit = _statusData?.lastCommit;
+    if (branch) {
+      html += `<div class="git-branch-bar">`;
+      html += `<span class="git-branch-name">${E(branch)}</span>`;
+      if (ahead !== undefined && behind !== undefined) {
+        if (ahead > 0 && behind > 0) html += `<span class="git-remote">↑${ahead} ↓${behind}</span>`;
+        else if (ahead > 0) html += `<span class="git-remote">↑${ahead}</span>`;
+        else if (behind > 0) html += `<span class="git-remote">↓${behind}</span>`;
+        else html += `<span class="git-remote git-remote-clean">✓</span>`;
+      }
+      if (lastCommit) html += `<span class="git-last-commit">${E(lastCommit)}</span>`;
+      html += `</div>`;
+    }
+
+    const entries = _statusData?.entries || [];
+    const modified = _statusData?.modified || 0;
+    const added = _statusData?.added || 0;
+    const deleted = _statusData?.deleted || 0;
+    html += `<div class="sg-t" style="display:flex;align-items:center;justify-content:space-between">`;
+    html += `变更 <span class="git-count">${entries.length}</span>`;
+    html += `</div>`;
+    if (entries.length === 0) {
+      html += '<div class="git-clean">工作区干净，无变更</div>';
+    } else {
+      html += `<div class="git-summary">`;
+      if (modified > 0) html += `<span class="git-chip git-chip-m">${modified} 修改</span>`;
+      if (added > 0) html += `<span class="git-chip git-chip-a">${added} 新增</span>`;
+      if (deleted > 0) html += `<span class="git-chip git-chip-d">${deleted} 删除</span>`;
+      html += `</div>`;
+      html += entries.map((entry, index) => GitChangeRowView.render(entry, index)).join('');
+    }
+    html += `<div class="git-commit-area">`;
+    html += `<textarea class="git-commit-msg" id="git-commit-msg" rows="2" placeholder="提交信息…"></textarea>`;
+    html += `<div class="git-commit-actions">`;
+    html += `<button class="git-btn git-btn-commit" data-git-action="commit" id="git-commit-btn">提交</button>`;
+    html += `</div>`;
+    html += `</div>`;
+    html += GitHistoryView.render(_logData?.entries || []);
+    html += `<div class="git-actions-bar">`;
+    html += `<span class="git-action" data-git-action="push">${_svg("iup", 12)} 推送</span>`;
+    html += `<span class="git-action" data-git-action="pull">${_svg("idown", 12)} 拉取</span>`;
+    html += `<span class="git-action git-action-refresh" data-git-action="refresh">${_svg("irefresh", 12)} 刷新</span>`;
+    html += `</div>`;
+    return html;
+  }
+}
+
 function renderGit(): void {
   const container = gitEl("git-container");
   if (!container) return;
-
-  if (_notRepo) {
-    const curPath = getRoot() || "(未设置)";
-    container.innerHTML = `<div class="git-empty">当前工作区不是 Git 仓库</div>
-      <div style="font-size:.6rem;color:var(--tm);text-align:center;padding:0 8px;word-break:break-all">路径: ${E(curPath)}</div>
-      <div class="git-action" data-git-action="refresh" style="justify-content:center;padding:8px">${_svg("irefresh",12)} 刷新</div>`;
-    return;
-  }
-
-  if (_error) {
-    container.innerHTML = `<div class="git-empty error">${E(_error)}</div>`;
-    return;
-  }
-
-  if (_loading) {
-    container.innerHTML = '<div class="git-empty">加载中…</div>';
-    return;
-  }
-
-  let html = "";
-
-  // ─── Branch & remote status bar ────────────
-  const branch = _statusData?.branch;
-  const ahead = _statusData?.ahead;
-  const behind = _statusData?.behind;
-  const lastCommit = _statusData?.lastCommit;
-  if (branch) {
-    html += `<div class="git-branch-bar">`;
-    html += `<span class="git-branch-name">${E(branch)}</span>`;
-    if (ahead !== undefined && behind !== undefined) {
-      if (ahead > 0 && behind > 0) html += `<span class="git-remote">↑${ahead} ↓${behind}</span>`;
-      else if (ahead > 0) html += `<span class="git-remote">↑${ahead}</span>`;
-      else if (behind > 0) html += `<span class="git-remote">↓${behind}</span>`;
-      else html += `<span class="git-remote git-remote-clean">✓</span>`;
-    }
-    if (lastCommit) html += `<span class="git-last-commit">${E(lastCommit)}</span>`;
-    html += `</div>`;
-  }
-
-  // ─── Changes section ───────────────────────
-  const entries = _statusData?.entries || [];
-  const modified = _statusData?.modified || 0;
-  const added = _statusData?.added || 0;
-  const deleted = _statusData?.deleted || 0;
-
-  html += `<div class="sg-t" style="display:flex;align-items:center;justify-content:space-between">`;
-  html += `变更 <span class="git-count">${entries.length}</span>`;
-  html += `</div>`;
-
-  if (entries.length === 0) {
-    html += '<div class="git-clean">工作区干净，无变更</div>';
-  } else {
-    // Summary chips
-    html += `<div class="git-summary">`;
-    if (modified > 0) html += `<span class="git-chip git-chip-m">${modified} 修改</span>`;
-    if (added > 0) html += `<span class="git-chip git-chip-a">${added} 新增</span>`;
-    if (deleted > 0) html += `<span class="git-chip git-chip-d">${deleted} 删除</span>`;
-    html += `</div>`;
-
-    for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
-      const e = entries[entryIndex];
-      const diffPath = e.renamePath || e.path;
-      const iconClass = statusIconClass(e.x, e.y);
-      const label = statusLabel(e.x, e.y);
-      const fileName = e.path.split("/").pop() || e.path;
-      const iconHtml = (window as any).ExplorerService?.iconFor(fileName, false) || "";
-      html += `<div class="git-file${_selectedDiffPath === diffPath ? " is-active" : ""}" data-git-action="show-diff" data-entry-index="${entryIndex}">`;
-      html += `<span class="git-status-badge ${iconClass}">${label}</span>`;
-      html += `${iconHtml} `;
-      html += `<span class="git-file-name">${E(e.path)}</span>`;
-      if (e.renamePath) html += `<span class="git-rename"> → ${E(e.renamePath)}</span>`;
-      if (_selectedDiffPath === diffPath) {
-        const disclosureIcon = _svg(_diffExpanded ? "itriangle-down" : "itriangle-up", 12);
-        const disclosureLabel = _diffExpanded ? "收起" : "展开";
-        html += `<button type="button" class="git-file-disclosure" data-git-action="toggle-diff" aria-expanded="${_diffExpanded}" aria-label="${disclosureLabel} diff" title="${disclosureLabel}">${disclosureIcon}</button>`;
-      }
-      html += "</div>";
-      if (_selectedDiffPath === diffPath && _diffExpanded) {
-        html += '<div class="git-diff-preview">';
-        if (_diffLoading) {
-          html += '<div class="git-diff-state">正在加载改动...</div>';
-        } else if (_diffError) {
-          html += `<div class="git-diff-state error">${E(_diffError)}</div>`;
-        } else if (_diffData) {
-          html += App.FileDiff.render(_diffData, {
-            pathAction: "open-diff-file",
-          });
-        }
-        html += "</div>";
-      }
-    }
-  }
-
-  // ─── Commit area ────────────────────────────
-  html += `<div class="git-commit-area">`;
-  html += `<textarea class="git-commit-msg" id="git-commit-msg" rows="2" placeholder="提交信息…"></textarea>`;
-  html += `<div class="git-commit-actions">`;
-  html += `<button class="git-btn git-btn-commit" data-git-action="commit" id="git-commit-btn">提交</button>`;
-  html += `</div>`;
-  html += `</div>`;
-
-  // ─── History section ────────────────────────
-  const logEntries = _logData?.entries || [];
-  html += `<div class="sg-t" style="display:flex;align-items:center;justify-content:space-between;margin-top:12px">`;
-  html += `最近提交 <span class="git-count">${logEntries.length}</span>`;
-  html += `</div>`;
-
-  if (logEntries.length === 0) {
-    html += '<div class="git-clean">暂无提交记录</div>';
-  } else {
-    for (const e of logEntries) {
-      html += `<div class="git-commit">`;
-      html += `<span class="git-hash">${E(e.hash)}</span>`;
-      html += `<span class="git-msg">${E(e.message)}</span>`;
-      html += "</div>";
-    }
-  }
-
-  // ─── Actions bar ────────────────────────────
-  html += `<div class="git-actions-bar">`;
-  html += `<span class="git-action" data-git-action="push">${_svg("iup", 12)} 推送</span>`;
-  html += `<span class="git-action" data-git-action="pull">${_svg("idown", 12)} 拉取</span>`;
-  html += `<span class="git-action git-action-refresh" data-git-action="refresh">${_svg("irefresh", 12)} 刷新</span>`;
-  html += `</div>`;
-
-  container.innerHTML = html;
+  container.innerHTML = GitPanelView.render();
 }
-
-// ─── Refresh ────────────────────────────────────────────────────
 
 async function refreshGit(): Promise<void> {
   const root = getRoot();

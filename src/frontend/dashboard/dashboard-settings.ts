@@ -581,12 +581,13 @@ async function loadCustomSubagents(): Promise<void> {
   }
 }
 
-function renderCustomSubagentManager(draft?: CustomSubagent): void {
-  const list = $('sa-agent-list');
-  const editor = $('sa-editor');
-  if (!list || !editor) return;
-  list.innerHTML = _customSubagents.length > 0
-    ? _customSubagents.map((agent) => `
+class SettingsCustomSubagentManagerView {
+  static render(draft?: CustomSubagent): void {
+    const list = $('sa-agent-list');
+    const editor = $('sa-editor');
+    if (!list || !editor) return;
+    list.innerHTML = _customSubagents.length > 0
+      ? _customSubagents.map((agent) => `
       <div class="sa-agent-item${agent.id === _selectedSubagentId ? ' on' : ''}" data-agent-id="${E(agent.id)}">
         <button type="button" class="sa-agent-select" data-agent-id="${E(agent.id)}">
           <span class="sa-agent-name">${E(agent.name)}</span>
@@ -594,21 +595,21 @@ function renderCustomSubagentManager(draft?: CustomSubagent): void {
         </button>
         <button type="button" class="sa-delete-btn${_subagentDeleteArmedId === agent.id ? ' armed' : ''}" data-settings-action="delete-subagent" data-agent-id="${E(agent.id)}" aria-label="${_subagentDeleteArmedId === agent.id ? '再次点击删除' : '删除'} ${E(agent.name)}" title="${_subagentDeleteArmedId === agent.id ? '再次点击确认删除' : '删除 Agent'}"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><use href="#itrash"></use></svg></button>
       </div>`).join('')
-    : '<div class="sa-empty">暂无自定义 Agent</div>';
-  const selected = draft ?? _customSubagents.find((agent) => agent.id === _selectedSubagentId);
-  if (!selected) {
-    editor.innerHTML = '<div class="sa-empty">新建一个 Agent，为常用分析任务固定角色和工具</div>';
-    return;
-  }
-  const modelValue = selected.model ? JSON.stringify(selected.model) : '';
-  const modelOptions = _subagentModels.map((model) => {
-    const value = JSON.stringify(model);
-    return `<option value="${E(value)}"${value === modelValue ? ' selected' : ''}>${E(model.provider)} / ${E(model.id)}</option>`;
-  }).join('');
-  const isPersisted = _customSubagents.some((agent) => agent.id === selected.id);
-  editor.innerHTML = `
+      : '<div class="sa-empty">暂无自定义 Agent</div>';
+    const selected = draft ?? _customSubagents.find((agent) => agent.id === _selectedSubagentId);
+    if (!selected) {
+      editor.innerHTML = '<div class="sa-empty">新建一个 Agent，为常用分析任务固定角色和工具</div>';
+      return;
+    }
+    const modelValue = selected.model ? JSON.stringify(selected.model) : '';
+    const modelOptions = _subagentModels.map((model) => {
+      const value = JSON.stringify(model);
+      return `<option value="${E(value)}"${value === modelValue ? ' selected' : ''}>${E(model.provider)} / ${E(model.id)}</option>`;
+    }).join('');
+    const isPersisted = _customSubagents.some((agent) => agent.id === selected.id);
+    editor.innerHTML = `
     <div class="sa-form-grid">
-      <label class="sa-field"><span>名称</span><input id="sa-name" maxlength="80" value="${E(selected.name)}" placeholder="例如：安全审查"></label>
+      <label class="sa-field"><span>名称</span><input id="sa-name" maxlength="80" value="${E(selected.name)}" placeholder="例如：安全审计"></label>
       <label class="sa-field"><span>Agent ID</span><input id="sa-id" maxlength="64" value="${E(selected.id)}" placeholder="security-reviewer"${isPersisted ? ' readonly' : ''}></label>
       <label class="sa-field sa-field-wide"><span>描述</span><input id="sa-description" maxlength="240" value="${E(selected.description)}" placeholder="告诉主 Agent 何时使用它"></label>
       <label class="sa-field sa-field-wide"><span>默认模型</span><select id="sa-model"><option value="">继承主 Agent</option>${modelOptions}</select></label>
@@ -619,6 +620,11 @@ function renderCustomSubagentManager(draft?: CustomSubagent): void {
       <span></span>
       <button type="button" class="sa-save-btn" data-settings-action="save-subagent">保存 Agent</button>
     </div>`;
+  }
+}
+
+function renderCustomSubagentManager(draft?: CustomSubagent): void {
+  return SettingsCustomSubagentManagerView.render(draft);
 }
 
 function startNewSubagent(): void {
@@ -705,8 +711,40 @@ function applyEditorSettings(): void {
   if (m?.updateSettings) m.updateSettings();
 }
 
-function renderStorageLocationSettings(container: HTMLElement): void {
-  container.insertAdjacentHTML('beforeend', `
+class SettingsStorageLocationView {
+  static mount(container: HTMLElement): void {
+    container.insertAdjacentHTML('beforeend', SettingsStorageLocationView.render());
+
+    const section = container.querySelector<HTMLElement>('[data-storage-location]');
+    const status = section?.querySelector<HTMLElement>('#gs-data-root-status');
+    const instance = section?.querySelector<HTMLElement>('#gs-instance-id');
+    const lock = section?.querySelector<HTMLElement>('#gs-workspace-lock');
+    if (!section || !status) return;
+    fetch('/api/storage-location').then(r => r.json()).then((info: Partial<StorageLocationInfo>) => {
+      if (!status.isConnected) return;
+      if (!info.dataRoot) throw new Error('missing data root');
+      status.textContent = info.restartRequired
+        ? `${info.dataRoot}（重启后生效）`
+        : String(info.dataRoot);
+      status.title = status.textContent;
+      if (instance) {
+        instance.textContent = String(info.instanceId || '未知');
+        instance.title = instance.textContent;
+      }
+      if (lock) {
+        const owner = info.workspaceLock?.owner;
+        lock.textContent = info.workspaceLock?.locked
+          ? `已锁定：${owner?.pid || '未知进程'}`
+          : '未锁定';
+        lock.title = owner?.workspace || lock.textContent;
+      }
+    }).catch(() => {
+      if (status.isConnected) status.textContent = '读取失败';
+    });
+  }
+
+  static render(): string {
+    return `
       <div class="gs-section" data-storage-location>
         <div class="gs-section-title">存储位置</div>
         <div class="gs-group">
@@ -738,37 +776,12 @@ function renderStorageLocationSettings(container: HTMLElement): void {
           </div>
         </div>
       </div>
-    `);
+    `;
+  }
+}
 
-  const section = container.querySelector<HTMLElement>('[data-storage-location]');
-  const status = section?.querySelector<HTMLElement>('#gs-data-root-status');
-  const instance = section?.querySelector<HTMLElement>('#gs-instance-id');
-  const lock = section?.querySelector<HTMLElement>('#gs-workspace-lock');
-  if (!section || !status) return;
-  fetch('/api/storage-location').then(r => r.json()).then((info: Partial<StorageLocationInfo>) => {
-    if (!status.isConnected) return;
-    if (!info.dataRoot) throw new Error('missing data root');
-    status.textContent = info.restartRequired
-      ? `${info.dataRoot}（重启后生效）`
-      : String(info.dataRoot);
-    status.title = status.textContent;
-    if (instance) {
-      instance.textContent = String(info.instanceId || '未知');
-      instance.title = instance.textContent;
-    }
-    if (lock) {
-      const owner = info.workspaceLock?.owner;
-      lock.textContent = info.workspaceLock?.status === 'locked'
-        ? `已锁定${owner?.port ? ` · ${owner.port}` : ''}`
-        : '未锁定';
-    }
-  }).catch(() => {
-    if (!status.isConnected) return;
-    status.textContent = '无法读取';
-    if (instance) instance.textContent = '无法读取';
-    if (lock) lock.textContent = '无法读取';
-  });
-  void previewStorageMigration(section);
+function renderStorageLocationSettings(container: HTMLElement): void {
+  return SettingsStorageLocationView.mount(container);
 }
 
 interface StorageMigrationPreview {

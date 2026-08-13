@@ -92,44 +92,19 @@ function highlightText(text: string, query: string, cs: boolean): string {
 
 // ─── Render results ────────────────────────────────────────────
 
-function renderResults(): void {
-  const list = el("search-results");
-  if (!list) return;
-
-  if (_isSearching) {
-    list.innerHTML = '<div class="search-status">搜索中…</div>';
-    return;
-  }
-
-  if (!_hasSearched) {
-    list.innerHTML = '<div class="search-status dim">输入关键词开始搜索</div>';
-    return;
-  }
-
-  if (_results.length === 0) {
-    list.innerHTML = '<div class="search-status dim">未找到匹配结果</div>';
-    return;
-  }
-
-  const query = _searchQuery.trim();
-  const total = _results.reduce((s, r) => s + r.matches.length, 0);
-  let html = `<div class="search-count">${_results.length} 个文件${_searchType === "text" ? `，${total} 处匹配` : ""}</div>`;
-
-  for (let resultIndex = 0; resultIndex < _results.length; resultIndex++) {
-    const result = _results[resultIndex];
+class SearchResultItemView {
+  static render(result: SearchResult, resultIndex: number, options: { query: string; type: "filename" | "text"; caseSensitive: boolean }): string {
     const fileName = result.file.split("/").pop() || result.file;
     const iconHtml = (window as any).ExplorerService?.iconFor(fileName, false) || S("ifolder", 14);
-    const nameHtml = _searchType === "filename" ? highlightText(fileName, query, _searchCase) : E(fileName);
-
-    html += `<div class="search-file" data-result-index="${resultIndex}">`;
+    const nameHtml = options.type === "filename" ? highlightText(fileName, options.query, options.caseSensitive) : E(fileName);
+    let html = `<div class="search-file" data-result-index="${resultIndex}">`;
     html += `<div class="search-file-name" data-search-action="open-result">`;
     html += `${iconHtml} ${nameHtml} <span class="search-file-path">${E(result.file)}</span>`;
     html += "</div>";
-
-    if (_searchType === "text" && result.matches.length > 0) {
+    if (options.type === "text" && result.matches.length > 0) {
       for (let matchIndex = 0; matchIndex < Math.min(result.matches.length, 5); matchIndex++) {
         const m = result.matches[matchIndex];
-        const matchText = highlightText(m.text.trim(), query, _searchCase);
+        const matchText = highlightText(m.text.trim(), options.query, options.caseSensitive);
         html += `<div class="search-match" data-search-action="open-result" data-match-index="${matchIndex}">`;
         html += `<span class="search-match-line">${m.line}</span>`;
         html += `<span class="search-match-text">${matchText}</span>`;
@@ -140,11 +115,31 @@ function renderResults(): void {
       }
     }
     html += "</div>";
+    return html;
   }
+}
 
-  list.innerHTML = html;
+class SearchResultsView {
+  static render(): string {
+    if (_isSearching) return '<div class="search-status">搜索中…</div>';
+    if (!_hasSearched) return '<div class="search-status dim">输入关键词开始搜索</div>';
+    if (_results.length === 0) return '<div class="search-status dim">未找到匹配结果</div>';
+    const query = _searchQuery.trim();
+    const total = _results.reduce((s, r) => s + r.matches.length, 0);
+    let html = `<div class="search-count">${_results.length} 个文件${_searchType === "text" ? `，${total} 处匹配` : ""}</div>`;
+    html += _results.map((result, index) => SearchResultItemView.render(result, index, {
+      query,
+      type: _searchType,
+      caseSensitive: _searchCase,
+    })).join('');
+    return html;
+  }
+}
 
-  // Toggle replace section (hide for conversations)
+function renderResults(): void {
+  const list = el("search-results");
+  if (!list) return;
+  list.innerHTML = SearchResultsView.render();
   const replaceSection = document.getElementById("search-replace-section");
   if (replaceSection) {
     const show = _searchType === "text" && _results.length > 0;
@@ -313,54 +308,52 @@ async function doReplacePreview(): Promise<void> {
   _isPreviewing = false;
 }
 
+class ReplacePreviewView {
+  static render(preview: ReplaceResponse | null): string {
+    if (!preview || preview.files.length === 0) {
+      return '<div class="search-status dim">没有匹配的替换内容</div>';
+    }
+    const { files, totalChanges } = preview;
+    let html = `<div class="replace-summary">将替换 ${totalChanges} 处匹配，涉及 ${files.length} 个文件</div>`;
+    for (const file of files) {
+      const fileName = file.file.split("/").pop() || file.file;
+      const iconHtml = (window as any).ExplorerService?.iconFor(fileName, false) || S("ifolder", 14);
+      html += `<div class="replace-file">`;
+      html += `<div class="replace-file-header">`;
+      html += `<span class="replace-file-icon">${iconHtml}</span>`;
+      html += `<span class="replace-file-name">${E(fileName)}</span>`;
+      html += `<span class="replace-file-matches">${file.matches.length} 处</span>`;
+      html += `</div>`;
+      const shown = file.matches.slice(0, 20);
+      for (const m of shown) {
+        html += `<div class="replace-match">`;
+        html += `<span class="replace-match-line">${m.line}</span>`;
+        html += `<span class="replace-match-old">${E(m.oldText)}</span>`;
+        html += `<span class="replace-match-arrow">→</span>`;
+        html += `<span class="replace-match-new">${E(m.newText)}</span>`;
+        html += `</div>`;
+      }
+      if (file.matches.length > 20) {
+        html += `<div class="search-more">… 还有 ${file.matches.length - 20} 处匹配</div>`;
+      }
+      html += `</div>`;
+    }
+    return html;
+  }
+}
+
 function renderReplacePreview(): void {
   const previewContainer = document.getElementById("replace-preview");
   const allBtn = document.getElementById("replace-all-btn");
   if (!previewContainer) return;
-
+  previewContainer.innerHTML = ReplacePreviewView.render(_replacePreview);
   if (!_replacePreview || _replacePreview.files.length === 0) {
-    previewContainer.innerHTML = '<div class="search-status dim">没有匹配的替换内容</div>';
     if (allBtn) allBtn.style.display = "none";
-    return;
-  }
-
-  const { files, totalChanges } = _replacePreview;
-  let html = `<div class="replace-summary">将替换 ${totalChanges} 处匹配，涉及 ${files.length} 个文件</div>`;
-
-  for (const file of files) {
-    const fileName = file.file.split("/").pop() || file.file;
-    const iconHtml = (window as any).ExplorerService?.iconFor(fileName, false) || S("ifolder", 14);
-
-    html += `<div class="replace-file">`;
-    html += `<div class="replace-file-header">`;
-    html += `<span class="replace-file-icon">${iconHtml}</span>`;
-    html += `<span class="replace-file-name">${E(fileName)}</span>`;
-    html += `<span class="replace-file-matches">${file.matches.length} 处</span>`;
-    html += `</div>`;
-
-    const shown = file.matches.slice(0, 20);
-    for (const m of shown) {
-      html += `<div class="replace-match">`;
-      html += `<span class="replace-match-line">${m.line}</span>`;
-      html += `<span class="replace-match-old">${E(m.oldText)}</span>`;
-      html += `<span class="replace-match-arrow">→</span>`;
-      html += `<span class="replace-match-new">${E(m.newText)}</span>`;
-      html += `</div>`;
-    }
-    if (file.matches.length > 20) {
-      html += `<div class="search-more">… 还有 ${file.matches.length - 20} 处匹配</div>`;
-    }
-    html += `</div>`;
-  }
-
-  previewContainer.innerHTML = html;
-  if (allBtn) {
+  } else if (allBtn) {
     allBtn.style.display = "";
-    allBtn.textContent = `全部替换 (${totalChanges} 处)`;
+    allBtn.textContent = "???? (" + _replacePreview.totalChanges + " ?)";
   }
 }
-
-// ─── Replace All ─────────────────────────────────────────────────
 
 async function doReplaceAll(): Promise<void> {
   if (_isApplying) return;

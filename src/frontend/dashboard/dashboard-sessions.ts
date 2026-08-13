@@ -452,20 +452,33 @@ function threadStatusHint(status: ThreadStatus): string {
   return '这条任务线程可继续打开或作为分支起点';
 }
 
-function renderSessionEmptyState(title: string, message: string, actions: string[]): string {
-  return `<div class="session-empty">
+class SessionEmptyStateView {
+  static render(title: string, message: string, actions: string[]): string {
+    return `<div class="session-empty">
     <div class="session-empty-icon">${S('imsg', 20)}</div>
     <div class="session-empty-title">${E(title)}</div>
     <div class="session-empty-text">${E(message)}</div>
     <div class="session-empty-actions">${actions.join('')}</div>
   </div>`;
+  }
+}
+
+function renderSessionEmptyState(title: string, message: string, actions: string[]): string {
+  return SessionEmptyStateView.render(title, message, actions);
+}
+
+class SessionActionsView {
+  static render(): string {
+    return `<div class="session-actions"><button class="sa-btn primary" data-action="new-session">+ 新会话</button></div>`;
+  }
 }
 
 function renderSessionActions(): string {
-  return `<div class="session-actions"><button class="sa-btn primary" data-action="new-session">+ 新会话</button></div>`;
+  return SessionActionsView.render();
 }
 
-function renderSessionCard(session: SessionInfo, openSessionIds: Set<string>, scopeLabel: string): string {
+class SessionCardView {
+  static render(session: SessionInfo, openSessionIds: Set<string>, scopeLabel: string): string {
   const name = session.name || '未命名会话';
   const messageText = session.messageCount > 0 ? `${session.messageCount} 条消息` : '暂无消息';
   const active = isActiveSession(session, openSessionIds);
@@ -492,9 +505,15 @@ function renderSessionCard(session: SessionInfo, openSessionIds: Set<string>, sc
       </div>
     </div>
   </div>`;
+  }
 }
 
-function renderSessionGroup(title: string, hint: string, sessions: SessionInfo[], openSessionIds: Set<string>, scopeLabel: string): string {
+function renderSessionCard(session: SessionInfo, openSessionIds: Set<string>, scopeLabel: string): string {
+  return SessionCardView.render(session, openSessionIds, scopeLabel);
+}
+
+class SessionGroupView {
+  static render(title: string, hint: string, sessions: SessionInfo[], openSessionIds: Set<string>, scopeLabel: string): string {
   const count = sessions.length;
   const items = sessions.length > 0
     ? sessions.map(session => renderSessionCard(session, openSessionIds, scopeLabel)).join('')
@@ -503,6 +522,11 @@ function renderSessionGroup(title: string, hint: string, sessions: SessionInfo[]
     <div class="session-group-head"><span>${E(title)}</span><span class="session-group-count">${count}</span></div>
     ${items}
   </div>`;
+  }
+}
+
+function renderSessionGroup(title: string, hint: string, sessions: SessionInfo[], openSessionIds: Set<string>, scopeLabel: string): string {
+  return SessionGroupView.render(title, hint, sessions, openSessionIds, scopeLabel);
 }
 
 function buildSessionRenderKey(sessions: SessionInfo[], others: { project: string; path?: string; sessions: SessionInfo[] }[], openSessionIds: Set<string>): string {
