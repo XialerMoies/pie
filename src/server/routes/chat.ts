@@ -1,7 +1,6 @@
 /**
  * Chat routes — POST /api/chat, GET /api/chat/stream (SSE)
  */
-import type { ServerResponse } from "http";
 import type { ChatStreamState, RouteHandler } from "./types.js";
 import { processAttachments, buildContextBlock } from "./attach.js";
 import type { CommandConfirmationRequest, CommandConfirmationResult } from "../../agent/types.js";
@@ -10,69 +9,37 @@ import { writePathGuardError } from "./path-guard.js";
 import { WorkspaceLockConflictError } from "../workspace-lock.js";
 import { authorizeWorkspacePath, switchAuthorizedWorkspace } from "./workspace-authorization.js";
 import { replayChatEvents, resetChatEventHistory, writeChatEvent, writeChatStreamBaseline } from "../chat-stream.js";
+import { serverConfirmationRegistry } from "../confirmation-registry.js";
 
 const COMMAND_CONFIRM_TIMEOUT_MS = 120_000;
-
-type PendingCommandConfirmation = {
-  response: ServerResponse;
-  resolve: (decision: CommandConfirmationResult) => void;
-  timeout: ReturnType<typeof setTimeout>;
-};
-
-const pendingCommandConfirmations = new Map<string, PendingCommandConfirmation>();
-
-function commandConfirmationId(): string {
-  return "cmd-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
-}
 
 export function createCommandConfirmCallback(chatStream: ChatStreamState) {
   return async (cmd: string, reason: string, request?: CommandConfirmationRequest): Promise<CommandConfirmationResult> => {
     const response = chatStream.response;
     if (!response) return { allow: false };
 
-    const id = commandConfirmationId();
-    return new Promise<CommandConfirmationResult>((resolve) => {
-      const finish = (decision: CommandConfirmationResult) => {
-        const pending = pendingCommandConfirmations.get(id);
-        if (pending) {
-          clearTimeout(pending.timeout);
-          pendingCommandConfirmations.delete(id);
-        }
-        resolve(decision.allow === true ? decision : { allow: false });
-      };
-      const timeout = setTimeout(() => finish({ allow: false }), COMMAND_CONFIRM_TIMEOUT_MS);
-      pendingCommandConfirmations.set(id, { response, resolve: finish, timeout });
-
-      try {
-        writeChatEvent(chatStream, {
-          type: "command_confirm",
-          id,
-          command: cmd,
-          reason,
-          permissionSuggestions: request?.permissionSuggestions ?? [],
-        });
-      } catch {
-        finish({ allow: false });
-      }
-    });
+    const pending = serverConfirmationRegistry.begin("command", [response], COMMAND_CONFIRM_TIMEOUT_MS);
+    try {
+      writeChatEvent(chatStream, {
+        type: "command_confirm",
+        id: pending.id,
+        command: cmd,
+        reason,
+        permissionSuggestions: request?.permissionSuggestions ?? [],
+      });
+    } catch {
+      serverConfirmationRegistry.resolve(pending.id, "command", { allow: false });
+    }
+    return pending.result;
   };
 }
 
 export function resolveCommandConfirmation(id: string, decision: CommandConfirmationResult): boolean {
-  const pending = pendingCommandConfirmations.get(id);
-  if (!pending) return false;
-  pending.resolve(decision.allow === true ? decision : { allow: false });
-  return true;
+  return serverConfirmationRegistry.resolve(id, "command", decision);
 }
 
-export function cancelCommandConfirmationsForResponse(response: ServerResponse): void {
-  for (const [id, pending] of pendingCommandConfirmations) {
-    if (pending.response === response) {
-      clearTimeout(pending.timeout);
-      pendingCommandConfirmations.delete(id);
-      pending.resolve({ allow: false });
-    }
-  }
+export function cancelCommandConfirmationsForResponse(response: import("http").ServerResponse): void {
+  serverConfirmationRegistry.removeResponse(response, "command");
 }
 
 export const handleChat: RouteHandler = (req, res, ctx) => {
