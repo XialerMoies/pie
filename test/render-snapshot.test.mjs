@@ -101,12 +101,115 @@ before(async () => {
   await import(`../src/frontend/service/explorer-service.ts?t=${ts}`);
   await import(`../src/frontend/services/file-diff-render.ts?t=${ts}`);
   Object.assign(globalThis, await import(`../src/frontend/chat/subagent-state.ts?t=${ts}`));
+  await import(`../src/frontend/chat/chat-component-views.ts?t=${ts}`);
   await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-layout.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/layout-tabs.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/layout-panel.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/layout-shortcuts.ts?t=${ts}`);
 }, 10000); // 10s timeout
+
+describe("chat component views", () => {
+  it("FileDiffView preserves its root across updates and removes it on dispose", () => {
+    const host = doc.createElement("div");
+    const view = new win.App.ChatViews.FileDiffView({
+      filePath: "src/one.ts",
+      type: "update",
+      linesAdded: 1,
+      linesRemoved: 1,
+      structuredPatch: [{ lines: ["-old", "+new"] }],
+    });
+
+    const root = view.mount(host);
+    view.update({
+      filePath: "src/two.ts",
+      type: "update",
+      linesAdded: 2,
+      linesRemoved: 0,
+      structuredPatch: [{ lines: ["+first", "+second"] }],
+    });
+
+    assert.strictEqual(host.firstElementChild, root);
+    assert.ok(root.textContent.includes("src/two.ts"));
+    assert.ok(root.textContent.includes("+2"));
+    view.dispose();
+    assert.strictEqual(host.childElementCount, 0);
+  });
+
+  it("EditSummaryView preserves its root and disclosure state across updates", () => {
+    const host = doc.createElement("div");
+    const firstBlocks = [{ type: "tool", seq: 1, metadata: { diff: {
+      filePath: "src/one.ts", type: "update", linesAdded: 1, linesRemoved: 0, structuredPatch: [],
+    } } }];
+    const view = new win.App.ChatViews.EditSummaryView(firstBlocks);
+    const root = view.mount(host);
+    const firstRow = root.querySelector('[data-diff-file-path="src/one.ts"]');
+    root.querySelector("[data-edit-summary-toggle]").click();
+    assert.strictEqual(root.querySelector("[data-edit-summary-toggle]").getAttribute("aria-expanded"), "false");
+
+    view.update([...firstBlocks, { type: "tool", seq: 2, metadata: { diff: {
+      filePath: "src/two.ts", type: "update", linesAdded: 2, linesRemoved: 1, structuredPatch: [],
+    } } }]);
+
+    assert.strictEqual(host.firstElementChild, root);
+    assert.strictEqual(root.querySelector('[data-diff-file-path="src/one.ts"]') === firstRow, true);
+    assert.strictEqual(root.querySelector("[data-edit-summary-toggle]").getAttribute("aria-expanded"), "false");
+    assert.strictEqual(root.querySelector("[data-edit-summary-files]").hidden, true);
+    assert.ok(root.textContent.includes("src/two.ts"));
+    view.dispose();
+    assert.strictEqual(host.childElementCount, 0);
+  });
+
+  it("SubagentBatchView preserves task disclosure state across updates", () => {
+    const host = doc.createElement("div");
+    const batch = {
+      batchId: "batch-1",
+      parentToolCallId: "delegate-1",
+      status: "running",
+      events: [],
+      tasks: [{ taskId: "task-1", status: "running", prompt: "Inspect", findings: [], evidence: [], events: [] }],
+    };
+    const view = new win.App.ChatViews.SubagentBatchView(batch);
+    const root = view.mount(host);
+    const task = root.querySelector('[data-subagent-task-id="task-1"]');
+    task.open = false;
+
+    view.update({
+      ...batch,
+      status: "completed",
+      tasks: [{ ...batch.tasks[0], status: "completed", summary: "Finished" }],
+    });
+
+    assert.strictEqual(host.firstElementChild, root);
+    assert.strictEqual(root.querySelector('[data-subagent-task-id="task-1"]').open, false);
+    assert.ok(root.textContent.includes("Finished"));
+    view.dispose();
+    assert.strictEqual(host.childElementCount, 0);
+  });
+
+  it("ChatErrorView keeps action ownership local and releases it on dispose", () => {
+    const host = doc.createElement("div");
+    const calls = [];
+    const view = new win.App.ChatViews.ChatErrorView({ title: "Failed", message: "Try again" }, {
+      retry: () => calls.push("retry"),
+      copy: () => calls.push("copy"),
+      refresh: () => calls.push("refresh"),
+      settings: () => calls.push("settings"),
+    });
+    const root = view.mount(host);
+
+    for (const action of ["retry", "copy", "refresh", "settings"]) {
+      root.querySelector(`[data-chat-error-action="${action}"]`).click();
+    }
+    assert.deepStrictEqual(calls, ["retry", "copy", "refresh", "settings"]);
+
+    view.update({ title: "Still failed", message: "Updated" });
+    assert.strictEqual(host.firstElementChild, root);
+    assert.ok(root.textContent.includes("Updated"));
+    view.dispose();
+    assert.strictEqual(host.childElementCount, 0);
+  });
+});
 
 describe("msgs() 渲染", () => {
   it("空消息返回欢迎页", () => {
@@ -930,6 +1033,43 @@ describe("msgs() 渲染", () => {
 
     assert.ok(html.includes("subagent-batch"));
     assert.ok(html.includes("Legacy replay"));
+  });
+
+  it("subagent event updates reuse the mounted batch and task nodes", () => {
+    const queued = {
+      type: "subagent_event", protocolVersion: 1, parentToolCallId: "delegate-live",
+      batchId: "batch-live", taskId: "task-live", seq: 1, kind: "task_queued",
+      status: "queued", timestamp: "2026-08-13T00:00:00.000Z",
+      payload: { profile: "reviewer", prompt: "Review live" },
+    };
+    state.M = [{
+      role: "assistant",
+      streaming: true,
+      blocks: [{ type: "tool", name: "delegate_tasks", toolCallId: "delegate-live", status: "running", blockId: "delegate-block", seq: 1 }],
+      subagentEvents: [queued],
+      subagentBatches: globalThis.reduceFrontendSubagentEvents([queued]),
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    const batchBefore = panel.querySelector('[data-subagent-batch-id="batch-live"]');
+    const taskBefore = panel.querySelector('[data-subagent-task-id="task-live"]');
+    taskBefore.open = false;
+
+    const completed = {
+      ...queued,
+      seq: 2,
+      kind: "task_completed",
+      status: "completed",
+      timestamp: "2026-08-13T00:00:01.000Z",
+      payload: { result: { summary: "Review complete", findings: [], evidence: [] } },
+    };
+    const updated = win.App.Chat.updateSubagentEvent(completed);
+
+    assert.strictEqual(updated, true);
+    assert.strictEqual(panel.querySelector('[data-subagent-batch-id="batch-live"]') === batchBefore, true);
+    assert.strictEqual(panel.querySelector('[data-subagent-task-id="task-live"]') === taskBefore, true);
+    assert.strictEqual(taskBefore.open, false);
+    assert.ok(taskBefore.textContent.includes("Review complete"));
   });
 
   it("blocks 中 text block 渲染在事件流内", () => {

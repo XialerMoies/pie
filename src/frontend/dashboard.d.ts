@@ -399,6 +399,34 @@ interface AppFileDiff {
   countContentLines(content: string): number;
   render(diff: FileDiffMetadata, options?: FileDiffRenderOptions): string;
 }
+interface ChatComponentView<T> {
+  mount(container: HTMLElement): HTMLElement;
+  update(data: T): void;
+  dispose(): void;
+}
+interface SubagentDelegationData {
+  input: unknown;
+  output?: unknown;
+  error?: unknown;
+  status?: string;
+  toolCallId?: string;
+  batches?: readonly FrontendSubagentBatch[];
+}
+interface AppChatViews {
+  configure(dependencies: { renderMarkdown?: (text: string) => string }): void;
+  FileDiffView: new (diff: FileDiffMetadata, options?: FileDiffRenderOptions) => ChatComponentView<FileDiffMetadata>;
+  EditSummaryView: new (blocks: any[], expanded?: boolean) => ChatComponentView<any[]>;
+  SubagentTaskView: new (task: FrontendSubagentTask, index?: number) => ChatComponentView<FrontendSubagentTask>;
+  SubagentBatchView: new (batch: FrontendSubagentBatch) => ChatComponentView<FrontendSubagentBatch>;
+  ChatErrorView: new (error: ChatErrorState, actions?: Record<string, () => void | Promise<void>>) => ChatComponentView<ChatErrorState>;
+  renderEditSummary(blocks: any[], expanded?: boolean): string;
+  refreshEditSummary(flow: HTMLElement, blocks: any[]): void;
+  renderSubagentBatches(batches: readonly FrontendSubagentBatch[] | undefined, toolCallId?: string): string;
+  refreshSubagentBatches(root: HTMLElement, batches: readonly FrontendSubagentBatch[] | undefined, toolCallId?: string): boolean;
+  renderSubagentDelegation(data: SubagentDelegationData): string;
+  refreshSubagentDelegation(root: HTMLElement, data: SubagentDelegationData): boolean;
+  renderErrorCard(error: ChatErrorState): string;
+}
 type McpConnectionState = 'connected' | 'connecting' | 'disconnected' | 'error';
 interface AppMcpState {
   normalize(value: unknown): McpConnectionState;
@@ -456,6 +484,7 @@ interface AppNamespace {
   Settings: AppSettings;
   Git: AppGit;
   FileDiff: AppFileDiff;
+  ChatViews: AppChatViews;
   McpState: AppMcpState;
   Tabs: AppTabs;
 }

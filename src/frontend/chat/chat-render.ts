@@ -63,147 +63,18 @@ function shortText(value: unknown, max = 1200): string {
   return text.length > max ? text.slice(0, max) + '\n... truncated' : text;
 }
 
-function diffForBlock(block: any, blocks: any[]): any | null {
-  if (block.type === 'tool') return block.metadata?.diff || null;
-  if (block.type === 'tool_use') {
-    const result = blocks.find(item => item.type === 'tool_result' && item.toolUseId && item.toolUseId === block.toolCallId);
-    return result?.metadata?.diff || block.metadata?.diff || null;
-  }
-  if (block.type === 'tool_result') {
-    const toolUse = blocks.find(item => item.type === 'tool_use' && item.toolCallId && item.toolCallId === block.toolUseId);
-    return toolUse ? null : block.metadata?.diff || null;
-  }
-  return null;
-}
-
-function collectEditedFiles(blocks: any[]): Array<{ filePath: string; linesAdded: number; linesRemoved: number }> {
-  const files = new Map<string, { filePath: string; linesAdded: number; linesRemoved: number }>();
-  for (const block of [...blocks].sort((a: any, b: any) => a.seq - b.seq)) {
-    const diff = diffForBlock(block, blocks);
-    if (!diff || typeof diff.filePath !== 'string' || !diff.filePath.trim()) continue;
-    const filePath = diff.filePath.trim();
-    const key = normalizeDiffPath(filePath);
-    const added = Number.isFinite(Number(diff.linesAdded))
-      ? Number(diff.linesAdded)
-      : (diff.type === 'create' ? App.FileDiff.countContentLines(String(diff.content || '')) : 0);
-    const removed = Number.isFinite(Number(diff.linesRemoved)) ? Number(diff.linesRemoved) : 0;
-    const current = files.get(key);
-    if (current) {
-      current.linesAdded += added;
-      current.linesRemoved += removed;
-    } else {
-      files.set(key, { filePath, linesAdded: added, linesRemoved: removed });
-    }
-  }
-  return [...files.values()];
-}
-
 function renderEditSummary(blocks: any[], expanded = true): string {
-  const files = collectEditedFiles(blocks);
-  if (files.length === 0) return '';
-  const added = files.reduce((total, file) => total + file.linesAdded, 0);
-  const removed = files.reduce((total, file) => total + file.linesRemoved, 0);
-  const rows = files.map(file => `<button type="button" class="trace-edit-file" data-diff-file-path="${E(file.filePath)}" title="打开文件"><span class="trace-edit-file-path">${E(file.filePath)}</span><span class="trace-edit-file-stat"><span class="add">+${file.linesAdded}</span> <span class="del">-${file.linesRemoved}</span></span></button>`).join('');
-  const collapseIcon = typeof S === 'function' ? S(expanded ? 'ich-down' : 'ich-right', 16) : '';
-  return `<section class="trace-edit-summary" data-edit-summary><div class="trace-edit-summary-head"><div class="trace-edit-summary-title"><span class="trace-edit-summary-icon">${typeof S === 'function' ? S('iedit', 22) : ''}</span><div><div class="trace-edit-summary-label">已编辑 ${files.length} 个文件</div><div class="trace-edit-summary-total"><span class="add">+${added}</span> <span class="del">-${removed}</span></div></div></div><button type="button" class="trace-edit-toggle" data-edit-summary-toggle aria-expanded="${expanded}" aria-label="${expanded ? '收起' : '展开'}已编辑文件" title="${expanded ? '收起' : '展开'}">${collapseIcon}</button></div><div class="trace-edit-files" data-edit-summary-files${expanded ? '' : ' hidden'}>${rows}</div></section>`;
+  return App.ChatViews.EditSummaryView.render(blocks, expanded);
 }
 
 function refreshEditSummary(flow: HTMLElement, blocks: any[]): void {
-  const trace = flow.querySelector<HTMLElement>('.trace.block-trace');
-  if (!trace) return;
-  const current = trace.querySelector<HTMLElement>('[data-edit-summary]');
-  const expanded = current?.querySelector<HTMLElement>('[data-edit-summary-toggle]')?.getAttribute('aria-expanded') !== 'false';
-  const html = renderEditSummary(blocks, expanded);
-  if (!html) { current?.remove(); return; }
-  if (current) current.outerHTML = html;
-  else trace.insertAdjacentHTML('beforeend', html);
+  App.ChatViews.refreshEditSummary(flow, blocks);
 }
 
 function firstSummaryLine(value: string, max = 220): string {
   const line = value.split(/\r?\n/).find(item => item.trim())?.trim() || '';
   return line.length > max ? line.slice(0, max) + '...' : line;
 }
-
-function normalizeDiffPath(value: string): string {
-  return value.replaceAll('\\', '/').replace(/\/+/g, '/').replace(/\/\.\//g, '/').replace(/\/$/, '').toLowerCase();
-}
-
-function diffRelativePath(workspace: string, filePath: string): string | null {
-  const root = normalizeDiffPath(workspace);
-  let target = filePath.trim().replaceAll('\\', '/').replace(/^\.\//, '');
-  if (!root || !target) return null;
-  const normalizedTarget = normalizeDiffPath(target);
-  const isAbsolute = /^[a-z]:\//i.test(target) || target.startsWith('/') || target.startsWith('//');
-  if (isAbsolute) {
-    if (normalizedTarget === root) return null;
-    if (!normalizedTarget.startsWith(root + '/')) return null;
-    target = target.slice(workspace.replaceAll('\\', '/').replace(/\/$/, '').length + 1);
-  }
-  target = target.replace(/^\/+/, '').replace(/\/+/g, '/');
-  if (!target || target === '.' || target.split('/').some(part => part === '..')) return null;
-  return target;
-}
-
-async function openDiffFile(filePath: string): Promise<void> {
-  const workspace = (globalThis as any).ExplorerService?.getWorkspacePath?.()
-    || (globalThis as any).App?.State?.getWorkspacePath?.()
-    || '';
-  const relativePath = diffRelativePath(String(workspace), filePath);
-  if (!relativePath) {
-    (window as any).toast?.('文件不在当前工作区内', 'error');
-    return;
-  }
-  const tabs = (window as any).App?.Tabs;
-  const existing = tabs?.getTab?.(relativePath) || tabs?.getTab?.(filePath);
-  if (existing) {
-    tabs.activate?.(existing.id);
-    return;
-  }
-  try {
-    const response = await fetch(`/api/file/read?root=${encodeURIComponent(String(workspace))}&path=${encodeURIComponent(relativePath)}`);
-    const data = await response.json();
-    if (!response.ok) throw new Error(data?.error || '文件读取失败');
-    const lang = relativePath.split('.').pop() || '';
-    (window as any).openFileTab?.(relativePath, String(data?.content || ''), lang);
-  } catch (error) {
-    (window as any).toast?.(error instanceof Error ? error.message : '文件读取失败', 'error');
-  }
-}
-
-let diffFileLinksBound = false;
-
-function bindDiffFileLinks(): void {
-  const guardedDocument = document as Document;
-  if (diffFileLinksBound) return;
-  diffFileLinksBound = true;
-  document.addEventListener('click', (event: MouseEvent) => {
-    const eventTarget = event.target as Element | null;
-    const toggle = typeof eventTarget?.closest === 'function'
-      ? eventTarget.closest<HTMLElement>('[data-edit-summary-toggle]')
-      : null;
-    if (toggle) {
-      const summary = toggle.closest<HTMLElement>('[data-edit-summary]');
-      const files = summary?.querySelector<HTMLElement>('[data-edit-summary-files]');
-      if (!files) return;
-      const expanded = toggle.getAttribute('aria-expanded') === 'true';
-      const nextExpanded = !expanded;
-      files.hidden = !nextExpanded;
-      toggle.setAttribute('aria-expanded', String(nextExpanded));
-      toggle.setAttribute('aria-label', nextExpanded ? '收起已编辑文件' : '展开已编辑文件');
-      toggle.title = nextExpanded ? '收起' : '展开';
-      toggle.innerHTML = typeof S === 'function' ? S(nextExpanded ? 'ich-down' : 'ich-right', 16) : '';
-      return;
-    }
-    const target = typeof eventTarget?.closest === 'function'
-      ? eventTarget.closest<HTMLElement>('[data-diff-file-path]')
-      : null;
-    if (!target) return;
-    event.preventDefault();
-    void openDiffFile(target.dataset.diffFilePath || '');
-  });
-}
-
-bindDiffFileLinks();
 
 function toolTitle(name: string): string {
   const lower = String(name || 'tool').toLowerCase().replace(/[-_]+/g, '-');
@@ -266,43 +137,8 @@ function traceSummaryText(t: any, input: string, output: string): string {
 }
 
 function renderErrorCard(error: ChatErrorState): string {
-  const nextSteps = Array.isArray(error.nextSteps) ? error.nextSteps.filter(Boolean) : [];
-  const raw = error.raw ? `<details class="msg-error-raw"><summary>错误详情</summary><pre>${E(error.raw)}</pre></details>` : '';
-  const reason = error.reason ? `<div class="msg-error-block"><div class="msg-error-label">可能原因</div><div class="msg-error-text">${E(error.reason)}</div></div>` : '';
-  const steps = nextSteps.length > 0
-    ? `<div class="msg-error-block"><div class="msg-error-label">下一步操作</div><ul class="msg-error-steps">${nextSteps.map(step => `<li>${E(step)}</li>`).join('')}</ul></div>`
-    : '';
-  return `<details class="msg-error"><summary><span class="msg-error-title">${E(error.title || '发生了错误')}</span><span class="msg-error-summary">${E(error.message || '点击查看详情')}</span></summary><div class="msg-error-body"><div class="msg-error-message">${E(error.message || '发生了错误')}</div>${reason}${steps}${raw}<div class="msg-error-actions"><button type="button" class="msg-error-btn" data-chat-error-action="retry">重新发送</button><button type="button" class="msg-error-btn" data-chat-error-action="copy">复制错误</button><button type="button" class="msg-error-btn" data-chat-error-action="refresh">刷新工作区</button><button type="button" class="msg-error-btn" data-chat-error-action="settings">打开设置</button></div></div></details>`;
+  return App.ChatViews.ChatErrorView.render(error);
 }
-
-function bindChatErrorActions(): void {
-  const guardedDocument = document as Document & { __chatErrorActionsBound?: boolean };
-  if (guardedDocument.__chatErrorActionsBound) return;
-  guardedDocument.__chatErrorActionsBound = true;
-  document.addEventListener('click', (event: MouseEvent) => {
-    const eventTarget = event.target as Element | null;
-    const target = typeof eventTarget?.closest === 'function'
-      ? eventTarget.closest<HTMLElement>('[data-chat-error-action]')
-      : null;
-    if (!target) return;
-    const appNamespace = (window as any).App;
-    switch (target.dataset.chatErrorAction) {
-      case 'retry':
-        appNamespace?.Chat?.retryLastTurn?.();
-        break;
-      case 'copy':
-        void appNamespace?.Chat?.copyLastError?.();
-        break;
-      case 'refresh':
-        appNamespace?.Chat?.refreshWorkspaceState?.();
-        break;
-      case 'settings':
-        appNamespace?.Settings?.openSettingsModal?.();
-        break;
-    }
-  });
-}
-bindChatErrorActions();
 
 function hasTraceValue(value: unknown): boolean {
   if (value === undefined || value === null) return false;
@@ -362,117 +198,36 @@ function blockId(b: any): string {
   return String(b.blockId || `${b.type || 'block'}-${b.seq || 0}`);
 }
 
-function subagentStatusText(status: string): string {
-  const labels: Record<string, string> = {
-    queued: '排队中', running: '运行中', completed: '已完成', partial: '部分完成',
-    failed: '失败', aborted: '已中止', timed_out: '已超时', limit_reached: '达到限制', interrupted: '已中断',
-  };
-  return labels[status] || status;
+App.ChatViews?.configure?.({ renderMarkdown: mdRender });
+
+function renderDelegateTasksBlock(options: SubagentDelegationData): string {
+  return App.ChatViews.renderSubagentDelegation(options);
 }
 
-interface DelegateTaskInput {
-  profile?: string;
-  agentId?: string;
-  prompt?: string;
-}
-
-function delegateTaskInput(input: unknown): { tasks: DelegateTaskInput[]; maxConcurrent: number } {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return { tasks: [], maxConcurrent: 2 };
-  const value = input as Record<string, unknown>;
-  const tasks = Array.isArray(value.tasks) ? value.tasks.flatMap((item) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
-    const task = item as Record<string, unknown>;
-    return [{
-      profile: typeof task.profile === 'string' ? task.profile : undefined,
-      agentId: typeof task.agentId === 'string' ? task.agentId : undefined,
-      prompt: typeof task.prompt === 'string' ? task.prompt : undefined,
-    }];
-  }) : [];
-  const requestedConcurrency = Number(value.maxConcurrent);
-  const maxConcurrent = Number.isFinite(requestedConcurrency)
-    ? Math.min(30, Math.max(1, Math.trunc(requestedConcurrency)))
-    : 2;
-  return { tasks, maxConcurrent };
-}
-
-function subagentProfileText(profile: string | undefined): string {
-  const labels: Record<string, string> = {
-    explorer: '探索', reviewer: '审查', planner: '规划', general: '通用',
-  };
-  return labels[profile || ''] || profile || '子 Agent';
-}
-
-function delegateStatus(status: string | undefined, batches: readonly FrontendSubagentBatch[]): string {
-  if (batches.length > 0) return batches[batches.length - 1].status;
-  if (status === 'success') return 'completed';
-  if (status === 'error') return 'failed';
-  return status === 'queued' ? 'queued' : 'running';
-}
-
-function delegateTraceStatus(status: string): 'running' | 'success' | 'error' {
-  if (status === 'running' || status === 'queued') return 'running';
-  if (status === 'completed' || status === 'partial') return 'success';
-  return 'error';
-}
-
-function renderDelegateRawDetails(input: unknown, output: unknown, error: unknown): string {
-  const inputText = hasTraceValue(input) ? shortText(input, 4000) : '';
-  const result = error || output;
-  const outputText = hasTraceValue(result) ? shortText(result, 4000) : '';
-  if (!inputText && !outputText) return '';
-  const sections = [
-    inputText ? `<div class="subagent-raw-section"><div class="subagent-raw-label">输入</div><pre>${E(inputText)}</pre></div>` : '',
-    outputText ? `<div class="subagent-raw-section"><div class="subagent-raw-label">${error ? '错误' : '结果'}</div><pre>${E(outputText)}</pre></div>` : '',
-  ].join('');
-  return `<details class="subagent-raw"><summary>原始详情</summary><div class="subagent-raw-body">${sections}</div></details>`;
-}
-
-function renderDelegateTasksBlock(options: {
-  input: unknown;
-  output?: unknown;
-  error?: unknown;
-  status?: string;
-  toolCallId?: string;
-  batches?: readonly FrontendSubagentBatch[];
-}): string {
-  const owned = selectSubagentBatchesForTool(options.batches, options.toolCallId);
-  const latestBatch = owned[owned.length - 1];
-  const input = delegateTaskInput(options.input);
-  const eventTasks = latestBatch?.tasks ?? [];
-  const taskCount = latestBatch ? eventTasks.length : input.tasks.length;
-  const status = delegateStatus(options.status, owned);
-  const raw = renderDelegateRawDetails(options.input, options.output, options.error);
-  const errorText = String(options.error || options.output || '');
-  const unconfirmed = options.status === 'error' && /not confirmed|requires explicit user confirmation|delegation_not_confirmed|用户拒绝|未确认/i.test(errorText);
-
-  if (unconfirmed) {
-    return `<section class="trace-node trace-tool trace-error subagent-delegation subagent-delegation-warning"><div class="trace-dot"></div><div class="subagent-delegation-panel"><div class="subagent-warning-row"><span class="subagent-warning-title">子任务未启动</span><span class="subagent-warning-reason">未确认</span></div>${raw}</div></section>`;
+function subagentDelegationData(
+  block: any,
+  blocks: any[],
+  batches?: readonly FrontendSubagentBatch[],
+): SubagentDelegationData {
+  if (block.type === 'tool_use') {
+    const result = blocks.find(item => item.type === 'tool_result' && item.toolUseId === block.toolCallId);
+    return {
+      input: block.input,
+      output: result?.isError ? undefined : (result?.output || block.output),
+      error: result?.isError ? result?.output : undefined,
+      status: result ? (result.isError ? 'error' : 'success') : (block.status || 'running'),
+      toolCallId: block.toolCallId,
+      batches,
+    };
   }
-
-  const tasks = Array.from({ length: taskCount }, (_, index) => {
-    const spec = input.tasks[index];
-    const task = eventTasks[index];
-    const taskStatus = task?.status
-      || (status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'queued');
-    const profile = task?.profile || spec?.profile;
-    const agentLabel = task?.agentName || spec?.agentId;
-    const title = task?.prompt || spec?.prompt || `${profile || 'agent'} ${index + 1}`;
-    const findings = Array.isArray(task?.findings) ? task.findings : [];
-    const evidence = Array.isArray(task?.evidence) ? task.evidence : [];
-    const details = [
-      task?.summary ? `<div class="subagent-task-summary">${mdRender(task.summary)}</div>` : '',
-      findings.length ? `<ul class="subagent-task-list">${findings.map((item) => `<li>${E(item)}</li>`).join('')}</ul>` : '',
-      evidence.length ? `<div class="subagent-evidence">${evidence.map((item) => `<div>${E(item)}</div>`).join('')}</div>` : '',
-    ].join('');
-    const row = `<span class="subagent-status-dot"></span><span class="subagent-task-profile" title="${E(agentLabel || profile || 'agent')}">${E(agentLabel || subagentProfileText(profile))}</span><span class="subagent-task-title">${E(title)}</span><span class="subagent-task-status">${E(subagentStatusText(taskStatus))}</span><span class="subagent-task-disclosure${details ? '' : ' subagent-task-disclosure-placeholder'}" aria-hidden="true"></span>`;
-    return details
-      ? `<details class="subagent-task subagent-${E(taskStatus)}" data-subagent-task-index="${index}"><summary>${row}</summary><div class="subagent-task-body">${details}</div></details>`
-      : `<div class="subagent-task subagent-${E(taskStatus)}" data-subagent-task-index="${index}"><div class="subagent-task-row">${row}</div></div>`;
-  }).join('');
-  const maxConcurrent = latestBatch?.maxConcurrent ?? input.maxConcurrent;
-  const summary = `${taskCount} 个子任务 · 并发 ${maxConcurrent} · ${subagentStatusText(status)}`;
-  const batchId = latestBatch?.batchId;
-  return `<section class="trace-node trace-tool trace-${delegateTraceStatus(status)} subagent-delegation subagent-${E(status)}"${batchId ? ` data-subagent-batch-id="${E(batchId)}"` : ''}><div class="trace-dot"></div><div class="subagent-delegation-panel"><div class="subagent-delegation-head"><span class="subagent-delegation-title">委派子任务</span><span class="subagent-delegation-summary">${E(summary)}</span></div><div class="subagent-tasks">${tasks}</div>${raw}</div></section>`;
+  return {
+    input: block.input,
+    output: block.error ? undefined : block.output,
+    error: block.error,
+    status: block.status || 'running',
+    toolCallId: block.toolCallId,
+    batches,
+  };
 }
 
 function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean, subagentBatches?: readonly FrontendSubagentBatch[]): string {
@@ -486,14 +241,7 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean, subagent
   }
   if (b.type === 'tool') {
     if (b.name === 'delegate_tasks') {
-      return renderDelegateTasksBlock({
-        input: b.input,
-        output: b.error ? undefined : b.output,
-        error: b.error,
-        status: b.status || 'running',
-        toolCallId: b.toolCallId,
-        batches: subagentBatches,
-      });
+      return renderDelegateTasksBlock(subagentDelegationData(b, blocks, subagentBatches));
     }
     // B-5：tool 合并 block——直接渲染（含 input/output/error/status）
     return renderTraceItem({
@@ -511,14 +259,7 @@ function renderEventBlock(b: any, blocks: any[], defaultOpen?: boolean, subagent
     const result = blocks.find(item => item.type === 'tool_result' && item.toolUseId && item.toolUseId === b.toolCallId);
     const status = result ? (result.isError ? 'error' : 'success') : (b.status || 'running');
     if (b.name === 'delegate_tasks') {
-      return renderDelegateTasksBlock({
-        input: b.input,
-        output: result?.isError ? undefined : (result?.output || b.output),
-        error: result?.isError ? result?.output : undefined,
-        status,
-        toolCallId: b.toolCallId,
-        batches: subagentBatches,
-      });
+      return renderDelegateTasksBlock(subagentDelegationData(b, blocks, subagentBatches));
     }
     return renderTraceItem({
       type: 'tool',
@@ -703,6 +444,11 @@ function updateLastBlock(block: any): boolean {
 
   const target = Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
     .find(element => element.dataset.blockId === blockId(block));
+  if (target && block.name === 'delegate_tasks') {
+    App.ChatViews.refreshSubagentDelegation(target, subagentDelegationData(block, message.blocks, message.subagentBatches));
+    refreshEditSummary(flow, message.blocks);
+    return true;
+  }
   if (target && block.type === 'text') {
     const textBody = target.querySelector('.trace-text-body') as HTMLElement | null;
       if (textBody) textBody.innerHTML = mdRender(block.text || '');
@@ -777,7 +523,11 @@ function finalizeLastMessage(): boolean {
         if (textElement) textElement.innerHTML = mdRender(block.text || '');
         else fullySynced = false;
       } else if (target && block.type === 'tool_use') {
-        replaceBlockContents(target, renderEventBlock(block, message.blocks, undefined, message.subagentBatches));
+        if (block.name === 'delegate_tasks') {
+          App.ChatViews.refreshSubagentDelegation(target, subagentDelegationData(block, message.blocks, message.subagentBatches));
+        } else {
+          replaceBlockContents(target, renderEventBlock(block, message.blocks, undefined, message.subagentBatches));
+        }
       } else if (block.type === 'tool_result') {
         const toolUse = message.blocks.find((item: any) => item.type === 'tool_use' && item.toolCallId && item.toolCallId === block.toolUseId);
         const toolTarget = toolUse ? Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
@@ -826,7 +576,19 @@ function updateSubagentEvent(event: FrontendSubagentEvent): boolean {
   const block = message.blocks?.find((candidate) =>
     candidate.name === 'delegate_tasks' && candidate.toolCallId === event.parentToolCallId
   );
-  return block && messageIndex === messages.length - 1 ? updateLastBlock(block) : false;
+  if (!block || messageIndex !== messages.length - 1) return false;
+  const messagesElement = $('ms');
+  const messageElements = messagesElement?.querySelectorAll('.m');
+  const lastMessageElement = messageElements?.[messageElements.length - 1] as HTMLElement | undefined;
+  const blockRoot = lastMessageElement
+    ? Array.from(lastMessageElement.querySelectorAll<HTMLElement>('[data-block-id]'))
+      .find(element => element.dataset.blockId === blockId(block))
+    : null;
+  if (blockRoot) {
+    App.ChatViews.refreshSubagentDelegation(blockRoot, subagentDelegationData(block, message.blocks || [], message.subagentBatches));
+    return true;
+  }
+  return updateLastBlock(block);
 }
 
 function appendDelta(text: string): void {

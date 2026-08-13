@@ -53,9 +53,58 @@ function renderFileDiff(diff: FileDiffMetadata, options: FileDiffRenderOptions =
   return `<div class="trace-diff"><div class="trace-diff-head"><button type="button" class="trace-diff-path" data-diff-file-path="${E(diff.filePath)}"${action} title="打开文件">${E(diff.filePath)}</button><span class="trace-diff-stat add">+${added}</span><span class="trace-diff-stat del">-${removed}</span>${toggle}</div><div class="trace-diff-code"${expanded ? "" : " hidden"}>${body}${more}</div></div>`;
 }
 
+class FileDiffView {
+  private root: HTMLElement | null = null;
+  private diff: FileDiffMetadata;
+  private options: FileDiffRenderOptions;
+
+  constructor(diff: FileDiffMetadata, options: FileDiffRenderOptions = {}) {
+    this.diff = diff;
+    this.options = options;
+  }
+
+  static render(diff: FileDiffMetadata, options: FileDiffRenderOptions = {}): string {
+    return renderFileDiff(diff, options);
+  }
+
+  mount(container: HTMLElement): HTMLElement {
+    if (this.root) return this.root;
+    this.root = this.createRoot();
+    container.appendChild(this.root);
+    return this.root;
+  }
+
+  update(diff: FileDiffMetadata, options: FileDiffRenderOptions = this.options): void {
+    this.diff = diff;
+    const expanded = this.root?.querySelector<HTMLElement>('.trace-diff-code')?.hidden === false;
+    this.options = options.collapsible && options.expanded === undefined && expanded !== undefined
+      ? { ...options, expanded }
+      : options;
+    if (!this.root) return;
+    const next = this.createRoot();
+    this.root.className = next.className;
+    this.root.replaceChildren(...Array.from(next.childNodes));
+  }
+
+  dispose(): void {
+    this.root?.remove();
+    this.root = null;
+  }
+
+  private createRoot(): HTMLElement {
+    const template = document.createElement('template');
+    template.innerHTML = renderFileDiff(this.diff, this.options).trim();
+    const root = template.content.firstElementChild as HTMLElement | null;
+    if (!root) throw new Error('FileDiffView requires valid diff metadata');
+    return root;
+  }
+}
+
 function fileDiffAddAppBindings(): void {
   const app = (window as any).App;
-  if (app) app.FileDiff = { countContentLines: fileDiffLineCount, render: renderFileDiff };
+  if (!app) return;
+  app.FileDiff = { countContentLines: fileDiffLineCount, render: renderFileDiff };
+  app.ChatViews = { ...(app.ChatViews || {}), FileDiffView };
 }
 
 fileDiffAddAppBindings();
