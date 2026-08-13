@@ -39,6 +39,8 @@ export interface RuntimeConfig {
   applyPermissionSuggestions?: ToolContext["applyPermissionSuggestions"]
   desktopApiToken?: string
   validateSubagentModel?: ToolContext["validateSubagentModel"]
+  getSubagentDefinitions?: ToolContext["getSubagentDefinitions"]
+  getSubagentLimits?: ToolContext["getSubagentLimits"]
   delegateTasks?: ToolContext["delegateTasks"]
 }
 
@@ -57,12 +59,14 @@ type RuntimeToolExtraContext = Pick<
   | "authorizeTool"
   | "desktopApiToken"
   | "validateSubagentModel"
+  | "getSubagentDefinitions"
+  | "getSubagentLimits"
   | "delegateTasks"
 >
 
 export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraContext | undefined {
   const permissionState = config.sessionPermissionState
-  if (!config.permissionMode && !config.getPermissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken && !config.validateSubagentModel && !config.delegateTasks) return undefined
+  if (!config.permissionMode && !config.getPermissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken && !config.validateSubagentModel && !config.getSubagentDefinitions && !config.getSubagentLimits && !config.delegateTasks) return undefined
   return {
     permissionMode: config.permissionMode,
     getPermissionMode: config.getPermissionMode,
@@ -81,6 +85,8 @@ export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraCo
     authorizeTool: config.authorizeTool,
     desktopApiToken: config.desktopApiToken,
     validateSubagentModel: config.validateSubagentModel,
+    getSubagentDefinitions: config.getSubagentDefinitions,
+    getSubagentLimits: config.getSubagentLimits,
     delegateTasks: config.delegateTasks,
   }
 }

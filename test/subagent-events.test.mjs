@@ -272,6 +272,25 @@ describe("subagent event replay reducer", () => {
     });
   });
 
+  it("preserves configured agent identity in replay task snapshots", () => {
+    const replay = reduceSubagentEventReplay([
+      event({
+        seq: 1,
+        kind: "task_queued",
+        status: "queued",
+        payload: {
+          profile: "reviewer",
+          prompt: "Review security boundaries",
+          agentId: "security-reviewer",
+          agentName: "Security Reviewer",
+        },
+      }),
+    ]);
+
+    assert.equal(replay.batches[0].tasks[0].agentId, "security-reviewer");
+    assert.equal(replay.batches[0].tasks[0].agentName, "Security Reviewer");
+  });
+
   it("marks an unfinished restored batch and its inactive tasks as interrupted", () => {
     const replay = reduceSubagentEventReplay([
       event({ taskId: null, seq: 1, kind: "batch_started", status: "running" }),

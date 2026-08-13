@@ -25,6 +25,8 @@ export const SUBAGENT_PROFILE_PROMPTS: Readonly<Record<SubagentProfile, string>>
 export interface EmbeddedSubagentTask {
   profile?: SubagentProfile
   prompt: string
+  agentId?: string
+  agent?: import("../agent/types.js").SubagentDefinition
   focusPaths?: string[]
   deliverable?: string
 }
@@ -74,6 +76,7 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
       parentSystemPrompt,
       READ_ONLY_CONSTRAINTS,
       SUBAGENT_PROFILE_PROMPTS[profile],
+      input.task.agent?.prompt,
     ].filter(Boolean).join("\n\n")
 
     const settingsManager = SettingsManager.inMemory()
@@ -90,7 +93,9 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
     })
     await resourceLoader.reload()
 
-    const tools = input.tools.filter((name) => READ_ONLY_TOOL_SET.has(name))
+    const configuredTools = input.task.agent?.tools ?? input.tools
+    const inputToolSet = new Set(input.tools)
+    const tools = configuredTools.filter((name) => READ_ONLY_TOOL_SET.has(name) && inputToolSet.has(name))
     const customTools = tools
       .map((name) => {
         const tool = toolRegistry.get(name)

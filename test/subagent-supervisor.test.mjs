@@ -288,7 +288,7 @@ describe("SubagentSupervisor concurrency and identity", () => {
     ]);
   });
 
-  it("clamps maxConcurrent to the inclusive range 1..4", async () => {
+  it("clamps maxConcurrent to the inclusive range 1..30", async () => {
     const lower = makeHarness();
     const lowPrompts = ["low-a", "low-b", "low-c"];
     const lowBatch = lower.supervisor.startBatch({
@@ -304,16 +304,16 @@ describe("SubagentSupervisor concurrency and identity", () => {
     await Promise.all([lowCompletion, lowBatch.result]);
 
     const upper = makeHarness();
-    const highPrompts = ["high-a", "high-b", "high-c", "high-d", "high-e"];
+    const highPrompts = Array.from({ length: 31 }, (_, index) => `high-${index}`);
     const highBatch = upper.supervisor.startBatch({
       workspace: "/repo",
       maxConcurrent: 99,
       tasks: highPrompts.map((prompt) => task(prompt)),
     });
 
-    await waitFor(() => upper.factoryCalls.length === 4);
+    await waitFor(() => upper.factoryCalls.length === 30);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.strictEqual(upper.factoryCalls.length, 4, "values above 4 must run at most four tasks");
+    assert.strictEqual(upper.factoryCalls.length, 30, "values above 30 must run at most thirty tasks");
     const highCompletion = completeAllAsTheyStart(upper, highPrompts);
     await Promise.all([highCompletion, highBatch.result]);
   });

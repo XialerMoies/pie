@@ -62,7 +62,7 @@ describe("delegate_tasks input validation", () => {
     const schema = delegateTasksTool.parameters;
     assert.deepEqual(schema.required, ["tasks"]);
     assert.equal(schema.properties.tasks.minItems, 1);
-    assert.equal(schema.properties.tasks.maxItems, 4);
+    assert.equal(schema.properties.tasks.maxItems, 30);
     assert.deepEqual(schema.properties.tasks.items.properties.profile.enum, [
       "general",
       "explorer",
@@ -70,6 +70,7 @@ describe("delegate_tasks input validation", () => {
       "planner",
     ]);
     assert.deepEqual(schema.properties.tasks.items.required, ["profile", "prompt"]);
+    assert.ok(schema.properties.tasks.items.properties.agentId);
     assert.ok(schema.properties.defaultModel);
     assert.ok(schema.properties.timeoutSeconds);
     assert.ok(schema.properties.maxTurns);
@@ -82,8 +83,8 @@ describe("delegate_tasks input validation", () => {
   for (const [name, value, message] of [
     ["non-object input", null, "object"],
     ["missing tasks", {}, "tasks"],
-    ["empty tasks", { tasks: [] }, "1 to 4"],
-    ["more than four tasks", { tasks: Array.from({ length: 5 }, () => ({ profile: "general", prompt: "x" })) }, "1 to 4"],
+    ["empty tasks", { tasks: [] }, "1 to 30"],
+    ["more than thirty tasks", { tasks: Array.from({ length: 31 }, () => ({ profile: "general", prompt: "x" })) }, "1 to 30"],
     ["blank prompt", { tasks: [{ profile: "general", prompt: "   " }] }, "prompt"],
     ["unknown profile", { tasks: [{ profile: "writer", prompt: "x" }] }, "profile"],
     ["invalid model shape", { tasks: [{ profile: "general", prompt: "x", model: { provider: "openai" } }] }, "model"],
@@ -114,7 +115,7 @@ describe("delegate_tasks input validation", () => {
         { profile: "explorer", prompt: "inspect", focusPaths: ["src", "test"], deliverable: "notes", model: MODEL_A },
         { profile: "reviewer", prompt: "review", model: MODEL_B },
       ],
-      maxConcurrent: 4,
+      maxConcurrent: 30,
       timeoutSeconds: 30,
       maxTurns: 100,
       maxToolCalls: 1,
@@ -133,6 +134,73 @@ describe("delegate_tasks input validation", () => {
       maxTurns: 20,
       maxToolCalls: 50,
     });
+  });
+
+  it("resolves a configured agent before confirmation while preserving an explicit task model", async () => {
+    let delegatedRequest;
+    await delegateTasksTool.execute({
+      tasks: [
+        { profile: "reviewer", prompt: "inspect", agentId: " security-reviewer " },
+        { profile: "explorer", prompt: "trace", agentId: "security-reviewer", model: MODEL_B },
+      ],
+    }, hostContext({
+      getSubagentDefinitions: () => [{
+        id: "security-reviewer",
+        name: "Security reviewer",
+        description: "Review security boundaries",
+        prompt: "Prioritize authentication and validation.",
+        tools: ["search", "file_read"],
+        model: MODEL_A,
+      }],
+      delegateTasks: async (request) => {
+        delegatedRequest = request;
+        return batchResult({ status: "completed" });
+      },
+    }));
+
+    assert.equal(delegatedRequest.tasks[0].agent.id, "security-reviewer");
+    assert.deepStrictEqual(delegatedRequest.tasks[0].model, MODEL_A);
+    assert.deepStrictEqual(delegatedRequest.tasks[1].model, MODEL_B);
+  });
+
+  it("rejects an unknown configured agent before confirmation", async () => {
+    let confirmed = false;
+    const result = await delegateTasksTool.execute({
+      tasks: [{ profile: "general", prompt: "inspect", agentId: "missing" }],
+    }, hostContext({
+      getSubagentDefinitions: () => [],
+      confirmCommand: async () => { confirmed = true; return true; },
+    }));
+
+    assert.equal(diagnosticCode(result), "invalid_delegate_tasks_input");
+    assert.match(result.text, /configured agent.*missing/i);
+    assert.equal(confirmed, false);
+  });
+
+  it("applies the user task and concurrency ceilings before confirmation and execution", async () => {
+    let confirmationReason = "";
+    let delegatedRequest;
+    const tasks = Array.from({ length: 10 }, (_, index) => ({
+      profile: "general",
+      prompt: `task-${index + 1}`,
+    }));
+
+    await delegateTasksTool.execute({ tasks, maxConcurrent: 8 }, hostContext({
+      getSubagentLimits: () => ({ maxTasks: 6, maxConcurrent: 3 }),
+      confirmCommand: async (_command, reason) => {
+        confirmationReason = reason;
+        return true;
+      },
+      delegateTasks: async (request) => {
+        delegatedRequest = request;
+        return batchResult({ status: "completed" });
+      },
+    }));
+
+    assert.equal(delegatedRequest.tasks.length, 6);
+    assert.deepEqual(delegatedRequest.tasks.map((task) => task.prompt), tasks.slice(0, 6).map((task) => task.prompt));
+    assert.equal(delegatedRequest.maxConcurrent, 3);
+    assert.match(confirmationReason, /Delegate 6 tasks/);
   });
 
   it("rejects an unknown model through the host validator", async () => {
@@ -196,6 +264,22 @@ describe("delegate_tasks execution", () => {
     assert.equal(delegateTasksTool.isConcurrencySafe, false);
     assert.equal(delegateTasksTool.authorizationMode, "specialized");
     assert.equal(delegateTasksTool.resultFormat, "structured");
+  });
+
+  it("exposes configured Agents in the host tool description", () => {
+    const piTool = agentToolToPIToolDefinition(delegateTasksTool, "/repo", undefined, {
+      getSubagentDefinitions: () => [{
+        id: "security-reviewer",
+        name: "Security reviewer",
+        description: "Review authentication boundaries",
+        prompt: "Review security.",
+        tools: ["search"],
+      }],
+    });
+
+    assert.match(piTool.description, /security-reviewer/);
+    assert.match(piTool.description, /Security reviewer/);
+    assert.match(piTool.description, /Review authentication boundaries/);
   });
 
   it("confirms the whole batch once with task count and deduplicated models", async () => {

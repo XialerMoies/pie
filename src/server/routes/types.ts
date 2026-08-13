@@ -85,6 +85,7 @@ export interface ServerContext {
     PI_CONFIG_DIR: string;
     SESSIONS_DIR: string;
     SETTINGS_FILE: string;
+    SUBAGENTS_FILE?: string;
     DATA_ROOT_POINTER_FILE?: string;
     STARTUP?: StartupPathsSnapshot;
     FRONTEND_DIR: string;

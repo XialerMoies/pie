@@ -177,9 +177,21 @@ export interface SubagentDelegationModel {
 
 export type SubagentDelegationProfile = "general" | "explorer" | "reviewer" | "planner"
 
+export interface SubagentDefinition {
+  id: string
+  name: string
+  description: string
+  prompt: string
+  tools: string[]
+  model?: SubagentDelegationModel
+}
+
 export interface SubagentDelegationTask {
   profile: SubagentDelegationProfile
   prompt: string
+  agentId?: string
+  /** Host-resolved immutable snapshot. The model can only provide agentId. */
+  agent?: SubagentDefinition
   focusPaths?: string[]
   deliverable?: string
   model?: SubagentDelegationModel
@@ -191,6 +203,11 @@ export interface SubagentDelegationRequest {
   timeoutSeconds: number
   maxTurns: number
   maxToolCalls: number
+}
+
+export interface SubagentDelegationLimits {
+  maxTasks: number
+  maxConcurrent: number
 }
 
 export interface SubagentDelegationUsage {
@@ -234,6 +251,8 @@ export type SubagentModelValidator = (
   model: SubagentDelegationModel,
 ) => boolean | Promise<boolean>
 
+export type SubagentDefinitionProvider = () => SubagentDefinition[]
+
 export type SubagentDelegateExecutor = (
   request: SubagentDelegationRequest,
   signal?: AbortSignal,
@@ -276,6 +295,8 @@ export interface ToolContext {
   desktopApiToken?: string
   /** Host-only subagent capabilities; model tool arguments cannot provide these. */
   validateSubagentModel?: SubagentModelValidator
+  getSubagentDefinitions?: SubagentDefinitionProvider
+  getSubagentLimits?: () => SubagentDelegationLimits
   delegateTasks?: SubagentDelegateExecutor
 }
 
@@ -512,6 +533,8 @@ export interface ToolExecutionExtraContext {
   authorizeTool?: ToolContext["authorizeTool"]
   desktopApiToken?: ToolContext["desktopApiToken"]
   validateSubagentModel?: ToolContext["validateSubagentModel"]
+  getSubagentDefinitions?: ToolContext["getSubagentDefinitions"]
+  getSubagentLimits?: ToolContext["getSubagentLimits"]
   delegateTasks?: ToolContext["delegateTasks"]
 }
 
@@ -522,10 +545,18 @@ export function agentToolToPIToolDefinition(
   extraCtx?: ToolExecutionExtraContext,
 ) {
   const authorizedTool = defineAgentTool(tool)
+  const subagentDefinitions = authorizedTool.name === "delegate_tasks"
+    ? extraCtx?.getSubagentDefinitions?.() ?? []
+    : []
+  const description = subagentDefinitions.length > 0
+    ? `${authorizedTool.description}\nConfigured Agents (use task.agentId):\n${subagentDefinitions
+      .map((agent) => `- ${agent.id}: ${agent.name}${agent.description ? ` - ${agent.description}` : ""}`)
+      .join("\n")}`
+    : authorizedTool.description
   return {
     name: authorizedTool.name,
     label: authorizedTool.name,
-    description: authorizedTool.description,
+    description,
     parameters: authorizedTool.parameters,
     execute: async (
       _toolCallId: string,

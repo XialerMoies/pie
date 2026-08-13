@@ -55,6 +55,8 @@ describe("shared user settings", () => {
       "explorer-filter",
       "explorer-state",
       "providers_order",
+      "subagent-max-concurrent",
+      "subagent-max-tasks",
     ]);
   });
 

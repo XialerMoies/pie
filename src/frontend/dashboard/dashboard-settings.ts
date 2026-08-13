@@ -5,6 +5,26 @@
 let _st: string = 'model';
 let _selectedProvider: string | null = null;
 let _provKeys: Record<string, ProviderKeyInfo> = {};
+type CustomSubagent = {
+  id: string;
+  name: string;
+  description: string;
+  prompt: string;
+  tools: string[];
+  model?: { provider: string; id: string };
+};
+const SUBAGENT_READ_ONLY_TOOLS = [
+  ['git-status', 'Git 状态'],
+  ['search', '代码搜索'],
+  ['file_read', '读取文件'],
+  ['explorer_list', '目录浏览'],
+  ['git_log', 'Git 历史'],
+  ['file_outline', '文件大纲'],
+] as const;
+let _customSubagents: CustomSubagent[] = [];
+let _subagentModels: Array<{ provider: string; id: string }> = [];
+let _selectedSubagentId: string | null = null;
+let _subagentDeleteArmedId: string | null = null;
 
 const CHAT_TIMELINE_WINDOW_OPTIONS = ['5', '7', '9'];
 const CHAT_JUMP_THRESHOLD_OPTIONS = ['48', '72', '120'];
@@ -31,6 +51,18 @@ function bindSettingsModalEvents(overlay: HTMLElement): void {
     if (action === 'close') { closeSettingsModal(); return; }
     if (action === 'font-decrease') { changeFontSize(-1); return; }
     if (action === 'font-increase') { changeFontSize(1); return; }
+    if (action === 'subagent-decrease' || action === 'subagent-increase') {
+      const inputId = target.closest<HTMLElement>('[data-settings-target]')?.dataset.settingsTarget;
+      if (inputId) changeSubagentSetting(inputId, action === 'subagent-increase' ? 1 : -1);
+      return;
+    }
+    if (action === 'new-subagent') { startNewSubagent(); return; }
+    if (action === 'save-subagent') { void saveCustomSubagent(); return; }
+    if (action === 'delete-subagent') {
+      const agentId = target.closest<HTMLElement>('[data-agent-id]')?.dataset.agentId;
+      if (agentId) void deleteCustomSubagent(agentId);
+      return;
+    }
     if (action === 'toggle-key') {
       const provider = target.closest<HTMLElement>('[data-provider]')?.dataset.provider;
       if (provider) toggleKeyVis(provider);
@@ -64,6 +96,9 @@ function bindSettingsModalEvents(overlay: HTMLElement): void {
     const modelProvider = model?.dataset.modelProvider;
     const modelId = model?.dataset.modelId;
     if (modelProvider && modelId) selectModel(modelProvider, modelId);
+
+    const subagentId = target.closest<HTMLElement>('.sa-agent-item[data-agent-id]')?.dataset.agentId;
+    if (subagentId) selectCustomSubagent(subagentId);
   });
 
   overlay.addEventListener('change', (event) => {
@@ -71,6 +106,7 @@ function bindSettingsModalEvents(overlay: HTMLElement): void {
     if (target.id === 'gs-autosave') toggleAutoSaveSetting();
     else if (target.matches('#gs-indent-type, #gs-tab-size, #gs-theme')) applyGeneralSetting();
     else if (target.matches('#gs-timeline-enabled, #gs-timeline-window, #gs-jump-enabled, #gs-jump-smooth, #gs-jump-threshold')) applyReadingSetting(target);
+    else if (target.matches('#gs-subagent-max-tasks, #gs-subagent-max-concurrent')) applySubagentSetting(target as HTMLInputElement);
   });
 
   overlay.addEventListener('dragstart', (event) => {
@@ -104,6 +140,7 @@ function showSettingsModal(): void {
         <div class="modal-sidebar">
           <div class="ms-item on" data-st="model">模型</div>
           <div class="ms-item" data-st="general">通用</div>
+          <div class="ms-item" data-st="subagents">子 Agent</div>
           <div class="ms-item" data-st="permissions">权限</div>
           <div class="ms-item" data-st="about">关于</div>
         </div>
@@ -281,6 +318,49 @@ function switchSettingsModal(tab: string): void {
     const jumpThresholdEl = $('gs-jump-threshold') as HTMLSelectElement | null;
     if (jumpThresholdEl) jumpThresholdEl.value = jumpThreshold;
     renderStorageLocationSettings(sc);
+  } else if (tab === 'subagents') {
+    const maxTasks = String(App.Preferences.getNumber('subagent-max-tasks', 4, 1, 30));
+    const maxConcurrent = String(App.Preferences.getNumber('subagent-max-concurrent', 2, 1, 30));
+    sc.innerHTML = `
+      <h3 class="s-title">子 Agent</h3>
+      <p class="s-desc">控制主 Agent 单次委派的资源上限。主 Agent 可以按任务需要选择更小的值。</p>
+      <div class="gs-section">
+        <div class="gs-section-title">并行编排</div>
+        <div class="gs-group">
+          <div class="gs-row gs-subagent-row">
+            <label class="gs-subagent-copy" for="gs-subagent-max-tasks"><span class="gs-label">子 Agent 上限</span><span class="gs-desc">单批最多创建的子任务数量</span></label>
+            <div class="gs-control gs-number-stepper">
+              <button type="button" class="gs-stepper-btn" data-settings-action="subagent-decrease" data-settings-target="gs-subagent-max-tasks" aria-label="减少子 Agent 上限">−</button>
+              <input class="gs-number-input" id="gs-subagent-max-tasks" type="number" min="1" max="30" step="1" value="${maxTasks}" aria-label="子 Agent 上限">
+              <button type="button" class="gs-stepper-btn" data-settings-action="subagent-increase" data-settings-target="gs-subagent-max-tasks" aria-label="增加子 Agent 上限">+</button>
+            </div>
+          </div>
+          <div class="gs-row gs-subagent-row" style="border:none">
+            <label class="gs-subagent-copy" for="gs-subagent-max-concurrent"><span class="gs-label">并发数</span><span class="gs-desc">同一时间最多运行的子 Agent 数量</span></label>
+            <div class="gs-control gs-number-stepper">
+              <button type="button" class="gs-stepper-btn" data-settings-action="subagent-decrease" data-settings-target="gs-subagent-max-concurrent" aria-label="减少并发数">−</button>
+              <input class="gs-number-input" id="gs-subagent-max-concurrent" type="number" min="1" max="30" step="1" value="${maxConcurrent}" aria-label="并发数">
+              <button type="button" class="gs-stepper-btn" data-settings-action="subagent-increase" data-settings-target="gs-subagent-max-concurrent" aria-label="增加并发数">+</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="gs-section sa-section">
+        <h4 class="sa-section-title">自定义 Agent</h4>
+        <div class="sa-section-note">保存后可通过 delegate_tasks 的 agentId 使用</div>
+        <div class="sa-manager">
+          <aside class="sa-agent-pane">
+            <div class="sa-sidebar-head">
+              <span>Agent 列表</span>
+              <button type="button" class="sa-add-btn" data-settings-action="new-subagent" aria-label="新建 Agent" title="新建 Agent"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><use href="#iplus"></use></svg></button>
+            </div>
+            <div class="sa-agent-list" id="sa-agent-list"><div class="sa-empty">加载中...</div></div>
+          </aside>
+          <div class="sa-editor" id="sa-editor"><div class="sa-empty">选择或新建 Agent</div></div>
+        </div>
+      </div>
+    `;
+    void loadCustomSubagents();
   } else if (tab === 'permissions') {
     sc.innerHTML = '<div id="settings-permissions-root"></div>';
     const root = document.getElementById('settings-permissions-root');
@@ -441,6 +521,160 @@ function applyReadingSetting(target: HTMLElement): void {
     App.Preferences.set('chat-jump-latest-threshold', (target as HTMLSelectElement).value);
     (App.Chat as any).refreshReadingSettings();
   }
+}
+
+function applySubagentSetting(target: HTMLInputElement): void {
+  const value = Math.min(30, Math.max(1, Math.trunc(Number(target.value) || 1)));
+  target.value = String(value);
+  const key = target.id === 'gs-subagent-max-tasks'
+    ? 'subagent-max-tasks'
+    : 'subagent-max-concurrent';
+  App.Preferences.set(key, String(value));
+  void App.Preferences.flush();
+}
+
+function changeSubagentSetting(inputId: string, delta: number): void {
+  const input = $(inputId) as HTMLInputElement | null;
+  if (!input) return;
+  input.value = String(Number(input.value) + delta);
+  applySubagentSetting(input);
+}
+
+async function loadCustomSubagents(): Promise<void> {
+  try {
+    const [agentsResponse, modelsResponse] = await Promise.all([
+      fetch('/api/subagents'),
+      fetch('/api/models'),
+    ]);
+    if (!agentsResponse.ok || !modelsResponse.ok) throw new Error('加载失败');
+    const agentsData = await agentsResponse.json() as { agents?: CustomSubagent[] };
+    const modelsData = await modelsResponse.json() as { models?: Array<{ provider: string; id: string }> };
+    _customSubagents = Array.isArray(agentsData.agents) ? agentsData.agents : [];
+    _subagentModels = Array.isArray(modelsData.models) ? modelsData.models : [];
+    _selectedSubagentId = _customSubagents[0]?.id ?? null;
+    _subagentDeleteArmedId = null;
+    renderCustomSubagentManager();
+  } catch {
+    const list = $('sa-agent-list');
+    if (list) list.innerHTML = '<div class="sa-empty sa-error">Agent 配置加载失败</div>';
+  }
+}
+
+function renderCustomSubagentManager(draft?: CustomSubagent): void {
+  const list = $('sa-agent-list');
+  const editor = $('sa-editor');
+  if (!list || !editor) return;
+  list.innerHTML = _customSubagents.length > 0
+    ? _customSubagents.map((agent) => `
+      <div class="sa-agent-item${agent.id === _selectedSubagentId ? ' on' : ''}" data-agent-id="${E(agent.id)}">
+        <button type="button" class="sa-agent-select" data-agent-id="${E(agent.id)}">
+          <span class="sa-agent-name">${E(agent.name)}</span>
+          <span class="sa-agent-id">${E(agent.id)}</span>
+        </button>
+        <button type="button" class="sa-delete-btn${_subagentDeleteArmedId === agent.id ? ' armed' : ''}" data-settings-action="delete-subagent" data-agent-id="${E(agent.id)}" aria-label="${_subagentDeleteArmedId === agent.id ? '再次点击删除' : '删除'} ${E(agent.name)}" title="${_subagentDeleteArmedId === agent.id ? '再次点击确认删除' : '删除 Agent'}"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><use href="#itrash"></use></svg></button>
+      </div>`).join('')
+    : '<div class="sa-empty">暂无自定义 Agent</div>';
+  const selected = draft ?? _customSubagents.find((agent) => agent.id === _selectedSubagentId);
+  if (!selected) {
+    editor.innerHTML = '<div class="sa-empty">新建一个 Agent，为常用分析任务固定角色和工具</div>';
+    return;
+  }
+  const modelValue = selected.model ? JSON.stringify(selected.model) : '';
+  const modelOptions = _subagentModels.map((model) => {
+    const value = JSON.stringify(model);
+    return `<option value="${E(value)}"${value === modelValue ? ' selected' : ''}>${E(model.provider)} / ${E(model.id)}</option>`;
+  }).join('');
+  const isPersisted = _customSubagents.some((agent) => agent.id === selected.id);
+  editor.innerHTML = `
+    <div class="sa-form-grid">
+      <label class="sa-field"><span>名称</span><input id="sa-name" maxlength="80" value="${E(selected.name)}" placeholder="例如：安全审查"></label>
+      <label class="sa-field"><span>Agent ID</span><input id="sa-id" maxlength="64" value="${E(selected.id)}" placeholder="security-reviewer"${isPersisted ? ' readonly' : ''}></label>
+      <label class="sa-field sa-field-wide"><span>描述</span><input id="sa-description" maxlength="240" value="${E(selected.description)}" placeholder="告诉主 Agent 何时使用它"></label>
+      <label class="sa-field sa-field-wide"><span>默认模型</span><select id="sa-model"><option value="">继承主 Agent</option>${modelOptions}</select></label>
+      <fieldset class="sa-field sa-field-wide sa-tools"><legend>只读工具</legend>${SUBAGENT_READ_ONLY_TOOLS.map(([id, label]) => `<label><input id="sa-tool-${E(id)}" type="checkbox" value="${E(id)}"${selected.tools.includes(id) ? ' checked' : ''}><span>${E(label)}</span></label>`).join('')}</fieldset>
+      <label class="sa-field sa-field-wide"><span>角色指令</span><textarea id="sa-prompt" maxlength="8000" rows="7" placeholder="描述职责、关注点和输出要求">${E(selected.prompt)}</textarea></label>
+    </div>
+    <div class="sa-form-actions">
+      <span></span>
+      <button type="button" class="sa-save-btn" data-settings-action="save-subagent">保存 Agent</button>
+    </div>`;
+}
+
+function startNewSubagent(): void {
+  _selectedSubagentId = null;
+  _subagentDeleteArmedId = null;
+  renderCustomSubagentManager({ id: '', name: '', description: '', prompt: '', tools: ['search', 'file_read'] });
+}
+
+function selectCustomSubagent(id: string): void {
+  _selectedSubagentId = id;
+  _subagentDeleteArmedId = null;
+  renderCustomSubagentManager();
+}
+
+function customSubagentFromForm(): CustomSubagent | null {
+  const id = ($('sa-id') as HTMLInputElement | null)?.value.trim() || '';
+  const name = ($('sa-name') as HTMLInputElement | null)?.value.trim() || '';
+  const description = ($('sa-description') as HTMLInputElement | null)?.value.trim() || '';
+  const prompt = ($('sa-prompt') as HTMLTextAreaElement | null)?.value.trim() || '';
+  const modelRaw = ($('sa-model') as HTMLSelectElement | null)?.value || '';
+  const tools = SUBAGENT_READ_ONLY_TOOLS
+    .map(([tool]) => tool)
+    .filter((tool) => ($(`sa-tool-${tool}`) as HTMLInputElement | null)?.checked);
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) { toast('Agent ID 只能使用小写字母、数字和短横线', 'error'); return null; }
+  if (!name || !prompt) { toast('请填写名称和角色指令', 'error'); return null; }
+  if (tools.length === 0) { toast('至少选择一个只读工具', 'error'); return null; }
+  let model: { provider: string; id: string } | undefined;
+  if (modelRaw) {
+    try { model = JSON.parse(modelRaw); } catch { toast('模型配置无效', 'error'); return null; }
+  }
+  return { id, name, description, prompt, tools, ...(model ? { model } : {}) };
+}
+
+async function persistCustomSubagents(agents: CustomSubagent[]): Promise<boolean> {
+  try {
+    const response = await fetch('/api/subagents', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agents }),
+    });
+    const result = await response.json() as { agents?: CustomSubagent[]; error?: string };
+    if (!response.ok) throw new Error(result.error || '保存失败');
+    _customSubagents = result.agents ?? agents;
+    return true;
+  } catch (error) {
+    toast(error instanceof Error ? error.message : '保存失败', 'error');
+    return false;
+  }
+}
+
+async function saveCustomSubagent(): Promise<void> {
+  const agent = customSubagentFromForm();
+  if (!agent) return;
+  const existingIndex = _customSubagents.findIndex((item) => item.id === agent.id);
+  const next = [..._customSubagents];
+  if (existingIndex >= 0) next[existingIndex] = agent;
+  else next.push(agent);
+  if (!await persistCustomSubagents(next)) return;
+  _selectedSubagentId = agent.id;
+  _subagentDeleteArmedId = null;
+  renderCustomSubagentManager();
+  toast('Agent 已保存', 'success');
+}
+
+async function deleteCustomSubagent(id: string): Promise<void> {
+  if (!_customSubagents.some((agent) => agent.id === id)) return;
+  if (_subagentDeleteArmedId !== id) {
+    _subagentDeleteArmedId = id;
+    renderCustomSubagentManager();
+    return;
+  }
+  const next = _customSubagents.filter((agent) => agent.id !== id);
+  if (!await persistCustomSubagents(next)) return;
+  if (_selectedSubagentId === id) _selectedSubagentId = next[0]?.id ?? null;
+  _subagentDeleteArmedId = null;
+  renderCustomSubagentManager();
+  toast('Agent 已删除');
 }
 
 function applyEditorSettings(): void {

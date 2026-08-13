@@ -372,6 +372,7 @@ function subagentStatusText(status: string): string {
 
 interface DelegateTaskInput {
   profile?: string;
+  agentId?: string;
   prompt?: string;
 }
 
@@ -383,12 +384,13 @@ function delegateTaskInput(input: unknown): { tasks: DelegateTaskInput[]; maxCon
     const task = item as Record<string, unknown>;
     return [{
       profile: typeof task.profile === 'string' ? task.profile : undefined,
+      agentId: typeof task.agentId === 'string' ? task.agentId : undefined,
       prompt: typeof task.prompt === 'string' ? task.prompt : undefined,
     }];
   }) : [];
   const requestedConcurrency = Number(value.maxConcurrent);
   const maxConcurrent = Number.isFinite(requestedConcurrency)
-    ? Math.min(4, Math.max(1, Math.trunc(requestedConcurrency)))
+    ? Math.min(30, Math.max(1, Math.trunc(requestedConcurrency)))
     : 2;
   return { tasks, maxConcurrent };
 }
@@ -437,7 +439,7 @@ function renderDelegateTasksBlock(options: {
   const latestBatch = owned[owned.length - 1];
   const input = delegateTaskInput(options.input);
   const eventTasks = latestBatch?.tasks ?? [];
-  const taskCount = Math.max(input.tasks.length, eventTasks.length);
+  const taskCount = latestBatch ? eventTasks.length : input.tasks.length;
   const status = delegateStatus(options.status, owned);
   const raw = renderDelegateRawDetails(options.input, options.output, options.error);
   const errorText = String(options.error || options.output || '');
@@ -453,6 +455,7 @@ function renderDelegateTasksBlock(options: {
     const taskStatus = task?.status
       || (status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'queued');
     const profile = task?.profile || spec?.profile;
+    const agentLabel = task?.agentName || spec?.agentId;
     const title = task?.prompt || spec?.prompt || `${profile || 'agent'} ${index + 1}`;
     const findings = Array.isArray(task?.findings) ? task.findings : [];
     const evidence = Array.isArray(task?.evidence) ? task.evidence : [];
@@ -461,12 +464,13 @@ function renderDelegateTasksBlock(options: {
       findings.length ? `<ul class="subagent-task-list">${findings.map((item) => `<li>${E(item)}</li>`).join('')}</ul>` : '',
       evidence.length ? `<div class="subagent-evidence">${evidence.map((item) => `<div>${E(item)}</div>`).join('')}</div>` : '',
     ].join('');
-    const row = `<span class="subagent-status-dot"></span><span class="subagent-task-profile" title="${E(profile || 'agent')}">${E(subagentProfileText(profile))}</span><span class="subagent-task-title">${E(title)}</span><span class="subagent-task-status">${E(subagentStatusText(taskStatus))}</span><span class="subagent-task-disclosure${details ? '' : ' subagent-task-disclosure-placeholder'}" aria-hidden="true"></span>`;
+    const row = `<span class="subagent-status-dot"></span><span class="subagent-task-profile" title="${E(agentLabel || profile || 'agent')}">${E(agentLabel || subagentProfileText(profile))}</span><span class="subagent-task-title">${E(title)}</span><span class="subagent-task-status">${E(subagentStatusText(taskStatus))}</span><span class="subagent-task-disclosure${details ? '' : ' subagent-task-disclosure-placeholder'}" aria-hidden="true"></span>`;
     return details
       ? `<details class="subagent-task subagent-${E(taskStatus)}" data-subagent-task-index="${index}"><summary>${row}</summary><div class="subagent-task-body">${details}</div></details>`
       : `<div class="subagent-task subagent-${E(taskStatus)}" data-subagent-task-index="${index}"><div class="subagent-task-row">${row}</div></div>`;
   }).join('');
-  const summary = `${taskCount} 个子任务 · 并发 ${input.maxConcurrent} · ${subagentStatusText(status)}`;
+  const maxConcurrent = latestBatch?.maxConcurrent ?? input.maxConcurrent;
+  const summary = `${taskCount} 个子任务 · 并发 ${maxConcurrent} · ${subagentStatusText(status)}`;
   const batchId = latestBatch?.batchId;
   return `<section class="trace-node trace-tool trace-${delegateTraceStatus(status)} subagent-delegation subagent-${E(status)}"${batchId ? ` data-subagent-batch-id="${E(batchId)}"` : ''}><div class="trace-dot"></div><div class="subagent-delegation-panel"><div class="subagent-delegation-head"><span class="subagent-delegation-title">委派子任务</span><span class="subagent-delegation-summary">${E(summary)}</span></div><div class="subagent-tasks">${tasks}</div>${raw}</div></section>`;
 }

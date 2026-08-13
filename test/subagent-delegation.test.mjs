@@ -431,6 +431,8 @@ describe("subagent delegation runtime bridge", () => {
 
   it("passes host capabilities through RuntimeConfig into the tool context", () => {
     const validateSubagentModel = async () => true;
+    const getSubagentDefinitions = () => [{ id: "reviewer", name: "Reviewer", description: "", prompt: "Review", tools: ["search"] }];
+    const getSubagentLimits = () => ({ maxTasks: 12, maxConcurrent: 5 });
     const delegateTasks = async () => batchResult();
 
     const extra = buildToolContextExtra({
@@ -440,10 +442,14 @@ describe("subagent delegation runtime bridge", () => {
       authFile: "/auth.json",
       modelsFile: "/models.json",
       validateSubagentModel,
+      getSubagentDefinitions,
+      getSubagentLimits,
       delegateTasks,
     });
 
     assert.strictEqual(extra.validateSubagentModel, validateSubagentModel);
+    assert.strictEqual(extra.getSubagentDefinitions, getSubagentDefinitions);
+    assert.strictEqual(extra.getSubagentLimits, getSubagentLimits);
     assert.strictEqual(extra.delegateTasks, delegateTasks);
   });
 });

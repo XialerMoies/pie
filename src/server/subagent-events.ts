@@ -50,6 +50,8 @@ export interface SubagentReplayTask {
   taskId: string;
   status: SubagentReplayStatus;
   profile?: string;
+  agentId?: string;
+  agentName?: string;
   prompt?: string;
   summary?: string;
   findings: string[];
@@ -63,6 +65,7 @@ export interface SubagentReplayBatch {
   status: SubagentReplayStatus;
   events: SubagentEvent[];
   tasks: SubagentReplayTask[];
+  maxConcurrent?: number;
 }
 
 export interface SubagentEventReplay {
@@ -235,6 +238,7 @@ export function reduceSubagentEventReplay(
     }
 
     const terminal = [...events].reverse().find((event) => event.kind === "batch_completed");
+    const batchStarted = events.find((event) => event.kind === "batch_started");
     const started = events.some((event) => event.kind === "batch_started");
     const hasActiveTask = [...taskEvents.keys()].some((taskId) => activeTaskIds.has(taskId));
     const interrupted = started && !terminal && !hasActiveTask;
@@ -248,6 +252,8 @@ export function reduceSubagentEventReplay(
         taskId,
         status,
         profile: typeof queued?.payload.profile === "string" ? queued.payload.profile : undefined,
+        ...(typeof queued?.payload.agentId === "string" ? { agentId: queued.payload.agentId } : {}),
+        ...(typeof queued?.payload.agentName === "string" ? { agentName: queued.payload.agentName } : {}),
         prompt: typeof queued?.payload.prompt === "string" ? queued.payload.prompt : undefined,
         summary: typeof result.summary === "string" ? result.summary : undefined,
         findings: stringList(result.findings),
@@ -262,6 +268,9 @@ export function reduceSubagentEventReplay(
       status: terminal?.status ?? (interrupted ? "interrupted" : "running"),
       events,
       tasks,
+      ...(typeof batchStarted?.payload.maxConcurrent === "number"
+        ? { maxConcurrent: batchStarted.payload.maxConcurrent }
+        : {}),
     } satisfies SubagentReplayBatch;
   });
 

@@ -45,7 +45,8 @@ import { WorkspaceFileWatcher } from "./workspace-file-watcher.js";
 import { getServersStatus, subscribeStatusChanges } from "../agent/mcp/MCPClientService.js";
 import { resolveStartupPaths, startupPathsSnapshot } from "./startup-paths.js";
 import { canonicalWorkspacePath } from "../data/data-layout.js";
-import { recordOpenedWorkspace } from "../data/user-settings.js";
+import { readUserPreferences, recordOpenedWorkspace } from "../data/user-settings.js";
+import { readSubagentDefinitions } from "../data/subagent-config.js";
 import { WorkspaceLockCoordinator } from "./workspace-lock.js";
 import { workspaceDataPaths, writeWorkspaceMetadata } from "./routes/session-dir.js";
 import { readWorkspaceUiState } from "./routes/ui-state.js";
@@ -129,6 +130,7 @@ const DATA_DIR = STARTUP.dataRoot;
 const PI_CONFIG_DIR = STARTUP.layout.userRoot;
 const SESSIONS_DIR = STARTUP.layout.sessionsDir;
 const SETTINGS_FILE = STARTUP.layout.settingsFile;
+const SUBAGENTS_FILE = STARTUP.layout.subagentsFile;
 const DATA_ROOT_POINTER_FILE = process.env.PI_DESKTOP_DATA_ROOT_POINTER || "";
 const FRONTEND_DIR = resolve(APP_ROOT, "dist", "frontend");
 const FRONTEND_ENTRY_FILE = "dashboard.html";
@@ -895,6 +897,18 @@ async function main() {
       await permissionService.applyPermissionSuggestions(suggestions, scope);
     },
     validateSubagentModel: subagentBridge.runtimeConfig.validateSubagentModel,
+    getSubagentDefinitions: () => readSubagentDefinitions(SUBAGENTS_FILE),
+    getSubagentLimits: () => {
+      const preferences = readUserPreferences(SETTINGS_FILE);
+      const readLimit = (key: string, fallback: number): number => {
+        const value = Number(preferences[key]);
+        return Number.isInteger(value) ? Math.min(30, Math.max(1, value)) : fallback;
+      };
+      return {
+        maxTasks: readLimit("subagent-max-tasks", 4),
+        maxConcurrent: readLimit("subagent-max-concurrent", 2),
+      };
+    },
     delegateTasks: subagentBridge.runtimeConfig.delegateTasks,
   });
 
@@ -951,6 +965,7 @@ async function main() {
       PI_CONFIG_DIR,
       SESSIONS_DIR,
       SETTINGS_FILE,
+      SUBAGENTS_FILE,
       DATA_ROOT_POINTER_FILE,
       STARTUP: STARTUP_SNAPSHOT,
       FRONTEND_DIR,

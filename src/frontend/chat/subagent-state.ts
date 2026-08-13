@@ -26,6 +26,8 @@ export interface FrontendSubagentTask {
   taskId: string;
   status: FrontendSubagentStatus;
   profile?: string;
+  agentId?: string;
+  agentName?: string;
   prompt?: string;
   summary?: string;
   findings: string[];
@@ -39,6 +41,7 @@ export interface FrontendSubagentBatch {
   status: FrontendSubagentStatus;
   events: FrontendSubagentEvent[];
   tasks: FrontendSubagentTask[];
+  maxConcurrent?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -85,6 +88,7 @@ export function reduceFrontendSubagentEvents(values: readonly unknown[]): Fronte
       taskEvents.set(event.taskId, list);
     }
     const terminal = [...events].reverse().find((event) => event.kind === 'batch_completed');
+    const batchStarted = events.find((event) => event.kind === 'batch_started');
     const tasks = [...taskEvents.entries()].map(([taskId, history]) => {
       const queued = history.find((event) => event.kind === 'task_queued');
       const completed = [...history].reverse().find((event) => event.kind === 'task_completed');
@@ -93,6 +97,8 @@ export function reduceFrontendSubagentEvents(values: readonly unknown[]): Fronte
         taskId,
         status: (completed?.status ?? history[history.length - 1].status) as FrontendSubagentStatus,
         profile: typeof queued?.payload.profile === 'string' ? queued.payload.profile : undefined,
+        ...(typeof queued?.payload.agentId === 'string' ? { agentId: queued.payload.agentId } : {}),
+        ...(typeof queued?.payload.agentName === 'string' ? { agentName: queued.payload.agentName } : {}),
         prompt: typeof queued?.payload.prompt === 'string' ? queued.payload.prompt : undefined,
         summary: typeof result.summary === 'string' ? result.summary : undefined,
         findings: stringList(result.findings),
@@ -106,6 +112,9 @@ export function reduceFrontendSubagentEvents(values: readonly unknown[]): Fronte
       status: (terminal?.status ?? 'running') as FrontendSubagentStatus,
       events,
       tasks,
+      ...(typeof batchStarted?.payload.maxConcurrent === 'number'
+        ? { maxConcurrent: batchStarted.payload.maxConcurrent }
+        : {}),
     } satisfies FrontendSubagentBatch;
   }).sort((left, right) => (left.events[0]?.timestamp || '').localeCompare(right.events[0]?.timestamp || ''));
 }

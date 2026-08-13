@@ -33,6 +33,8 @@ const KNOWN_PREFERENCE_KEYS = [
   "explorer-filter",
   "explorer-state",
   "providers_order",
+  "subagent-max-concurrent",
+  "subagent-max-tasks",
 ];
 
 const values = new Map<string, string>();

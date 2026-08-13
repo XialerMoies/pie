@@ -83,6 +83,8 @@ describe("preferences REST boundary", () => {
         "editor-theme": "vs-dark",
         unknown: "ignored",
         "auto-save": 42,
+        "subagent-max-tasks": "31",
+        "subagent-max-concurrent": "0",
       },
     }));
     const paths = { SETTINGS_FILE: settingsFile };
@@ -119,6 +121,33 @@ describe("preferences REST boundary", () => {
       defaultModel: "kept-model",
       preferences: { "editor-theme": "vs", "chat-mode": "plan" },
     });
+  });
+
+  it("persists subagent limits only within the supported 1..30 range", async () => {
+    const root = makeRoot();
+    const settingsFile = join(root, "user", "settings.json");
+    const paths = { SETTINGS_FILE: settingsFile };
+
+    const saved = await callSettings("PATCH", "/api/preferences", {
+      values: { "subagent-max-tasks": "30", "subagent-max-concurrent": "1" },
+    }, paths);
+    assert.strictEqual(saved.status, 200);
+    assert.deepStrictEqual(saved.body.preferences, {
+      "subagent-max-tasks": "30",
+      "subagent-max-concurrent": "1",
+    });
+
+    for (const [key, value] of [
+      ["subagent-max-tasks", "0"],
+      ["subagent-max-concurrent", "31"],
+      ["subagent-max-tasks", "2.5"],
+    ]) {
+      const response = await callSettings("PATCH", "/api/preferences", {
+        values: { [key]: value },
+      }, paths);
+      assert.strictEqual(response.status, 400, `${key}=${value}`);
+      assert.match(response.body.error, /between 1 and 30/i);
+    }
   });
 
   it("returns 400 for invalid preference patches and malformed JSON", async () => {
@@ -190,6 +219,68 @@ describe("preferences REST boundary", () => {
       },
       preferences: { "editor-theme": "vs", "chat-mode": "plan" },
     });
+  });
+});
+
+describe("custom subagent REST boundary", () => {
+  it("lists and replaces validated custom agents", async () => {
+    const root = makeRoot();
+    const paths = {
+      SETTINGS_FILE: join(root, "user", "settings.json"),
+      SUBAGENTS_FILE: join(root, "user", "subagents.json"),
+    };
+    const model = { provider: "openai", id: "gpt-test" };
+    const agent = {
+      id: "security-reviewer",
+      name: "安全审查",
+      description: "检查安全边界",
+      prompt: "优先检查权限与输入验证。",
+      tools: ["search", "file_read"],
+      model,
+    };
+
+    const empty = await callSettings("GET", "/api/subagents", undefined, paths, {
+      runtime: { modelRegistry: { find: () => model } },
+    });
+    assert.deepStrictEqual(empty, { status: 200, body: { agents: [] } });
+
+    const saved = await callSettings("PUT", "/api/subagents", { agents: [agent] }, paths, {
+      runtime: { modelRegistry: { find: () => model } },
+    });
+    assert.strictEqual(saved.status, 200);
+    assert.deepStrictEqual(saved.body, { ok: true, agents: [agent] });
+
+    const loaded = await callSettings("GET", "/api/subagents", undefined, paths, {
+      runtime: { modelRegistry: { find: () => model } },
+    });
+    assert.deepStrictEqual(loaded.body, { agents: [agent] });
+  });
+
+  it("rejects unavailable models and writable tools", async () => {
+    const root = makeRoot();
+    const paths = {
+      SETTINGS_FILE: join(root, "user", "settings.json"),
+      SUBAGENTS_FILE: join(root, "user", "subagents.json"),
+    };
+    const base = {
+      id: "reviewer",
+      name: "Reviewer",
+      description: "Review code",
+      prompt: "Review carefully.",
+      tools: ["search"],
+    };
+
+    const unknownModel = await callSettings("PUT", "/api/subagents", {
+      agents: [{ ...base, model: { provider: "missing", id: "none" } }],
+    }, paths, { runtime: { modelRegistry: { find: () => undefined } } });
+    assert.strictEqual(unknownModel.status, 400);
+    assert.match(unknownModel.body.error, /model.*missing\/none/i);
+
+    const writable = await callSettings("PUT", "/api/subagents", {
+      agents: [{ ...base, tools: ["file_write"] }],
+    }, paths);
+    assert.strictEqual(writable.status, 400);
+    assert.match(writable.body.error, /read-only tool/i);
   });
 });
 

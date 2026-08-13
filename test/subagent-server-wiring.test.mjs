@@ -89,6 +89,9 @@ describe("subagent server wiring", () => {
     assert.match(serverSource, /createSubagentDelegationBridge/);
     assert.match(serverSource, /createRuntimeSubagentHost/);
     assert.match(serverSource, /validateSubagentModel:\s*subagentBridge\.runtimeConfig\.validateSubagentModel/);
+    assert.match(serverSource, /getSubagentDefinitions:\s*\(\)\s*=>\s*readSubagentDefinitions\(SUBAGENTS_FILE\)/);
+    assert.match(serverSource, /getSubagentLimits:\s*\(\)\s*=>/);
+    assert.match(serverSource, /readUserPreferences\(SETTINGS_FILE\)/);
     assert.match(serverSource, /delegateTasks:\s*subagentBridge\.runtimeConfig\.delegateTasks/);
     assert.match(serverSource, /subagentBridge\.bind\(subagentHost\)/);
 

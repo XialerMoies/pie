@@ -18,6 +18,8 @@ export const USER_PREFERENCE_KEYS = new Set([
   "explorer-filter",
   "explorer-state",
   "providers_order",
+  "subagent-max-concurrent",
+  "subagent-max-tasks",
 ]);
 
 export interface UserSettingsDocument {
@@ -65,10 +67,12 @@ function sanitizePreferences(value: unknown): Record<string, string> {
 
   const preferences: Record<string, string> = {};
   for (const [key, preference] of Object.entries(value)) {
+    const isSubagentLimit = key === "subagent-max-tasks" || key === "subagent-max-concurrent";
     if (
       USER_PREFERENCE_KEYS.has(key)
       && typeof preference === "string"
       && preference.length <= MAX_PREFERENCE_VALUE_LENGTH
+      && (!isSubagentLimit || (/^\d+$/.test(preference) && Number(preference) >= 1 && Number(preference) <= 30))
     ) {
       preferences[key] = preference;
     }
@@ -178,6 +182,12 @@ function validatePreferencePatch(
     if (typeof value !== "string") throw new Error(`Preference value must be a string: ${key}`);
     if (value.length > MAX_PREFERENCE_VALUE_LENGTH) {
       throw new Error(`Preference value is too long: ${key}`);
+    }
+    if (
+      (key === "subagent-max-tasks" || key === "subagent-max-concurrent")
+      && (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 30)
+    ) {
+      throw new Error(`Preference value must be an integer between 1 and 30: ${key}`);
     }
     validatedValues[key] = value;
   }

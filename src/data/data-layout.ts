@@ -17,6 +17,7 @@ export interface DataLayout {
   mcpConfigFile: string;
   mcpTrustFile: string;
   settingsFile: string;
+  subagentsFile: string;
   workspaceMetadataFile: string;
   workspaceLockFile: string;
   sessionsDir: string;
@@ -77,6 +78,7 @@ export function resolveDataLayout(options: DataLayoutOptions): DataLayout {
     mcpConfigFile: join(userRoot, "mcp.json"),
     mcpTrustFile: join(userRoot, "mcp-trust.json"),
     settingsFile: join(userRoot, "settings.json"),
+    subagentsFile: join(userRoot, "subagents.json"),
     workspaceMetadataFile: join(workspaceRoot, "metadata.json"),
     workspaceLockFile: join(workspaceRoot, "workspace.lock"),
     sessionsDir: join(workspaceRoot, "sessions"),

@@ -15,6 +15,7 @@ import {
   type SubagentEventKind,
   type SubagentEventStatus,
 } from "./subagent-events.js";
+import { READ_ONLY_SUBAGENT_TOOL_NAMES } from "../data/subagent-config.js";
 
 export type {
   SubagentDelegationBatchResult,
@@ -27,14 +28,7 @@ export type {
   SubagentDelegationUsage,
 } from "../agent/types.js";
 
-export const READ_ONLY_SUBAGENT_TOOLS = [
-  "git-status",
-  "search",
-  "file_read",
-  "explorer_list",
-  "git_log",
-  "file_outline",
-] as const;
+export const READ_ONLY_SUBAGENT_TOOLS = READ_ONLY_SUBAGENT_TOOL_NAMES;
 
 export type SubagentTaskStatus = "queued" | "running" | SubagentDelegationTaskResultStatus;
 
@@ -282,7 +276,7 @@ export class SubagentSupervisor {
       taskIds: tasks.map((task) => task.taskId),
       tasks,
       queue: [...tasks],
-      maxConcurrent: clamp(options.maxConcurrent, 2, 1, 4),
+      maxConcurrent: clamp(options.maxConcurrent, 2, 1, 30),
       active: 0,
       cancelled: false,
       status: "running",
@@ -300,10 +294,15 @@ export class SubagentSupervisor {
     };
     this.batches.set(batchId, batch);
 
-    this.emitEvent(batch, null, "batch_started", "running", { taskCount: tasks.length });
+    this.emitEvent(batch, null, "batch_started", "running", {
+      taskCount: tasks.length,
+      maxConcurrent: batch.maxConcurrent,
+    });
     for (const task of tasks) {
       this.emitEvent(batch, task.taskId, "task_queued", "queued", {
         profile: task.input.profile ?? "general",
+        agentId: task.input.agent?.id ?? task.input.agentId ?? null,
+        agentName: task.input.agent?.name ?? null,
         prompt: task.input.prompt,
         focusPaths: task.input.focusPaths ?? [],
         deliverable: task.input.deliverable ?? "",
@@ -410,7 +409,7 @@ export class SubagentSupervisor {
         workspace: batch.workspace,
         task: task.input,
         model: task.input.model ?? batch.model,
-        tools: READ_ONLY_SUBAGENT_TOOLS,
+        tools: task.input.agent?.tools ?? READ_ONLY_SUBAGENT_TOOLS,
         limits: { ...batch.limits },
       });
       task.session = session;

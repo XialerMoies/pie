@@ -136,6 +136,28 @@ describe("embedded subagent session factory", () => {
     assert.strictEqual(harness.inheritedModel.id, "main-model");
   });
 
+  it("applies a configured agent prompt and narrows the read-only tool set", async () => {
+    const harness = createHarness();
+    await harness.factory(factoryInput({
+      task: {
+        profile: "reviewer",
+        prompt: "Review the implementation",
+        agentId: "security-reviewer",
+        agent: {
+          id: "security-reviewer",
+          name: "Security reviewer",
+          description: "Security review",
+          prompt: "Prioritize authentication and input validation.",
+          tools: ["search", "file_read"],
+        },
+      },
+    }));
+
+    assert.match(harness.loaderOptions[0].systemPrompt, /Prioritize authentication and input validation/);
+    assert.deepStrictEqual(harness.sessionOptions[0].tools, ["search", "file_read"]);
+    assert.deepStrictEqual(harness.sessionOptions[0].customTools.map((tool) => tool.name), ["search", "file_read"]);
+  });
+
   it("rejects an unknown model instead of accepting arbitrary provider strings", async () => {
     const harness = createHarness();
 

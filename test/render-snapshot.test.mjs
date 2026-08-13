@@ -762,6 +762,43 @@ describe("msgs() 渲染", () => {
     assert.equal((html.match(/data-block-id=/g) || []).length, 1, "subagent tasks must not become main timeline blocks");
   });
 
+  it("renders the configured agent name restored from subagent events", () => {
+    const html = win.App.Chat.renderMessage({
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        name: "delegate_tasks",
+        toolCallId: "delegate-call-custom",
+        status: "success",
+        input: {
+          tasks: [{ profile: "reviewer", prompt: "Review security", agentId: "security-reviewer" }],
+        },
+        blockId: "tool-custom",
+        seq: 1,
+      }],
+      subagentBatches: [{
+        batchId: "batch-custom",
+        parentToolCallId: "delegate-call-custom",
+        status: "completed",
+        events: [],
+        tasks: [{
+          taskId: "task-custom",
+          status: "completed",
+          profile: "reviewer",
+          agentId: "security-reviewer",
+          agentName: "Security Reviewer",
+          prompt: "Review security",
+          findings: [],
+          evidence: [],
+          events: [],
+        }],
+      }],
+    });
+
+    assert.ok(html.includes("Security Reviewer"));
+    assert.ok(!html.includes('title="security-reviewer"'));
+  });
+
   it("renders queued delegate tasks from tool input before subagent events arrive", () => {
     const html = win.App.Chat.renderMessage({
       role: "assistant",

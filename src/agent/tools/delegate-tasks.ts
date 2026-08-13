@@ -4,6 +4,7 @@ import {
   structuredToolResult,
   type AgentTool,
   type CommandConfirmationResponse,
+  type SubagentDefinition,
   type SubagentDelegationModel,
   type SubagentDelegationProfile,
   type SubagentDelegationRequest,
@@ -11,6 +12,7 @@ import {
 } from "../types.js"
 
 const PROFILES = ["general", "explorer", "reviewer", "planner"] as const
+const MAX_SUBAGENT_TASKS = 30
 const PROFILE_SET = new Set<string>(PROFILES)
 const INPUT_KEYS = new Set([
   "tasks",
@@ -20,7 +22,7 @@ const INPUT_KEYS = new Set([
   "maxToolCalls",
   "maxConcurrent",
 ])
-const TASK_KEYS = new Set(["profile", "prompt", "focusPaths", "deliverable", "model"])
+const TASK_KEYS = new Set(["profile", "prompt", "focusPaths", "deliverable", "model", "agentId"])
 const MODEL_KEYS = new Set(["provider", "id"])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -74,8 +76,8 @@ export async function validateDelegateTasksInput(
   if (!isRecord(input)) throw inputError("input must be an object")
   assertAllowedKeys(input, INPUT_KEYS, "input")
   if (!Array.isArray(input.tasks)) throw inputError("tasks is required and must be an array")
-  if (input.tasks.length < 1 || input.tasks.length > 4) {
-    throw inputError("tasks must contain 1 to 4 items")
+  if (input.tasks.length < 1 || input.tasks.length > MAX_SUBAGENT_TASKS) {
+    throw inputError(`tasks must contain 1 to ${MAX_SUBAGENT_TASKS} items`)
   }
 
   const defaultModel = input.defaultModel === undefined
@@ -90,6 +92,12 @@ export async function validateDelegateTasksInput(
     }
     const prompt = typeof value.prompt === "string" ? value.prompt.trim() : ""
     if (!prompt) throw inputError(`tasks[${index}].prompt must be a non-empty string`)
+    const agentId = value.agentId === undefined
+      ? undefined
+      : typeof value.agentId === "string" ? value.agentId.trim() : ""
+    if (value.agentId !== undefined && !agentId) {
+      throw inputError(`tasks[${index}].agentId must be a non-empty string`)
+    }
 
     let focusPaths: string[] | undefined
     if (value.focusPaths !== undefined) {
@@ -116,6 +124,7 @@ export async function validateDelegateTasksInput(
     return {
       profile: profile as SubagentDelegationProfile,
       prompt,
+      ...(agentId ? { agentId } : {}),
       ...(focusPaths ? { focusPaths } : {}),
       ...(deliverable ? { deliverable } : {}),
       ...(model ? { model } : {}),
@@ -142,7 +151,7 @@ export async function validateDelegateTasksInput(
 
   return {
     tasks,
-    maxConcurrent: parseLimit(input.maxConcurrent, "maxConcurrent", 2, 1, 4),
+    maxConcurrent: parseLimit(input.maxConcurrent, "maxConcurrent", 2, 1, MAX_SUBAGENT_TASKS),
     timeoutSeconds: parseLimit(input.timeoutSeconds, "timeoutSeconds", 300, 30, 3600),
     maxTurns: parseLimit(input.maxTurns, "maxTurns", 20, 1, 100),
     maxToolCalls: parseLimit(input.maxToolCalls, "maxToolCalls", 50, 1, 500),
@@ -152,6 +161,56 @@ export async function validateDelegateTasksInput(
 function confirmationAllowed(response: CommandConfirmationResponse): boolean {
   if (response === true) return true
   return !!response && typeof response === "object" && response.allow === true
+}
+
+async function applyConfiguredAgents(
+  request: SubagentDelegationRequest,
+  definitions: SubagentDefinition[],
+  validateModel?: SubagentModelValidator,
+): Promise<SubagentDelegationRequest> {
+  const byId = new Map(definitions.map((definition) => [definition.id, definition]));
+  const tasks = await Promise.all(request.tasks.map(async (task) => {
+    if (!task.agentId) return task;
+    const agent = byId.get(task.agentId);
+    if (!agent) throw inputError(`configured agent ${task.agentId} is not available`);
+    const model = task.model ?? agent.model;
+    if (model) {
+      if (!validateModel) throw new Error("Subagent model validation is unavailable");
+      let valid = false;
+      try { valid = await validateModel(model); } catch { valid = false; }
+      if (!valid) throw inputError(`model ${displayModel(model)} is not available`);
+    }
+    return {
+      ...task,
+      agent: {
+        ...agent,
+        tools: [...agent.tools],
+        ...(agent.model ? { model: { ...agent.model } } : {}),
+      },
+      ...(model ? { model } : {}),
+    };
+  }));
+  return { ...request, tasks };
+}
+
+function clampHostLimit(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(MAX_SUBAGENT_TASKS, Math.max(1, Math.trunc(value)))
+    : fallback
+}
+
+function applyHostLimits(
+  request: SubagentDelegationRequest,
+  limits: ReturnType<NonNullable<Parameters<AgentTool["execute"]>[1]["getSubagentLimits"]>> | undefined,
+): SubagentDelegationRequest {
+  const maxTasks = clampHostLimit(limits?.maxTasks, 4)
+  const maxConcurrent = clampHostLimit(limits?.maxConcurrent, 2)
+  const tasks = request.tasks.slice(0, maxTasks)
+  return {
+    ...request,
+    tasks,
+    maxConcurrent: Math.min(request.maxConcurrent, maxConcurrent, tasks.length),
+  }
 }
 
 function confirmationText(request: SubagentDelegationRequest): string {
@@ -180,18 +239,19 @@ function updateSpecializedDecision(
 
 export const delegateTasksTool: AgentTool = defineAgentTool({
   name: "delegate_tasks",
-  description: "Delegate 1 to 4 read-only analysis tasks to isolated in-process subagents and return one structured batch result.",
+  description: "Delegate 1 to 30 read-only analysis tasks to isolated in-process subagents and return one structured batch result. Host settings may apply lower task and concurrency limits.",
   parameters: {
     type: "object",
     properties: {
       tasks: {
         type: "array",
         minItems: 1,
-        maxItems: 4,
+        maxItems: MAX_SUBAGENT_TASKS,
         items: {
           type: "object",
           properties: {
             profile: { type: "string", enum: PROFILES },
+            agentId: { type: "string", minLength: 1, description: "Optional configured Agent id from the host settings." },
             prompt: { type: "string", minLength: 1 },
             focusPaths: { type: "array", items: { type: "string", minLength: 1 } },
             deliverable: { type: "string", minLength: 1 },
@@ -221,7 +281,7 @@ export const delegateTasksTool: AgentTool = defineAgentTool({
       timeoutSeconds: { type: "number", minimum: 30, maximum: 3600, default: 300 },
       maxTurns: { type: "number", minimum: 1, maximum: 100, default: 20 },
       maxToolCalls: { type: "number", minimum: 1, maximum: 500, default: 50 },
-      maxConcurrent: { type: "number", minimum: 1, maximum: 4, default: 2 },
+      maxConcurrent: { type: "number", minimum: 1, maximum: MAX_SUBAGENT_TASKS, default: 2 },
     },
     required: ["tasks"],
   },
@@ -247,6 +307,8 @@ export const delegateTasksTool: AgentTool = defineAgentTool({
     let request: SubagentDelegationRequest
     try {
       request = await validateDelegateTasksInput(args, ctx.validateSubagentModel)
+      request = await applyConfiguredAgents(request, ctx.getSubagentDefinitions?.() ?? [], ctx.validateSubagentModel)
+      request = applyHostLimits(request, ctx.getSubagentLimits?.())
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const code = /validation is unavailable/i.test(message)

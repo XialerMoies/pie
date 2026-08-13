@@ -77,6 +77,8 @@ type ExtraCtx = {
   authorizeTool?: ToolContext["authorizeTool"]
   desktopApiToken?: ToolContext["desktopApiToken"]
   validateSubagentModel?: ToolContext["validateSubagentModel"]
+  getSubagentDefinitions?: ToolContext["getSubagentDefinitions"]
+  getSubagentLimits?: ToolContext["getSubagentLimits"]
   delegateTasks?: ToolContext["delegateTasks"]
 }
 

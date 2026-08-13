@@ -75,6 +75,7 @@ beforeEach(() => {
   fetchImpl = async (url) => {
     if (String(url) === "/api/auth") return { ok: true, json: async () => ({ providers: [] }) };
     if (String(url) === "/api/models") return { ok: true, json: async () => ({ models: [] }) };
+    if (String(url) === "/api/subagents") return { ok: true, json: async () => ({ agents: [] }) };
     return { ok: true, json: async () => ({ ok: true }) };
   };
 });
@@ -91,6 +92,14 @@ async function openGeneralSettings() {
   const generalTab = document.querySelector('.ms-item[data-st="general"]');
   assert.ok(generalTab, "General settings tab should be rendered");
   generalTab.click();
+}
+
+async function openSubagentSettings() {
+  win.App.Settings.openSettingsModal();
+  await flushAsyncWork();
+  const tab = document.querySelector('.ms-item[data-st="subagents"]');
+  assert.ok(tab, "Subagent settings tab should be rendered");
+  tab.click();
 }
 
 function getControl(id) {
@@ -120,6 +129,91 @@ describe("settings DOM boundary", () => {
   it("does not use inline event attributes", () => {
     const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-settings.ts"), "utf8");
     assert.doesNotMatch(source, /\son(?:click|change|dragstart|dragover|drop)\s*=/i);
+  });
+
+  it("renders a dedicated Subagent tab with independently persisted 1..30 limits", async () => {
+    storage.set("subagent-max-tasks", "12");
+    storage.set("subagent-max-concurrent", "5");
+    await openSubagentSettings();
+
+    const maxTasks = getControl("gs-subagent-max-tasks");
+    const maxConcurrent = getControl("gs-subagent-max-concurrent");
+    assert.strictEqual(maxTasks.type, "number");
+    assert.strictEqual(maxTasks.min, "1");
+    assert.strictEqual(maxTasks.max, "30");
+    assert.strictEqual(maxTasks.value, "12");
+    assert.strictEqual(maxConcurrent.value, "5");
+    assert.strictEqual(document.querySelectorAll(".gs-subagent-copy .gs-label").length, 2);
+    assert.strictEqual(document.querySelectorAll(".gs-subagent-copy .gs-desc").length, 2);
+    assert.strictEqual(document.querySelectorAll('[data-settings-action="subagent-decrease"]').length, 2);
+    assert.strictEqual(document.querySelectorAll('[data-settings-action="subagent-increase"]').length, 2);
+
+    document.querySelector('[data-settings-action="subagent-increase"][data-settings-target="gs-subagent-max-tasks"]').click();
+    assert.strictEqual(maxTasks.value, "13");
+    assert.strictEqual(storage.get("subagent-max-tasks"), "13");
+
+    maxTasks.value = "30";
+    maxTasks.dispatchEvent(new win.Event("change", { bubbles: true }));
+    maxConcurrent.value = "8";
+    maxConcurrent.dispatchEvent(new win.Event("change", { bubbles: true }));
+    assert.strictEqual(storage.get("subagent-max-tasks"), "30");
+    assert.strictEqual(storage.get("subagent-max-concurrent"), "8");
+
+    maxConcurrent.value = "99";
+    maxConcurrent.dispatchEvent(new win.Event("change", { bubbles: true }));
+    assert.strictEqual(maxConcurrent.value, "30");
+    assert.strictEqual(storage.get("subagent-max-concurrent"), "30");
+  });
+
+  it("creates, edits, and deletes custom read-only Agents", async () => {
+    const requests = [];
+    const existing = {
+      id: "security-reviewer",
+      name: "安全审查",
+      description: "检查安全边界",
+      prompt: "优先检查权限与输入验证。",
+      tools: ["search", "file_read"],
+      model: { provider: "openai", id: "gpt-test" },
+    };
+    fetchImpl = async (url, init = {}) => {
+      if (String(url) === "/api/subagents" && init.method === "PUT") {
+        requests.push(JSON.parse(init.body));
+        return { ok: true, json: async () => ({ ok: true, agents: requests.at(-1).agents }) };
+      }
+      if (String(url) === "/api/subagents") return { ok: true, json: async () => ({ agents: [existing] }) };
+      if (String(url) === "/api/models") return { ok: true, json: async () => ({ models: [existing.model] }) };
+      return { ok: true, json: async () => ({}) };
+    };
+
+    await openSubagentSettings();
+    await flushAsyncWork();
+    assert.strictEqual(document.querySelector('.sa-section-title')?.textContent, '自定义 Agent');
+    assert.ok(document.querySelector('.sa-agent-pane > .sa-sidebar-head [data-settings-action="new-subagent"]'));
+    assert.strictEqual(document.querySelectorAll(".sa-agent-item").length, 1);
+    const deleteButton = document.querySelector('.sa-agent-item [data-settings-action="delete-subagent"]');
+    assert.ok(deleteButton, 'delete action should live inside the Agent list item');
+    assert.strictEqual(deleteButton.getAttribute('data-agent-id'), existing.id);
+    assert.ok(deleteButton.querySelector('svg use[href="#itrash"]'));
+    assert.strictEqual(getControl("sa-name").value, "安全审查");
+    assert.strictEqual(getControl("sa-tool-search").checked, true);
+    assert.strictEqual(getControl("sa-tool-git_log").checked, false);
+
+    getControl("sa-description").value = "更新后的安全边界说明";
+    document.querySelector('[data-settings-action="save-subagent"]').click();
+    await flushAsyncWork();
+    assert.strictEqual(requests.length, 1);
+    assert.strictEqual(requests[0].agents[0].description, "更新后的安全边界说明");
+
+    const currentDeleteButton = document.querySelector(`.sa-agent-item [data-settings-action="delete-subagent"][data-agent-id="${existing.id}"]`);
+    assert.ok(currentDeleteButton);
+    currentDeleteButton.click();
+    assert.strictEqual(requests.length, 1, "first delete click only arms confirmation");
+    const armedDeleteButton = document.querySelector(`.sa-agent-item [data-settings-action="delete-subagent"][data-agent-id="${existing.id}"]`);
+    assert.ok(armedDeleteButton?.classList.contains("armed"));
+    armedDeleteButton.click();
+    await flushAsyncWork();
+    assert.deepStrictEqual(requests.at(-1), { agents: [] });
+    assert.strictEqual(document.querySelectorAll(".sa-agent-item").length, 0);
   });
 
   it("keeps hostile provider names as inert data and handles selection through DOM events", async () => {

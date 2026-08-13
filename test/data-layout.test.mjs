@@ -51,6 +51,7 @@ describe("multi-instance data layout", () => {
 
     assert.strictEqual(layout.dataRoot, dataRoot);
     assert.strictEqual(layout.userRoot, resolve(dataRoot, "user"));
+    assert.strictEqual(layout.subagentsFile, resolve(layout.userRoot, "subagents.json"));
     assert.strictEqual(layout.sessionsDir, resolve(layout.workspaceRoot, "sessions"));
     assert.strictEqual(layout.cacheDir, resolve(layout.instanceRoot, "cache"));
     assert.strictEqual(layout.workspaceLockFile, resolve(layout.workspaceRoot, "workspace.lock"));

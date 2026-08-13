@@ -49,4 +49,20 @@ describe("frontend subagent reducer", () => {
       ["batch-1"],
     );
   });
+
+  it("preserves configured agent identity from queued events", () => {
+    const batches = reduceFrontendSubagentEvents([
+      event({
+        payload: {
+          profile: "reviewer",
+          prompt: "Review security boundaries",
+          agentId: "security-reviewer",
+          agentName: "Security Reviewer",
+        },
+      }),
+    ]);
+
+    assert.equal(batches[0].tasks[0].agentId, "security-reviewer");
+    assert.equal(batches[0].tasks[0].agentName, "Security Reviewer");
+  });
 });
