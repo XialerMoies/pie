@@ -115,6 +115,23 @@ let _usageModalEl: HTMLElement | null = null;
 let _usageTab: 'current' | 'summary' = 'current';
 let _usageSummaryFetchInFlight: Promise<void> | null = null;
 
+class UsageModalView {
+  static render(): string {
+    return `
+    <div class="usage-panel">
+      <button class="usage-close" id="usage-close">&times;</button>
+      <div class="usage-head">
+        <button class="usage-tab active" data-tab="current">当前会话</button>
+        <button class="usage-tab" data-tab="summary">全部会话</button>
+      </div>
+      <div class="usage-body" id="usage-body">
+        <div class="usage-view" id="usage-view-current"></div>
+        <div class="usage-view" id="usage-view-summary" hidden></div>
+      </div>
+    </div>`;
+  }
+}
+
 function openUsagePanel(): void {
   closeUsagePanel(); // 关闭已有
 
@@ -130,18 +147,7 @@ function openUsagePanel(): void {
     if (e.target === overlay) closeUsagePanel();
   });
 
-  overlay.innerHTML = `
-    <div class="usage-panel">
-      <button class="usage-close" id="usage-close">&times;</button>
-      <div class="usage-head">
-        <button class="usage-tab active" data-tab="current">当前会话</button>
-        <button class="usage-tab" data-tab="summary">全部会话</button>
-      </div>
-      <div class="usage-body" id="usage-body">
-        <div class="usage-view" id="usage-view-current"></div>
-        <div class="usage-view" id="usage-view-summary" hidden></div>
-      </div>
-    </div>`;
+  overlay.innerHTML = UsageModalView.render();
 
   document.body.appendChild(overlay);
   _usageModalEl = overlay;
@@ -186,7 +192,70 @@ function renderUsagePanel(refreshActive = false): void {
   }
 }
 
+class UsageCurrentView {
+  static render(container: HTMLElement): void {
+    const d = _lastUsageData;
+    if (!d || !d.hasActiveSession || !isChatTabActive()) {
+      container.innerHTML = '<div class="usage-none">未选择会话</div>';
+      return;
+    }
+
+    const pct = d.contextUsage?.percent;
+    const pctDisplay = formatPercent(pct);
+    const pctClass = pct != null && pct >= 85 ? 'usage-danger' : pct != null && pct >= 70 ? 'usage-warn' : '';
+
+    container.innerHTML = `
+    <div class="usage-grid">
+      <div class="usage-card">
+        <div class="usage-card-val ${pctClass}">${pctDisplay}</div>
+        <div class="usage-card-lb">上下文窗口</div>
+        <div style="font-size:.65rem;color:var(--tm);margin-top:2px">${d.contextUsage?.tokens != null ? fmt(d.contextUsage.tokens) : '--'} / ${d.contextUsage?.contextWindow ? fmt(d.contextUsage.contextWindow) : '--'}</div>
+      </div>
+      <div class="usage-card">
+        <div class="usage-card-val">${formatPercent(d.cacheHitRate)}</div>
+        <div class="usage-card-lb">缓存命中率</div>
+      </div>
+      <div class="usage-card">
+        <div class="usage-card-val">${formatCost(d.cost, d.provider)}</div>
+        <div class="usage-card-lb">费用</div>
+      </div>
+    </div>
+
+    <div class="usage-section">
+      <div class="usage-section-hd">Token 用量</div>
+      <div class="usage-detail">
+        <span class="usage-dl">输入</span><span class="usage-dv">${fmt(d.tokens.input)}</span>
+        <span class="usage-dl">输出</span><span class="usage-dv">${fmt(d.tokens.output)}</span>
+        <span class="usage-dl">缓存命中</span><span class="usage-dv">${fmt(d.tokens.cacheRead)}</span>
+        <span class="usage-dl">缓存写入</span><span class="usage-dv">${fmt(d.tokens.cacheWrite)}</span>
+      </div>
+    </div>
+
+    <div class="usage-section">
+      <div class="usage-section-hd">Compaction</div>
+      <div style="font-size:.75rem;display:grid;grid-template-columns:auto 1fr;gap:4px 12px">
+        <span class="usage-dl">压缩次数</span><span class="usage-dv" style="text-align:left">${fmt(d.compactCount)}</span>
+        ${d.lastCompactionAt ? `<span class="usage-dl">最近压缩</span><span class="usage-dv" style="text-align:left">${new Date(d.lastCompactionAt).toLocaleString('zh-CN')}</span>` : ''}
+      </div>
+      ${d.lastCompactionSummary ? `<div class="usage-summary-text">${escapeHtml(d.lastCompactionSummary)}</div>` : ''}
+    </div>
+
+    ${d.isCompacting
+      ? '<div style="margin-top:12px;font-size:.72rem;color:var(--uw);text-align:center">正在压缩...</div>'
+      : `<button class="usage-compact-btn" id="panel-compact-btn" ${d.isStreaming ? 'disabled' : ''}>${d.isStreaming ? '请等待回复完成' : '压缩上下文'}</button>`}
+    `;
+
+    requestAnimationFrame(() => {
+      const panelBtn = container.querySelector('#panel-compact-btn') as HTMLButtonElement | null;
+      if (panelBtn && !panelBtn.disabled) {
+        panelBtn.addEventListener('click', () => { closeUsagePanel(); (window as any).openCompactModal?.(); });
+      }
+    });
+  }
+}
+
 function renderCurrentSessionUsage(container: HTMLElement): void {
+  return UsageCurrentView.render(container);
   const d = _lastUsageData;
 
   if (!d || !d.hasActiveSession || !isChatTabActive()) {
@@ -273,7 +342,65 @@ async function fetchSummary(): Promise<void> {
   return _usageSummaryFetchInFlight;
 }
 
+class UsageSummaryView {
+  static render(container: HTMLElement): void {
+    if (!_lastSummary) {
+      container.innerHTML = '<div class="usage-none">加载中...</div>';
+      fetchSummary().then(() => {
+        if (_lastSummary && container.isConnected && _usageTab === 'summary') UsageSummaryView.render(container);
+      });
+      return;
+    }
+
+    const s = _lastSummary;
+    const t = s.tokens;
+    const topHtml = s.topSessions.map((session, i) =>
+      `<div style="display:flex;gap:8px;padding:4px 0;font-size:.75rem;border-bottom:1px solid var(--bd)">
+      <span style="color:var(--tm);min-width:16px">${i + 1}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tx)">${escapeHtml(session.name)}</span>
+      <span style="color:var(--tm);font-family:var(--fm)">${fmt(session.totalTokens)}</span>
+    </div>`
+    ).join('');
+
+    container.innerHTML = `
+    <div class="usage-grid">
+      <div class="usage-card">
+        <div class="usage-card-val">${fmt(s.sessions)}</div>
+        <div class="usage-card-lb">总会话数</div>
+      </div>
+      <div class="usage-card">
+        <div class="usage-card-val">${fmt(t.input + t.output + t.cacheRead + t.cacheWrite)}</div>
+        <div class="usage-card-lb">总 Tokens</div>
+      </div>
+      <div class="usage-card">
+        <div class="usage-card-val">${formatCost(s.cost)}</div>
+        <div class="usage-card-lb">总费用</div>
+      </div>
+    </div>
+    <div class="usage-section">
+      <div class="usage-section-hd">Token 用量</div>
+      <div class="usage-detail">
+        <span class="usage-dl">输入</span><span class="usage-dv">${fmt(t.input)}</span>
+        <span class="usage-dl">输出</span><span class="usage-dv">${fmt(t.output)}</span>
+        <span class="usage-dl">命中</span><span class="usage-dv">${fmt(t.cacheRead)}</span>
+        <span class="usage-dl">未命中</span><span class="usage-dv">${fmt(t.cacheWrite)}</span>
+      </div>
+    </div>
+    <div class="usage-section">
+      <div class="usage-section-hd">压缩</div>
+      <div style="font-size:.75rem">总压缩次数: ${s.compactCount}</div>
+    </div>
+    ${s.topSessions.length > 0 ? `
+    <div class="usage-section">
+      <div class="usage-section-hd">Token 最高会话 Top 5</div>
+      ${topHtml}
+    </div>` : ''}
+    <div style="font-size:.65rem;color:var(--tm);text-align:center;margin-top:8px">${s.lastUpdatedAt ? '数据更新: ' + new Date(s.lastUpdatedAt).toLocaleString('zh-CN') : ''}</div>`;
+  }
+}
+
 function renderSummaryUsage(container: HTMLElement): void {
+  return UsageSummaryView.render(container);
   if (!_lastSummary) {
     container.innerHTML = '<div class="usage-none">加载中...</div>';
     fetchSummary().then(() => {
