@@ -527,32 +527,7 @@ function bind(): void {
           else sb('ms');
           return;
         } else if (d.type === 'command_confirm') {
-          const id = d.id || '';
-          if (!id) return;
-          void (async () => {
-            const choice = typeof confirmCommandAsync === 'function'
-              ? await confirmCommandAsync({
-                command: d.command || '',
-                reason: d.reason || '该命令需要确认',
-                permissionSuggestions: d.permissionSuggestions || [],
-              })
-              : ((await confirmAsync(`
-                <div style="font-weight:700;margin-bottom:8px">确认执行命令</div>
-                <div style="font-size:.76rem;color:var(--ts);margin-bottom:10px">${E(d.reason || '该命令需要确认')}</div>
-                <pre style="margin:0;max-width:560px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.18);border:1px solid var(--bd);border-radius:7px;padding:10px;font-family:var(--fm);font-size:.74rem;color:var(--tx)">${E(d.command || '')}</pre>
-              `)) ? 'session' : 'deny');
-            await fetch('/api/chat/command-confirm', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                id,
-                allow: choice !== 'deny',
-                scope: choice === 'workspace'
-                  ? 'workspace'
-                  : choice === 'session' ? 'session' : 'once',
-              }),
-            }).catch(() => undefined);
-          })();
+          void ChatCommandConfirmationView.handle(d);
           return;
         } else if (d.type === 'queue_update') {
           const steering = Array.isArray((d as any).steering) ? (d as any).steering.length : 0;

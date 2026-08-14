@@ -63,11 +63,27 @@ describe("frontend component tree boundaries", () => {
     assert.match(subagent, /refreshSubagentDelegation:\s*chatSubagentRefreshDelegation/);
   });
 
+  it("keeps chat command confirmation in a dedicated component view", () => {
+    const chat = source("src/frontend/dashboard/dashboard-chat.ts");
+    const confirmation = source("src/frontend/chat/chat-command-confirmation.ts");
+    for (const name of ["ChatCommandConfirmationView"]) assertClass(confirmation, name);
+    assert.match(confirmation, /static async handle\(/);
+    assert.match(chat, /ChatCommandConfirmationView\.handle\(d\)/);
+    assert.doesNotMatch(chat, /confirmCommandAsync|\/api\/chat\/command-confirm/);
+  });
+
   it("loads the subagent component module after shared chat views and before chat rendering", () => {
     const compiler = source("scripts/compile-frontend-ts.mjs");
     const sharedIndex = compiler.indexOf('"gen/chat/chat-component-views.js"');
     const subagentIndex = compiler.indexOf('"gen/chat/chat-subagent-views.js"');
     const renderIndex = compiler.indexOf('"gen/chat/chat-render.js"');
     assert.ok(sharedIndex >= 0 && subagentIndex > sharedIndex && renderIndex > subagentIndex);
+  });
+
+  it("loads chat command confirmation before dashboard chat", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const confirmationIndex = compiler.indexOf('"gen/chat/chat-command-confirmation.js"');
+    const dashboardChatIndex = compiler.indexOf('"gen/dashboard/dashboard-chat.js"');
+    assert.ok(confirmationIndex >= 0 && dashboardChatIndex > confirmationIndex);
   });
 });
