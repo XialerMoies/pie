@@ -416,6 +416,7 @@ interface AppChatViews {
   configure(dependencies: { renderMarkdown?: (text: string) => string }): void;
   createComposer(callbacks: ChatComposerCallbacks): AppChatComposer;
   resizeComposerInput(input: HTMLTextAreaElement): void;
+  openModelPicker(event: MouseEvent): void;
   FileDiffView: new (diff: FileDiffMetadata, options?: FileDiffRenderOptions) => ChatComponentView<FileDiffMetadata>;
   EditSummaryView: new (blocks: any[], expanded?: boolean) => ChatComponentView<any[]>;
   SubagentTaskView: new (task: FrontendSubagentTask, index?: number) => ChatComponentView<FrontendSubagentTask>;

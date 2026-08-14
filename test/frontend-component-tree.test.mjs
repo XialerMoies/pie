@@ -82,6 +82,16 @@ describe("frontend component tree boundaries", () => {
     assert.doesNotMatch(chat, /function\s+sendOrStop\b|let\s+chatNoteMode\b/);
   });
 
+  it("keeps model picker rendering and lifecycle in a dedicated component view", () => {
+    const chat = source("src/frontend/dashboard/dashboard-chat.ts");
+    const picker = source("src/frontend/chat/chat-model-picker.ts");
+    assertClass(picker, "ChatModelPickerView");
+    assert.match(picker, /id = 'model-picker'|id = \"model-picker\"/);
+    assert.match(picker, /openModelPicker/);
+    assert.match(chat, /App\.ChatViews\.openModelPicker\(e\)/);
+    assert.doesNotMatch(chat, /fetch\('\/api\/models'\)|fetch\('\/api\/model\/switch'\)/);
+  });
+
   it("loads the subagent component module after shared chat views and before chat rendering", () => {
     const compiler = source("scripts/compile-frontend-ts.mjs");
     const sharedIndex = compiler.indexOf('"gen/chat/chat-component-views.js"');
@@ -102,5 +112,12 @@ describe("frontend component tree boundaries", () => {
     const composerIndex = compiler.indexOf('"gen/chat/chat-composer.js"');
     const dashboardChatIndex = compiler.indexOf('"gen/dashboard/dashboard-chat.js"');
     assert.ok(composerIndex >= 0 && dashboardChatIndex > composerIndex);
+  });
+
+  it("loads the model picker before dashboard chat", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const pickerIndex = compiler.indexOf('"gen/chat/chat-model-picker.js"');
+    const dashboardChatIndex = compiler.indexOf('"gen/dashboard/dashboard-chat.js"');
+    assert.ok(pickerIndex >= 0 && dashboardChatIndex > pickerIndex);
   });
 });

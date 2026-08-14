@@ -758,53 +758,7 @@ function isBusy(): boolean {
 // ═══════════════════════════════════════════════════════════════════
 
 function showModelPicker(e: MouseEvent): void {
-  const existing = $('model-picker');
-  if (existing) { existing.remove(); return; }
-  const target = e.currentTarget as HTMLElement || $('fi-model-btn');
-  fetch('/api/models').then(r => r.json()).then((data: { models?: Array<{ provider: string; id: string }> }) => {
-    if (!data.models || !data.models.length) { toast('没有可用模型'); return; }
-    const rect = target.getBoundingClientRect();
-    const picker = document.createElement('div');
-    picker.id = 'model-picker';
-    picker.className = 'model-picker';
-    picker.style.bottom = `${window.innerHeight - rect.top + 4}px`;
-    picker.style.left = `${rect.left}px`;
-    const modelList = document.createElement('div');
-    modelList.className = 'model-picker-list';
-    const grouped: Record<string, Array<{ provider: string; id: string }>> = {};
-    for (const m of data.models) {
-      if (!grouped[m.provider]) grouped[m.provider] = [];
-      grouped[m.provider].push(m);
-    }
-    for (const [provider, models] of Object.entries(grouped)) {
-      const header = document.createElement('div');
-      header.style.cssText = 'font-size:.6rem;font-weight:600;text-transform:uppercase;color:var(--tm);padding:6px 10px 3px;letter-spacing:.05em;font-family:var(--fd)';
-      header.textContent = provider;
-      modelList.appendChild(header);
-      for (const m of models) {
-        const item = document.createElement('div');
-        const stD = App.ChatState.getDashboard();
-        const active = (m.provider === stD?.modelProvider && m.id === stD?.modelId);
-        item.style.cssText = `padding:6px 10px;border-radius:4px;cursor:pointer;font-size:.78rem;font-family:var(--fm);color:${active?'var(--am)':'var(--ts)'};background:${active?'rgba(245,158,11,.1)':'transparent'}`;
-        item.textContent = m.id;
-        item.addEventListener('mouseenter', () => { item.style.background = 'var(--bc)'; });
-        item.addEventListener('mouseleave', () => { item.style.background = active ? 'rgba(245,158,11,.1)' : 'transparent'; });
-        item.addEventListener('click', () => {
-          fetch('/api/model/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, modelId: m.id }) })
-            .then(r => r.json()).then((r: { ok: boolean; error?: string }) => {
-              if (r.ok) { toast('已切换: ' + m.id, 'success'); getD(); void App.Chat?.syncThinkingLevel?.(); picker.remove(); }
-              else toast('切换失败: ' + (r.error || ''), 'error');
-            }).catch(() => toast('切换失败', 'error'));
-        });
-        modelList.appendChild(item);
-      }
-    }
-    picker.appendChild(modelList);
-    App.Chat?.mountThinkingControl?.(picker);
-    document.body.appendChild(picker);
-    const close = function (ev: MouseEvent) { if (!picker.contains(ev.target as Node) && ev.target !== target) { picker.remove(); document.removeEventListener('click', close, true); } };
-    setTimeout(() => document.addEventListener('click', close as any, true), 0);
-  }).catch((err) => { console.error("[model picker]", err); toast("加载模型列表失败"); });
+  App.ChatViews.openModelPicker(e);
 }
 
 // ─── App 命名空间绑定 ──────────────────────────────────────

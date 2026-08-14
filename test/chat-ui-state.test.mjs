@@ -194,6 +194,7 @@ describe("chat ui state", () => {
     Object.assign(globalThis, await import(`../src/frontend/chat/subagent-state.ts?t=${ts}`));
     await import(`../src/frontend/chat/chat-composer.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-command-confirmation.ts?t=${ts}`);
+    await import(`../src/frontend/chat/chat-model-picker.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-component-views.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-subagent-views.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);

@@ -156,6 +156,7 @@ const bundleOrder = [
   "gen/chat/subagent-state.js",
   "gen/chat/chat-composer.js",
   "gen/chat/chat-command-confirmation.js",
+  "gen/chat/chat-model-picker.js",
   "gen/chat/chat-component-views.js",
   "gen/chat/chat-subagent-views.js",
   "gen/chat/chat-render.js",
