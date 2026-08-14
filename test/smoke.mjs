@@ -90,12 +90,15 @@ if (existsSync(assetsDir)) {
   check(false, "assets/ 目录存在");
 }
 const workerFiles = readdirSyncSafe(assetsDir).filter(n => n.includes("worker"));
-if (workerFiles.length > 0) {
-  check(workerFiles.length >= 3, `Monaco Worker 文件存在 (${workerFiles.length} 个)`);
-} else {
-  console.log("  ℹ️ current IIFE build does not emit Monaco worker assets");
+const requiredMonacoWorkers = ["editor.worker", "ts.worker", "json.worker", "css.worker", "html.worker"];
+for (const workerName of requiredMonacoWorkers) {
+  check(workerFiles.some(name => name.startsWith(`${workerName}-`) && name.endsWith(".js")), `Monaco ${workerName} asset is emitted`);
 }
-
+if (existsSync(monacoEntryPath)) {
+  const monacoEntry = readFileSync(monacoEntryPath, "utf-8");
+  check(!monacoEntry.includes("data:text/javascript"), "Monaco workers are not inlined as data URLs");
+  check(requiredMonacoWorkers.every(workerName => monacoEntry.includes(`../assets/${workerName}-`)), "Monaco entry references every worker asset by a relative URL");
+}
 // 3. CSS 产物
 console.log("\n🎨 CSS 产物检查");
 const cssFiles = readdirSyncSafe(assetsDir).filter(n => n.endsWith(".css"));

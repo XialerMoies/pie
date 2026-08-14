@@ -23,23 +23,21 @@ import { ObserverOwner } from "./observer-owner";
 // ─── 不再需要 addExtraLib — tsserver 子进程直接读文件系统 node_modules
 
 // ─── Worker 配置 ─────────────────────────────────────────────
-import editorWorkerUrl from "monaco-editor/esm/vs/editor/editor.worker?url";
-import tsWorkerUrl from "monaco-editor/esm/vs/language/typescript/ts.worker?url";
-import jsonWorkerUrl from "monaco-editor/esm/vs/language/json/json.worker?url";
-import cssWorkerUrl from "monaco-editor/esm/vs/language/css/css.worker?url";
-import htmlWorkerUrl from "monaco-editor/esm/vs/language/html/html.worker?url";
+import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
+import TypeScriptWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+import JsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
+import CssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
+import HtmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 
 self.MonacoEnvironment = {
   getWorker(_: unknown, label: string) {
-    let url: string;
     switch (label) {
-      case "typescript": case "javascript": url = tsWorkerUrl; break;
-      case "json": url = jsonWorkerUrl; break;
-      case "css": case "scss": case "less": url = cssWorkerUrl; break;
-      case "html": case "handlebars": case "razor": url = htmlWorkerUrl; break;
-      default: url = editorWorkerUrl;
+      case "typescript": case "javascript": return new TypeScriptWorker({ name: label });
+      case "json": return new JsonWorker({ name: label });
+      case "css": case "scss": case "less": return new CssWorker({ name: label });
+      case "html": case "handlebars": case "razor": return new HtmlWorker({ name: label });
+      default: return new EditorWorker({ name: label });
     }
-    return new Worker(url, { type: "module", name: label });
   },
 };
 
