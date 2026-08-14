@@ -4,12 +4,9 @@ import path from "node:path";
 import type {
   CommandConfirmationResponse,
   PermissionRule,
-  PermissionRuleMatch,
   PermissionRuleScope,
   PermissionSuggestion,
-  PermissionToolName,
   SessionPermissionState,
-  McpCapabilityName,
   McpToolCapabilityDeclaration,
   ToolAuthorizationRequest,
   ToolAuthorizationMode,
@@ -21,16 +18,11 @@ import type {
 } from "../agent/types.js";
 import { toolAuthorizationDecisionRequest } from "../agent/types.js";
 import {
-  applySessionPermissionSuggestions,
   createMcpCapabilityPermissionSuggestions,
   createPathPermissionSuggestions,
   createToolPermissionSuggestions,
   evaluatePathPermission,
-  findMatchingMcpCapabilityPermissionRule,
-  findMatchingToolPermissionRule,
   normalizePermissionPath,
-  pathPermissionRuleOverlapsRoot,
-  permissionRulesForScopes,
   type PathPermissionDecision,
   type PathPermissionOperation,
 } from "../agent/permissions.js";
@@ -47,13 +39,20 @@ import {
   type PermissionAuditStore,
 } from "./permission-audit-log.js";
 import {
-  emptyWorkspacePermissionRuleSet,
-  type WorkspacePermissionRuleSet,
-  type WorkspacePermissionRuleStore,
-} from "./permission-rule-store.js";
+  PermissionRuleManager,
+  eligibleMcpCapability,
+  type PermissionRuleListName,
+  type PermissionRulesSnapshot,
+} from "./permission-rule-manager.js";
+import type { WorkspacePermissionRuleStore } from "./permission-rule-store.js";
 import type { RootRegistry } from "./root-registry.js";
 
 export type { PermissionAuditEntry, PermissionAuditOperation } from "./permission-audit-log.js";
+export type {
+  PermissionRuleListName,
+  PermissionRulesSnapshot,
+  ScopedPermissionRule,
+} from "./permission-rule-manager.js";
 
 export interface ServerPermissionConfirmationRequest {
   source: string;
@@ -91,20 +90,6 @@ export interface ServerPathAuthorizationOptions {
   suggestedDirectory?: string;
 }
 
-export type PermissionRuleListName = "allow" | "deny" | "ask";
-
-export interface ScopedPermissionRule extends PermissionRule {
-  scope: PermissionRuleScope;
-  index: number;
-}
-
-export interface PermissionRulesSnapshot {
-  additionalWorkingDirectories: Array<{ path: string; source: string }>;
-  alwaysAllowRules: ScopedPermissionRule[];
-  alwaysDenyRules: ScopedPermissionRule[];
-  alwaysAskRules: ScopedPermissionRule[];
-}
-
 export class ServerPermissionError extends Error {
   statusCode: number;
   code: string;
@@ -123,10 +108,8 @@ export class ServerPermissionService {
   private readonly trustedRootsProvider?: () => readonly string[];
   private readonly rootRegistry?: RootRegistry;
   private readonly confirmPermission?: ServerPermissionConfirmCallback;
-  private readonly permissionRuleStore?: WorkspacePermissionRuleStore;
   private readonly auditLog: PermissionAuditLog;
-  private activeWorkspaceRuleKey = "";
-  private activeWorkspaceRulePath = "";
+  private readonly ruleManager?: PermissionRuleManager;
 
   constructor(options: ServerPermissionServiceOptions = {}) {
     this.sessionPermissionState = options.sessionPermissionState;
@@ -134,11 +117,18 @@ export class ServerPermissionService {
     this.trustedRootsProvider = options.trustedRootsProvider;
     this.rootRegistry = options.rootRegistry;
     this.confirmPermission = options.confirmPermission;
-    this.permissionRuleStore = options.permissionRuleStore;
     this.auditLog = new PermissionAuditLog({
       store: options.auditStore,
       maxEntries: options.maxAuditEntries,
     });
+    this.ruleManager = options.sessionPermissionState
+      ? new PermissionRuleManager({
+          sessionPermissionState: options.sessionPermissionState,
+          workspaceRootProvider: options.workspaceRootProvider,
+          permissionRuleStore: options.permissionRuleStore,
+          createError: (message, statusCode, code) => new ServerPermissionError(message, statusCode, code),
+        })
+      : undefined;
   }
 
   recordPermissionModeChange(mode: PermissionMode, source: string): void {
@@ -343,7 +333,6 @@ export class ServerPermissionService {
       permissionRequired,
       mcpCapabilities: request.mcpCapabilities,
     };
-    const state = this.sessionPermissionState;
     const decisionRequest = toolAuthorizationDecisionRequest(request);
     const result = (
       allow: boolean,
@@ -351,9 +340,9 @@ export class ServerPermissionService {
       reason?: string,
     ): ToolAuthorizationResult => ({ allow, ...(reason ? { reason } : {}), decision: { ...decision, request: decisionRequest } });
 
-    const denyMatch = findScopedToolRule(request.toolName, state?.alwaysDenyRules);
+    const denyMatch = this.ruleManager?.findToolRule(request.toolName, "deny");
     const capabilityDenyMatch = mcpCapability && request.mcpCapabilities
-      ? findScopedMcpCapabilityRule(request.mcpCapabilities.serverName, mcpCapability, state?.alwaysDenyRules)
+      ? this.ruleManager?.findMcpCapabilityRule(request.mcpCapabilities.serverName, mcpCapability, "deny")
       : undefined;
     if (denyMatch || capabilityDenyMatch) {
       const matchedScope = denyMatch?.scope || capabilityDenyMatch!.scope;
@@ -385,13 +374,13 @@ export class ServerPermissionService {
       }, specializedReason);
     }
 
-    const askMatch = findScopedToolRule(request.toolName, state?.alwaysAskRules);
+    const askMatch = this.ruleManager?.findToolRule(request.toolName, "ask");
     const capabilityAskMatch = mcpCapability && request.mcpCapabilities
-      ? findScopedMcpCapabilityRule(request.mcpCapabilities.serverName, mcpCapability, state?.alwaysAskRules)
+      ? this.ruleManager?.findMcpCapabilityRule(request.mcpCapabilities.serverName, mcpCapability, "ask")
       : undefined;
-    const allowMatch = findScopedToolRule(request.toolName, state?.alwaysAllowRules);
+    const allowMatch = this.ruleManager?.findToolRule(request.toolName, "allow");
     const capabilityAllowMatch = mcpCapability && request.mcpCapabilities
-      ? findScopedMcpCapabilityRule(request.mcpCapabilities.serverName, mcpCapability, state?.alwaysAllowRules)
+      ? this.ruleManager?.findMcpCapabilityRule(request.mcpCapabilities.serverName, mcpCapability, "allow")
       : undefined;
     const effectiveAskMatch = askMatch || capabilityAskMatch;
     if (allowMatch && !effectiveAskMatch) {
@@ -550,164 +539,53 @@ export class ServerPermissionService {
   }
 
   getRulesSnapshot(): PermissionRulesSnapshot {
-    this.syncWorkspaceRules();
-    const state = this.requireSessionPermissionState();
-    return {
-      additionalWorkingDirectories: [...state.additionalWorkingDirectories.values()],
-      alwaysAllowRules: scopedRuleViews(state.alwaysAllowRules),
-      alwaysDenyRules: scopedRuleViews(state.alwaysDenyRules),
-      alwaysAskRules: scopedRuleViews(state.alwaysAskRules),
-    };
+    return this.requireRuleManager().getRulesSnapshot();
   }
 
   async applyPermissionSuggestions(
     suggestions: readonly PermissionSuggestion[],
     scope: PermissionRuleScope,
   ): Promise<PermissionRule[]> {
-    this.syncWorkspaceRules();
-    const state = this.requireSessionPermissionState();
-    if (scope === "session") {
-      applySessionPermissionSuggestions(state, suggestions);
-      return suggestions.flatMap((suggestion) => (
-        suggestion.type === "addWorkingDirectory" ? [] : [{ ...suggestion.rule }]
-      ));
-    }
-
-    const rules = suggestions.flatMap((suggestion) => (
-      suggestion.type === "addReadRule" || suggestion.type === "addPathRule" || suggestion.type === "addToolRule"
-        ? [normalizePermissionRule(suggestion.rule)]
-        : []
-    ));
-    if (rules.length === 0) return [];
-    await this.mutateWorkspaceRules((candidate) => {
-      for (const rule of rules) addUniqueRule(candidate.alwaysAllowRules, rule);
-    });
-    return rules;
+    return this.requireRuleManager().applyPermissionSuggestions(suggestions, scope);
   }
 
   async addSessionRule(list: PermissionRuleListName, rule: PermissionRule): Promise<{ added: boolean; rule: PermissionRule }> {
-    return this.addRule(list, rule, "session");
+    return this.requireRuleManager().addSessionRule(list, rule);
   }
 
   async addRule(list: PermissionRuleListName, rule: PermissionRule, scope: PermissionRuleScope = "session"): Promise<{ added: boolean; rule: PermissionRule }> {
-    this.syncWorkspaceRules();
-    const state = this.requireSessionPermissionState();
-    const normalized = normalizePermissionRule(rule);
-    const workspaceRoot = this.workspaceRootProvider?.();
-    if (list === "ask" && workspaceRoot && pathPermissionRuleOverlapsRoot(normalized, workspaceRoot)) {
-      throw new ServerPermissionError(
-        "Ask rules cannot target paths inside the active workspace",
-        400,
-        "workspace_internal_ask_rule",
-      );
-    }
-    if (scope === "workspace") {
-      let added = false;
-      await this.mutateWorkspaceRules((candidate) => {
-        added = addUniqueRule(rulesForRuleSet(candidate, list), normalized);
-      });
-      return { added, rule: normalized };
-    }
-
-    const rules = rulesForList(state, list, scope);
-    const added = addUniqueRule(rules, normalized);
-    return { added, rule: normalized };
+    return this.requireRuleManager().addRule(list, rule, scope);
   }
 
   async removeSessionRule(list: PermissionRuleListName, index: number): Promise<PermissionRule | undefined> {
-    return this.removeRule(list, index, "session");
+    return this.requireRuleManager().removeSessionRule(list, index);
   }
 
   async removeRule(list: PermissionRuleListName, index: number, scope: PermissionRuleScope = "session"): Promise<PermissionRule | undefined> {
-    this.syncWorkspaceRules();
-    const state = this.requireSessionPermissionState();
-    const rules = rulesForList(state, list, scope);
-    if (!Number.isInteger(index) || index < 0 || index >= rules.length) return undefined;
-    const selected = { ...rules[index] };
-    if (scope === "workspace") {
-      let removed: PermissionRule | undefined;
-      await this.mutateWorkspaceRules((candidate) => {
-        const latest = rulesForRuleSet(candidate, list);
-        const latestIndex = latest.findIndex((rule) => samePermissionRule(rule, selected));
-        if (latestIndex >= 0) removed = latest.splice(latestIndex, 1)[0];
-      });
-      return removed ? { ...removed } : undefined;
-    }
-    return rules.splice(index, 1)[0];
+    return this.requireRuleManager().removeRule(list, index, scope);
   }
 
   async clearSessionRules(list?: PermissionRuleListName | "all"): Promise<number> {
-    return this.clearRules(list, "session");
+    return this.requireRuleManager().clearSessionRules(list);
   }
 
   async clearRules(list: PermissionRuleListName | "all" = "all", scope: PermissionRuleScope = "session"): Promise<number> {
-    this.syncWorkspaceRules();
-    const state = this.requireSessionPermissionState();
-    const lists: PermissionRuleListName[] = list && list !== "all" ? [list] : ["allow", "deny", "ask"];
-    if (scope === "workspace") {
-      let removed = 0;
-      await this.mutateWorkspaceRules((candidate) => {
-        for (const item of lists) {
-          const rules = rulesForRuleSet(candidate, item);
-          removed += rules.length;
-          rules.length = 0;
-        }
-      });
-      return removed;
-    }
-
-    let removed = 0;
-    for (const item of lists) {
-      const rules = rulesForList(state, item, scope);
-      removed += rules.length;
-      rules.length = 0;
-    }
-    if (scope === "session" && (!list || list === "all")) {
-      removed += state.additionalWorkingDirectories.size;
-      state.additionalWorkingDirectories.clear();
-    }
-    return removed;
+    return this.requireRuleManager().clearRules(list, scope);
   }
 
   private syncWorkspaceRules(): void {
-    if (!this.sessionPermissionState || !this.permissionRuleStore) return;
-    const workspacePath = this.workspaceRootProvider?.();
-    if (!workspacePath) return;
-    const key = normalizePermissionPath(workspacePath);
-    if (key === this.activeWorkspaceRuleKey) return;
-
-    let loaded = emptyWorkspacePermissionRuleSet();
-    try {
-      loaded = this.permissionRuleStore.load(workspacePath);
-    } catch {
-      loaded = emptyWorkspacePermissionRuleSet();
-    }
-    replaceWorkspaceRules(this.sessionPermissionState, loaded);
-    this.activeWorkspaceRuleKey = key;
-    this.activeWorkspaceRulePath = workspacePath;
-  }
-
-  private async mutateWorkspaceRules(mutator: (candidate: WorkspacePermissionRuleSet) => void): Promise<void> {
-    const state = this.requireSessionPermissionState();
-    if (!this.permissionRuleStore || !this.activeWorkspaceRulePath) {
-      throw new ServerPermissionError("Workspace permission rule store is not available", 503, "permission_rule_store_unavailable");
-    }
-    const candidate = await this.permissionRuleStore.update(this.activeWorkspaceRulePath, (latest) => {
-      mutator(latest);
-      return latest;
-    });
-    replaceWorkspaceRules(state, candidate);
+    this.ruleManager?.syncWorkspaceRules();
   }
 
   private record(entry: PendingPermissionAuditEntry): void {
     this.auditLog.record(entry);
   }
 
-  private requireSessionPermissionState(): SessionPermissionState {
-    if (!this.sessionPermissionState) {
+  private requireRuleManager(): PermissionRuleManager {
+    if (!this.ruleManager) {
       throw new ServerPermissionError("Session permission state is not available", 503, "permission_state_unavailable");
     }
-    return this.sessionPermissionState;
+    return this.ruleManager;
   }
 
   private allowedRoots(permissionRoot: string, guardedRoot: string, operation: PathPermissionOperation): string[] {
@@ -841,9 +719,6 @@ export async function authorizeRoutePath(
     : guardPathWithinRoot(effectiveRoot, target, operation);
 }
 
-const PERMISSION_TOOL_NAMES = new Set<PermissionToolName>(["Read", "Write", "Create", "Remove", "Command", "Tool", "McpCapability"]);
-const PERMISSION_RULE_MATCHES = new Set<PermissionRuleMatch>(["exact", "prefix", "wildcard"]);
-
 function isSensitiveWorkspaceRoot(workspace: string): boolean {
   // 归一化：小写 + 正斜杠 + 去尾斜杠；c:\windows → c:/windows
   const normalized = normalizePermissionPath(workspace).replace(/\\/g, "/").replace(/\/+$/, "");
@@ -866,103 +741,4 @@ function isSensitiveWorkspaceRoot(workspace: string): boolean {
   if (normalized === home) return true;
 
   return false;
-}
-
-function rulesForList(
-  state: SessionPermissionState,
-  list: PermissionRuleListName,
-  scope: PermissionRuleScope = "session",
-): PermissionRule[] {
-  if (list === "allow") return state.alwaysAllowRules[scope];
-  if (list === "deny") return state.alwaysDenyRules[scope];
-  return state.alwaysAskRules[scope];
-}
-
-function rulesForRuleSet(rules: WorkspacePermissionRuleSet, list: PermissionRuleListName): PermissionRule[] {
-  if (list === "allow") return rules.alwaysAllowRules;
-  if (list === "deny") return rules.alwaysDenyRules;
-  return rules.alwaysAskRules;
-}
-
-function scopedRuleViews(
-  rules: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>>,
-): ScopedPermissionRule[] {
-  return (["session", "workspace"] as const).flatMap((scope) => (
-    (rules[scope] || []).map((rule, index) => ({ ...rule, scope, index }))
-  ));
-}
-
-function findScopedToolRule(
-  toolName: string,
-  rules: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>> | undefined,
-): { rule: PermissionRule; scope: PermissionRuleScope } | undefined {
-  for (const scope of ["session", "workspace"] as const) {
-    const rule = findMatchingToolPermissionRule(toolName, rules?.[scope]);
-    if (rule) return { rule, scope };
-  }
-  return undefined;
-}
-
-function eligibleMcpCapability(
-  capabilities: McpToolCapabilityDeclaration | undefined,
-): McpCapabilityName | undefined {
-  if (
-    capabilities?.declaration === "declared" &&
-    capabilities.readOnly &&
-    !capabilities.destructive &&
-    !capabilities.openWorld
-  ) {
-    return "readOnly";
-  }
-  return undefined;
-}
-
-function findScopedMcpCapabilityRule(
-  serverName: string,
-  capability: McpCapabilityName,
-  rules: Partial<Record<PermissionRuleScope, readonly PermissionRule[]>> | undefined,
-): { rule: PermissionRule; scope: PermissionRuleScope } | undefined {
-  for (const scope of ["session", "workspace"] as const) {
-    const rule = findMatchingMcpCapabilityPermissionRule(serverName, capability, rules?.[scope]);
-    if (rule) return { rule, scope };
-  }
-  return undefined;
-}
-
-function replaceWorkspaceRules(state: SessionPermissionState, rules: WorkspacePermissionRuleSet): void {
-  state.alwaysAllowRules.workspace.splice(0, state.alwaysAllowRules.workspace.length, ...rules.alwaysAllowRules.map((rule) => ({ ...rule })));
-  state.alwaysDenyRules.workspace.splice(0, state.alwaysDenyRules.workspace.length, ...rules.alwaysDenyRules.map((rule) => ({ ...rule })));
-  state.alwaysAskRules.workspace.splice(0, state.alwaysAskRules.workspace.length, ...rules.alwaysAskRules.map((rule) => ({ ...rule })));
-}
-
-function normalizePermissionRule(rule: PermissionRule): PermissionRule {
-  const toolName = String(rule?.toolName || "") as PermissionToolName;
-  const ruleContent = String(rule?.ruleContent || "").trim();
-  const match = rule?.match === undefined ? undefined : String(rule.match) as PermissionRuleMatch;
-
-  if (!PERMISSION_TOOL_NAMES.has(toolName)) {
-    throw new ServerPermissionError("Invalid permission rule toolName", 400, "invalid_permission_rule");
-  }
-  if (!ruleContent || ruleContent.length > 1000) {
-    throw new ServerPermissionError("Invalid permission rule content", 400, "invalid_permission_rule");
-  }
-  if (match !== undefined && !PERMISSION_RULE_MATCHES.has(match)) {
-    throw new ServerPermissionError("Invalid permission rule match mode", 400, "invalid_permission_rule");
-  }
-
-  return match === undefined ? { toolName, ruleContent } : { toolName, ruleContent, match };
-}
-
-function addUniqueRule(rules: PermissionRule[], rule: PermissionRule): boolean {
-  const exists = rules.some((existing) => samePermissionRule(existing, rule));
-  if (!exists) rules.push({ ...rule });
-  return !exists;
-}
-
-function samePermissionRule(left: PermissionRule, right: PermissionRule): boolean {
-  return (
-    left.toolName === right.toolName &&
-    left.ruleContent === right.ruleContent &&
-    (left.match ?? "prefix") === (right.match ?? "prefix")
-  );
 }

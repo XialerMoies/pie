@@ -211,6 +211,20 @@ describe("server permission service", () => {
     assert.doesNotMatch(auditStoreSource, /from "\.\/permission-service\.js"/);
   });
 
+  it("delegates permission rule state to a focused rule manager", () => {
+    const ruleManagerPath = resolve(process.cwd(), "src/server/permission-rule-manager.ts");
+    assert.strictEqual(existsSync(ruleManagerPath), true, "permission-rule-manager.ts must own rule state");
+
+    const serviceSource = readFileSync(resolve(process.cwd(), "src/server/permission-service.ts"), "utf8");
+    const managerSource = readFileSync(ruleManagerPath, "utf8");
+
+    assert.match(serviceSource, /new PermissionRuleManager\(/);
+    assert.doesNotMatch(serviceSource, /activeWorkspaceRule(?:Key|Path)/);
+    assert.doesNotMatch(serviceSource, /function (?:rulesForList|replaceWorkspaceRules|normalizePermissionRule)\(/);
+    assert.match(managerSource, /export class PermissionRuleManager/);
+    assert.doesNotMatch(managerSource, /from "\.\/permission-service\.js"/);
+  });
+
   it("hydrates workspace rules before authorization and replaces them when the workspace changes", async () => {
     const root = makeTempRoot("server-perm-workspace-hydrate-");
     try {
