@@ -219,6 +219,8 @@ server 与 AgentRuntime 仍按项目隔离在独立子进程内，因此 server 
 （每完成一项，在此追加一行：日期 / ID / 简述 / 验证）
 
 - 2026-08-09 / ④-A Task 8 / 单 Electron 主进程多窗口迁移：每项目独立 server child/AgentRuntime；duplicate workspace 聚焦、close/crash/reopen 隔离、second-instance 转发与 E2E-only diagnostics / Windows packaged E2E 通过，shell 124 ms、workbench 1564 ms
+- 2026-08-14 / 技术债 / App.* 依赖局部化第六批：Permissions/MCP/Explorer/Git/Search 面板、ExplorerService、LayoutPanel、ChatEventNode、ChatAttachmentInput 9 文件清除 52 处直接引用，各自 `XxxPaneDependencies`/`ExplorerServiceDependencies` 面板级依赖接口 + 装配入口，保留公开 App.* facade；统一门禁扩展 9 文件 + 面板级专属断言 / App.* 文件 19→10、引用 340→288（剩 10 个中高耦合文件）、typecheck、bundle 49 文件、frontend 351/351；提交 `8e54f9c`
+- 2026-08-14 / 技术债 / App.* 依赖局部化第五批：Tree/tsserver/model-picker/timeline/menus/session-list-panel/MCP Views/events/tab-store 等 11 个低引用文件批量降为 0（依赖解构/惰性工厂/函数式访问三模式），统一结构门禁覆盖 / App.* 文件 30→19、引用 362→340、typecheck、bundle、frontend 351/351；提交 `81aab80`
 - 2026-08-14 / 技术债 / App.* 依赖局部化第四批：chat-token.ts 新增 `ChatTokenDependencies`（tabs/events/state/chat/chatState）模块级解构，7 处 App.* 降为 0；**token\* 专属别名避免 bundle 单作用域下与 chat-render `chatState` 同名冲突**（B-11 变体）；workspace 状态改经 State facade 不再直读 localStorage；同步事件所有权/workspace 状态/组件边界测试 / 全前端 App.* 369→362（剩 30 文件）、typecheck、bundle、frontend 350/350；提交 `25bfa3c`
 - 2026-08-14 / 技术债 / App.* 依赖局部化第三批：chat-mode.ts 新增 `ChatModeDependencies`（preferences/permissions）模块级解构，8 处 App.* 降为 0，保留 App.Chat 门面与行为；新增门禁禁止 `/\bApp\./` 回流 / 全前端 App.* 377→369、typecheck、bundle、frontend 350/350；提交 `0dcd717`
 - 2026-08-14 / 技术债 / App.* 依赖局部化第二批：chat-sse-controller.ts 新增 `ChatSseControllerDependencies` 构造注入 Chat/ChatState/ChatStream/ChatViews，createSseController 外部签名不变，装配入口一次取出；文件内 App.* 13→0，新增门禁禁止 `/\bApp\./` 回流 / 全前端 App.* 389→376、typecheck、bundle、frontend 349/349；提交 `cb472e5`
