@@ -164,6 +164,7 @@ const bundleOrder = [
   "gen/chat/chat-render.js",
   "gen/chat/chat-timeline.js",
   "gen/chat/chat-reading-controls.js",
+  "gen/chat/chat-sse-controller.js",
   "gen/chat/chat-mode.js",
   "gen/chat/chat-token.js",
   "gen/chat/chat-attachments.js",

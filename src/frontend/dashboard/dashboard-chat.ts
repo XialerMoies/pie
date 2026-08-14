@@ -7,6 +7,7 @@ let submitMessageHandler: ((text: string) => void) | null = null;
 let chatComposerView: AppChatComposer | null = null;
 let chatAttachmentInputView: AppChatAttachmentInput | null = null;
 let chatReadingControlsView: AppChatReadingControls | null = null;
+let chatSseControllerView: AppChatSseController | null = null;
 
 type ChatSendContext = {
   sessionId: string;
@@ -297,6 +298,14 @@ function bind(): void {
     updateUI();
   }
 
+  function finalizeSendContext(context: ChatSendContext | null): void {
+    if (context && !context.persistent && context.sessionId) {
+      void deleteEphemeralSession(context.sessionId).then(() => App.Session.loadSessions());
+    } else {
+      App.Session.loadSessions();
+    }
+  }
+
   function updateNoteStatus(noteId: string, status: 'queued' | 'delivered' | 'failed'): void {
     const messages = App.ChatState.getMessages();
     for (let index = messages.length - 1; index >= 0; index--) {
@@ -393,14 +402,6 @@ function bind(): void {
         ? { sessionId: '', persistent: true, draftId: activeTabId }
         : { sessionId: '', persistent: false };
 
-    const finalizeSendContext = (context: ChatSendContext | null): void => {
-      if (context && !context.persistent && context.sessionId) {
-        void deleteEphemeralSession(context.sessionId).then(() => App.Session.loadSessions());
-      } else {
-        App.Session.loadSessions();
-      }
-    };
-
     void (async () => {
       const prepared = await ensureSessionForSend();
       if (!App.ChatStream.isCurrent(gen) || !App.ChatState.isBusy()) return;
@@ -429,110 +430,7 @@ function bind(): void {
         });
     })();
 
-    App.ChatStream.setHandlers(gen, {
-      onMessage: (e: MessageEvent) => {
-      if (!App.ChatStream.isCurrent(gen)) return;
-      try {
-        if (!window.___sseFirst) { window.___sseFirst = true; mark('sse_first_event'); } const d = JSON.parse(e.data) as { type: string; id?: string; command?: string; reason?: string; permissionSuggestions?: any[]; text?: string; thinking?: boolean; turnId?: string; sessionId?: string; message?: string; block?: any; blocks?: any[] };
-        const messages = App.ChatState.getMessages();
-        const last = messages[messages.length - 1];
-        if (d.type === 'subagent_event' && (d as any).event) {
-          const updated = App.Chat?.updateSubagentEvent?.((d as any).event) || false;
-          if (!updated) scheduleMessagesRender();
-          else sb('ms');
-          return;
-        } else if (d.type === 'command_confirm') {
-          void ChatCommandConfirmationView.handle(d);
-          return;
-        } else if (d.type === 'queue_update') {
-          const steering = Array.isArray((d as any).steering) ? (d as any).steering.length : 0;
-          const followUp = Array.isArray((d as any).followUp) ? (d as any).followUp.length : 0;
-          const total = steering + followUp;
-          if (total > 0) toast(`${total} 条补充已排队`, 'info');
-          return;
-        } else if (d.type === 'block') {
-          if (last?.streaming && d.block) {
-            if (!last.blocks) last.blocks = [];
-            const idx = last.blocks.findIndex((b: any) => b.blockId === d.block.blockId);
-            if (idx >= 0) last.blocks[idx] = d.block;
-            else last.blocks.push(d.block);
-            last._rv = (last._rv || 0) + 1;
-            const updated = App.Chat?.updateLastBlock?.(d.block) || false;
-            if (!updated) scheduleMessagesRender();
-            else sb('ms');
-          }
-          return;
-        } else if (d.type === 'delta') {
-          if (d.thinking) { sb('ms'); return; }
-          if (last?.streaming) {
-            if (!last?.blocks?.length) App.Chat?.appendDelta?.(d.text || '');
-          } else {
-            App.ChatState.appendMessage({ role: 'assistant', content: d.text || '', thinking: '', streaming: true });
-            updateUI();
-          }
-          sb('ms');
-        } else if (d.type === 'thinking') {
-          if (last) { last.thinking = (last.thinking || '') + (d.text || ''); last._rv = (last._rv || 0) + 1; }
-          sb('ms');
-        } else if (d.type === 'done') {
-          if (!last) return;
-          if (d.turnId && !last.turnId) last.turnId = d.turnId;
-          last.content = d.text || '';
-          last.streaming = false;
-          last.error = undefined;
-          if (Array.isArray(d.blocks)) last.blocks = d.blocks;
-          last._rv = (last._rv || 0) + 1;
-            App.ChatState.setBusy(false); App.ChatStream.close();
-          const finalized = App.Chat?.finalizeLastMessage?.() || false;
-          if (finalized) markLastMessageRendered();
-          else renderMessages();
-          chatComposerView?.refresh();
-          const sessionId = (d as any).sessionId || activeSendContext?.sessionId || '';
-          const sendContext = activeSendContext;
-          activeSendContext = null;
-          if (sendContext && !sendContext.persistent && sessionId) {
-            void deleteEphemeralSession(sessionId).then(() => App.Session.loadSessions());
-          } else {
-            if (sendContext?.persistent && sessionId) {
-              void Promise.resolve(App.Session.maybeAutoTitleSession(sessionId, d.text || ''))
-                .finally(() => App.Session.loadSessions());
-            } else {
-              App.Session.loadSessions();
-            }
-          }
-          sb('ms');
-        } else if (d.type === 'error') {
-          const reason = d.text || d.message || '未知错误';
-          setAssistantError(
-            '发生了错误',
-            '当前回复未能完成。请先查看错误详情，再决定是否重试。',
-            reason,
-            ['检查网络和模型配置', '确认工作区路径仍然有效', '重试发送当前消息'],
-            reason,
-          );
-          App.ChatState.setBusy(false); App.ChatStream.close();
-          renderMessages();
-          chatComposerView?.refresh();
-          const failedContext = activeSendContext;
-          activeSendContext = null;
-          finalizeSendContext(failedContext);
-          sb('ms');
-          console.error('[chat] SSE error:', d.text || d.message);
-        }
-      } catch { /* ignore */ }
-      },
-      onError: () => {
-      if (!App.ChatStream.isCurrent(gen)) return;
-      // EventSource owns transport reconnects and will resume with
-      // Last-Event-ID. Keep this turn alive until a business event finishes it.
-      toast('连接中断，正在重连…', 'info');
-      updateUI();
-      },
-      onOpen: () => {
-        if (!App.ChatStream.isCurrent(gen)) return;
-        updateUI();
-      },
-    });
+    chatSseControllerView?.bind(gen);
   }
   submitMessageHandler = submitMessage;
 
@@ -557,6 +455,33 @@ function bind(): void {
     });
   }
   App.Chat.scheduleMessagesRender = scheduleMessagesRender;
+
+  chatSseControllerView = App.ChatViews.createSseController({
+    scheduleMessagesRender,
+    updateUI,
+    markLastMessageRendered,
+    renderMessages,
+    refreshComposer: () => chatComposerView?.refresh(),
+    setAssistantError,
+    completeSend: (sessionId, assistantText) => {
+      const effectiveSessionId = sessionId || activeSendContext?.sessionId || '';
+      const sendContext = activeSendContext;
+      activeSendContext = null;
+      if (sendContext && !sendContext.persistent && effectiveSessionId) {
+        void deleteEphemeralSession(effectiveSessionId).then(() => App.Session.loadSessions());
+      } else if (sendContext?.persistent && effectiveSessionId) {
+        void Promise.resolve(App.Session.maybeAutoTitleSession(effectiveSessionId, assistantText))
+          .finally(() => App.Session.loadSessions());
+      } else {
+        App.Session.loadSessions();
+      }
+    },
+    failSend: () => {
+      const failedContext = activeSendContext;
+      activeSendContext = null;
+      finalizeSendContext(failedContext);
+    },
+  });
 
   chatAttachmentInputView = App.ChatViews.createAttachmentInput();
   chatAttachmentInputView.bind();

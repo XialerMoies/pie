@@ -66,9 +66,11 @@ describe("frontend component tree boundaries", () => {
   it("keeps chat command confirmation in a dedicated component view", () => {
     const chat = source("src/frontend/dashboard/dashboard-chat.ts");
     const confirmation = source("src/frontend/chat/chat-command-confirmation.ts");
+    const controller = source("src/frontend/chat/chat-sse-controller.ts");
     for (const name of ["ChatCommandConfirmationView"]) assertClass(confirmation, name);
     assert.match(confirmation, /static async handle\(/);
-    assert.match(chat, /ChatCommandConfirmationView\.handle\(d\)/);
+    assert.match(controller, /ChatCommandConfirmationView/);
+    assert.doesNotMatch(chat, /ChatCommandConfirmationView\.handle\(d\)/);
     assert.doesNotMatch(chat, /confirmCommandAsync|\/api\/chat\/command-confirm/);
   });
 
@@ -126,6 +128,18 @@ describe("frontend component tree boundaries", () => {
     assert.doesNotMatch(chat, /function\\s+chatReadLatestSettings\\b/);
   });
 
+  it("keeps SSE event routing in a dedicated controller view", () => {
+    const chat = source("src/frontend/dashboard/dashboard-chat.ts");
+    const controller = source("src/frontend/chat/chat-sse-controller.ts");
+    assertClass(controller, "ChatSseControllerView");
+    for (const method of ["bind", "handleMessage", "handleError", "handleOpen"]) {
+      assert.match(controller, new RegExp(`${method}\\s*\\(`), `${method} should belong to ChatSseControllerView`);
+    }
+    assert.match(chat, /createSseController\(/);
+    assert.doesNotMatch(chat, /onMessage:\s*\(e:\s*MessageEvent\)/);
+    assert.doesNotMatch(chat, /JSON\.parse\(e\.data\)/);
+  });
+
   it("loads the subagent component module after shared chat views and before chat rendering", () => {
     const compiler = source("scripts/compile-frontend-ts.mjs");
     const sharedIndex = compiler.indexOf('"gen/chat/chat-component-views.js"');
@@ -175,5 +189,12 @@ describe("frontend component tree boundaries", () => {
     const readingIndex = compiler.indexOf('"gen/chat/chat-reading-controls.js"');
     const dashboardChatIndex = compiler.indexOf('"gen/dashboard/dashboard-chat.js"');
     assert.ok(readingIndex >= 0 && dashboardChatIndex > readingIndex);
+  });
+
+  it("loads the SSE controller before dashboard chat", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const controllerIndex = compiler.indexOf('"gen/chat/chat-sse-controller.js"');
+    const dashboardChatIndex = compiler.indexOf('"gen/dashboard/dashboard-chat.js"');
+    assert.ok(controllerIndex >= 0 && dashboardChatIndex > controllerIndex);
   });
 });

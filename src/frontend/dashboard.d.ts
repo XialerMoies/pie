@@ -419,6 +419,7 @@ interface AppChatViews {
   openModelPicker(event: MouseEvent): void;
   createAttachmentInput(): AppChatAttachmentInput;
   createReadingControls(callbacks?: ChatReadingControlsCallbacks): AppChatReadingControls;
+  createSseController(callbacks: ChatSseControllerCallbacks): AppChatSseController;
   FileDiffView: new (diff: FileDiffMetadata, options?: FileDiffRenderOptions) => ChatComponentView<FileDiffMetadata>;
   EditSummaryView: new (blocks: any[], expanded?: boolean) => ChatComponentView<any[]>;
   SubagentTaskView: new (task: FrontendSubagentTask, index?: number) => ChatComponentView<FrontendSubagentTask>;
@@ -459,6 +460,22 @@ interface AppChatComposer {
 interface AppChatAttachmentInput {
   bind(): void;
   dispose(): void;
+}
+interface ChatSseControllerCallbacks {
+  scheduleMessagesRender(scroll?: boolean): void;
+  updateUI(): void;
+  markLastMessageRendered(): void;
+  renderMessages(): void;
+  refreshComposer(): void;
+  setAssistantError(title: string, message: string, reason?: string, nextSteps?: string[], raw?: string): void;
+  completeSend(sessionId: string, assistantText: string): void;
+  failSend(): void;
+}
+interface AppChatSseController {
+  bind(generation: number): boolean;
+  handleMessage(generation: number, event: MessageEvent): void;
+  handleError(generation: number, event: Event): void;
+  handleOpen(generation: number, event: Event): void;
 }
 interface ChatReadingControlsCallbacks {
   onScroll?: () => void;

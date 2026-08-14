@@ -1,0 +1,180 @@
+/// <reference path="../dashboard.d.ts" />
+
+interface ChatSseEvent {
+  type: string;
+  command?: string;
+  reason?: string;
+  permissionSuggestions?: any[];
+  text?: string;
+  thinking?: boolean;
+  turnId?: string;
+  sessionId?: string;
+  message?: string;
+  block?: any;
+  blocks?: any[];
+  event?: any;
+  steering?: any[];
+  followUp?: any[];
+}
+
+class ChatSseControllerView {
+  private readonly callbacks: ChatSseControllerCallbacks;
+  private generation = 0;
+
+  constructor(callbacks: ChatSseControllerCallbacks) {
+    this.callbacks = callbacks;
+  }
+
+  bind(generation: number): boolean {
+    this.generation = generation;
+    return App.ChatStream.setHandlers(generation, {
+      onMessage: (event) => this.handleMessage(generation, event),
+      onError: (event) => this.handleError(generation, event),
+      onOpen: (event) => this.handleOpen(generation, event),
+    });
+  }
+
+  handleMessage(generation: number, event: MessageEvent): void {
+    if (!this.isCurrent(generation)) return;
+    try {
+      if (!window.___sseFirst) {
+        window.___sseFirst = true;
+        mark('sse_first_event');
+      }
+      const data = JSON.parse(event.data) as ChatSseEvent;
+      const messages = App.ChatState.getMessages();
+      const last = messages[messages.length - 1];
+
+      if (data.type === 'subagent_event' && data.event) {
+        const updated = App.Chat?.updateSubagentEvent?.(data.event) || false;
+        if (!updated) this.callbacks.scheduleMessagesRender();
+        else sb('ms');
+        return;
+      }
+      if (data.type === 'command_confirm') {
+        const confirmation = (App.ChatViews as any).ChatCommandConfirmationView;
+        if (confirmation?.handle) void confirmation.handle(data);
+        return;
+      }
+      if (data.type === 'queue_update') {
+        const steering = Array.isArray(data.steering) ? data.steering.length : 0;
+        const followUp = Array.isArray(data.followUp) ? data.followUp.length : 0;
+        const total = steering + followUp;
+        if (total > 0) toast(`${total} 条补充已排队`, 'info');
+        return;
+      }
+      if (data.type === 'block') {
+        this.handleBlock(last, data.block);
+        return;
+      }
+      if (data.type === 'delta') {
+        this.handleDelta(last, data);
+        return;
+      }
+      if (data.type === 'thinking') {
+        if (last) {
+          last.thinking = (last.thinking || '') + (data.text || '');
+          last._rv = (last._rv || 0) + 1;
+        }
+        sb('ms');
+        return;
+      }
+      if (data.type === 'done') {
+        this.handleDone(last, data);
+        return;
+      }
+      if (data.type === 'error') this.handleBusinessError(data);
+    } catch {
+      // Ignore malformed payloads and keep the active stream alive.
+    }
+  }
+
+  handleError(generation: number, _event: Event): void {
+    if (!this.isCurrent(generation)) return;
+    // EventSource owns reconnects and resumes with Last-Event-ID.
+    toast('连接中断，正在重连…', 'info');
+    this.callbacks.updateUI();
+  }
+
+  handleOpen(generation: number, _event: Event): void {
+    if (!this.isCurrent(generation)) return;
+    this.callbacks.updateUI();
+  }
+
+  private isCurrent(generation: number): boolean {
+    return this.generation === generation && App.ChatStream.isCurrent(generation);
+  }
+
+  private handleBlock(last: any, block: any): void {
+    if (!last?.streaming || !block) return;
+    if (!last.blocks) last.blocks = [];
+    const index = last.blocks.findIndex((item: any) => item.blockId === block.blockId);
+    if (index >= 0) last.blocks[index] = block;
+    else last.blocks.push(block);
+    last._rv = (last._rv || 0) + 1;
+    const updated = App.Chat?.updateLastBlock?.(block) || false;
+    if (!updated) this.callbacks.scheduleMessagesRender();
+    else sb('ms');
+  }
+
+  private handleDelta(last: any, data: ChatSseEvent): void {
+    if (data.thinking) {
+      sb('ms');
+      return;
+    }
+    if (last?.streaming) {
+      if (!last.blocks?.length) App.Chat?.appendDelta?.(data.text || '');
+    } else {
+      App.ChatState.appendMessage({ role: 'assistant', content: data.text || '', thinking: '', streaming: true });
+      this.callbacks.updateUI();
+    }
+    sb('ms');
+  }
+
+  private handleDone(last: any, data: ChatSseEvent): void {
+    if (!last) return;
+    if (data.turnId && !last.turnId) last.turnId = data.turnId;
+    last.content = data.text || '';
+    last.streaming = false;
+    last.error = undefined;
+    if (Array.isArray(data.blocks)) last.blocks = data.blocks;
+    last._rv = (last._rv || 0) + 1;
+    App.ChatState.setBusy(false);
+    App.ChatStream.close();
+    const finalized = App.Chat?.finalizeLastMessage?.() || false;
+    if (finalized) this.callbacks.markLastMessageRendered();
+    else this.callbacks.renderMessages();
+    this.callbacks.refreshComposer();
+    this.callbacks.completeSend(data.sessionId || '', data.text || '');
+    sb('ms');
+  }
+
+  private handleBusinessError(data: ChatSseEvent): void {
+    const reason = data.text || data.message || '未知错误';
+    this.callbacks.setAssistantError(
+      '发生了错误',
+      '当前回复未能完成。请先查看错误详情，再决定是否重试。',
+      reason,
+      ['检查网络和模型配置', '确认工作区路径仍然有效', '重试发送当前消息'],
+      reason,
+    );
+    App.ChatState.setBusy(false);
+    App.ChatStream.close();
+    this.callbacks.renderMessages();
+    this.callbacks.refreshComposer();
+    this.callbacks.failSend();
+    sb('ms');
+    console.error('[chat] SSE error:', data.text || data.message);
+  }
+}
+
+const chatSseControllerApp = (window as any).App;
+if (chatSseControllerApp) {
+  chatSseControllerApp.ChatViews = {
+    ...(chatSseControllerApp.ChatViews || {}),
+    ChatSseControllerView,
+    createSseController: (callbacks: ChatSseControllerCallbacks): AppChatSseController => new ChatSseControllerView(callbacks),
+  };
+}
+
+export {};
