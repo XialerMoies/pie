@@ -2,6 +2,18 @@
 //  Slash Command Popup
 // ═══════════════════════════════════════════════════════════════════
 
+interface ChatModeDependencies {
+  preferences: AppPreferences;
+  permissions?: AppPermissions;
+}
+
+const chatModeApp = (window as any).App;
+const chatModeDependencies: ChatModeDependencies = {
+  preferences: chatModeApp.Preferences,
+  permissions: chatModeApp.Permissions,
+};
+const { preferences, permissions } = chatModeDependencies;
+
 function handleSlash(ci: HTMLTextAreaElement): void {
   const slashEl = $('fi-slash');
   if (!slashEl) return;
@@ -76,8 +88,8 @@ async function syncThinkingLevel(): Promise<void> {
 
 function loadModeState(): void {
   try {
-    _currentMode = App.Preferences.get('chat-mode', 'auto');
-    const effort = App.Preferences.get('chat-effort', 'medium');
+    _currentMode = preferences.get('chat-mode', 'auto');
+    const effort = preferences.get('chat-effort', 'medium');
     if (EFFORT_LABELS[effort]) _currentEffort = effort;
     if (!MODE_LABELS[_currentMode]) _currentMode = 'auto';
   } catch { _currentMode = 'auto'; }
@@ -90,14 +102,14 @@ function loadModeState(): void {
 
 function setMode(mode: string): void {
   _currentMode = mode;
-  App.Preferences.set('chat-mode', mode);
+  preferences.set('chat-mode', mode);
   updateModeButton();
 }
 
 /** 调用服务端 setThinkingLevel，替代 localStorage + 提示词前缀 */
 async function setEffort(effort: string): Promise<void> {
   _currentEffort = effort;
-  App.Preferences.set('chat-effort', effort);
+  preferences.set('chat-effort', effort);
   if (!_supportsThinking) return;
   try {
     const r = await fetch('/api/thinking-level', {
@@ -182,7 +194,7 @@ function updateModeButton(): void {
   const el = $('fi-mode-name');
   if (!el) return;
   const conversationLabel = MODE_LABELS[_currentMode] || '自动';
-  const permissionMode = App.Permissions?.getMode?.() || 'standard';
+  const permissionMode = permissions?.getMode?.() || 'standard';
   el.textContent = `${conversationLabel} · ${PERMISSION_MODE_LABELS[permissionMode] || '标准'}`;
 }
 
@@ -190,7 +202,7 @@ let permissionModeSynced = false;
 
 /** 从服务端同步权限模式一次；成功后刷新策略按钮，可选的弹窗在其中一并更新 active 状态 */
 function syncPermissionMode(popup?: HTMLElement): void {
-  void App.Permissions?.refreshMode?.().then((mode) => {
+  void permissions?.refreshMode?.().then((mode) => {
     permissionModeSynced = true;
     updateModeButton();
     if (!popup?.isConnected) return;
@@ -210,7 +222,7 @@ function showModePopup(btn: HTMLElement): void {
   popup.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
   popup.style.left = rect.left + 'px';
 
-  const permissionMode = App.Permissions?.getMode?.() || 'standard';
+  const permissionMode = permissions?.getMode?.() || 'standard';
   let html = '';
 
   html += '<div class="mode-popup-title">对话方式</div><div class="mode-segment">';
@@ -242,7 +254,7 @@ function showModePopup(btn: HTMLElement): void {
   popup.querySelectorAll<HTMLElement>('[data-permission-mode]').forEach((option) => {
     option.addEventListener('click', () => {
       const mode = option.dataset.permissionMode as 'plan' | 'standard' | 'dontAsk' | 'yes';
-      App.Permissions?.setMode?.(mode);
+      permissions?.setMode?.(mode);
       popup.remove();
     });
   });

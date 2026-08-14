@@ -194,6 +194,14 @@ describe("frontend component tree boundaries", () => {
     assert.doesNotMatch(chat, /JSON\.parse\(e\.data\)/);
   });
 
+  it("localizes chat mode dependencies at the module boundary", () => {
+    const mode = source("src/frontend/chat/chat-mode.ts");
+    assert.match(mode, /interface\s+ChatModeDependencies\s*\{/);
+    assert.match(mode, /preferences:\s*AppPreferences/);
+    assert.match(mode, /permissions\?:\s*AppPermissions/);
+    assert.doesNotMatch(mode, /\bApp\./);
+  });
+
   it("loads the subagent component module after shared chat views and before chat rendering", () => {
     const compiler = source("scripts/compile-frontend-ts.mjs");
     const sharedIndex = compiler.indexOf('"gen/chat/chat-component-views.js"');
