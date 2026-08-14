@@ -29,8 +29,8 @@
  * - rm -rf "/etc" / rm -rf $HOME（引号/环境变量）
  */
 import { describe, it } from "node:test"
-import { ok, deepEqual, equal } from "node:assert/strict"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { ok, deepEqual, equal, doesNotMatch, match } from "node:assert/strict"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import {
@@ -68,6 +68,64 @@ describe("path extractor module boundary", () => {
       { token: "src/input.txt", operation: "read", source: "cp source" },
       { token: "../output.txt", operation: "write", source: "cp destination" },
     ])
+  })
+
+  it("preserves representative extraction behavior across command families", () => {
+    const cases = [
+      ["cd", ["/d", "C:\\work tree"], { shellDialect: "cmd" }, [
+        { token: "C:\\work tree", operation: "read", source: "cd target" },
+      ]],
+      ["ls", [], {}, [{ token: ".", operation: "read", source: undefined }]],
+      ["mv", ["old.txt", "new.txt"], {}, [
+        { token: "old.txt", operation: "remove", source: "mv source" },
+        { token: "new.txt", operation: "write", source: "mv destination" },
+      ]],
+      ["find", ["src", "-newer", "stamp.txt", "-name", "*.ts"], {}, [
+        { token: "src", operation: "read", source: "find path" },
+        { token: "stamp.txt", operation: "read", source: "find path" },
+      ]],
+      ["findstr", ["needle", "one.txt", "/g:files.txt"], {}, [
+        { token: "one.txt", operation: "read", source: "findstr file" },
+        { token: "files.txt", operation: "read", source: "findstr list file" },
+      ]],
+      ["rg", ["needle"], {}, [{ token: ".", operation: "read", source: undefined }]],
+      ["sort", ["-o", "sorted.txt", "input.txt"], {}, [
+        { token: "sorted.txt", operation: "write", source: "sort output" },
+        { token: "input.txt", operation: "read", source: "sort input" },
+      ]],
+      ["sed", ["-i", "s/a/b/", "input.txt"], {}, [
+        { token: "input.txt", operation: "write", source: "sed file" },
+      ]],
+      ["jq", ["--slurpfile", "items", "items.json", ".", "input.json"], {}, [
+        { token: "items.json", operation: "read", source: "jq bound file" },
+        { token: "input.json", operation: "read", source: "jq input file" },
+      ]],
+      ["git", ["diff", "--no-index", "old.txt", "new.txt"], {}, [
+        { token: "old.txt", operation: "read", source: "git diff --no-index" },
+        { token: "new.txt", operation: "read", source: "git diff --no-index" },
+      ]],
+      ["tar", ["-czf", "archive.tgz", "src"], {}, [
+        { token: "archive.tgz", operation: "write", source: "tar archive" },
+        { token: "src", operation: "read", source: "tar path" },
+      ]],
+      ["set-content", ["-LiteralPath", "out.txt", "value"], {}, [
+        { token: "out.txt", operation: "write" },
+      ]],
+      ["unknown", ["file.txt"], {}, []],
+    ]
+
+    for (const [command, args, context, expected] of cases) {
+      deepEqual(extractCommandPathArgs(command, args, context), expected, command)
+    }
+  })
+
+  it("keeps the public facade thin and delegates command families", () => {
+    const facade = readFileSync(resolve(process.cwd(), "src/agent/tools/command/path-extractors.ts"), "utf8")
+    for (const moduleName of ["core", "filesystem", "search", "archive"]) {
+      match(facade, new RegExp(`path-extractors/${moduleName}\\.js`))
+    }
+    doesNotMatch(facade, /function\s+(?:cpExtractor|findExtractor|sedExtractor|tarExtractor)\b/)
+    ok(facade.split(/\r?\n/).length <= 160, "path-extractors.ts must remain a routing facade")
   })
 })
 
