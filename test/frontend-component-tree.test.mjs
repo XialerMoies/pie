@@ -51,4 +51,23 @@ describe("frontend component tree boundaries", () => {
     assertDelegates(src, "renderSessionCard", "SessionCardView");
     assertDelegates(src, "renderSessionGroup", "SessionGroupView");
   });
+
+  it("keeps subagent views in their dedicated component module", () => {
+    const legacy = source("src/frontend/chat/chat-component-views.ts");
+    const subagent = source("src/frontend/chat/chat-subagent-views.ts");
+    for (const name of ["SubagentTaskView", "SubagentBatchView"]) assertClass(subagent, name);
+    assert.doesNotMatch(legacy, /class\s+(?:SubagentTaskView|SubagentBatchView)\b/);
+    assert.doesNotMatch(legacy, /function\s+chatViewNormalizeDelegation\b/);
+    assert.doesNotMatch(legacy, /function\s+chatViewRefreshSubagentDelegation\b/);
+    assert.match(subagent, /renderSubagentDelegation:\s*chatSubagentRenderDelegation/);
+    assert.match(subagent, /refreshSubagentDelegation:\s*chatSubagentRefreshDelegation/);
+  });
+
+  it("loads the subagent component module after shared chat views and before chat rendering", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const sharedIndex = compiler.indexOf('"gen/chat/chat-component-views.js"');
+    const subagentIndex = compiler.indexOf('"gen/chat/chat-subagent-views.js"');
+    const renderIndex = compiler.indexOf('"gen/chat/chat-render.js"');
+    assert.ok(sharedIndex >= 0 && subagentIndex > sharedIndex && renderIndex > subagentIndex);
+  });
 });

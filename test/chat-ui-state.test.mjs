@@ -193,6 +193,7 @@ describe("chat ui state", () => {
     await import(`../src/frontend/services/file-diff-render.ts?t=${ts}`);
     Object.assign(globalThis, await import(`../src/frontend/chat/subagent-state.ts?t=${ts}`));
     await import(`../src/frontend/chat/chat-component-views.ts?t=${ts}`);
+    await import(`../src/frontend/chat/chat-subagent-views.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-timeline.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/dashboard-chat.ts?t=${ts}`);
