@@ -218,6 +218,7 @@ server 与 AgentRuntime 仍按项目隔离在独立子进程内，因此 server 
 （每完成一项，在此追加一行：日期 / ID / 简述 / 验证）
 
 - 2026-08-09 / ④-A Task 8 / 单 Electron 主进程多窗口迁移：每项目独立 server child/AgentRuntime；duplicate workspace 聚焦、close/crash/reopen 隔离、second-instance 转发与 E2E-only diagnostics / Windows packaged E2E 通过，shell 124 ms、workbench 1564 ms
+- 2026-08-14 / 技术债 / 附件输入区抽离：file 按钮选择（electronAPI.selectFile）与 explorer 树 drag&drop 添加附件移入 `chat-attachment-input.ts` 的 `ChatAttachmentInputView`，新增 dispose 治理监听器；dashboard-chat 仅保留 createAttachmentInput + bind 接线；d.ts 补 `AppChatAttachmentInput` / typecheck、bundle 42 文件、frontend 334/334、组件树门禁 15/15；提交 `0ba3d5d`
 - 2026-08-14 / 技术债 / 模型选择器抽离：模型分组/高亮/切换请求/思考等级挂载/外部点击关闭移入 `chat-model-picker.ts` 的 `ChatModelPickerView`，dashboard-chat 仅保留 `openModelPicker` 接线；existing 分支补 `close()` 修复旧代码 outsideClick 监听器泄漏 / typecheck、bundle、frontend 332/332、组件树门禁 13/13；提交 `740503d`
 - 2026-08-14 / 技术债 / 聊天输入区抽离：输入高度自适应、Enter/Tab/Escape、slash 命令、发送/中止/补充模式切换与按钮状态移入 `chat-composer.ts` 的 `ChatComposerView`，noteMode 状态实例化；dashboard-chat 保留消息提交与 SSE 生命周期，经 `createComposer` 回调接线；d.ts 补 `ChatComposerCallbacks`/`AppChatComposer` / typecheck、bundle、frontend 330/330、组件树门禁 11/11；提交 `6bd7c2b`
 - 2026-08-14 / 技术债 / 命令确认流程抽离：dashboard-chat 的 `command_confirm` SSE 分支（confirmCommandAsync/confirmAsync fallback、scope 归一化、/api/chat/command-confirm 回传）移入 `chat-command-confirmation.ts` 的 `ChatCommandConfirmationView`，保留确认范围、回传接口与 fallback 行为 / typecheck、bundle、frontend 328/328、组件树门禁 9/9；提交 `e6c60b4`
