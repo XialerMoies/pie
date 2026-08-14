@@ -418,6 +418,7 @@ interface AppChatViews {
   resizeComposerInput(input: HTMLTextAreaElement): void;
   openModelPicker(event: MouseEvent): void;
   createAttachmentInput(): AppChatAttachmentInput;
+  createReadingControls(callbacks?: ChatReadingControlsCallbacks): AppChatReadingControls;
   FileDiffView: new (diff: FileDiffMetadata, options?: FileDiffRenderOptions) => ChatComponentView<FileDiffMetadata>;
   EditSummaryView: new (blocks: any[], expanded?: boolean) => ChatComponentView<any[]>;
   SubagentTaskView: new (task: FrontendSubagentTask, index?: number) => ChatComponentView<FrontendSubagentTask>;
@@ -457,6 +458,16 @@ interface AppChatComposer {
 }
 interface AppChatAttachmentInput {
   bind(): void;
+  dispose(): void;
+}
+interface ChatReadingControlsCallbacks {
+  onScroll?: () => void;
+}
+interface AppChatReadingControls {
+  bind(): void;
+  refreshSettings(): void;
+  scrollToLatest(options?: { force?: boolean; smooth?: boolean }): boolean;
+  reset(): void;
   dispose(): void;
 }
 type McpConnectionState = 'connected' | 'connecting' | 'disconnected' | 'error';

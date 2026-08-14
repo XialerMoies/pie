@@ -6,6 +6,7 @@ let _msgKeys: string[] = [];
 let submitMessageHandler: ((text: string) => void) | null = null;
 let chatComposerView: AppChatComposer | null = null;
 let chatAttachmentInputView: AppChatAttachmentInput | null = null;
+let chatReadingControlsView: AppChatReadingControls | null = null;
 
 type ChatSendContext = {
   sessionId: string;
@@ -14,91 +15,22 @@ type ChatSendContext = {
 };
 
 let activeSendContext: ChatSendContext | null = null;
-const CHAT_LATEST_DEFAULT_THRESHOLD = 72;
-const CHAT_LATEST_ALLOWED_THRESHOLDS = [48, 72, 120];
-let chatLatestEnabled = true;
-let chatLatestSmooth = true;
-let chatLatestThreshold = CHAT_LATEST_DEFAULT_THRESHOLD;
-let chatFollowLatest = true;
-let chatSmoothScrollTimer: ReturnType<typeof setTimeout> | null = null;
 
-function chatReadBooleanPreference(key: string, fallback = true): boolean {
-  const preferences = (App as any).Preferences;
-  if (typeof preferences?.getBoolean !== 'function') return fallback;
-  try {
-    const value = preferences.getBoolean(key, fallback);
-    return typeof value === 'boolean' ? value : fallback;
-  } catch {
-    return fallback;
+function chatGetReadingControls(): AppChatReadingControls {
+  if (!chatReadingControlsView) {
+    chatReadingControlsView = App.ChatViews.createReadingControls({
+      onScroll: () => App.ChatTimeline?.handleMessagesScroll(),
+    });
   }
-}
-
-function chatReadLatestSettings(): void {
-  const preferences = (App as any).Preferences;
-  chatLatestEnabled = chatReadBooleanPreference('chat-jump-latest-enabled');
-  chatLatestSmooth = chatReadBooleanPreference('chat-jump-latest-smooth');
-  const threshold = preferences?.getNumber
-    ? preferences.getNumber('chat-jump-latest-threshold', CHAT_LATEST_DEFAULT_THRESHOLD)
-    : CHAT_LATEST_DEFAULT_THRESHOLD;
-  chatLatestThreshold = CHAT_LATEST_ALLOWED_THRESHOLDS.includes(threshold)
-    ? threshold
-    : CHAT_LATEST_DEFAULT_THRESHOLD;
-}
-
-function chatSetJumpLatestVisible(visible: boolean): void {
-  const button = $('chat-jump-latest') as HTMLButtonElement | null;
-  if (!button) return;
-  visible = visible && chatLatestEnabled;
-  button.classList.toggle('on', visible);
-  button.setAttribute('aria-hidden', visible ? 'false' : 'true');
-  button.tabIndex = visible ? 0 : -1;
-}
-
-function chatIsNearLatest(messages: HTMLElement): boolean {
-  return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= chatLatestThreshold;
-}
-
-function chatSyncLatestState(): void {
-  const messages = $('ms');
-  if (!messages) return;
-  const nearLatest = chatIsNearLatest(messages);
-  chatFollowLatest = nearLatest;
-  chatSetJumpLatestVisible(!nearLatest);
-}
-
-function chatScheduleSmoothScrollSync(): void {
-  if (chatSmoothScrollTimer !== null) clearTimeout(chatSmoothScrollTimer);
-  chatSmoothScrollTimer = setTimeout(() => {
-    chatSmoothScrollTimer = null;
-    chatSyncLatestState();
-  }, 120);
+  return chatReadingControlsView;
 }
 
 function chatScrollToLatest(options: { force?: boolean; smooth?: boolean } = {}): boolean {
-  const messages = $('ms');
-  if (!messages) return false;
-  if (!options.force && !chatFollowLatest) {
-    chatSetJumpLatestVisible(true);
-    return false;
-  }
-
-  chatFollowLatest = true;
-  chatSetJumpLatestVisible(false);
-  const smooth = options.smooth === undefined ? chatLatestSmooth : options.smooth;
-  if (smooth && typeof messages.scrollTo === 'function') {
-    messages.scrollTo({ top: messages.scrollHeight, behavior: 'smooth' });
-    chatScheduleSmoothScrollSync();
-  } else {
-    messages.scrollTop = messages.scrollHeight;
-  }
-  return true;
+  return chatGetReadingControls().scrollToLatest(options);
 }
 
 function refreshReadingSettings(): void {
-  chatReadLatestSettings();
-  const messages = $('ms');
-  if (messages) chatSyncLatestState();
-  else chatSetJumpLatestVisible(false);
+  chatGetReadingControls().refreshSettings();
 }
 
 function chatGetActiveSessionTabId(): string | null {
@@ -323,10 +255,7 @@ function markLastMessageRendered(): void {
 /** 重置消息 key 缓存（用于 M 被整体替换的场景） */
 function resetMsgKeys(): void {
   _msgKeys = [];
-  if (chatSmoothScrollTimer !== null) clearTimeout(chatSmoothScrollTimer);
-  chatSmoothScrollTimer = null;
-  chatFollowLatest = true;
-  chatSetJumpLatestVisible(false);
+  chatReadingControlsView?.reset();
   App.ChatTimeline?.reset();
 }
 
@@ -347,16 +276,7 @@ function bind(): void {
   });
   chatComposerView.bind();
 
-  const messages = $('ms');
-  const jumpLatest = $('chat-jump-latest') as HTMLButtonElement | null;
-  messages?.addEventListener('scroll', () => {
-    if (chatSmoothScrollTimer !== null) chatScheduleSmoothScrollSync();
-    else chatSyncLatestState();
-    App.ChatTimeline?.handleMessagesScroll();
-  }, { passive: true });
-  jumpLatest?.addEventListener('click', () => {
-    chatScrollToLatest({ force: true });
-  });
+  chatGetReadingControls().bind();
   App.ChatTimeline?.bind();
   refreshReadingSettings();
 

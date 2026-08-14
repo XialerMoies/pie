@@ -114,6 +114,18 @@ describe("frontend component tree boundaries", () => {
     assert.doesNotMatch(chat, /function\\s+renderEventBlock\\b/);
   });
 
+  it("keeps chat reading and jump-to-latest state in a dedicated component view", () => {
+    const chat = source("src/frontend/dashboard/dashboard-chat.ts");
+    const reading = source("src/frontend/chat/chat-reading-controls.ts");
+    assertClass(reading, "ChatReadingControlsView");
+    for (const method of ["bind", "scrollToLatest", "refreshSettings", "reset", "dispose"]) {
+      assert.match(reading, new RegExp(`${method}\\s*\\(`), `${method} should belong to ChatReadingControlsView`);
+    }
+    assert.match(chat, /createReadingControls\(/);
+    assert.doesNotMatch(chat, /let\\s+chatLatest(?:Enabled|Smooth|Threshold|FollowLatest)\\b/);
+    assert.doesNotMatch(chat, /function\\s+chatReadLatestSettings\\b/);
+  });
+
   it("loads the subagent component module after shared chat views and before chat rendering", () => {
     const compiler = source("scripts/compile-frontend-ts.mjs");
     const sharedIndex = compiler.indexOf('"gen/chat/chat-component-views.js"');
@@ -156,5 +168,12 @@ describe("frontend component tree boundaries", () => {
     const eventNodeIndex = compiler.indexOf('"gen/chat/chat-event-node.js"');
     const renderIndex = compiler.indexOf('"gen/chat/chat-render.js"');
     assert.ok(subagentIndex >= 0 && eventNodeIndex > subagentIndex && renderIndex > eventNodeIndex);
+  });
+
+  it("loads reading controls before dashboard chat", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const readingIndex = compiler.indexOf('"gen/chat/chat-reading-controls.js"');
+    const dashboardChatIndex = compiler.indexOf('"gen/dashboard/dashboard-chat.js"');
+    assert.ok(readingIndex >= 0 && dashboardChatIndex > readingIndex);
   });
 });
