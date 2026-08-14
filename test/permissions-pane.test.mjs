@@ -198,6 +198,7 @@ beforeEach(() => {
 });
 
 before(async () => {
+  await import("../src/frontend/pane/permissions/permissions-views.ts");
   await import("../src/frontend/pane/permissions/index.ts");
 });
 
@@ -746,7 +747,7 @@ describe("permissions pane", { concurrency: 1 }, () => {
   });
 
   it("keeps the pane focused on recent decisions and existing rules", () => {
-    const source = readFileSync(new URL("../src/frontend/pane/permissions/index.ts", import.meta.url), "utf-8");
+    const source = readFileSync(new URL("../src/frontend/pane/permissions/permissions-views.ts", import.meta.url), "utf-8");
     assert.doesNotMatch(source, /perm-stats/);
     assert.doesNotMatch(source, /perm-add-rule/);
     assert.doesNotMatch(source, /perm-clear-all/);

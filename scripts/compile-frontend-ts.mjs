@@ -139,6 +139,7 @@ const bundlePrev = existsSync(bundleOut) ? readFileSync(bundleOut, "utf-8") : nu
 
 // 与 dashboard.html 原 script 顺序一致（已移除 problems/index 和 pane/problems）
 const REQUIRED_BUNDLE_ENTRIES = [
+  "gen/pane/permissions/permissions-views.js",
   "gen/pane/permissions/index.js",
   "gen/dashboard/dashboard-settings.js",
 ];
@@ -186,6 +187,7 @@ const bundleOrder = [
   "gen/pane/git/index.js",
   "gen/pane/mcp/mcp-state.js",
   "gen/pane/mcp/index.js",
+  "gen/pane/permissions/permissions-views.js",
   "gen/pane/permissions/index.js",
   "gen/dashboard/dashboard-menus.js",
   "gen/dashboard/dashboard-settings.js",
@@ -195,10 +197,11 @@ const missingBundleEntries = REQUIRED_BUNDLE_ENTRIES.filter(f => !existsSync(res
 if (missingBundleEntries.length > 0) {
   throw new Error(`dashboard bundle 缺少必需入口: ${missingBundleEntries.join(", ")}`);
 }
+const permissionViewsBundleIndex = bundleOrder.indexOf("gen/pane/permissions/permissions-views.js");
 const permissionsBundleIndex = bundleOrder.indexOf("gen/pane/permissions/index.js");
 const settingsBundleIndex = bundleOrder.indexOf("gen/dashboard/dashboard-settings.js");
-if (permissionsBundleIndex === -1 || settingsBundleIndex === -1 || permissionsBundleIndex >= settingsBundleIndex) {
-  throw new Error("dashboard bundle 顺序错误: Permissions 必须位于 Settings 之前");
+if (permissionViewsBundleIndex === -1 || permissionsBundleIndex <= permissionViewsBundleIndex || settingsBundleIndex <= permissionsBundleIndex) {
+  throw new Error("dashboard bundle 顺序错误: Permissions Views 必须位于 Permissions 和 Settings 之前");
 }
 
 const bundleFiles = bundleOrder.filter(f => existsSync(resolve(SRC, f)));

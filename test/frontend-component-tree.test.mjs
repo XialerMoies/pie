@@ -55,6 +55,15 @@ describe("frontend component tree boundaries", () => {
     assert.doesNotMatch(src, /class\s+(?:SessionEmptyStateView|SessionActionsView|SessionCardView|SessionGroupView)\b/);
   });
 
+  it("keeps permissions rendering in dedicated component views", () => {
+    const controller = source("src/frontend/pane/permissions/index.ts");
+    const views = source("src/frontend/pane/permissions/permissions-views.ts");
+    for (const name of ["PermissionsPanelView", "PermissionAuditView", "PermissionRulesView", "WorkingDirectoriesView"]) assertClass(views, name);
+    assert.match(controller, /App\.PermissionViews\.renderPanel\(/);
+    assert.match(controller, /App\.PermissionViews\.renderContent\(/);
+    assert.doesNotMatch(controller, /class\s+(?:PermissionsPanelView|PermissionAuditView|PermissionRulesView|WorkingDirectoriesView)\b/);
+  });
+
   it("keeps subagent views in their dedicated component module", () => {
     const legacy = source("src/frontend/chat/chat-component-views.ts");
     const subagent = source("src/frontend/chat/chat-subagent-views.ts");
@@ -206,5 +215,12 @@ describe("frontend component tree boundaries", () => {
     const panelIndex = compiler.indexOf('"gen/dashboard/session-list-panel.js"');
     const sessionsIndex = compiler.indexOf('"gen/dashboard/dashboard-sessions.js"');
     assert.ok(panelIndex >= 0 && sessionsIndex > panelIndex);
+  });
+
+  it("loads permissions views before the permissions controller", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const viewsIndex = compiler.indexOf('"gen/pane/permissions/permissions-views.js"');
+    const controllerIndex = compiler.indexOf('"gen/pane/permissions/index.js"');
+    assert.ok(viewsIndex >= 0 && controllerIndex > viewsIndex);
   });
 });

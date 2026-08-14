@@ -320,6 +320,18 @@ interface AppPermissions {
   setMode(mode: 'plan' | 'standard' | 'dontAsk' | 'yes'): void;
   refreshMode(): Promise<'plan' | 'standard' | 'dontAsk' | 'yes'>;
 }
+interface PermissionPanelViewState {
+  tab: 'audit' | 'rules';
+  mode: PermissionMode;
+  audit: PermissionAuditEntry[];
+  rules: PermissionRulesSnapshot | null;
+}
+interface AppPermissionViews {
+  renderPanel(state: PermissionPanelViewState): string;
+  renderContent(state: PermissionPanelViewState): string;
+  renderError(message: string): string;
+  scopeLabel(scope: PermissionRuleScope): string;
+}
 interface AppSettings {
   openSettingsModal(): void;
   closeSettingsModal(): void;
@@ -556,6 +568,7 @@ interface AppNamespace {
   File: AppFile;
   Session: AppSession;
   SessionViews: AppSessionViews;
+  PermissionViews: AppPermissionViews;
   SessionActivation: AppSessionActivation;
   SessionTabs: AppSessionTabs;
   SessionRestore: AppSessionRestore;
