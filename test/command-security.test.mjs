@@ -1315,6 +1315,32 @@ describe("isReadOnlyCommand", () => {
 
 // ─── isDangerousCommand ─────────────────────────────────
 
+describe("dangerous command module boundary", () => {
+  it("preserves security rule priority across text, AST, and legacy checks", () => {
+    const expansion = isDangerousCommandDirect("echo $(cat /proc/self/environ)")
+    ok(expansion.dangerous)
+    match(expansion.reason, /Shell 展开\/替换语法/)
+
+    const reset = isDangerousCommandDirect("git reset --hard")
+    equal(reset.dangerous, false)
+    equal(reset.requiresConfirmation, true)
+    match(reset.reason || "", /Git reset --hard/)
+
+    const filesystem = isDangerousCommandDirect("mkfs.ext4 /dev/sda")
+    ok(filesystem.dangerous)
+    match(filesystem.reason, /文件系统破坏性操作/)
+  })
+
+  it("keeps the public facade thin and delegates rule families", () => {
+    const facade = readFileSync(resolve(process.cwd(), "src/agent/tools/command/dangerous-command.ts"), "utf8")
+    for (const moduleName of ["shared", "text-rules", "ast-rules"]) {
+      match(facade, new RegExp(`dangerous-command/${moduleName}\\.js`))
+    }
+    doesNotMatch(facade, /function\s+(?:_rmIsDangerous|_checkCCSecurityPatterns|astRmDanger)\b/)
+    ok(facade.split(/\r?\n/).length <= 100, "dangerous-command.ts must remain an orchestration facade")
+  })
+})
+
 describe("isDangerousCommand", () => {
   it("keeps the command.ts compatibility export bound to the extracted module", () => {
     equal(isDangerousCommand, isDangerousCommandDirect)
