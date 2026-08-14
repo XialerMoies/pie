@@ -280,6 +280,7 @@ before(async () => {
   await import(`../src/frontend/dashboard/dashboard-layout.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/session-restore.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/session-activation.ts?t=${ts}`);
+  await import(`../src/frontend/dashboard/session-list-panel.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${ts}`);
   await import(`../src/frontend/pane/chat/index.ts?t=${ts}`);
   win.renderTabs();

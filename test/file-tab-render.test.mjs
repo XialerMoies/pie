@@ -86,6 +86,7 @@ describe("file tab render before Monaco", { concurrency: false }, () => {
     const sessionNonce = Date.now();
     await import(`../src/frontend/dashboard/session-restore.ts?f2=${sessionNonce}`);
     await import(`../src/frontend/dashboard/session-activation.ts?f2=${sessionNonce}`);
+    await import(`../src/frontend/dashboard/session-list-panel.ts?f2=${sessionNonce}`);
     await import(`../src/frontend/dashboard/dashboard-sessions.ts?f2=${sessionNonce}`);
     await import("../src/frontend/dashboard/dashboard-layout.ts");
     global.App = win.App;

@@ -260,6 +260,24 @@ interface AppSession {
   saveUiState(): void;
   migrateSessionTabLabels(): void;
 }
+interface SessionListPanelCallbacks {
+  isConversationSearchActive(): boolean;
+  getActiveSessionTabId(): string | null;
+  getOpenSessionIds(): Set<string>;
+  indexSessionTabs(sessions: SessionInfo[], others: { project?: string; path?: string; sessions: SessionInfo[] }[]): void;
+  renderSessionTabs(activeId?: string): void;
+  setupListHandler(): void;
+}
+interface AppSessionListPanel {
+  fetchIndex(): Promise<void>;
+  load(): Promise<void>;
+  render(): void;
+  invalidate(): void;
+  getSession(id: string): SessionInfo | undefined;
+}
+interface AppSessionViews {
+  createSessionListPanel(callbacks: SessionListPanelCallbacks): AppSessionListPanel;
+}
 interface SessionRestoreOptions {
   onActiveSession(sessionId: string): Promise<void> | void;
   prefetchSessionIndex(): Promise<void> | void;
@@ -537,6 +555,7 @@ interface AppNamespace {
   Events: AppEvents;
   File: AppFile;
   Session: AppSession;
+  SessionViews: AppSessionViews;
   SessionActivation: AppSessionActivation;
   SessionTabs: AppSessionTabs;
   SessionRestore: AppSessionRestore;

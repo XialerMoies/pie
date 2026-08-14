@@ -47,9 +47,12 @@ describe("frontend component tree boundaries", () => {
 
   it("uses component views for session list rows and groups", () => {
     const src = source("src/frontend/dashboard/dashboard-sessions.ts");
-    for (const name of ["SessionEmptyStateView", "SessionActionsView", "SessionCardView", "SessionGroupView"]) assertClass(src, name);
-    assertDelegates(src, "renderSessionCard", "SessionCardView");
-    assertDelegates(src, "renderSessionGroup", "SessionGroupView");
+    const panel = source("src/frontend/dashboard/session-list-panel.ts");
+    for (const name of ["SessionEmptyStateView", "SessionActionsView", "SessionCardView", "SessionGroupView", "SessionListPanelView"]) assertClass(panel, name);
+    assert.match(panel, /SessionCardView\.render\(/);
+    assert.match(panel, /SessionGroupView\.render\(/);
+    assert.match(src, /createSessionListPanel\(/);
+    assert.doesNotMatch(src, /class\s+(?:SessionEmptyStateView|SessionActionsView|SessionCardView|SessionGroupView)\b/);
   });
 
   it("keeps subagent views in their dedicated component module", () => {
@@ -196,5 +199,12 @@ describe("frontend component tree boundaries", () => {
     const controllerIndex = compiler.indexOf('"gen/chat/chat-sse-controller.js"');
     const dashboardChatIndex = compiler.indexOf('"gen/dashboard/dashboard-chat.js"');
     assert.ok(controllerIndex >= 0 && dashboardChatIndex > controllerIndex);
+  });
+
+  it("loads the session list panel before dashboard sessions", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const panelIndex = compiler.indexOf('"gen/dashboard/session-list-panel.js"');
+    const sessionsIndex = compiler.indexOf('"gen/dashboard/dashboard-sessions.js"');
+    assert.ok(panelIndex >= 0 && sessionsIndex > panelIndex);
   });
 });

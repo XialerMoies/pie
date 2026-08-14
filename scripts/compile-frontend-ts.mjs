@@ -178,6 +178,7 @@ const bundleOrder = [
   "gen/ui/tree-events.js",
   "gen/dashboard/session-restore.js",
   "gen/dashboard/session-activation.js",
+  "gen/dashboard/session-list-panel.js",
   "gen/dashboard/dashboard-sessions.js",
   "gen/pane/explorer/index.js",
   "gen/pane/chat/index.js",

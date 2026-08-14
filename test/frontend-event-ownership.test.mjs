@@ -340,7 +340,7 @@ describe("MCP pane event refresh ownership", () => {
 
 describe("non-Markdown HTML boundaries", () => {
   it("escapes server session ids before placing them in data attributes", () => {
-    const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-sessions.ts"), "utf8");
+    const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/session-list-panel.ts"), "utf8");
     assert.doesNotMatch(source, /data-session-id="\$\{session\.id\}"/);
     assert.match(source, /data-session-id="\$\{E\(session\.id\)\}"/);
   });

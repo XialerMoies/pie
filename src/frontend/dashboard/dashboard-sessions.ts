@@ -22,19 +22,9 @@ interface SessionInfo {
 type ThreadStatus = 'running' | 'error' | 'archived' | 'pinned' | 'success' | 'empty';
 type SessionTitleSource = 'auto' | 'manual';
 
-let _loadRetries = 0;
-const MAX_LOAD_RETRIES = 8;
-let _lastSessionRenderKey = '';
-
-/** 会话列表缓存：fetchSessionIndex 写入，renderSessionPanel 读取 */
-interface SessionDataCache {
-  sessions: SessionInfo[];
-  others: { project: string; path?: string; sessions: SessionInfo[] }[];
-}
-let _sessionDataCache: SessionDataCache | null = null;
-
 let _sessionListSeq = 0;
 let _sessionTabLookup = new Map<string, SessionInfo>();
+let sessionListPanelView: AppSessionListPanel | null = null;
 
 const {
   isDraftSessionId,
@@ -295,7 +285,7 @@ async function maybeAutoTitleSession(id: string, assistantText?: string): Promis
   const title = deriveAutoSessionTitle(App.ChatState.getMessages(), assistantText);
   if (!title || isGenericSessionTitle(title)) return null;
   writeSessionTabLabel(id, title, 'auto');
-  _lastSessionRenderKey = '';
+  getSessionListPanel().invalidate();
   renderSessionTabs(id);
   try {
     await fetch('/api/sessions/rename', {
@@ -397,292 +387,33 @@ function closeSessionTab(id: string): void {
   saveUiState();
 }
 
-function parseSessionTime(value?: string): number {
-  if (!value) return 0;
-  const time = Date.parse(value);
-  return Number.isFinite(time) ? time : 0;
-}
-
-function formatSessionTime(value?: string): string {
-  const time = parseSessionTime(value);
-  if (!time) return '时间未知';
-  const diff = Date.now() - time;
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  if (diff < minute) return '刚刚';
-  if (diff < hour) return `${Math.max(1, Math.floor(diff / minute))} 分钟前`;
-  if (diff < day) return `${Math.max(1, Math.floor(diff / hour))} 小时前`;
-  if (diff < 7 * day) return `${Math.max(1, Math.floor(diff / day))} 天前`;
-  return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit' }).format(new Date(time));
-}
-
-function getSessionTimeValue(session: SessionInfo): number {
-  return parseSessionTime(session.updatedAt || session.createdAt);
-}
-
-function isActiveSession(session: SessionInfo, openSessionIds: Set<string>): boolean {
-  return openSessionIds.has(session.id);
-}
-
-function deriveThreadStatus(session: SessionInfo, activeId: string): ThreadStatus {
-  if (session.archived) return 'archived';
-  if (session.hasError) return 'error';
-  if (session.isRunning) return 'running';
-  if (session.pinned) return 'pinned';
-  if (session.messageCount <= 0) return 'empty';
-  return 'success';
-}
-
-function threadStatusLabel(status: ThreadStatus): string {
-  if (status === 'running') return '运行中';
-  if (status === 'error') return '需处理';
-  if (status === 'archived') return '已归档';
-  if (status === 'pinned') return '固定';
-  if (status === 'empty') return '空线程';
-  return '已完成';
-}
-
-function threadStatusHint(status: ThreadStatus): string {
-  if (status === 'running') return '这条线程正在当前工作区推进';
-  if (status === 'error') return '上次执行出现错误，建议先查看失败节点';
-  if (status === 'archived') return '这条线程已归档，保留用于回看';
-  if (status === 'pinned') return '固定线程会保留在顶部，方便继续';
-  if (status === 'empty') return '这条线程还没有形成有效对话';
-  return '这条任务线程可继续打开或作为分支起点';
-}
-
-class SessionEmptyStateView {
-  static render(title: string, message: string, actions: string[]): string {
-    return `<div class="session-empty">
-    <div class="session-empty-icon">${S('imsg', 20)}</div>
-    <div class="session-empty-title">${E(title)}</div>
-    <div class="session-empty-text">${E(message)}</div>
-    <div class="session-empty-actions">${actions.join('')}</div>
-  </div>`;
-  }
-}
-
-function renderSessionEmptyState(title: string, message: string, actions: string[]): string {
-  return SessionEmptyStateView.render(title, message, actions);
-}
-
-class SessionActionsView {
-  static render(): string {
-    return `<div class="session-actions"><button class="sa-btn primary" data-action="new-session">+ 新会话</button></div>`;
-  }
-}
-
-function renderSessionActions(): string {
-  return SessionActionsView.render();
-}
-
-class SessionCardView {
-  static render(session: SessionInfo, openSessionIds: Set<string>, scopeLabel: string): string {
-  const name = session.name || '未命名会话';
-  const messageText = session.messageCount > 0 ? `${session.messageCount} 条消息` : '暂无消息';
-  const active = isActiveSession(session, openSessionIds);
-  const status = deriveThreadStatus(session, active ? session.id : '');
-  const timeText = formatSessionTime(session.updatedAt || session.createdAt);
-  const className = `sess-item thread-item thread-${status}${active ? ' active' : ''}`;
-  const pinTitle = session.pinned ? '取消固定' : '固定线程';
-  const pinIcon = session.pinned ? S('ipin-off', 14) : S('ipin', 14);
-  const branchText = session.branchFrom?.name ? `从 ${session.branchFrom.name} 分支` : session.branchFrom?.id ? '分支线程' : '';
-  const hint = [threadStatusHint(status), messageText, scopeLabel, branchText].filter(Boolean).join(' · ');
-  return `<div class="${className}" title="${E(hint)}" data-session-id="${E(session.id)}">
-    <div class="thread-row">
-      <div class="sess-info thread-info">
-        <div class="sess-name thread-name">
-          <span class="thread-title">${E(name)}</span>
-        </div>
-      </div>
-      <div class="thread-time">${E(timeText)}</div>
-      <div class="sess-ops thread-ops">
-        <button class="sess-pin" title="${pinTitle}" aria-label="${pinTitle}" data-action="pin" data-session-id="${E(session.id)}" data-pinned="${session.pinned ? 'true' : 'false'}">${pinIcon}</button>
-        <button class="sess-branch" title="创建分支" aria-label="创建分支" data-action="branch" data-session-id="${E(session.id)}">${S('ibranch', 14)}</button>
-        <button class="sess-rename" title="重命名" aria-label="重命名" data-action="rename" data-session-id="${E(session.id)}">${S('iedit', 14)}</button>
-        <button class="sess-del" title="删除" aria-label="删除" data-action="delete" data-session-id="${E(session.id)}">${S('itrash', 14)}</button>
-      </div>
-    </div>
-  </div>`;
-  }
-}
-
-function renderSessionCard(session: SessionInfo, openSessionIds: Set<string>, scopeLabel: string): string {
-  return SessionCardView.render(session, openSessionIds, scopeLabel);
-}
-
-class SessionGroupView {
-  static render(title: string, hint: string, sessions: SessionInfo[], openSessionIds: Set<string>, scopeLabel: string): string {
-  const count = sessions.length;
-  const items = sessions.length > 0
-    ? sessions.map(session => renderSessionCard(session, openSessionIds, scopeLabel)).join('')
-    : `<div class="session-group-empty">${E(hint)}</div>`;
-  return `<div class="session-group">
-    <div class="session-group-head"><span>${E(title)}</span><span class="session-group-count">${count}</span></div>
-    ${items}
-  </div>`;
-  }
-}
-
-function renderSessionGroup(title: string, hint: string, sessions: SessionInfo[], openSessionIds: Set<string>, scopeLabel: string): string {
-  return SessionGroupView.render(title, hint, sessions, openSessionIds, scopeLabel);
-}
-
-function buildSessionRenderKey(sessions: SessionInfo[], others: { project: string; path?: string; sessions: SessionInfo[] }[], openSessionIds: Set<string>): string {
-  return JSON.stringify({
-    openSessionIds: [...openSessionIds].sort(),
-    sessions: sessions.map(session => ({
-      id: session.id,
-      name: session.name,
-      active: session.active,
-      messageCount: session.messageCount,
-      updatedAt: session.updatedAt || session.createdAt,
-      workspace: session.workspace || '',
-      pinned: Boolean(session.pinned),
-      archived: Boolean(session.archived),
-      hasError: Boolean(session.hasError),
-      isRunning: Boolean(session.isRunning),
-      status: deriveThreadStatus(session, ''),
-      branchFrom: session.branchFrom?.id || '',
-    })),
-    others: others.map(project => ({
-      project: project.project,
-      path: project.path || '',
-      sessions: project.sessions.map(session => ({
-        id: session.id,
-        name: session.name,
-        active: session.active,
-        messageCount: session.messageCount,
-        updatedAt: session.updatedAt || session.createdAt,
-        pinned: Boolean(session.pinned),
-        archived: Boolean(session.archived),
-        hasError: Boolean(session.hasError),
-        isRunning: Boolean(session.isRunning),
-        status: deriveThreadStatus(session, ''),
-        branchFrom: session.branchFrom?.id || '',
-      })),
-    })),
-  });
-}
-
-function setSessionPanelStatus(text: string, kind: 'loading' | 'ready' | 'error' = 'ready'): void {
-  void text;
-  void kind;
-}
-
-/**
- * 拉取并索引会话元数据，存入 _sessionDataCache，不碰 #sl。
- * 无论左侧面板是什么都调用，确保标签标题尽早回填。
- */
-function fetchSessionIndex(): Promise<void> {
-  const ws = App.State.getWorkspacePath();
-  setSessionPanelStatus('正在刷新任务线程…', 'loading');
-  return fetch('/api/sessions?workspace=' + encodeURIComponent(ws) + '&other=1')
-    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-    .then((data: { sessions?: SessionInfo[]; other?: { project: string; path?: string; sessions: SessionInfo[] }[]; error?: string }) => {
-      if (data.error) throw new Error(data.error);
-      const sessions = (data.sessions || []).slice().sort((a, b) => getSessionTimeValue(b) - getSessionTimeValue(a));
-      const others = data.other || [];
-      _sessionDataCache = { sessions, others };
-      indexSessionTabs(sessions, others);
-      const activeId = App.Tabs.getActiveSessionTabId() || '';
-      renderSessionTabs(activeId);
+function getSessionListPanel(): AppSessionListPanel {
+  if (!sessionListPanelView) {
+    sessionListPanelView = App.SessionViews.createSessionListPanel({
+      isConversationSearchActive: () => Boolean((window as any).isConversationSearchActive?.()),
+      getActiveSessionTabId: () => App.Tabs.getActiveSessionTabId() || null,
+      getOpenSessionIds: readOpenRealSessionIds,
+      indexSessionTabs,
+      renderSessionTabs,
+      setupListHandler: setupSessionListHandler,
     });
-  // 注意：错误由调用方处理（loadSessions UI 路径 / 后台路径各自决定是否吞错）
+  }
+  return sessionListPanelView;
 }
 
-/**
- * 从 _sessionDataCache 渲染 #sl（会话列表面板）。
- * 搜索活跃时不执行。
- */
+/** 拉取并索引会话元数据，不触碰会话列表面板。 */
+function fetchSessionIndex(): Promise<void> {
+  return getSessionListPanel().fetchIndex();
+}
+
+/** 从已缓存的会话元数据渲染会话列表面板。 */
 function renderSessionPanel(): void {
-  if ((window as any).isConversationSearchActive?.()) return;
-  const el = $('sl');
-  if (!el) return;
-  if (!_sessionDataCache) { loadSessions(); return; }
-
-  const { sessions, others } = _sessionDataCache;
-  const activeId = App.Tabs.getActiveSessionTabId() || '';
-  const openSessionIds = readOpenRealSessionIds();
-
-  const renderKey = buildSessionRenderKey(sessions, others, openSessionIds);
-  const needsInitialRender = !el.querySelector('.session-toolbar') && !el.querySelector('.session-empty') && !el.querySelector('.session-group');
-  const hasChanged = needsInitialRender || renderKey !== _lastSessionRenderKey;
-  const totalSessions = sessions.length + others.reduce((sum, project) => sum + project.sessions.length, 0);
-  const pinnedSessions = sessions.filter(s => s.pinned);
-  const activeSessions = sessions.filter(s => isActiveSession(s, openSessionIds));
-
-  if (sessions.length === 0 && others.length === 0) {
-    _lastSessionRenderKey = renderKey;
-    el.classList.remove('is-loading');
-    setSessionPanelStatus('暂无任务线程', 'ready');
-    el.innerHTML = renderSessionEmptyState(
-      '暂无任务线程',
-      '新会话会出现在这里，按时间和活跃状态整理成可继续的任务线程。',
-      [`<button class="sa-btn primary" data-action="new-session">+ 新会话</button>`],
-    );
-    setupSessionListHandler();
-    return;
-  }
-
-  const statusBits = [
-    pinnedSessions.length > 0 ? `${pinnedSessions.length} 个固定` : '',
-    activeSessions.length > 0 ? `${activeSessions.length} 个已打开` : '',
-    others.length > 0 ? `${others.length} 个其他项目` : '',
-  ].filter(Boolean);
-  setSessionPanelStatus(statusBits.length > 0 ? `任务线程已刷新 · ${statusBits.join(' · ')}` : '任务线程已刷新', 'ready');
-  el.classList.remove('is-loading');
-  if (!hasChanged) return;
-
-  let html = '';
-  if (pinnedSessions.length > 0) html += renderSessionGroup('固定线程', '固定的重要任务会留在这里。', pinnedSessions, openSessionIds, '当前项目');
-  html += sessions.filter(s => !s.pinned).map(s => renderSessionCard(s, openSessionIds, '当前项目')).join('');
-
-  if (others.length > 0) {
-    html += `<div class="sess-other-header" data-action="toggle-other" data-label="其他项目 (${others.length})">▸ 其他项目 (${others.length})</div>`;
-    html += `<div class="sess-other-list" style="display:none">`;
-    for (const proj of others) {
-      const projLabel = proj.project === "未分类" ? "未分类（旧会话）" : E(proj.project);
-      const projPath = proj.path ? ` <span class="sess-other-path">${E(proj.path)}</span>` : '';
-      const ordered = proj.sessions.slice().sort((a, b) => getSessionTimeValue(b) - getSessionTimeValue(a));
-      html += `<div class="sess-other-project"><div class="sess-other-title">${projLabel}${projPath}</div>`;
-      html += ordered.map(s => renderSessionCard(s, openSessionIds, projLabel)).join('');
-      html += `</div>`;
-    }
-    html += `</div>`;
-  }
-
-  el.innerHTML = html;
-  _lastSessionRenderKey = renderKey;
-  setupSessionListHandler();
+  getSessionListPanel().render();
 }
 
-/** 组合函数：先取数据、索引，再渲染会话面板 */
+/** 组合函数：先取数据、索引，再渲染会话面板。 */
 function loadSessions(): Promise<void> {
-  const el = $('sl');
-  if (!el) {
-    // #sl 不存在时仅后台索引，不 retry（chatPaneRender 挂载后会主动调）
-    return fetchSessionIndex().catch(() => {});
-  }
-  if ((window as any).isConversationSearchActive?.()) return Promise.resolve();
-  _loadRetries = 0;
-  el.classList.add('is-loading');
-  return fetchSessionIndex().then(() => renderSessionPanel()).catch(() => {
-    const list = $('sl');
-    if (list) {
-      _lastSessionRenderKey = '';
-      el.classList.remove('is-loading');
-      setSessionPanelStatus('加载失败', 'error');
-      list.innerHTML = renderSessionEmptyState(
-        '网络错误',
-        '会话列表暂时无法加载，可能是后端未启动或网络被中断。',
-        [`<button class="sa-btn primary" data-action="retry">重新加载</button>`, `<button class="sa-btn" data-action="new-session">+ 新会话</button>`],
-      );
-      setupSessionListHandler();
-    }
-    toast('加载会话列表失败', 'error');
-  });
+  return getSessionListPanel().load();
 }
 
 function toggleOtherSessions(header: HTMLElement): void {
@@ -720,7 +451,7 @@ function renameSession(el: HTMLElement, id: string): void {
     if (val && val !== oldName) {
       fetch('/api/sessions/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name: val, titleSource: 'manual' }) })
         .then(r => r.json()).then((r: { ok: boolean }) => {
-          if (r.ok) { _lastSessionRenderKey = ''; writeSessionTabLabel(id, val, 'manual'); renderSessionTabs(id); toast('已重命名'); loadSessions(); }
+          if (r.ok) { getSessionListPanel().invalidate(); writeSessionTabLabel(id, val, 'manual'); renderSessionTabs(id); toast('已重命名'); loadSessions(); }
           else { nm.textContent = oldName; toast('重命名失败'); }
         }).catch(() => { nm.textContent = oldName; toast('重命名失败'); });
     } else { nm.textContent = oldName; }
@@ -794,7 +525,7 @@ function pinSession(id: string, pinned: boolean): void {
   }).then(r => r.json()).then((r: { ok?: boolean; error?: string }) => {
     if (!r.ok) { toast('固定失败: ' + (r.error || ''), 'error'); return; }
     toast(pinned ? '已固定线程' : '已取消固定', 'success');
-    _lastSessionRenderKey = '';
+    getSessionListPanel().invalidate();
     loadSessions();
   }).catch(() => toast('固定失败', 'error'));
 }

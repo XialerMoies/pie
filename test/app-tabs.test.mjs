@@ -24,6 +24,7 @@ async function loadDashboardSessions() {
   const nonce = Date.now() + Math.random();
   await import(`../src/frontend/dashboard/session-restore.ts?t=${nonce}`);
   await import(`../src/frontend/dashboard/session-activation.ts?t=${nonce}`);
+  await import(`../src/frontend/dashboard/session-list-panel.ts?t=${nonce}`);
   await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${nonce}`);
 }
 
