@@ -1,12 +1,22 @@
 // 面板管理 — 切换/缩放/状态渲染
 // 从 dashboard-layout.ts 拆出
 
+interface LayoutPanelDependencies {
+  state: AppStateFacade;
+}
+
+const layoutPanelApp = (window as any).App;
+const layoutPanelDependencies: LayoutPanelDependencies = {
+  state: layoutPanelApp.State,
+};
+const layoutPanelState = layoutPanelDependencies.state;
+
 function _panelWidth(): number {
-  const width = App.State.getSnapshot().panel.width;
+  const width = layoutPanelState.getSnapshot().panel.width;
   return width > 50 ? width : 0;
 }
 
-function _syncPanelToStore(active = App.State.getSnapshot().panel.active || 'explorer'): void {
+function _syncPanelToStore(active = layoutPanelState.getSnapshot().panel.active || 'explorer'): void {
   const si = document.getElementById('si');
   const panel: Partial<WorkspaceUiSnapshot['panel']> = {
     active,
@@ -16,13 +26,13 @@ function _syncPanelToStore(active = App.State.getSnapshot().panel.active || 'exp
   if (si && !si.classList.contains('closed') && si.offsetWidth > 50) {
     panel.width = si.offsetWidth;
   }
-  App.State.updatePanel(panel);
+  layoutPanelState.updatePanel(panel);
 }
 
 function togglePanel(name: string): void {
   const si = $('si'), pc = $('pc');
   if (!si || !pc) return;
-  const activePanel = App.State.getSnapshot().panel.active || 'explorer';
+  const activePanel = layoutPanelState.getSnapshot().panel.active || 'explorer';
   const highlightedButton = document.querySelector('.sbar .b[data-side].on') as HTMLElement | null;
   const visiblePanel = highlightedButton?.dataset.side || activePanel;
   if (visiblePanel === name && !si.classList.contains('closed')) {
@@ -49,7 +59,7 @@ function restorePanel(name: string): void {
 
   const restoredPanel = name === 'permissions' ? 'explorer' : name;
 
-  const panel = App.State.getSnapshot().panel;
+  const panel = layoutPanelState.getSnapshot().panel;
   const isClosed = panel.closed === true;
   const savedWidth = panel.width > 50 ? panel.width : _panelWidth();
 

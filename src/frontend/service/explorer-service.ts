@@ -1,6 +1,22 @@
 // ExplorerService — API 调用 + 状态管理（服务层）
 /// <reference path="../../dashboard.d.ts" />
 
+interface ExplorerServiceDependencies {
+  preferences: AppPreferences;
+  state: AppStateFacade;
+  events: AppEvents;
+}
+
+const explorerServiceApp = (window as any).App;
+const explorerServiceDependencies: ExplorerServiceDependencies = {
+  preferences: explorerServiceApp.Preferences,
+  state: explorerServiceApp.State,
+  events: explorerServiceApp.Events,
+};
+const explorerServicePreferences = explorerServiceDependencies.preferences;
+const explorerServiceState = explorerServiceDependencies.state;
+const explorerServiceEvents = explorerServiceDependencies.events;
+
 export class ExplorerService {
   static _filterEnabled = true;
   static _lastRefreshKey = '';
@@ -17,7 +33,7 @@ export class ExplorerService {
 
   static setFilterEnabled(v: boolean): void {
     this._filterEnabled = v;
-    App.Preferences.setBoolean('explorer-filter', v);
+    explorerServicePreferences.setBoolean('explorer-filter', v);
   }
   static getFilterEnabled(): boolean { return this._filterEnabled; }
 
@@ -44,12 +60,12 @@ export class ExplorerService {
 
   /** 获取工作区路径 */
   static getWorkspacePath(): string {
-    return App.State.getWorkspacePath();
+    return explorerServiceState.getWorkspacePath();
   }
 
   /** 设置工作区路径 */
   static setWorkspacePath(p: string): void {
-    App.State.setWorkspacePath(p);
+    explorerServiceState.setWorkspacePath(p);
   }
 
   /** 浏览器环境下选择工作区路径 */
@@ -244,7 +260,7 @@ function setExplorerStatus(text: string, kind: 'loading' | 'ready' | 'error' = '
 
 // 从统一偏好 facade 恢复筛选状态
 function applyExplorerPreferences(): void {
-  ExplorerService._filterEnabled = App.Preferences.getBoolean('explorer-filter', true);
+  ExplorerService._filterEnabled = explorerServicePreferences.getBoolean('explorer-filter', true);
 }
 
 // 暴露到全局（供 inline onclick 使用）
@@ -315,8 +331,8 @@ function subscribeExplorerEvents(): void {
     if (version !== _treeSubscriptionVersion) return;
     void ExplorerService.refreshTree();
   };
-  const unsubscribeChanged = App.Events.subscribe('explorer.changed', refreshMountedTree);
-  const unsubscribeResync = App.Events.subscribe('resync', refreshMountedTree);
+  const unsubscribeChanged = explorerServiceEvents.subscribe('explorer.changed', refreshMountedTree);
+  const unsubscribeResync = explorerServiceEvents.subscribe('resync', refreshMountedTree);
   let active = true;
   const unsubscribe = () => {
     if (!active) return;
@@ -398,5 +414,5 @@ ExplorerService.refreshTree = function (): Promise<void> {
 };
 
 // ─── 文件变更自动刷新（共享事件总线）────────────────────────
-App.Events.subscribe('permission.confirm', handlePermissionConfirm);
+explorerServiceEvents.subscribe('permission.confirm', handlePermissionConfirm);
 subscribeExplorerEvents();

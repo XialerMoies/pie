@@ -47,6 +47,19 @@ interface GitDiffResponse extends FileDiffMetadata {
   error?: string;
 }
 
+interface GitPaneDependencies {
+  state: AppStateFacade;
+  fileDiff: AppFileDiff;
+}
+
+const gitPaneApp = (window as any).App;
+const gitPaneDependencies: GitPaneDependencies = {
+  state: gitPaneApp.State,
+  fileDiff: gitPaneApp.FileDiff,
+};
+const gitPaneState = gitPaneDependencies.state;
+const gitPaneFileDiff = gitPaneDependencies.fileDiff;
+
 // ─── State ───────────────────────────────────────────────────────
 
 let _statusData: GitStatusResponse | null = null;
@@ -67,7 +80,7 @@ function gitEl(id: string): HTMLElement | null {
 }
 
 function getRoot(): string {
-  return App.State.getWorkspacePath();
+  return gitPaneState.getWorkspacePath();
 }
 
 // ─── Status label & color ───────────────────────────────────────
@@ -155,7 +168,7 @@ class GitDiffPreviewView {
     } else if (_diffError) {
       html += `<div class="git-diff-state error">${E(_diffError)}</div>`;
     } else if (_diffData) {
-      html += App.FileDiff.render(_diffData, {
+      html += gitPaneFileDiff.render(_diffData, {
         pathAction: "open-diff-file",
       });
     }
@@ -448,14 +461,14 @@ function gitPaneRender(container: HTMLElement): void {
 // ─── App bindings ─────────────────────────────────────────────
 
 function gitAddAppBindings(): void {
-  const App = (window as any).App;
-  if (App) {
-    App.Git = App.Git || {};
-    App.Git.refreshGit = refreshGit;
-    App.Git.openGitFile = openGitFile;
-    App.Git.commit = commit;
-    App.Git.push = push;
-    App.Git.pull = pull;
+  const gitBindingsApp = (window as any).App;
+  if (gitBindingsApp) {
+    gitBindingsApp.Git = gitBindingsApp.Git || {};
+    gitBindingsApp.Git.refreshGit = refreshGit;
+    gitBindingsApp.Git.openGitFile = openGitFile;
+    gitBindingsApp.Git.commit = commit;
+    gitBindingsApp.Git.push = push;
+    gitBindingsApp.Git.pull = pull;
   }
 }
 gitAddAppBindings();

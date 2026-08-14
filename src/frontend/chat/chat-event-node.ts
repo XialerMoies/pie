@@ -1,10 +1,17 @@
 interface ChatEventNodeDependencies {
   renderMarkdown: (text: string) => string;
+  chatViews: AppChatViews;
+  fileDiff: AppFileDiff;
 }
 
+const chatEventNodeApp = (window as any).App;
 const chatEventNodeDependencies: ChatEventNodeDependencies = {
   renderMarkdown: (text) => E(text || ''),
+  chatViews: chatEventNodeApp.ChatViews,
+  fileDiff: chatEventNodeApp.FileDiff,
 };
+const chatEventNodeChatViews = chatEventNodeDependencies.chatViews;
+const chatEventNodeFileDiff = chatEventNodeDependencies.fileDiff;
 
 function chatEventNodeConfigure(dependencies: Partial<ChatEventNodeDependencies>): void {
   if (dependencies.renderMarkdown) chatEventNodeDependencies.renderMarkdown = dependencies.renderMarkdown;
@@ -21,11 +28,11 @@ function chatEventNodeShortText(value: unknown, max = 1200): string {
 }
 
 function chatEventNodeRenderEditSummary(blocks: any[], expanded = true): string {
-  return App.ChatViews.EditSummaryView.render(blocks, expanded);
+  return chatEventNodeChatViews.EditSummaryView.render(blocks, expanded);
 }
 
 function chatEventNodeRefreshEditSummary(flow: HTMLElement, blocks: any[]): void {
-  App.ChatViews.refreshEditSummary(flow, blocks);
+  chatEventNodeChatViews.refreshEditSummary(flow, blocks);
 }
 
 function chatEventNodeFirstSummaryLine(value: string, max = 220): string {
@@ -110,7 +117,7 @@ function chatEventNodeRenderTraceItem(t: any, defaultOpen?: boolean): string {
     const input = chatEventNodeHasTraceValue(t.input) ? chatEventNodeShortText(t.input, 900) : '';
     const result = t.error || t.output;
     const output = chatEventNodeHasTraceValue(result) ? chatEventNodeShortText(result, 1200) : '';
-    const diffBlock = App.FileDiff?.render?.(t.metadata?.diff) || '';
+    const diffBlock = chatEventNodeFileDiff?.render?.(t.metadata?.diff) || '';
     const inputSection = input ? `<div class="trace-card-section trace-card-in"><div class="trace-card-label">IN</div><pre>${E(input)}</pre></div>` : '';
     const outputLabel = t.status === 'error' ? 'ERROR' : 'OUT';
     const outputSection = output ? `<div class="trace-card-section trace-card-out"><div class="trace-card-label${t.status === 'error' ? ' error' : ''}">${outputLabel}</div><pre>${E(output)}</pre></div>` : '';
@@ -169,13 +176,13 @@ function chatEventNodeSubagentData(block: any, blocks: any[], batches?: readonly
 function chatEventNodeRenderBlock(block: any, blocks: any[], defaultOpen?: boolean, batches?: readonly FrontendSubagentBatch[]): string {
   if (block.type === 'thinking') return chatEventNodeRenderTraceItem({ type: 'thinking', status: block.status || 'streaming', text: block.text || '', id: chatEventNodeBlockId(block) }, defaultOpen);
   if (block.type === 'tool') {
-    if (block.name === 'delegate_tasks') return App.ChatViews.renderSubagentDelegation(chatEventNodeSubagentData(block, blocks, batches));
+    if (block.name === 'delegate_tasks') return chatEventNodeChatViews.renderSubagentDelegation(chatEventNodeSubagentData(block, blocks, batches));
     return chatEventNodeRenderTraceItem({ type: 'tool', status: block.status || 'running', name: block.name || 'tool', input: block.input, output: block.error ? undefined : block.output, error: block.error, metadata: block.metadata, id: chatEventNodeBlockId(block) });
   }
   if (block.type === 'tool_use') {
     const result = blocks.find(item => item.type === 'tool_result' && item.toolUseId && item.toolUseId === block.toolCallId);
     const status = result ? (result.isError ? 'error' : 'success') : (block.status || 'running');
-    if (block.name === 'delegate_tasks') return App.ChatViews.renderSubagentDelegation(chatEventNodeSubagentData(block, blocks, batches));
+    if (block.name === 'delegate_tasks') return chatEventNodeChatViews.renderSubagentDelegation(chatEventNodeSubagentData(block, blocks, batches));
     return chatEventNodeRenderTraceItem({ type: 'tool', status, name: block.name || 'tool', input: block.input, output: result?.isError ? undefined : (result?.output || block.output), error: result?.isError ? result?.output : undefined, metadata: result?.metadata || block.metadata, id: chatEventNodeBlockId(block) });
   }
   if (block.type === 'tool_result') {
@@ -269,7 +276,6 @@ class ChatEventNodeView {
   static blockId(block: any): string { return chatEventNodeBlockId(block); }
 }
 
-const chatEventNodeApp = (window as any).App;
 if (chatEventNodeApp) {
   chatEventNodeApp.ChatViews = {
     ...(chatEventNodeApp.ChatViews || {}),

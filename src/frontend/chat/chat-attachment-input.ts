@@ -1,5 +1,15 @@
 /// <reference path="../dashboard.d.ts" />
 
+interface ChatAttachmentInputDependencies {
+  chat?: AppChat;
+}
+
+const chatAttachmentInputApp = (window as any).App;
+const chatAttachmentInputDependencies: ChatAttachmentInputDependencies = {
+  chat: chatAttachmentInputApp?.Chat,
+};
+const attachmentInputChat = chatAttachmentInputDependencies.chat;
+
 class ChatAttachmentInputView {
   private cleanups: Array<() => void> = [];
   private bound = false;
@@ -19,12 +29,12 @@ class ChatAttachmentInputView {
         const dragEvent = event as DragEvent;
         dragEvent.preventDefault();
         if (dragEvent.dataTransfer) dragEvent.dataTransfer.dropEffect = 'move';
-        App.Chat?.showDropZone?.(true);
+        attachmentInputChat?.showDropZone?.(true);
       });
       this.listen(inputArea, 'dragleave', (event) => {
         const dragEvent = event as DragEvent;
         if (!inputArea.contains(dragEvent.relatedTarget as Node)) {
-          App.Chat?.showDropZone?.(false);
+          attachmentInputChat?.showDropZone?.(false);
         }
       });
       this.listen(inputArea, 'drop', (event) => {
@@ -49,7 +59,7 @@ class ChatAttachmentInputView {
             ? path.replace(workspace.replace(/\\/g, '/'), '').replace(/^\/+/, '')
             : path;
           const name = path.split(/[/\\]/).pop() || path;
-          App.Chat?.addAttachment?.({ kind: 'file', path: relativePath, name });
+          attachmentInputChat?.addAttachment?.({ kind: 'file', path: relativePath, name });
         }
       } else {
         toast('请使用 Electron 桌面版', 'info');
@@ -62,7 +72,7 @@ class ChatAttachmentInputView {
 
   private async handleDrop(event: DragEvent): Promise<void> {
     event.preventDefault();
-    App.Chat?.showDropZone?.(false);
+    attachmentInputChat?.showDropZone?.(false);
     let treeNodeId = event.dataTransfer?.getData('text/tree-node');
     if (!treeNodeId) {
       const plain = event.dataTransfer?.getData('text/plain') || '';
@@ -78,9 +88,9 @@ class ChatAttachmentInputView {
       const tree = (ExplorerService as any)._getTree?.();
       const node = tree?._findNodeById?.(treeNodeId);
       if (node?.isDir) {
-        App.Chat?.addAttachment?.({ kind: 'folder', path: treeNodeId, name: name + '/' });
+        attachmentInputChat?.addAttachment?.({ kind: 'folder', path: treeNodeId, name: name + '/' });
       } else {
-        App.Chat?.addAttachment?.({ kind: 'file', path: treeNodeId, name });
+        attachmentInputChat?.addAttachment?.({ kind: 'file', path: treeNodeId, name });
       }
       toast(`已添加: ${name}`, 'success');
     } else if (event.dataTransfer?.files && event.dataTransfer.files.length > 0) {
@@ -94,7 +104,6 @@ class ChatAttachmentInputView {
   }
 }
 
-const chatAttachmentInputApp = (window as any).App;
 if (chatAttachmentInputApp) {
   chatAttachmentInputApp.ChatViews = {
     ...(chatAttachmentInputApp.ChatViews || {}),

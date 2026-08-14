@@ -7,6 +7,19 @@
  */
 /// <reference path="../../dashboard.d.ts" />
 
+interface McpPaneDependencies {
+  events: AppEvents;
+  views: AppMcpViews;
+}
+
+const mcpPaneApp = (window as any).App;
+const mcpPaneDependencies: McpPaneDependencies = {
+  events: mcpPaneApp.Events,
+  views: mcpPaneApp.McpViews,
+};
+const mcpPaneEvents = mcpPaneDependencies.events;
+const mcpPaneViews = mcpPaneDependencies.views;
+
 // ─── 状态 ──────────────────────────────────────
 
 const MCP_PANEL_ID = "mcp-panel-root";
@@ -34,15 +47,15 @@ function handleMcpInvalidation(): void {
 function startMcpUpdates(): void {
   stopMcpUpdates();
   _mcpUpdateUnsubscribers = [
-    App.Events.subscribe('mcp.changed', handleMcpInvalidation),
-    App.Events.subscribe('resync', handleMcpInvalidation),
+    mcpPaneEvents.subscribe('mcp.changed', handleMcpInvalidation),
+    mcpPaneEvents.subscribe('resync', handleMcpInvalidation),
   ];
 }
 
 // ─── 面板入口 ──────────────────────────────────
 
 function mcpPaneRender(container: HTMLElement): void {
-  container.innerHTML = `<div id="${MCP_PANEL_ID}">${App.McpViews.renderPanel()}</div>`;
+  container.innerHTML = `<div id="${MCP_PANEL_ID}">${mcpPaneViews.renderPanel()}</div>`;
   startMcpUpdates();
   switchMcpTab("installed");
 }
@@ -83,7 +96,7 @@ async function fetchMcpServers(): Promise<void> {
     const barCount = document.getElementById("mcp-bar-count");
 
     if (barCount) barCount.textContent = String(servers.length);
-    content.innerHTML = App.McpViews.renderServers(servers);
+    content.innerHTML = mcpPaneViews.renderServers(servers);
 
     bindToggleEvents(content);
     bindTrustEvents(content);
@@ -161,7 +174,7 @@ async function renderExploreTab(container: HTMLElement): Promise<void> {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const catalog: CatalogEntry[] = await res.json();
 
-    container.innerHTML = App.McpViews.renderCatalog(catalog);
+    container.innerHTML = mcpPaneViews.renderCatalog(catalog);
 
     bindInstallEvents(container);
     bindCustomInstall(container);

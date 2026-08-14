@@ -8,6 +8,16 @@
  */
 /// <reference path="../../dashboard.d.ts" />
 
+interface SearchPaneDependencies {
+  state: AppStateFacade;
+}
+
+const searchPaneApp = (window as any).App;
+const searchPaneDependencies: SearchPaneDependencies = {
+  state: searchPaneApp.State,
+};
+const searchPaneState = searchPaneDependencies.state;
+
 interface SearchMatch {
   line: number;
   column: number;
@@ -56,9 +66,9 @@ let _isPreviewing = false;
 let _isApplying = false;
 let _replaceExpanded = false;
 
-// NOTE: WS_KEY is in App.Constants.WS_KEY — don't redeclare const
+// Workspace compatibility storage stays behind the shared state facade.
 function getSearchRoot(): string {
-  return App.State.getWorkspacePath();
+  return searchPaneState.getWorkspacePath();
 }
 
 // ─── DOM refs ───────────────────────────────────────────────────
@@ -542,13 +552,13 @@ function searchPaneRender(container: HTMLElement): void {
   }
 }
 
-// Export for App.File namespace
+// Export public search actions at the application boundary.
 function addAppBindings(): void {
-  const App = (window as any).App;
-  if (App) {
-    App.File.openSearchResult = openSearchResult;
-    App.Settings.setSearchType = setSearchType;
-    App.Settings.toggleCaseSensitive = toggleCaseSensitive;
+  const searchBindingsApp = (window as any).App;
+  if (searchBindingsApp) {
+    searchBindingsApp.File.openSearchResult = openSearchResult;
+    searchBindingsApp.Settings.setSearchType = setSearchType;
+    searchBindingsApp.Settings.toggleCaseSensitive = toggleCaseSensitive;
   }
 }
 addAppBindings();

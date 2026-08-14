@@ -1,5 +1,15 @@
 /// <reference path="../../dashboard.d.ts" />
 
+interface PermissionsPaneDependencies {
+  views: AppPermissionViews;
+}
+
+const permissionsPaneApp = (window as any).App || ((window as any).App = {});
+const permissionsPaneDependencies: PermissionsPaneDependencies = {
+  views: permissionsPaneApp.PermissionViews,
+};
+const permissionsPaneViews = permissionsPaneDependencies.views;
+
 type PermissionDecision = "allow" | "ask" | "deny";
 type PermissionOperation = "read" | "write" | "create" | "remove" | "tool";
 type PermissionRuleList = "allow" | "deny" | "ask";
@@ -89,11 +99,11 @@ function unmountPermissionsPanel(): void {
 }
 
 function renderPermissionsPanel(): string {
-  return App.PermissionViews.renderPanel(permissionViewState());
+  return permissionsPaneViews.renderPanel(permissionViewState());
 }
 
 function renderPermissionsContent(): string {
-  return App.PermissionViews.renderContent(permissionViewState());
+  return permissionsPaneViews.renderContent(permissionViewState());
 }
 
 function permissionViewState(): PermissionPanelViewState {
@@ -160,7 +170,7 @@ async function refreshPermissionsPanel(forceToast = false): Promise<void> {
     if (!isCurrentPermissionsRefresh(requestGeneration, requestMountedGeneration, requestRoot)) return;
     const content = mountedRoot?.querySelector<HTMLElement>("#permissions-content");
     if (content) {
-      content.innerHTML = App.PermissionViews.renderError((err as Error).message);
+      content.innerHTML = permissionsPaneViews.renderError((err as Error).message);
     }
   }
 }
@@ -354,7 +364,7 @@ function syncPermissionsPanel(): void {
 }
 
 function permissionScopeLabel(scope: PermissionRuleScope): string {
-  return App.PermissionViews.scopeLabel(scope);
+  return permissionsPaneViews.scopeLabel(scope);
 }
 
 
@@ -385,9 +395,8 @@ async function removePermissionRule(list: PermissionRuleList, scope: PermissionR
   }
 }
 
-const permissionsApp = (window as any).App || ((window as any).App = {});
-permissionsApp.Permissions = {
-  ...(permissionsApp.Permissions || {}),
+permissionsPaneApp.Permissions = {
+  ...(permissionsPaneApp.Permissions || {}),
   mount: mountPermissionsPanel,
   refresh: refreshPermissionsPanel,
   unmount: unmountPermissionsPanel,

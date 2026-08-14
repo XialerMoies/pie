@@ -1,17 +1,30 @@
 // Explorer pane — 文件资源管理器面板（仅 DOM 渲染 + Tree 绑定）
 /// <reference path="../../dashboard.d.ts" />
 
+interface ExplorerPaneDependencies {
+  views: AppExplorerViews;
+  tabs: AppTabs;
+}
+
+const explorerPaneApp = (window as any).App;
+const explorerPaneDependencies: ExplorerPaneDependencies = {
+  views: explorerPaneApp.ExplorerViews,
+  tabs: explorerPaneApp.Tabs,
+};
+const explorerPaneViews = explorerPaneDependencies.views;
+const explorerPaneTabs = explorerPaneDependencies.tabs;
+
 function explorerRender(container: HTMLElement): void {
-  App.ExplorerViews.dispose();
+  explorerPaneViews.dispose();
   bindExplorerActions(container);
   const ws = ExplorerService.getWorkspacePath();
   if (!ws) {
-    container.innerHTML = App.ExplorerViews.renderEmpty();
+    container.innerHTML = explorerPaneViews.renderEmpty();
     return;
   }
 
   container.style.cssText = 'display:flex;flex-direction:column;height:100%;min-height:0';
-  container.innerHTML = App.ExplorerViews.renderPanel();
+  container.innerHTML = explorerPaneViews.renderPanel();
 
   // 阻止浏览器的默认右键菜单
   container.addEventListener('contextmenu', e => e.preventDefault());
@@ -187,14 +200,14 @@ function initTree(container: HTMLElement): void {
     if (unsupportedVideoExt.has(ext)) { toast(`${ext} 格式不支持浏览器预览，建议用外部播放器打开`, 'info'); openFileTab(path, `[二进制文件，不支持预览: ${ext}]`, ext, 'text'); return; }
 
     // 文本文件
-    const tabs = App.Tabs;
+    const tabs = explorerPaneTabs;
     const existingTab = tabs?.getTab?.(path);
 
     // 已打开且有内容 → 只激活，不重新读
     if (existingTab && existingTab.content && existingTab.content !== "加载中...") {
       console.log("[explorer] tab already open, activate:", path);
       mark("file-click");
-      (window as any).App?.Tabs?.activate(path);
+      explorerPaneTabs.activate(path);
       return;
     }
 
@@ -257,7 +270,7 @@ function toggleExplorerFilter(): void {
   const btn = document.querySelector('.sg-more') as HTMLElement | null;
   if (!btn) return;
   const on = ExplorerService.getFilterEnabled();
-  App.ExplorerViews.showFilterMenu(btn, on, (enabled) => {
+  explorerPaneViews.showFilterMenu(btn, on, (enabled) => {
     ExplorerService.setFilterEnabled(enabled);
     ExplorerService.refreshTree();
   });

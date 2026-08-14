@@ -31,6 +31,15 @@ describe("frontend component tree boundaries", () => {
       "src/frontend/dashboard/session-list-panel.ts",
       "src/frontend/chat/chat-timeline.ts",
       "src/frontend/pane/mcp/mcp-views.ts",
+      "src/frontend/pane/permissions/index.ts",
+      "src/frontend/chat/chat-event-node.ts",
+      "src/frontend/dashboard/layout-panel.ts",
+      "src/frontend/pane/mcp/index.ts",
+      "src/frontend/pane/explorer/index.ts",
+      "src/frontend/chat/chat-attachment-input.ts",
+      "src/frontend/pane/search/index.ts",
+      "src/frontend/service/explorer-service.ts",
+      "src/frontend/pane/git/index.ts",
     ];
     for (const file of files) {
       assert.doesNotMatch(source(file), /\bApp(?:\.|\s+as\s+any)/, `${file} must localize App dependencies at its boundary`);
@@ -86,8 +95,10 @@ describe("frontend component tree boundaries", () => {
     const controller = source("src/frontend/pane/permissions/index.ts");
     const views = source("src/frontend/pane/permissions/permissions-views.ts");
     for (const name of ["PermissionsPanelView", "PermissionAuditView", "PermissionRulesView", "WorkingDirectoriesView"]) assertClass(views, name);
-    assert.match(controller, /App\.PermissionViews\.renderPanel\(/);
-    assert.match(controller, /App\.PermissionViews\.renderContent\(/);
+    assert.match(controller, /interface\s+PermissionsPaneDependencies\s*\{/);
+    assert.match(controller, /views:\s*AppPermissionViews/);
+    assert.match(controller, /permissionsPaneViews\.renderPanel\(/);
+    assert.match(controller, /permissionsPaneViews\.renderContent\(/);
     assert.doesNotMatch(controller, /class\s+(?:PermissionsPanelView|PermissionAuditView|PermissionRulesView|WorkingDirectoriesView)\b/);
   });
 
@@ -95,9 +106,12 @@ describe("frontend component tree boundaries", () => {
     const controller = source("src/frontend/pane/mcp/index.ts");
     const views = source("src/frontend/pane/mcp/mcp-views.ts");
     for (const name of ["McpPanelView", "McpServerListView", "McpCatalogView", "McpCustomInstallView"]) assertClass(views, name);
-    assert.match(controller, /App\.McpViews\.renderPanel\(/);
-    assert.match(controller, /App\.McpViews\.renderServers\(/);
-    assert.match(controller, /App\.McpViews\.renderCatalog\(/);
+    assert.match(controller, /interface\s+McpPaneDependencies\s*\{/);
+    assert.match(controller, /events:\s*AppEvents/);
+    assert.match(controller, /views:\s*AppMcpViews/);
+    assert.match(controller, /mcpPaneViews\.renderPanel\(/);
+    assert.match(controller, /mcpPaneViews\.renderServers\(/);
+    assert.match(controller, /mcpPaneViews\.renderCatalog\(/);
     assert.doesNotMatch(controller, /class\s+(?:McpPanelView|McpServerListView|McpCatalogView|McpCustomInstallView)\b/);
   });
 
@@ -105,9 +119,12 @@ describe("frontend component tree boundaries", () => {
     const controller = source("src/frontend/pane/explorer/index.ts");
     const views = source("src/frontend/pane/explorer/explorer-views.ts");
     for (const name of ["ExplorerPanelView", "ExplorerEmptyView", "ExplorerFilterMenuView"]) assertClass(views, name);
-    assert.match(controller, /App\.ExplorerViews\.renderEmpty\(/);
-    assert.match(controller, /App\.ExplorerViews\.renderPanel\(/);
-    assert.match(controller, /App\.ExplorerViews\.showFilterMenu\(/);
+    assert.match(controller, /interface\s+ExplorerPaneDependencies\s*\{/);
+    assert.match(controller, /views:\s*AppExplorerViews/);
+    assert.match(controller, /tabs:\s*AppTabs/);
+    assert.match(controller, /explorerPaneViews\.renderEmpty\(/);
+    assert.match(controller, /explorerPaneViews\.renderPanel\(/);
+    assert.match(controller, /explorerPaneViews\.showFilterMenu\(/);
     assert.doesNotMatch(controller, /class\s+(?:ExplorerPanelView|ExplorerEmptyView|ExplorerFilterMenuView)\b/);
   });
 
@@ -166,6 +183,9 @@ describe("frontend component tree boundaries", () => {
     const chat = source("src/frontend/dashboard/dashboard-chat.ts");
     const attachments = source("src/frontend/chat/chat-attachment-input.ts");
     assertClass(attachments, "ChatAttachmentInputView");
+    assert.match(attachments, /interface\s+ChatAttachmentInputDependencies\s*\{/);
+    assert.match(attachments, /chat\?:\s*AppChat/);
+    assert.match(attachments, /attachmentInputChat\?\.addAttachment\?\./);
     assert.match(attachments, /selectFile\(|handleDrop\(|dataTransfer/);
     assert.match(chat, /App\.ChatViews\.createAttachmentInput\(/);
     assert.doesNotMatch(chat, /electronAPI.*selectFile|dataTransfer/);
@@ -175,6 +195,9 @@ describe("frontend component tree boundaries", () => {
     const chat = source("src/frontend/chat/chat-render.ts");
     const eventNode = source("src/frontend/chat/chat-event-node.ts");
     assertClass(eventNode, "ChatEventNodeView");
+    assert.match(eventNode, /interface\s+ChatEventNodeDependencies\s*\{/);
+    assert.match(eventNode, /chatViews:\s*AppChatViews/);
+    assert.match(eventNode, /fileDiff:\s*AppFileDiff/);
     for (const method of ["renderEventBlock", "renderBlocks", "renderBlockNode", "replaceBlockContents", "insertBlockNode"]) {
       assert.match(eventNode, new RegExp(`static\\s+${method}\\s*\\(`), `${method} should belong to ChatEventNodeView`);
     }

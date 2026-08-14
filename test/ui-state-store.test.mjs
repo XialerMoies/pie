@@ -37,10 +37,7 @@ describe("UiStateStore", () => {
     const workspaceConsumers = [
       "src/frontend/dashboard/dashboard-chat.ts",
       "src/frontend/dashboard/dashboard-sessions.ts",
-      "src/frontend/pane/git/index.ts",
-      "src/frontend/pane/search/index.ts",
       "src/frontend/editor/monaco-setup.ts",
-      "src/frontend/service/explorer-service.ts",
     ];
 
     for (const file of workspaceConsumers) {
@@ -60,7 +57,20 @@ describe("UiStateStore", () => {
     assert.doesNotMatch(tsserverSource, /localStorage[^\n]*(?:WS_KEY|workspace_path)|(?:WS_KEY|workspace_path)[^\n]*localStorage/);
 
     const explorerSource = readFileSync(resolve(process.cwd(), "src/frontend/service/explorer-service.ts"), "utf8");
-    assert.match(explorerSource, /App\.State\.setWorkspacePath\(p\)/);
+    assert.match(explorerSource, /interface\s+ExplorerServiceDependencies\s*\{/);
+    assert.match(explorerSource, /state:\s*AppStateFacade/);
+    assert.match(explorerSource, /explorerServiceState\.getWorkspacePath\(\)/);
+    assert.match(explorerSource, /explorerServiceState\.setWorkspacePath\(p\)/);
+
+    for (const [file, alias] of [
+      ["src/frontend/pane/git/index.ts", "gitPaneState"],
+      ["src/frontend/pane/search/index.ts", "searchPaneState"],
+    ]) {
+      const source = readFileSync(resolve(process.cwd(), file), "utf8");
+      assert.match(source, /state:\s*AppStateFacade/);
+      assert.match(source, new RegExp(`${alias}\\.getWorkspacePath\\(\\)`));
+      assert.doesNotMatch(source, /localStorage[^\n]*(?:WS_KEY|workspace_path)|(?:WS_KEY|workspace_path)[^\n]*localStorage/);
+    }
 
     const menuSource = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-menus.ts"), "utf8");
     assert.doesNotMatch(menuSource, /__uiStateStore/, "workspace reset must stay behind App.State");
@@ -92,6 +102,10 @@ describe("UiStateStore", () => {
       const source = readFileSync(resolve(process.cwd(), file), "utf8");
       assert.doesNotMatch(source, /_activePanel/, `${file} must use App.State for panel state`);
     }
+    const panel = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/layout-panel.ts"), "utf8");
+    assert.match(panel, /interface\s+LayoutPanelDependencies\s*\{/);
+    assert.match(panel, /state:\s*AppStateFacade/);
+    assert.match(panel, /layoutPanelState\.getSnapshot\(\)/);
   });
 
   it("keeps dashboard layout runtime and tab reads behind public facades", () => {
