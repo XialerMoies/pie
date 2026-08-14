@@ -185,6 +185,11 @@ describe("frontend component tree boundaries", () => {
       assert.match(controller, new RegExp(`${method}\\s*\\(`), `${method} should belong to ChatSseControllerView`);
     }
     assert.match(chat, /createSseController\(/);
+    assert.match(controller, /interface\s+ChatSseControllerDependencies\s*\{/);
+    for (const dependency of ["chat", "chatState", "chatStream", "chatViews"]) {
+      assert.match(controller, new RegExp(`${dependency}:\\s*AppChat`));
+    }
+    assert.doesNotMatch(controller, /\bApp\./);
     assert.doesNotMatch(chat, /onMessage:\s*\(e:\s*MessageEvent\)/);
     assert.doesNotMatch(chat, /JSON\.parse\(e\.data\)/);
   });

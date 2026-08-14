@@ -17,17 +17,26 @@ interface ChatSseEvent {
   followUp?: any[];
 }
 
+interface ChatSseControllerDependencies {
+  chat: AppChat;
+  chatState: AppChatState;
+  chatStream: AppChatStream;
+  chatViews: AppChatViews;
+}
+
 class ChatSseControllerView {
   private readonly callbacks: ChatSseControllerCallbacks;
+  private readonly dependencies: ChatSseControllerDependencies;
   private generation = 0;
 
-  constructor(callbacks: ChatSseControllerCallbacks) {
+  constructor(callbacks: ChatSseControllerCallbacks, dependencies: ChatSseControllerDependencies) {
     this.callbacks = callbacks;
+    this.dependencies = dependencies;
   }
 
   bind(generation: number): boolean {
     this.generation = generation;
-    return App.ChatStream.setHandlers(generation, {
+    return this.dependencies.chatStream.setHandlers(generation, {
       onMessage: (event) => this.handleMessage(generation, event),
       onError: (event) => this.handleError(generation, event),
       onOpen: (event) => this.handleOpen(generation, event),
@@ -42,17 +51,17 @@ class ChatSseControllerView {
         mark('sse_first_event');
       }
       const data = JSON.parse(event.data) as ChatSseEvent;
-      const messages = App.ChatState.getMessages();
+      const messages = this.dependencies.chatState.getMessages();
       const last = messages[messages.length - 1];
 
       if (data.type === 'subagent_event' && data.event) {
-        const updated = App.Chat?.updateSubagentEvent?.(data.event) || false;
+        const updated = this.dependencies.chat.updateSubagentEvent?.(data.event) || false;
         if (!updated) this.callbacks.scheduleMessagesRender();
         else sb('ms');
         return;
       }
       if (data.type === 'command_confirm') {
-        const confirmation = (App.ChatViews as any).ChatCommandConfirmationView;
+        const confirmation = (this.dependencies.chatViews as any).ChatCommandConfirmationView;
         if (confirmation?.handle) void confirmation.handle(data);
         return;
       }
@@ -102,7 +111,7 @@ class ChatSseControllerView {
   }
 
   private isCurrent(generation: number): boolean {
-    return this.generation === generation && App.ChatStream.isCurrent(generation);
+    return this.generation === generation && this.dependencies.chatStream.isCurrent(generation);
   }
 
   private handleBlock(last: any, block: any): void {
@@ -112,7 +121,7 @@ class ChatSseControllerView {
     if (index >= 0) last.blocks[index] = block;
     else last.blocks.push(block);
     last._rv = (last._rv || 0) + 1;
-    const updated = App.Chat?.updateLastBlock?.(block) || false;
+    const updated = this.dependencies.chat.updateLastBlock?.(block) || false;
     if (!updated) this.callbacks.scheduleMessagesRender();
     else sb('ms');
   }
@@ -123,9 +132,9 @@ class ChatSseControllerView {
       return;
     }
     if (last?.streaming) {
-      if (!last.blocks?.length) App.Chat?.appendDelta?.(data.text || '');
+      if (!last.blocks?.length) this.dependencies.chat.appendDelta?.(data.text || '');
     } else {
-      App.ChatState.appendMessage({ role: 'assistant', content: data.text || '', thinking: '', streaming: true });
+      this.dependencies.chatState.appendMessage({ role: 'assistant', content: data.text || '', thinking: '', streaming: true });
       this.callbacks.updateUI();
     }
     sb('ms');
@@ -139,9 +148,9 @@ class ChatSseControllerView {
     last.error = undefined;
     if (Array.isArray(data.blocks)) last.blocks = data.blocks;
     last._rv = (last._rv || 0) + 1;
-    App.ChatState.setBusy(false);
-    App.ChatStream.close();
-    const finalized = App.Chat?.finalizeLastMessage?.() || false;
+    this.dependencies.chatState.setBusy(false);
+    this.dependencies.chatStream.close();
+    const finalized = this.dependencies.chat.finalizeLastMessage?.() || false;
     if (finalized) this.callbacks.markLastMessageRendered();
     else this.callbacks.renderMessages();
     this.callbacks.refreshComposer();
@@ -158,8 +167,8 @@ class ChatSseControllerView {
       ['检查网络和模型配置', '确认工作区路径仍然有效', '重试发送当前消息'],
       reason,
     );
-    App.ChatState.setBusy(false);
-    App.ChatStream.close();
+    this.dependencies.chatState.setBusy(false);
+    this.dependencies.chatStream.close();
     this.callbacks.renderMessages();
     this.callbacks.refreshComposer();
     this.callbacks.failSend();
@@ -173,7 +182,12 @@ if (chatSseControllerApp) {
   chatSseControllerApp.ChatViews = {
     ...(chatSseControllerApp.ChatViews || {}),
     ChatSseControllerView,
-    createSseController: (callbacks: ChatSseControllerCallbacks): AppChatSseController => new ChatSseControllerView(callbacks),
+    createSseController: (callbacks: ChatSseControllerCallbacks): AppChatSseController => new ChatSseControllerView(callbacks, {
+      chat: chatSseControllerApp.Chat,
+      chatState: chatSseControllerApp.ChatState,
+      chatStream: chatSseControllerApp.ChatStream,
+      chatViews: chatSseControllerApp.ChatViews,
+    }),
   };
 }
 
