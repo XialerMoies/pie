@@ -219,6 +219,7 @@ server 与 AgentRuntime 仍按项目隔离在独立子进程内，因此 server 
 （每完成一项，在此追加一行：日期 / ID / 简述 / 验证）
 
 - 2026-08-09 / ④-A Task 8 / 单 Electron 主进程多窗口迁移：每项目独立 server child/AgentRuntime；duplicate workspace 聚焦、close/crash/reopen 隔离、second-instance 转发与 E2E-only diagnostics / Windows packaged E2E 通过，shell 124 ms、workbench 1564 ms
+- 2026-08-14 / 技术债 / **组件树化收官**：mcp/explorer/timeline 最后三块面板视图独立——MCP 4 视图入 `mcp-views.ts`（控制器保留请求与操作）、Explorer 空状态/面板/过滤菜单入 `explorer-views.ts`（filter menu 带 dispose）、Timeline 状态与监听生命周期收拢为 `ChatTimelineView`（外部 API 不变）。全部 20 个前端渲染区域组件化完成：42 组件类 / 18 视图文件 / 29 门禁，frontend 348/348；提交 `23a98c2`
 - 2026-08-14 / 缺陷修复 / B-12 Monaco Worker：5 个 worker 从 `?url` 改 Vite `?worker` 构造器，生产构建输出独立文件（editor/ts/json/css/html），monaco-entry 用 `new URL` 相对引用，消除 data: Worker 相对 import 无法解析的回退告警；smoke 从软检查升级硬门禁（5 worker 必须存在 + 不内联 + 相对引用）/ build:vite、smoke 78/78、typecheck、frontend 343/343、实机无 fallback 警告；提交 `d3e72cc`
 - 2026-08-14 / 技术债 / Permissions 面板视图抽离：PermissionsPanel/Audit/Rules/WorkingDirectories 4 个纯视图组件与状态格式化移入 `permissions-views.ts`，state 参数化替代模块变量直接引用；index.ts 保留请求、三重竞态控制、mutation queue、风险确认与事件绑定 / `index.ts` 523→398 行、typecheck、bundle、npm test 全量、frontend 343/343、组件树门禁 25/25；提交 `97f67dc`
 - 2026-08-14 / 技术债 / 会话列表面板抽离：数据缓存、拉取、状态派生、组件渲染（EmptyState/Actions/Card/GroupView）与错误/空状态移入 `session-list-panel.ts` 的 `SessionListPanelView`，renderKey 有变化才重渲染；dashboard-sessions 仅保留标签管理、会话操作、事件委托与 facade / `dashboard-sessions.ts` 989→720 行、typecheck、bundle、npm test 全量、frontend 341/341、组件树门禁 23/23；提交 `2fcf461`
