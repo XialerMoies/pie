@@ -219,7 +219,8 @@ server 与 AgentRuntime 仍按项目隔离在独立子进程内，因此 server 
 
 - 2026-08-09 / ④-A Task 8 / 单 Electron 主进程多窗口迁移：每项目独立 server child/AgentRuntime；duplicate workspace 聚焦、close/crash/reopen 隔离、second-instance 转发与 E2E-only diagnostics / Windows packaged E2E 通过，shell 124 ms、workbench 1564 ms
 - 2026-08-14 / 技术债 / command 与 route permission 确认状态机合并：共享 `ConfirmationRegistry` 统一 ID、超时、fail-closed、response 生命周期与 decision 归一化；保留 chat/AppEventHub 双传输及 kind 隔离，原确认 API 不变；新增行为与结构防回流测试 / typecheck、确认通道定向 129 项、unit 1021 项、全量 npm test 通过；人工验收通过，提交 `8dbb354`
-- 2026-08-14 / 测试基础设施 / 将跨进程 `file-lock` 从 unit 主并行阶段移出，改为末尾 `--test-concurrency=1` 独立串行执行；新增测试编排结构防回流；两轮 unit 均主段 1015/1015、file-lock 7/7，全量 `npm test` 通过；file-lock flake 治理完成，app-tabs 另行处理
+- 2026-08-14 / 测试基础设施 / 两类 flake 治理完成：跨进程 `file-lock` 从 unit 主并行阶段移至末尾 `--test-concurrency=1` 独立串行；frontend 因 happy-dom / global window 文件级并发污染整体改为 `--test-concurrency=1`；新增测试编排结构防回流 / frontend 324/324、unit 1016/1016 + file-lock 7/7、`git diff --check` 通过；提交 `16fd122`、`dd4e8ac`
+- 2026-08-14 / 技术债 / `electron-main.ts` 第一批小拆分：renderer ready、cookie 隔离、preload/导航安全探测移入 `electron-e2e-renderer-probe.ts`，主文件保留 packaged E2E 编排与窗口/server 生命周期；新增 API 行为与结构防回流测试 / `electron-main.ts` 1192→1108 行、typecheck、unit 1020/1020 + file-lock 7/7、routes 335/335 + workspace-lock 13/13、frontend 324/324、CSS 门禁通过
 - 2026-08-14 / 技术债 / server 事件路由抽离：`runtime.onEvent`、trace/block 持久化、assistant block 组装移入 `agent-event-router.ts`，`server.ts` 保持启动编排入口；新增结构防回流测试 / typecheck、事件定向 49 项、unit 1016 项、全量 npm test 通过
 - 2026-08-14 / 技术债 / `settings.ts` 路由职责拆分：入口降为薄 dispatcher，auth/models/preferences/storage/subagents/thinking/layout 分模块；新增 settings-route-structure 防回流 / typecheck、settings 定向 27 项、unit 1015 项通过
 - 2026-08-08 / 设置页 / 文案中文化 + 弹窗尺寸自适应 + 存储布局重构：Permissions→权限、Smooth/Immediate→平滑滚动/立即到达、标题"回到最新位置效果"；弹窗随窗口 78vw/82vh（全屏 1280×880）；存储位置 grid 布局 + 长路径省略 + 按钮不折行 + 移动端适配 / 前端 261 项 + 实机验收
