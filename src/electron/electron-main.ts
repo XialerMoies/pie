@@ -7,7 +7,6 @@
  */
 import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
 import { randomUUID } from "crypto";
-import * as http from "http";
 import * as path from "path";
 import * as fs from "fs";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -32,8 +31,6 @@ import {
   createExternalServerBinding,
   createNoneServerBinding,
   createOwnedServerBinding,
-  type OwnedServerBinding,
-  type ExternalServerBinding,
   type ServerBinding,
 } from "./server-binding.js";
 import { resumeQuitAfterDisposal } from "./quit-coordinator.js";
@@ -60,6 +57,11 @@ import {
   runRendererCookieIsolationProbe,
   waitForRendererReady,
 } from "./electron-e2e-renderer-probe.js";
+import {
+  requestJson,
+  requestStatus,
+  waitForServerOrigin,
+} from "./electron-http-client.js";
 
 function initializeElectron(): void {
 const __filename = fileURLToPath(import.meta.url);
@@ -322,69 +324,10 @@ function e2eStage(message: string): void {
   console.log(`[e2e] ${message}`);
 }
 
-function requestStatus(url: string): Promise<number> {
-  return new Promise((resolveStatus, reject) => {
-    const request = http.get(url, (response) => {
-      response.resume();
-      resolveStatus(response.statusCode || 0);
-    });
-    request.once("error", reject);
-    request.setTimeout(5000, () => request.destroy(new Error("E2E HTTP request timed out")));
-  });
-}
-
-function requestJson(
-  pathname: string,
-  method = "GET",
-  payload?: unknown,
-  options: {
-    includeToken?: boolean;
-    headers?: Record<string, string>;
-    timeoutMs?: number;
-    binding?: ServerBinding;
-  } = {},
-): Promise<{ status: number; body: unknown }> {
-  return new Promise((resolveRequest, reject) => {
-    const binding = options.binding || initialServerBinding;
-    const body = payload === undefined ? "" : JSON.stringify(payload);
-    const request = http.request(`http://127.0.0.1:${binding.port}${pathname}`, {
-      method,
-      headers: {
-        ...(options.includeToken === false ? {} : { "X-My-Code-Agent-Token": binding.token }),
-        ...(body ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } : {}),
-        ...options.headers,
-      },
-    }, (response) => {
-      let text = "";
-      response.setEncoding("utf8");
-      response.on("data", (chunk) => { text += chunk; });
-      response.on("end", () => {
-        let parsed: unknown = null;
-        try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
-        resolveRequest({ status: response.statusCode || 0, body: parsed });
-      });
-    });
-    request.once("error", reject);
-    request.setTimeout(options.timeoutMs ?? 10_000, () => request.destroy(new Error(`E2E HTTP request timed out: ${pathname}`)));
-    if (body) request.write(body);
-    request.end();
-  });
-}
-
 function writeE2EResult(result: Record<string, unknown>): void {
   if (!E2E_RESULT_FILE) return;
   ensureDir(path.dirname(E2E_RESULT_FILE));
   fs.writeFileSync(E2E_RESULT_FILE, JSON.stringify(result, null, 2), "utf-8");
-}
-
-async function waitForServerOrigin(binding: ServerBinding, timeoutMs = 30_000): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const origin = (binding as OwnedServerBinding).origin || (binding as ExternalServerBinding).origin || "";
-    if (origin) return origin;
-    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
-  }
-  return (binding as OwnedServerBinding).origin || (binding as ExternalServerBinding).origin || "";
 }
 
 async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
@@ -419,36 +362,39 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
     const renderer = await collectRendererE2EResult(win, path.join(externalRoot, "ipc.txt"));
     const textIconStatus = await requestStatus(`${origin}/icons/file_type_text.svg`);
     const unauthorizedApiStatus = await requestStatus(`${origin}/api/dashboard`);
-    const wrongTokenApi = await requestJson("/api/dashboard", "GET", undefined, {
+    const wrongTokenApi = await requestJson(initialServerBinding, "/api/dashboard", "GET", undefined, {
       headers: { "X-My-Code-Agent-Token": "forged-token" },
     });
-    const hostileOriginApi = await requestJson("/api/dashboard", "GET", undefined, {
+    const hostileOriginApi = await requestJson(initialServerBinding, "/api/dashboard", "GET", undefined, {
       headers: { Origin: "https://evil.example" },
     });
-    const crossSiteApi = await requestJson("/api/dashboard", "GET", undefined, {
+    const crossSiteApi = await requestJson(initialServerBinding, "/api/dashboard", "GET", undefined, {
       headers: { "Sec-Fetch-Site": "cross-site" },
     });
     const unauthorizedMutationPath = path.join(e2eRoot, "unauthorized-write.txt");
-    const unauthorizedMutation = await requestJson("/api/file/write", "POST", {
+    const unauthorizedMutation = await requestJson(initialServerBinding, "/api/file/write", "POST", {
       root: e2eRoot,
       path: "unauthorized-write.txt",
       content: "must-not-exist",
     }, { includeToken: false });
 
     const fileRead = await requestJson(
+      initialServerBinding,
       `/api/file/read?root=${encodeURIComponent(e2eRoot)}&path=read.txt`,
     );
-    const fileWrite = await requestJson("/api/file/write", "POST", {
+    const fileWrite = await requestJson(initialServerBinding, "/api/file/write", "POST", {
       root: e2eRoot,
       path: "write.txt",
       content: "packaged-write",
     });
     const externalRead = await requestJson(
+      initialServerBinding,
       `/api/file/read?root=${encodeURIComponent(externalRoot)}&path=read.txt`,
     );
     let sensitiveExternalReadBlocked = false;
     try {
       const sensitiveExternalRead = await requestJson(
+        initialServerBinding,
         `/api/file/read?root=${encodeURIComponent(externalRoot)}&path=${encodeURIComponent(".env")}`,
         "GET",
         undefined,
@@ -458,29 +404,29 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
     } catch (error) {
       sensitiveExternalReadBlocked = error instanceof Error && error.message.includes("timed out");
     }
-    const persistedPreferences = await requestJson("/api/preferences");
+    const persistedPreferences = await requestJson(initialServerBinding, "/api/preferences");
 
     const contextA = initialContext;
     if (!contextA) throw new Error("Initial Electron context is unavailable");
     const projectASelectedAt = Date.now();
     await windowManager.openWorkspace(contextA, projectA);
     const workspaceRead = await requestJson(
+      contextA.server,
       `/api/file/read?root=${encodeURIComponent(projectA)}&path=read.txt`,
       "GET",
       undefined,
-      { binding: contextA.server },
     );
     const pathTraversal = await requestJson(
+      contextA.server,
       `/api/file/read?root=${encodeURIComponent(projectA)}&path=${encodeURIComponent("../read.txt")}`,
       "GET",
       undefined,
-      { binding: contextA.server },
     );
     const siblingTraversal = await requestJson(
+      contextA.server,
       `/api/file/read?root=${encodeURIComponent(projectA)}&path=${encodeURIComponent("../project-a-sibling/read.txt")}`,
       "GET",
       undefined,
-      { binding: contextA.server },
     );
 
     const contextB = createEmptyManagedWindow();
@@ -551,10 +497,10 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
     const serverPidAfter = contextB.server.process?.pid || null;
     const projectALoadedAtAfter = latestE2ETiming(contextA, "workbench-loaded");
     const projectADashboardAfterCrash = await requestJson(
+      contextA.server,
       "/api/dashboard",
       "GET",
       undefined,
-      { binding: contextA.server },
     );
 
     const closingChild = contextB.server.process;
@@ -573,10 +519,10 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
     ));
     const closedServerExited = contextB.lifecycle === "closed" && contextB.server.process === null;
     const projectADashboardAfterClose = await requestJson(
+      contextA.server,
       "/api/dashboard",
       "GET",
       undefined,
-      { binding: contextA.server },
     );
 
     writeE2EResult({
@@ -793,9 +739,7 @@ const windowManager = new WindowManager({
   resolveDataLayout,
   createOwnedServerBinding: (input) => createWindowOwnedServer(input),
   switchExternalWorkspace: async (context, workspace) => {
-    const result = await requestJson("/api/workspace/switch", "POST", { workspace }, {
-      binding: context.server,
-    });
+    const result = await requestJson(context.server, "/api/workspace/switch", "POST", { workspace });
     if (result.status < 200 || result.status >= 300) {
       const body = result.body && typeof result.body === "object" && "error" in result.body
         ? String((result.body as { error: unknown }).error)
