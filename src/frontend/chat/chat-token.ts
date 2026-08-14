@@ -3,6 +3,30 @@
 //  应用事件触发 /api/usage/current 刷新，更新 Rail 和面板数据
 // ═══════════════════════════════════════════════════════════════════
 
+interface ChatTokenDependencies {
+  tabs: AppTabs;
+  events: AppEvents;
+  state: AppStateFacade;
+  chat?: AppChat;
+  chatState: AppChatState;
+}
+
+const chatTokenApp = (window as any).App;
+const chatTokenDependencies: ChatTokenDependencies = {
+  tabs: chatTokenApp.Tabs,
+  events: chatTokenApp.Events,
+  state: chatTokenApp.State,
+  chat: chatTokenApp.Chat,
+  chatState: chatTokenApp.ChatState,
+};
+const {
+  tabs: tokenTabs,
+  events: tokenEvents,
+  state: tokenState,
+  chat: tokenChat,
+  chatState: tokenChatState,
+} = chatTokenDependencies;
+
 function fmt(n: number | null | undefined): string {
   if (n == null) return '--';
   if (n < 1000) return String(n);
@@ -61,8 +85,7 @@ interface UsageCurrentResponse {
 // ─── Token Rail 更新 ────────────────────────────────────
 
 function isChatTabActive(): boolean {
-  const tabs = App.Tabs;
-  const active = tabs?.getActiveTab?.();
+  const active = tokenTabs?.getActiveTab?.();
   return active != null && (active.kind === 'chat' || active.kind === 'session');
 }
 
@@ -538,8 +561,8 @@ function startTokenUpdates(): void {
   requestAnimationFrame(syncRailPosition);
   void refreshTokenUsage();
   _tokenUpdateUnsubscribers = [
-    App.Events.subscribe('usage.changed', () => { void refreshTokenUsage(); }),
-    App.Events.subscribe('resync', () => { void refreshTokenUsage(); }),
+    tokenEvents.subscribe('usage.changed', () => { void refreshTokenUsage(); }),
+    tokenEvents.subscribe('resync', () => { void refreshTokenUsage(); }),
   ];
 }
 
@@ -648,9 +671,9 @@ async function doCompact(): Promise<void> {
     _lastSummary = null;
     void refreshTokenUsage();
     // 触发消息刷新（保留完整字段：turnId/blocks/error 等）
-    const activeId = App.Tabs.getActiveSessionTabId();
+    const activeId = tokenTabs.getActiveSessionTabId();
     if (activeId && !activeId.startsWith('draft:')) {
-      const ws = App.State.getWorkspacePath();
+      const ws = tokenState.getWorkspacePath();
       try {
         const r2 = await fetch('/api/sessions/activate', {
           method: 'POST',
@@ -659,8 +682,8 @@ async function doCompact(): Promise<void> {
         });
         const data2 = await r2.json();
         if (data2.ok && Array.isArray(data2.messages)) {
-          App.Chat?.resetMsgKeys?.();
-          App.ChatState.replaceMessages(data2.messages.map((m: any) => ({
+          tokenChat?.resetMsgKeys?.();
+          tokenChatState.replaceMessages(data2.messages.map((m: any) => ({
             role: m.role,
             content: m.content,
             thinking: m.thinking || '',

@@ -37,7 +37,6 @@ describe("UiStateStore", () => {
     const workspaceConsumers = [
       "src/frontend/dashboard/dashboard-chat.ts",
       "src/frontend/dashboard/dashboard-sessions.ts",
-      "src/frontend/chat/chat-token.ts",
       "src/frontend/pane/git/index.ts",
       "src/frontend/pane/search/index.ts",
       "src/frontend/editor/monaco-tsserver.ts",
@@ -50,6 +49,11 @@ describe("UiStateStore", () => {
       assert.match(source, /App\.State\.getWorkspacePath\(\)/, `${file} must read workspace through App.State`);
       assert.doesNotMatch(source, /localStorage[^\n]*(?:WS_KEY|workspace_path)|(?:WS_KEY|workspace_path)[^\n]*localStorage/, `${file} must not own workspace compatibility storage`);
     }
+
+    const tokenSource = readFileSync(resolve(process.cwd(), "src/frontend/chat/chat-token.ts"), "utf8");
+    assert.match(tokenSource, /state:\s*AppStateFacade/);
+    assert.match(tokenSource, /tokenState\.getWorkspacePath\(\)/);
+    assert.doesNotMatch(tokenSource, /localStorage[^\n]*(?:WS_KEY|workspace_path)|(?:WS_KEY|workspace_path)[^\n]*localStorage/);
 
     const explorerSource = readFileSync(resolve(process.cwd(), "src/frontend/service/explorer-service.ts"), "utf8");
     assert.match(explorerSource, /App\.State\.setWorkspacePath\(p\)/);

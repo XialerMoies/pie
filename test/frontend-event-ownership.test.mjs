@@ -321,8 +321,8 @@ describe("token usage event refresh ownership", () => {
     const chat = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-chat.ts"), "utf8");
     assert.doesNotMatch(usage, /\b(?:startTokenPoll|stopTokenPoll|pollTokenUsage|_pollTimer)\b/);
     assert.doesNotMatch(usage, /setInterval\s*\([^,]+,\s*6000\s*\)/);
-    assert.match(usage, /App\.Events\.subscribe\(['"]usage\.changed['"]/);
-    assert.match(usage, /App\.Events\.subscribe\(['"]resync['"]/);
+    assert.match(usage, /tokenEvents\.subscribe\(['"]usage\.changed['"]/);
+    assert.match(usage, /tokenEvents\.subscribe\(['"]resync['"]/);
     assert.match(chat, /startTokenUpdates/);
     assert.doesNotMatch(chat, /startTokenPoll/);
   });

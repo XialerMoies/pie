@@ -23,6 +23,14 @@ describe("frontend component tree boundaries", () => {
     for (const name of ["UsageModalView", "UsageCurrentView", "UsageSummaryView"]) assertClass(src, name);
     assertDelegates(src, "renderCurrentSessionUsage", "UsageCurrentView");
     assertDelegates(src, "renderSummaryUsage", "UsageSummaryView");
+    assert.match(src, /interface\s+ChatTokenDependencies\s*\{/);
+    for (const dependency of ["tabs: AppTabs", "events: AppEvents", "state: AppStateFacade", "chat?: AppChat", "chatState: AppChatState"]) {
+      assert.match(src, new RegExp(dependency.replace("?", "\\?")));
+    }
+    for (const alias of ["tabs: tokenTabs", "events: tokenEvents", "state: tokenState", "chat: tokenChat", "chatState: tokenChatState"]) {
+      assert.match(src, new RegExp(alias));
+    }
+    assert.doesNotMatch(src, /\bApp\./);
   });
 
   it("uses component views for settings storage and custom subagents", () => {
