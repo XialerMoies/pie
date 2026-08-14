@@ -7,6 +7,7 @@
 
 | ID | 描述 | 范围评估 | 状态 |
 |---|---|---|---|
+| B-12 | Monaco Worker 打包模式 worker 路径告警——`?url` + `type:"module"` 生成无法解析相对 import 的 data: Worker，控制台 fallback 警告 | 改 Vite `?worker` 构造器输出独立文件 + smoke 硬门禁 | ✅ 已解决（`d3e72cc`，5 个独立 worker + 不内联 + 相对引用） |
 | B-11 | bundle 顶层函数重名遮蔽——UI 状态与偏好 hydrate 同名被覆盖，导致标签/UI 状态无法恢复（`App.State.hydrate` 返回布尔非状态对象） | 重命名 + 编译期 AST 门禁防回流 | ✅ 已解决，见 [bug-log.md](bug-log.md#B-11) |
 | B-10 | 会话切换竞态打崩 server——切换时 _session 置空，并发 dashboard 请求读空 session 抛异常 | Runtime 等待 transition + Dashboard 未就绪返回 503 | ✅ 已解决，见 [bug-log.md](bug-log.md#B-10) |
 | B-9 | 重启后工作区重置为空——随机 instanceId → userData 丢失 localStorage，且前端从未从 /api/bootstrap 恢复 | 服务端 last-workspace 持久化 + bootstrap 恢复 workspace | ✅ 已解决，见 [bug-log.md](bug-log.md#B-9) |
@@ -218,6 +219,7 @@ server 与 AgentRuntime 仍按项目隔离在独立子进程内，因此 server 
 （每完成一项，在此追加一行：日期 / ID / 简述 / 验证）
 
 - 2026-08-09 / ④-A Task 8 / 单 Electron 主进程多窗口迁移：每项目独立 server child/AgentRuntime；duplicate workspace 聚焦、close/crash/reopen 隔离、second-instance 转发与 E2E-only diagnostics / Windows packaged E2E 通过，shell 124 ms、workbench 1564 ms
+- 2026-08-14 / 缺陷修复 / B-12 Monaco Worker：5 个 worker 从 `?url` 改 Vite `?worker` 构造器，生产构建输出独立文件（editor/ts/json/css/html），monaco-entry 用 `new URL` 相对引用，消除 data: Worker 相对 import 无法解析的回退告警；smoke 从软检查升级硬门禁（5 worker 必须存在 + 不内联 + 相对引用）/ build:vite、smoke 78/78、typecheck、frontend 343/343、实机无 fallback 警告；提交 `d3e72cc`
 - 2026-08-14 / 技术债 / Permissions 面板视图抽离：PermissionsPanel/Audit/Rules/WorkingDirectories 4 个纯视图组件与状态格式化移入 `permissions-views.ts`，state 参数化替代模块变量直接引用；index.ts 保留请求、三重竞态控制、mutation queue、风险确认与事件绑定 / `index.ts` 523→398 行、typecheck、bundle、npm test 全量、frontend 343/343、组件树门禁 25/25；提交 `97f67dc`
 - 2026-08-14 / 技术债 / 会话列表面板抽离：数据缓存、拉取、状态派生、组件渲染（EmptyState/Actions/Card/GroupView）与错误/空状态移入 `session-list-panel.ts` 的 `SessionListPanelView`，renderKey 有变化才重渲染；dashboard-sessions 仅保留标签管理、会话操作、事件委托与 facade / `dashboard-sessions.ts` 989→720 行、typecheck、bundle、npm test 全量、frontend 341/341、组件树门禁 23/23；提交 `2fcf461`
 - 2026-08-14 / 技术债 / SSE 控制器抽离：SSE 事件路由（subagent_event/command_confirm/queue_update/block/delta/thinking/done/error）与流式更新、会话收尾、重连处理移入 `chat-sse-controller.ts` 的 `ChatSseControllerView`，generation 双重校验防旧会话串流、command_confirm 经 App.ChatViews 规范化访问；dashboard-chat 经 createSseController 9 回调接线 / `dashboard-chat.ts` 718→569 行、typecheck、bundle、frontend 340/340、组件树门禁 21/21；提交 `86edf68`
