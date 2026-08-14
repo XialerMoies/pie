@@ -219,6 +219,7 @@ server 与 AgentRuntime 仍按项目隔离在独立子进程内，因此 server 
 （每完成一项，在此追加一行：日期 / ID / 简述 / 验证）
 
 - 2026-08-09 / ④-A Task 8 / 单 Electron 主进程多窗口迁移：每项目独立 server child/AgentRuntime；duplicate workspace 聚焦、close/crash/reopen 隔离、second-instance 转发与 E2E-only diagnostics / Windows packaged E2E 通过，shell 124 ms、workbench 1564 ms
+- 2026-08-14 / 技术债 / App.* 依赖局部化第二批：chat-sse-controller.ts 新增 `ChatSseControllerDependencies` 构造注入 Chat/ChatState/ChatStream/ChatViews，createSseController 外部签名不变，装配入口一次取出；文件内 App.* 13→0，新增门禁禁止 `/\bApp\./` 回流 / 全前端 App.* 389→376、typecheck、bundle、frontend 349/349；提交 `cb472e5`
 - 2026-08-14 / 技术债 / App.* 依赖局部化第一批：chat-render.ts 新增 `ChatRenderDependencies` 集中装配 ChatState/ChatViews，文件内 App.* 直接引用 18→0，全局访问只留装配入口；新增结构门禁禁止 `/\bApp\./` 回流 / 全前端 App.* 407→389、typecheck、bundle、frontend 349/349；提交 `e1f8db7`
 - 2026-08-14 / 技术债 / **组件树化收官**：mcp/explorer/timeline 最后三块面板视图独立——MCP 4 视图入 `mcp-views.ts`（控制器保留请求与操作）、Explorer 空状态/面板/过滤菜单入 `explorer-views.ts`（filter menu 带 dispose）、Timeline 状态与监听生命周期收拢为 `ChatTimelineView`（外部 API 不变）。全部 20 个前端渲染区域组件化完成：42 组件类 / 18 视图文件 / 29 门禁，frontend 348/348；提交 `23a98c2`
 - 2026-08-14 / 缺陷修复 / B-12 Monaco Worker：5 个 worker 从 `?url` 改 Vite `?worker` 构造器，生产构建输出独立文件（editor/ts/json/css/html），monaco-entry 用 `new URL` 相对引用，消除 data: Worker 相对 import 无法解析的回退告警；smoke 从软检查升级硬门禁（5 worker 必须存在 + 不内联 + 相对引用）/ build:vite、smoke 78/78、typecheck、frontend 343/343、实机无 fallback 警告；提交 `d3e72cc`
