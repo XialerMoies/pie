@@ -2,6 +2,50 @@
 //  Send / Stop — 消息发送 & SSE 流
 // ═══════════════════════════════════════════════════════════════════
 
+interface DashboardChatApi extends AppChat {
+  renderMessage?: (message: Message, messageIndex?: number) => string;
+  handleSlash?: (input: HTMLTextAreaElement) => void;
+  loadModeState?: () => void;
+  showModePopup?: (button: HTMLElement) => void;
+}
+
+interface DashboardChatDependencies {
+  chat: AppChat;
+  chatState: AppChatState;
+  chatStream: AppChatStream;
+  chatTimeline?: AppChatTimeline;
+  chatViews: AppChatViews;
+  tabs: AppTabs;
+  state: AppStateFacade;
+  session: AppSession;
+  getSessionTabs: () => AppSessionTabs;
+  getSessionRestore: () => AppSessionRestore;
+  getGit: () => AppGit | undefined;
+}
+
+const dashboardChatApp = (window as any).App;
+const dashboardChatDependencies: DashboardChatDependencies = {
+  chat: dashboardChatApp.Chat,
+  chatState: dashboardChatApp.ChatState,
+  chatStream: dashboardChatApp.ChatStream,
+  chatTimeline: dashboardChatApp.ChatTimeline,
+  chatViews: dashboardChatApp.ChatViews,
+  tabs: dashboardChatApp.Tabs,
+  state: dashboardChatApp.State,
+  session: dashboardChatApp.Session,
+  getSessionTabs: () => dashboardChatApp.SessionTabs,
+  getSessionRestore: () => dashboardChatApp.SessionRestore,
+  getGit: () => dashboardChatApp.Git,
+};
+const dashboardChatChat = dashboardChatDependencies.chat as DashboardChatApi;
+const dashboardChatState = dashboardChatDependencies.state;
+const dashboardChatRuntimeState = dashboardChatDependencies.chatState;
+const dashboardChatStream = dashboardChatDependencies.chatStream;
+const dashboardChatTimeline = dashboardChatDependencies.chatTimeline;
+const dashboardChatViews = dashboardChatDependencies.chatViews;
+const dashboardChatTabs = dashboardChatDependencies.tabs;
+const dashboardChatSession = dashboardChatDependencies.session;
+
 let _msgKeys: string[] = [];
 let submitMessageHandler: ((text: string) => void) | null = null;
 let chatComposerView: AppChatComposer | null = null;
@@ -19,8 +63,8 @@ let activeSendContext: ChatSendContext | null = null;
 
 function chatGetReadingControls(): AppChatReadingControls {
   if (!chatReadingControlsView) {
-    chatReadingControlsView = App.ChatViews.createReadingControls({
-      onScroll: () => App.ChatTimeline?.handleMessagesScroll(),
+    chatReadingControlsView = dashboardChatViews.createReadingControls({
+      onScroll: () => dashboardChatTimeline?.handleMessagesScroll(),
     });
   }
   return chatReadingControlsView;
@@ -35,9 +79,9 @@ function refreshReadingSettings(): void {
 }
 
 function chatGetActiveSessionTabId(): string | null {
-  const activeTab = App.Tabs?.getActiveTab?.();
+  const activeTab = dashboardChatTabs?.getActiveTab?.();
   if (activeTab && (activeTab.kind === 'session' || activeTab.kind === 'chat')) return activeTab.id;
-  return App.Tabs?.getActiveSessionTabId?.() || null;
+  return dashboardChatTabs?.getActiveSessionTabId?.() || null;
 }
 
 function chatIsDraftSessionId(id: string | null | undefined): boolean {
@@ -45,24 +89,24 @@ function chatIsDraftSessionId(id: string | null | undefined): boolean {
 }
 
 function chatReadLocalSessionTabIds(): string[] {
-  return App.Tabs?.getSessionTabIds?.() || [];
+  return dashboardChatTabs?.getSessionTabIds?.() || [];
 }
 
 function chatWriteLocalSessionTabIds(ids: string[]): void {
   const unique = Array.from(new Set(ids.filter((id) => typeof id === 'string' && id.length > 0)));
-  App.SessionTabs.writeSessionTabIds(unique);
+  dashboardChatDependencies.getSessionTabs().writeSessionTabIds(unique);
 }
 
 function chatSetActiveSessionTabId(id: string | null): void {
-  App.SessionTabs.setActiveSessionTabId(id);
+  dashboardChatDependencies.getSessionTabs().setActiveSessionTabId(id);
 }
 
 function chatCommitSessionTab(oldId: string, newId: string): void {
-  App.Session.commitSessionTab(oldId, newId);
+  dashboardChatSession.commitSessionTab(oldId, newId);
 }
 
 function chatCreateFallbackDraftTab(): string | null {
-  const tabs = App.Tabs;
+  const tabs = dashboardChatTabs;
   if (!tabs?.openTab || !tabs.activateTab) return null;
   const id = `draft:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   tabs.openTab({ kind: 'chat', id, title: '新会话', draftId: id });
@@ -78,7 +122,7 @@ function chatBindCreatedSession(sessionId: string, draftId?: string): string | u
   if (!sourceDraftId) sourceDraftId = chatCreateFallbackDraftTab() || undefined;
   if (sourceDraftId) chatCommitSessionTab(sourceDraftId, sessionId);
   else {
-    const tabs = App.Tabs;
+    const tabs = dashboardChatTabs;
     if (tabs?.openTab) tabs.openTab({ kind: 'session', id: sessionId, title: '新会话', sessionId });
     chatSetActiveSessionTabId(sessionId);
   }
@@ -86,18 +130,18 @@ function chatBindCreatedSession(sessionId: string, draftId?: string): string | u
 }
 
 async function ensureSessionForSend(): Promise<ChatSendContext> {
-  await App.SessionRestore.whenReady();
+  await dashboardChatDependencies.getSessionRestore().whenReady();
 
   // 恢复完成后重新读取 activeId；不能使用恢复开始前的空快照。
   let activeTabId = chatGetActiveSessionTabId();
   if (!activeTabId) {
-    activeTabId = App.Session.ensureDraftSessionTab?.() || null;
+    activeTabId = dashboardChatSession.ensureDraftSessionTab?.() || null;
   }
   if (activeTabId && !chatIsDraftSessionId(activeTabId)) {
     return { sessionId: activeTabId, persistent: true };
   }
 
-  const ws = App.State.getWorkspacePath();
+  const ws = dashboardChatState.getWorkspacePath();
   try {
     const response = await fetch('/api/sessions/new', {
       method: 'POST',
@@ -133,7 +177,7 @@ async function deleteEphemeralSession(sessionId: string): Promise<void> {
 }
 
 function extractLastUserMessage(): string {
-  const messages = App.ChatState.getMessages();
+  const messages = dashboardChatRuntimeState.getMessages();
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role === 'user' && msg.content.trim()) return msg.content.trim();
@@ -142,7 +186,7 @@ function extractLastUserMessage(): string {
 }
 
 function retryLastTurn(): void {
-  if (App.ChatState.isBusy()) return;
+  if (dashboardChatRuntimeState.isBusy()) return;
   const text = extractLastUserMessage();
   if (!text) { toast('没有可重发的消息', 'error'); return; }
   const input = $('ci') as HTMLTextAreaElement | null;
@@ -151,7 +195,7 @@ function retryLastTurn(): void {
 }
 
 async function copyLastError(): Promise<void> {
-  const last = [...App.ChatState.getMessages()].reverse().find(m => m.error?.message || m.error?.reason || m.error?.raw);
+  const last = [...dashboardChatRuntimeState.getMessages()].reverse().find(m => m.error?.message || m.error?.reason || m.error?.raw);
   const error = last?.error;
   if (!error) { toast('没有可复制的错误', 'error'); return; }
   const text = [
@@ -173,11 +217,12 @@ function refreshWorkspaceState(): void {
   // 切换工作区时清理 ProblemsStore，避免旧 workspace 诊断数据残留
   const pstore = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
   if (pstore) pstore.clear();
-  App.Session.loadSessions();
+  dashboardChatSession.loadSessions();
   getD();
   const pc = $('pc');
-  if (pc) renderPanel(App.State.getSnapshot().panel.active || 'explorer', pc);
-  if (App.Git?.refreshGit) setTimeout(() => App.Git.refreshGit(), 200);
+  if (pc) renderPanel(dashboardChatState.getSnapshot().panel.active || 'explorer', pc);
+  const git = dashboardChatDependencies.getGit();
+  if (git?.refreshGit) setTimeout(() => git.refreshGit(), 200);
 }
 
 function _messageKey(m: any): string {
@@ -189,12 +234,12 @@ function _messageKey(m: any): string {
 
 /** 节点级消息 diff：逐条检查 key，变才渲染 + replaceWith；无中间字符串层 */
 function _applyMsgsDiff(msgsEl: HTMLElement, scroll: boolean): void {
-  const M = App.ChatState.getMessages();
-  const rm = (window as any).App?.Chat?.renderMessage;
+  const M = dashboardChatRuntimeState.getMessages();
+  const rm = dashboardChatChat.renderMessage;
   if (!rm) {
     const fallback = (window as any).msgs ? (window as any).msgs() || "" : "";
     msgsEl.innerHTML = fallback;
-    App.ChatTimeline?.sync();
+    dashboardChatTimeline?.sync();
     if (scroll) sb("ms");
     return;
   }
@@ -242,12 +287,12 @@ function _applyMsgsDiff(msgsEl: HTMLElement, scroll: boolean): void {
     changed = true;
   }
 
-  App.ChatTimeline?.sync();
+  dashboardChatTimeline?.sync();
   if (changed && scroll) sb("ms");
 }
 
 function markLastMessageRendered(): void {
-  const M = App.ChatState.getMessages();
+  const M = dashboardChatRuntimeState.getMessages();
   while (_msgKeys.length < M.length) _msgKeys.push("");
   while (_msgKeys.length > M.length) _msgKeys.pop();
   if (M.length > 0) _msgKeys[M.length - 1] = _messageKey(M[M.length - 1]);
@@ -257,17 +302,17 @@ function markLastMessageRendered(): void {
 function resetMsgKeys(): void {
   _msgKeys = [];
   chatReadingControlsView?.reset();
-  App.ChatTimeline?.reset();
+  dashboardChatTimeline?.reset();
 }
 
 function bind(): void {
   const ci = $('ci') as HTMLTextAreaElement | null, cs = $('cs') as HTMLButtonElement | null;
   if (!ci || !cs) return;
 
-  chatComposerView = App.ChatViews.createComposer({
-    isBusy: () => App.ChatState.isBusy(),
+  chatComposerView = dashboardChatViews.createComposer({
+    isBusy: () => dashboardChatRuntimeState.isBusy(),
     onInput: (input) => {
-      const fn = App.Chat?.handleSlash;
+      const fn = dashboardChatChat.handleSlash;
       if (fn) fn(input);
       updateUI();
     },
@@ -278,7 +323,7 @@ function bind(): void {
   chatComposerView.bind();
 
   chatGetReadingControls().bind();
-  App.ChatTimeline?.bind();
+  dashboardChatTimeline?.bind();
   refreshReadingSettings();
 
   let renderFrame: number | null = null;
@@ -288,7 +333,7 @@ function bind(): void {
   }
 
   function setAssistantError(title: string, message: string, reason?: string, nextSteps?: string[], raw?: string): void {
-    const messages = App.ChatState.getMessages();
+    const messages = dashboardChatRuntimeState.getMessages();
     const last = messages[messages.length - 1];
     if (!last) return;
     last.error = makeErrorState(title, message, reason, nextSteps, raw);
@@ -300,28 +345,28 @@ function bind(): void {
 
   function finalizeSendContext(context: ChatSendContext | null): void {
     if (context && !context.persistent && context.sessionId) {
-      void deleteEphemeralSession(context.sessionId).then(() => App.Session.loadSessions());
+      void deleteEphemeralSession(context.sessionId).then(() => dashboardChatSession.loadSessions());
     } else {
-      App.Session.loadSessions();
+      dashboardChatSession.loadSessions();
     }
   }
 
   function updateNoteStatus(noteId: string, status: 'queued' | 'delivered' | 'failed'): void {
-    const messages = App.ChatState.getMessages();
+    const messages = dashboardChatRuntimeState.getMessages();
     for (let index = messages.length - 1; index >= 0; index--) {
       const message = messages[index];
       const block = message.blocks?.find(item => item.type === 'user_note' && item.noteId === noteId);
       if (!block) continue;
       block.status = status;
       message._rv = (message._rv || 0) + 1;
-      const updated = index === messages.length - 1 && App.Chat?.updateLastBlock?.(block);
+      const updated = index === messages.length - 1 && dashboardChatChat.updateLastBlock?.(block);
       if (!updated) scheduleMessagesRender(false);
       return;
     }
   }
 
   function insertQueuedNote(text: string, noteId: string, mode: 'steer' | 'followUp'): boolean {
-    const messages = App.ChatState.getMessages();
+    const messages = dashboardChatRuntimeState.getMessages();
     const assistant = [...messages].reverse()
       .find(message => message.role === 'assistant' && message.streaming);
     if (!assistant) return false;
@@ -337,9 +382,9 @@ function bind(): void {
 
   function submitNote(rawText: string, mode: 'steer' | 'followUp'): void {
     const text = rawText.trim();
-    if (!text || !App.ChatState.isBusy()) return;
+    if (!text || !dashboardChatRuntimeState.isBusy()) return;
     ci.value = '';
-    App.ChatViews.resizeComposerInput(ci);
+    dashboardChatViews.resizeComposerInput(ci);
     const noteId = 'note-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
     if (!insertQueuedNote(text, noteId, mode)) return;
     updateUI();
@@ -360,12 +405,12 @@ function bind(): void {
   }
 
   function abortRun(): void {
-    if (!App.ChatState.isBusy()) return;
-    App.ChatStream.close();
-    const messages = App.ChatState.getMessages();
+    if (!dashboardChatRuntimeState.isBusy()) return;
+    dashboardChatStream.close();
+    const messages = dashboardChatRuntimeState.getMessages();
     const last = [...messages].reverse().find((message) => message.role === 'assistant' && message.streaming);
     if (last) last.streaming = false;
-    App.ChatState.setBusy(false);
+    dashboardChatRuntimeState.setBusy(false);
     updateUI();
     sb('ms');
     void fetch('/api/chat/abort', { method: 'POST' }).catch(() => undefined);
@@ -376,10 +421,10 @@ function bind(): void {
     const ciVal = rawText.trim();
     if (!ciVal) return;
     ci2.value = '';
-    App.ChatViews.resizeComposerInput(ci2);
+    dashboardChatViews.resizeComposerInput(ci2);
 
     if (ciVal === '/clear') {
-      App.ChatState.setBusy(false);
+      dashboardChatRuntimeState.setBusy(false);
       fetch('/api/clear', { method: 'POST' })
         .then(r => r.json())
         .then((d: { ok: boolean }) => toast(d.ok ? '缓存已清除' : '清除失败', d.ok ? 'success' : 'error'))
@@ -388,13 +433,13 @@ function bind(): void {
       return;
     }
 
-    App.ChatState.appendMessage({ role: 'user', content: ciVal });
-    App.ChatState.setBusy(true);
-    App.ChatState.appendMessage({ role: 'assistant', content: '', thinking: '', streaming: true });
+    dashboardChatRuntimeState.appendMessage({ role: 'user', content: ciVal });
+    dashboardChatRuntimeState.setBusy(true);
+    dashboardChatRuntimeState.appendMessage({ role: 'assistant', content: '', thinking: '', streaming: true });
     updateUI(); chatScrollToLatest({ force: true });
-    const _ws = App.State.getWorkspacePath();
-    App.ChatStream.close();
-    const gen = App.ChatStream.open();
+    const _ws = dashboardChatState.getWorkspacePath();
+    dashboardChatStream.close();
+    const gen = dashboardChatStream.open();
     const activeTabId = chatGetActiveSessionTabId();
     activeSendContext = activeTabId && !chatIsDraftSessionId(activeTabId)
       ? { sessionId: activeTabId, persistent: true }
@@ -404,17 +449,17 @@ function bind(): void {
 
     void (async () => {
       const prepared = await ensureSessionForSend();
-      if (!App.ChatStream.isCurrent(gen) || !App.ChatState.isBusy()) return;
+      if (!dashboardChatStream.isCurrent(gen) || !dashboardChatRuntimeState.isBusy()) return;
       activeSendContext = prepared;
 
-      const atts = App.Chat?.getPendingAttachments?.();
+      const atts = dashboardChatChat.getPendingAttachments?.();
       const pending = atts && atts.length > 0 ? atts : undefined;
-      const finalMsg = App.Chat?.buildInstruction?.(ciVal) || ciVal;
+      const finalMsg = dashboardChatChat.buildInstruction?.(ciVal) || ciVal;
       const body = pending ? { message: finalMsg, workspace: _ws, attachments: pending } : { message: finalMsg, workspace: _ws };
       fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-        .then(() => { if (pending) App.Chat?.clearAttachments?.(); })
+        .then(() => { if (pending) dashboardChatChat.clearAttachments?.(); })
         .catch((err: unknown) => {
-          if (!App.ChatStream.isCurrent(gen)) return;
+          if (!dashboardChatStream.isCurrent(gen)) return;
           setAssistantError(
             '发送失败',
             '消息没有成功送达后端，请检查当前连接。',
@@ -422,7 +467,7 @@ function bind(): void {
             ['确认后端服务是否仍在运行', '检查当前工作区是否有效', '重新发送当前消息'],
             err instanceof Error ? err.stack || err.message : String(err),
           );
-          App.ChatState.setBusy(false);
+          dashboardChatRuntimeState.setBusy(false);
           updateUI();
           const failedContext = activeSendContext;
           activeSendContext = null;
@@ -454,9 +499,9 @@ function bind(): void {
       renderMessages(scroll);
     });
   }
-  App.Chat.scheduleMessagesRender = scheduleMessagesRender;
+  dashboardChatChat.scheduleMessagesRender = scheduleMessagesRender;
 
-  chatSseControllerView = App.ChatViews.createSseController({
+  chatSseControllerView = dashboardChatViews.createSseController({
     scheduleMessagesRender,
     updateUI,
     markLastMessageRendered,
@@ -468,12 +513,12 @@ function bind(): void {
       const sendContext = activeSendContext;
       activeSendContext = null;
       if (sendContext && !sendContext.persistent && effectiveSessionId) {
-        void deleteEphemeralSession(effectiveSessionId).then(() => App.Session.loadSessions());
+        void deleteEphemeralSession(effectiveSessionId).then(() => dashboardChatSession.loadSessions());
       } else if (sendContext?.persistent && effectiveSessionId) {
-        void Promise.resolve(App.Session.maybeAutoTitleSession(effectiveSessionId, assistantText))
-          .finally(() => App.Session.loadSessions());
+        void Promise.resolve(dashboardChatSession.maybeAutoTitleSession(effectiveSessionId, assistantText))
+          .finally(() => dashboardChatSession.loadSessions());
       } else {
-        App.Session.loadSessions();
+        dashboardChatSession.loadSessions();
       }
     },
     failSend: () => {
@@ -483,14 +528,14 @@ function bind(): void {
     },
   });
 
-  chatAttachmentInputView = App.ChatViews.createAttachmentInput();
+  chatAttachmentInputView = dashboardChatViews.createAttachmentInput();
   chatAttachmentInputView.bind();
 
   // ─── Wire up model button ───
   const modelBtn = $('fi-model-btn');
   if (modelBtn) {
     modelBtn.addEventListener('click', (e) => {
-      const st = App.ChatState.getDashboard();
+      const st = dashboardChatRuntimeState.getDashboard();
       if (!st || st.modelId === 'N/A' || st.modelId === 'unknown') {
         (window as any).openSettingsModal?.();
       } else {
@@ -501,10 +546,10 @@ function bind(): void {
   }
 
   // ─── Wire up mode button ───
-  App.Chat?.loadModeState?.();
+  dashboardChatChat.loadModeState?.();
   const modeBtn = $('fi-mode-btn');
   if (modeBtn) {
-    modeBtn.addEventListener('click', () => App.Chat?.showModePopup?.(modeBtn));
+    modeBtn.addEventListener('click', () => dashboardChatChat.showModePopup?.(modeBtn));
   }
 
   // ─── Token usage events → Token Rail + Usage 面板 ───
@@ -514,7 +559,7 @@ function bind(): void {
 function updateModelName(): void {
   const mn = $('fi-model-name');
   if (!mn) return;
-  const st = App.ChatState.getDashboard();
+  const st = dashboardChatRuntimeState.getDashboard();
   if (!st || st.modelId === 'N/A' || !st.modelId) {
     mn.textContent = '未配置';
     mn.style.color = 'var(--tm)';
@@ -537,7 +582,7 @@ function updateUI(): void {
 }
 
 function isBusy(): boolean {
-  return App.ChatState.isBusy();
+  return dashboardChatRuntimeState.isBusy();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -545,7 +590,7 @@ function isBusy(): boolean {
 // ═══════════════════════════════════════════════════════════════════
 
 function showModelPicker(e: MouseEvent): void {
-  App.ChatViews.openModelPicker(e);
+  dashboardChatViews.openModelPicker(e);
 }
 
 // ─── App 命名空间绑定 ──────────────────────────────────────
@@ -553,17 +598,17 @@ window.bind = bind;
 window.updateUI = updateUI;
 window.showModelPicker = showModelPicker;
 
-{ const AppChat = (window as any).App?.Chat; if (AppChat) {
-  AppChat.bind = bind;
-  AppChat.updateUI = updateUI;
-  AppChat.showModelPicker = showModelPicker;
-  AppChat.isBusy = isBusy;
-  AppChat.updateModelName = updateModelName;
-  App.Chat.retryLastTurn = retryLastTurn;
-  App.Chat.copyLastError = copyLastError;
-  App.Chat.refreshWorkspaceState = refreshWorkspaceState;
-  App.Chat.resetMsgKeys = resetMsgKeys;
-  App.Chat.scrollToLatest = chatScrollToLatest;
-  App.Chat.refreshReadingSettings = refreshReadingSettings;
-  App.Chat.resizeComposerInput = (input) => App.ChatViews.resizeComposerInput(input);
+{ const dashboardChatPublicApi = dashboardChatChat; if (dashboardChatPublicApi) {
+  dashboardChatPublicApi.bind = bind;
+  dashboardChatPublicApi.updateUI = updateUI;
+  dashboardChatPublicApi.showModelPicker = showModelPicker;
+  dashboardChatPublicApi.isBusy = isBusy;
+  dashboardChatPublicApi.updateModelName = updateModelName;
+  dashboardChatPublicApi.retryLastTurn = retryLastTurn;
+  dashboardChatPublicApi.copyLastError = copyLastError;
+  dashboardChatPublicApi.refreshWorkspaceState = refreshWorkspaceState;
+  dashboardChatPublicApi.resetMsgKeys = resetMsgKeys;
+  dashboardChatPublicApi.scrollToLatest = chatScrollToLatest;
+  dashboardChatPublicApi.refreshReadingSettings = refreshReadingSettings;
+  dashboardChatPublicApi.resizeComposerInput = (input) => dashboardChatViews.resizeComposerInput(input);
 } }

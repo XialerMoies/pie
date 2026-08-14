@@ -46,6 +46,26 @@ describe("frontend component tree boundaries", () => {
     }
   });
 
+  it("localizes dashboard chat dependencies and keeps late registrations lazy", () => {
+    const chat = source("src/frontend/dashboard/dashboard-chat.ts");
+    assert.match(chat, /interface\s+DashboardChatDependencies\s*\{/);
+    for (const dependency of [
+      "chat: AppChat",
+      "chatState: AppChatState",
+      "chatStream: AppChatStream",
+      "chatViews: AppChatViews",
+      "tabs: AppTabs",
+      "state: AppStateFacade",
+      "session: AppSession",
+    ]) {
+      assert.match(chat, new RegExp(dependency));
+    }
+    assert.match(chat, /getSessionTabs:\s*\(\)\s*=>\s*AppSessionTabs/);
+    assert.match(chat, /getSessionRestore:\s*\(\)\s*=>\s*AppSessionRestore/);
+    assert.match(chat, /getGit:\s*\(\)\s*=>\s*AppGit\s*\|\s*undefined/);
+    assert.doesNotMatch(chat, /\bApp(?:\.|\s+as\s+any)/);
+  });
+
   it("uses component views for token usage modal panes", () => {
     const src = source("src/frontend/chat/chat-token.ts");
     for (const name of ["UsageModalView", "UsageCurrentView", "UsageSummaryView"]) assertClass(src, name);
@@ -164,7 +184,7 @@ describe("frontend component tree boundaries", () => {
     const composer = source("src/frontend/chat/chat-composer.ts");
     assertClass(composer, "ChatComposerView");
     assert.match(composer, /onSubmitNote|chat-stop|chat-note-mode/);
-    assert.match(chat, /App\.ChatViews\.createComposer\(/);
+    assert.match(chat, /dashboardChatViews\.createComposer\(/);
     assert.match(chat, /chatComposerView\?\.refresh\(\)/);
     assert.doesNotMatch(chat, /function\s+sendOrStop\b|let\s+chatNoteMode\b/);
   });
@@ -175,7 +195,7 @@ describe("frontend component tree boundaries", () => {
     assertClass(picker, "ChatModelPickerView");
     assert.match(picker, /id = 'model-picker'|id = \"model-picker\"/);
     assert.match(picker, /openModelPicker/);
-    assert.match(chat, /App\.ChatViews\.openModelPicker\(e\)/);
+    assert.match(chat, /dashboardChatViews\.openModelPicker\(e\)/);
     assert.doesNotMatch(chat, /fetch\('\/api\/models'\)|fetch\('\/api\/model\/switch'\)/);
   });
 
@@ -187,7 +207,7 @@ describe("frontend component tree boundaries", () => {
     assert.match(attachments, /chat\?:\s*AppChat/);
     assert.match(attachments, /attachmentInputChat\?\.addAttachment\?\./);
     assert.match(attachments, /selectFile\(|handleDrop\(|dataTransfer/);
-    assert.match(chat, /App\.ChatViews\.createAttachmentInput\(/);
+    assert.match(chat, /dashboardChatViews\.createAttachmentInput\(/);
     assert.doesNotMatch(chat, /electronAPI.*selectFile|dataTransfer/);
   });
 

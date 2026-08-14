@@ -35,7 +35,6 @@ function store() { return global.window.__uiStateStore; }
 describe("UiStateStore", () => {
   it("keeps workspace compatibility storage behind App.State", () => {
     const workspaceConsumers = [
-      "src/frontend/dashboard/dashboard-chat.ts",
       "src/frontend/dashboard/dashboard-sessions.ts",
       "src/frontend/editor/monaco-setup.ts",
     ];
@@ -55,6 +54,11 @@ describe("UiStateStore", () => {
     assert.match(tsserverSource, /function\s+monacoTsserverState\(\):\s*AppStateFacade/);
     assert.match(tsserverSource, /monacoTsserverState\(\)\.getWorkspacePath\(\)/);
     assert.doesNotMatch(tsserverSource, /localStorage[^\n]*(?:WS_KEY|workspace_path)|(?:WS_KEY|workspace_path)[^\n]*localStorage/);
+
+    const dashboardChatSource = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-chat.ts"), "utf8");
+    assert.match(dashboardChatSource, /state:\s*AppStateFacade/);
+    assert.match(dashboardChatSource, /dashboardChatState\.getWorkspacePath\(\)/);
+    assert.doesNotMatch(dashboardChatSource, /localStorage[^\n]*(?:WS_KEY|workspace_path)|(?:WS_KEY|workspace_path)[^\n]*localStorage/);
 
     const explorerSource = readFileSync(resolve(process.cwd(), "src/frontend/service/explorer-service.ts"), "utf8");
     assert.match(explorerSource, /interface\s+ExplorerServiceDependencies\s*\{/);
