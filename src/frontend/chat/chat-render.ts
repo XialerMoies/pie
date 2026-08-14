@@ -2,6 +2,18 @@
 //  消息渲染 & 流式追加
 // ═══════════════════════════════════════════════════════════════════
 
+type ChatRenderDependencies = {
+  chatState: AppChatState;
+  chatViews: AppChatViews;
+};
+
+const chatRenderApp = (window as any).App;
+const chatRenderDependencies: ChatRenderDependencies = {
+  chatState: chatRenderApp.ChatState,
+  chatViews: chatRenderApp.ChatViews,
+};
+const { chatState, chatViews } = chatRenderDependencies;
+
 /** 渲染 markdown 为 HTML（过滤可能影响布局的标签） */
 function safeMarkdownUrl(value: unknown, image = false): string | null {
   const href = String(value ?? '').trim().replace(/[\u0000-\u001f\u007f]/g, '');
@@ -58,37 +70,37 @@ function mdRender(text: string): string {
 }
 
 function renderErrorCard(error: ChatErrorState): string {
-  return App.ChatViews.ChatErrorView.render(error);
+  return chatViews.ChatErrorView.render(error);
 }
 
-App.ChatViews?.configure?.({ renderMarkdown: mdRender });
-App.ChatViews?.ChatEventNodeView?.configure?.({ renderMarkdown: mdRender });
+chatViews.configure({ renderMarkdown: mdRender });
+chatViews.ChatEventNodeView.configure({ renderMarkdown: mdRender });
 function renderBlocks(blocks: any[], subagentBatches?: readonly FrontendSubagentBatch[]): string {
-  return App.ChatViews.ChatEventNodeView.renderBlocks(blocks, subagentBatches);
+  return chatViews.ChatEventNodeView.renderBlocks(blocks, subagentBatches);
 }
 
 function renderEventBlock(block: any, blocks: any[], defaultOpen?: boolean, subagentBatches?: readonly FrontendSubagentBatch[]): string {
-  return App.ChatViews.ChatEventNodeView.renderEventBlock(block, blocks, defaultOpen, subagentBatches);
+  return chatViews.ChatEventNodeView.renderEventBlock(block, blocks, defaultOpen, subagentBatches);
 }
 
 function replaceBlockContents(target: HTMLElement, html: string): void {
-  App.ChatViews.ChatEventNodeView.replaceBlockContents(target, html);
+  chatViews.ChatEventNodeView.replaceBlockContents(target, html);
 }
 
 function insertBlockNode(flow: HTMLElement, block: any, blocks: any[]): boolean {
-  return App.ChatViews.ChatEventNodeView.insertBlockNode(flow, block, blocks);
+  return chatViews.ChatEventNodeView.insertBlockNode(flow, block, blocks);
 }
 
 function refreshEditSummary(flow: HTMLElement, blocks: any[]): void {
-  App.ChatViews.ChatEventNodeView.refreshEditSummary(flow, blocks);
+  chatViews.ChatEventNodeView.refreshEditSummary(flow, blocks);
 }
 
 function subagentDelegationData(block: any, blocks: any[], batches?: readonly FrontendSubagentBatch[]): SubagentDelegationData {
-  return App.ChatViews.ChatEventNodeView.subagentDelegationData(block, blocks, batches);
+  return chatViews.ChatEventNodeView.subagentDelegationData(block, blocks, batches);
 }
 
 function blockId(block: any): string {
-  return App.ChatViews.ChatEventNodeView.blockId(block);
+  return chatViews.ChatEventNodeView.blockId(block);
 }
 
 function renderMessage(m: any, messageIndex = -1): string {
@@ -115,13 +127,13 @@ function renderMessage(m: any, messageIndex = -1): string {
 }
 
 function msgs(): string {
-  const M = App.ChatState.getMessages();
+  const M = chatState.getMessages();
   if (M.length === 0) return '<div class="wl"><h2>Pi — 你的代码助手</h2><p>在下方输入，开始编码</p></div>';
   return M.map((message, index) => renderMessage(message, index)).join('\n');
 }
 
 function updateLastBlock(block: any): boolean {
-  const messages = App.ChatState.getMessages();
+  const messages = chatState.getMessages();
   const message = messages[messages.length - 1] as any;
   const messagesElement = $('ms');
   if (!message?.blocks?.length || !messagesElement) return false;
@@ -142,7 +154,7 @@ function updateLastBlock(block: any): boolean {
   const target = Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
     .find(element => element.dataset.blockId === blockId(block));
   if (target && block.name === 'delegate_tasks') {
-    App.ChatViews.refreshSubagentDelegation(target, subagentDelegationData(block, message.blocks, message.subagentBatches));
+    chatViews.refreshSubagentDelegation(target, subagentDelegationData(block, message.blocks, message.subagentBatches));
     refreshEditSummary(flow, message.blocks);
     return true;
   }
@@ -185,7 +197,7 @@ function updateLastBlock(block: any): boolean {
 }
 
 function finalizeLastMessage(): boolean {
-  const messages = App.ChatState.getMessages();
+  const messages = chatState.getMessages();
   const message = messages[messages.length - 1] as any;
   const messagesElement = $('ms');
   if (!message || !messagesElement) return false;
@@ -221,7 +233,7 @@ function finalizeLastMessage(): boolean {
         else fullySynced = false;
       } else if (target && block.type === 'tool_use') {
         if (block.name === 'delegate_tasks') {
-          App.ChatViews.refreshSubagentDelegation(target, subagentDelegationData(block, message.blocks, message.subagentBatches));
+          chatViews.refreshSubagentDelegation(target, subagentDelegationData(block, message.blocks, message.subagentBatches));
         } else {
           replaceBlockContents(target, renderEventBlock(block, message.blocks, undefined, message.subagentBatches));
         }
@@ -254,7 +266,7 @@ function finalizeLastMessage(): boolean {
 }
 
 function updateSubagentEvent(event: FrontendSubagentEvent): boolean {
-  const messages = App.ChatState.getMessages();
+  const messages = chatState.getMessages();
   let messageIndex = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].blocks?.some((candidate) =>
@@ -282,14 +294,14 @@ function updateSubagentEvent(event: FrontendSubagentEvent): boolean {
       .find(element => element.dataset.blockId === blockId(block))
     : null;
   if (blockRoot) {
-    App.ChatViews.refreshSubagentDelegation(blockRoot, subagentDelegationData(block, message.blocks || [], message.subagentBatches));
+    chatViews.refreshSubagentDelegation(blockRoot, subagentDelegationData(block, message.blocks || [], message.subagentBatches));
     return true;
   }
   return updateLastBlock(block);
 }
 
 function appendDelta(text: string): void {
-  const M = App.ChatState.getMessages();
+  const M = chatState.getMessages();
   const msgsEl = $('ms');
   if (!msgsEl) return;
   const last = M[M.length - 1];

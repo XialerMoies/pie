@@ -157,6 +157,14 @@ describe("frontend component tree boundaries", () => {
     assert.doesNotMatch(chat, /function\\s+renderEventBlock\\b/);
   });
 
+  it("keeps chat rendering dependencies behind one module boundary", () => {
+    const chat = source("src/frontend/chat/chat-render.ts");
+    assert.match(chat, /type\s+ChatRenderDependencies\s*=\s*\{/);
+    assert.match(chat, /chatState:\s*AppChatState/);
+    assert.match(chat, /chatViews:\s*AppChatViews/);
+    assert.doesNotMatch(chat, /\bApp\./);
+  });
+
   it("keeps chat reading and jump-to-latest state in a dedicated component view", () => {
     const chat = source("src/frontend/dashboard/dashboard-chat.ts");
     const reading = source("src/frontend/chat/chat-reading-controls.ts");
