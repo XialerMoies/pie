@@ -92,6 +92,15 @@ describe("frontend component tree boundaries", () => {
     assert.doesNotMatch(chat, /fetch\('\/api\/models'\)|fetch\('\/api\/model\/switch'\)/);
   });
 
+  it("keeps attachment file and drag-drop input in a dedicated component view", () => {
+    const chat = source("src/frontend/dashboard/dashboard-chat.ts");
+    const attachments = source("src/frontend/chat/chat-attachment-input.ts");
+    assertClass(attachments, "ChatAttachmentInputView");
+    assert.match(attachments, /selectFile\(|handleDrop\(|dataTransfer/);
+    assert.match(chat, /App\.ChatViews\.createAttachmentInput\(/);
+    assert.doesNotMatch(chat, /electronAPI.*selectFile|dataTransfer/);
+  });
+
   it("loads the subagent component module after shared chat views and before chat rendering", () => {
     const compiler = source("scripts/compile-frontend-ts.mjs");
     const sharedIndex = compiler.indexOf('"gen/chat/chat-component-views.js"');
@@ -119,5 +128,12 @@ describe("frontend component tree boundaries", () => {
     const pickerIndex = compiler.indexOf('"gen/chat/chat-model-picker.js"');
     const dashboardChatIndex = compiler.indexOf('"gen/dashboard/dashboard-chat.js"');
     assert.ok(pickerIndex >= 0 && dashboardChatIndex > pickerIndex);
+  });
+
+  it("loads attachment input before dashboard chat", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const attachmentIndex = compiler.indexOf('"gen/chat/chat-attachment-input.js"');
+    const dashboardChatIndex = compiler.indexOf('"gen/dashboard/dashboard-chat.js"');
+    assert.ok(attachmentIndex >= 0 && dashboardChatIndex > attachmentIndex);
   });
 });

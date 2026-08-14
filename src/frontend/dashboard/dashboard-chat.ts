@@ -5,6 +5,7 @@
 let _msgKeys: string[] = [];
 let submitMessageHandler: ((text: string) => void) | null = null;
 let chatComposerView: AppChatComposer | null = null;
+let chatAttachmentInputView: AppChatAttachmentInput | null = null;
 
 type ChatSendContext = {
   sessionId: string;
@@ -637,6 +638,9 @@ function bind(): void {
   }
   App.Chat.scheduleMessagesRender = scheduleMessagesRender;
 
+  chatAttachmentInputView = App.ChatViews.createAttachmentInput();
+  chatAttachmentInputView.bind();
+
   // ─── Wire up model button ───
   const modelBtn = $('fi-model-btn');
   if (modelBtn) {
@@ -658,68 +662,6 @@ function bind(): void {
     modeBtn.addEventListener('click', () => App.Chat?.showModePopup?.(modeBtn));
   }
 
-  // ─── Wire up file attach + button ───
-  const fileBtn = $('fi-file-btn');
-  if (fileBtn) {
-    fileBtn.addEventListener('click', async () => {
-      try {
-        const api = (window as any).electronAPI as ElectronAPI | undefined;
-        if (api?.selectFile) {
-          const p = await api.selectFile();
-          if (p) {
-            const ws = ExplorerService.getWorkspacePath();
-            const relPath = ws ? p.replace(ws.replace(/\\/g, '/'), '').replace(/^\/+/, '') : p;
-            const name = p.split(/[/\\]/).pop() || p;
-            App.Chat?.addAttachment?.({ kind: 'file', path: relPath, name });
-          }
-        } else {
-          toast('请使用 Electron 桌面版', 'info');
-        }
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        toast(`选择文件失败: ${detail}`, 'error');
-      }
-    });
-  }
-
-  // ─── Drag & Drop from explorer tree ───
-  const fiArea = $('fi');
-  if (fiArea) {
-    fiArea.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-      App.Chat?.showDropZone?.(true);
-    });
-    fiArea.addEventListener('dragleave', (e) => {
-      if (!fiArea.contains(e.relatedTarget as Node)) {
-        App.Chat?.showDropZone?.(false);
-      }
-    });
-    fiArea.addEventListener('drop', (e) => {
-      e.preventDefault();
-      App.Chat?.showDropZone?.(false);
-      let treeNodeId = e.dataTransfer?.getData('text/tree-node');
-      if (!treeNodeId) {
-        const plain = e.dataTransfer?.getData('text/plain') || '';
-        if (plain.startsWith('tree-node:')) treeNodeId = plain.slice(10);
-      }
-      if (treeNodeId) {
-        const ws = ExplorerService.getWorkspacePath();
-        if (!ws) { toast('请先选择工作区', 'error'); return; }
-        const name = treeNodeId.split('/').pop() || treeNodeId;
-        const tree = (ExplorerService as any)._getTree?.();
-        const node = tree?._findNodeById?.(treeNodeId);
-        if (node?.isDir) {
-          App.Chat?.addAttachment?.({ kind: 'folder', path: treeNodeId, name: name + '/' });
-        } else {
-          App.Chat?.addAttachment?.({ kind: 'file', path: treeNodeId, name });
-        }
-        toast(`已添加: ${name}`, 'success');
-      } else if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-        toast('请使用文件菜单或目录树添加文件', 'info');
-      }
-    });
-  }
   // ─── Token usage events → Token Rail + Usage 面板 ───
   (window as any).startTokenUpdates?.();
 }

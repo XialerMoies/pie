@@ -417,6 +417,7 @@ interface AppChatViews {
   createComposer(callbacks: ChatComposerCallbacks): AppChatComposer;
   resizeComposerInput(input: HTMLTextAreaElement): void;
   openModelPicker(event: MouseEvent): void;
+  createAttachmentInput(): AppChatAttachmentInput;
   FileDiffView: new (diff: FileDiffMetadata, options?: FileDiffRenderOptions) => ChatComponentView<FileDiffMetadata>;
   EditSummaryView: new (blocks: any[], expanded?: boolean) => ChatComponentView<any[]>;
   SubagentTaskView: new (task: FrontendSubagentTask, index?: number) => ChatComponentView<FrontendSubagentTask>;
@@ -440,6 +441,10 @@ interface ChatComposerCallbacks {
 interface AppChatComposer {
   bind(): void;
   refresh(): void;
+  dispose(): void;
+}
+interface AppChatAttachmentInput {
+  bind(): void;
   dispose(): void;
 }
 type McpConnectionState = 'connected' | 'connecting' | 'disconnected' | 'error';
