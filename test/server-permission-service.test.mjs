@@ -195,6 +195,22 @@ describe("workspace permission rule store", () => {
 });
 
 describe("server permission service", () => {
+  it("delegates permission audit state to a focused audit log", () => {
+    const auditLogPath = resolve(process.cwd(), "src/server/permission-audit-log.ts");
+    assert.strictEqual(existsSync(auditLogPath), true, "permission-audit-log.ts must own audit state");
+
+    const serviceSource = readFileSync(resolve(process.cwd(), "src/server/permission-service.ts"), "utf8");
+    const auditLogSource = readFileSync(auditLogPath, "utf8");
+    const auditStoreSource = readFileSync(resolve(process.cwd(), "src/server/permission-audit-store.ts"), "utf8");
+
+    assert.match(serviceSource, /new PermissionAuditLog\(/);
+    assert.doesNotMatch(serviceSource, /private (?:auditSeq|auditWriteQueue|audit):/);
+    assert.doesNotMatch(serviceSource, /loadPersistedAudit\(/);
+    assert.match(auditLogSource, /export class PermissionAuditLog/);
+    assert.doesNotMatch(auditLogSource, /from "\.\/permission-audit-store\.js"/);
+    assert.doesNotMatch(auditStoreSource, /from "\.\/permission-service\.js"/);
+  });
+
   it("hydrates workspace rules before authorization and replaces them when the workspace changes", async () => {
     const root = makeTempRoot("server-perm-workspace-hydrate-");
     try {

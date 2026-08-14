@@ -1,12 +1,8 @@
 import { existsSync, readFileSync } from "fs";
-import type { PermissionAuditEntry } from "./permission-service.js";
+import type { PermissionAuditEntry, PermissionAuditStore } from "./permission-audit-log.js";
 import { updateLockedJson } from "../data/locked-json-store.js";
 
-export interface PermissionAuditStore {
-  load(limit: number): PermissionAuditEntry[];
-  append(entry: PermissionAuditEntry): Promise<void>;
-  clear(): Promise<void>;
-}
+export type { PermissionAuditStore } from "./permission-audit-log.js";
 
 export class FilePermissionAuditStore implements PermissionAuditStore {
   private readonly maxEntries: number;

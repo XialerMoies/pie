@@ -39,7 +39,13 @@ import {
   PathGuardError,
   type GuardedPath,
 } from "./routes/path-guard.js";
-import type { PermissionAuditStore } from "./permission-audit-store.js";
+import {
+  PermissionAuditLog,
+  type PendingPermissionAuditEntry,
+  type PermissionAuditEntry,
+  type PermissionAuditOperation,
+  type PermissionAuditStore,
+} from "./permission-audit-log.js";
 import {
   emptyWorkspacePermissionRuleSet,
   type WorkspacePermissionRuleSet,
@@ -47,28 +53,7 @@ import {
 } from "./permission-rule-store.js";
 import type { RootRegistry } from "./root-registry.js";
 
-export interface PermissionAuditEntry {
-  id: number;
-  timestamp: string;
-  source: string;
-  operation: PermissionAuditOperation;
-  root: string;
-  path?: string;
-  relativePath?: string;
-  decision: PathPermissionDecision["status"];
-  reason?: string;
-  code?: string;
-  toolName?: string;
-  toolOperations?: readonly ToolOperation[];
-  riskLevel?: ToolRiskLevel;
-  workspaceBounded?: boolean;
-  authorizationMode?: ToolAuthorizationMode;
-  permissionRequired?: boolean;
-  mcpCapabilities?: McpToolCapabilityDeclaration;
-  mcpCapabilityAutoAllowed?: boolean;
-}
-
-export type PermissionAuditOperation = PathPermissionOperation | "tool";
+export type { PermissionAuditEntry, PermissionAuditOperation } from "./permission-audit-log.js";
 
 export interface ServerPermissionConfirmationRequest {
   source: string;
@@ -138,14 +123,10 @@ export class ServerPermissionService {
   private readonly trustedRootsProvider?: () => readonly string[];
   private readonly rootRegistry?: RootRegistry;
   private readonly confirmPermission?: ServerPermissionConfirmCallback;
-  private readonly auditStore?: PermissionAuditStore;
   private readonly permissionRuleStore?: WorkspacePermissionRuleStore;
-  private readonly maxAuditEntries: number;
+  private readonly auditLog: PermissionAuditLog;
   private activeWorkspaceRuleKey = "";
   private activeWorkspaceRulePath = "";
-  private auditSeq = 0;
-  private audit: PermissionAuditEntry[] = [];
-  private auditWriteQueue: Promise<void> = Promise.resolve();
 
   constructor(options: ServerPermissionServiceOptions = {}) {
     this.sessionPermissionState = options.sessionPermissionState;
@@ -153,10 +134,11 @@ export class ServerPermissionService {
     this.trustedRootsProvider = options.trustedRootsProvider;
     this.rootRegistry = options.rootRegistry;
     this.confirmPermission = options.confirmPermission;
-    this.auditStore = options.auditStore;
     this.permissionRuleStore = options.permissionRuleStore;
-    this.maxAuditEntries = options.maxAuditEntries ?? 500;
-    this.loadPersistedAudit();
+    this.auditLog = new PermissionAuditLog({
+      store: options.auditStore,
+      maxEntries: options.maxAuditEntries,
+    });
   }
 
   recordPermissionModeChange(mode: PermissionMode, source: string): void {
@@ -556,19 +538,15 @@ export class ServerPermissionService {
   }
 
   getAuditTrail(limit = 100): PermissionAuditEntry[] {
-    const normalizedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), this.maxAuditEntries)) : 100;
-    return this.audit.slice(-normalizedLimit);
+    return this.auditLog.getTrail(limit);
   }
 
   async flushAuditWrites(): Promise<void> {
-    await this.auditWriteQueue;
+    await this.auditLog.flushWrites();
   }
 
   async clearAuditTrail(): Promise<void> {
-    this.audit = [];
-    if (!this.auditStore) return;
-    this.auditWriteQueue = this.auditWriteQueue.then(() => this.auditStore!.clear()).catch(() => {});
-    await this.auditWriteQueue;
+    await this.auditLog.clear();
   }
 
   getRulesSnapshot(): PermissionRulesSnapshot {
@@ -721,46 +699,8 @@ export class ServerPermissionService {
     replaceWorkspaceRules(state, candidate);
   }
 
-  private record(entry: Omit<PermissionAuditEntry, "id" | "timestamp">): void {
-    const confirmedByUser = entry.reason?.startsWith("Confirmed by user") === true;
-    if (entry.operation === "read" && entry.decision === "allow" && !confirmedByUser) {
-      return;
-    }
-    if (
-      entry.operation === "tool" &&
-      entry.decision === "allow" &&
-      !confirmedByUser &&
-      entry.permissionRequired === false &&
-      entry.riskLevel !== "high"
-    ) {
-      return;
-    }
-    const nextEntry: PermissionAuditEntry = {
-      id: ++this.auditSeq,
-      timestamp: new Date().toISOString(),
-      ...entry,
-    };
-    this.audit.push(nextEntry);
-    if (this.audit.length > this.maxAuditEntries) {
-      this.audit.splice(0, this.audit.length - this.maxAuditEntries);
-    }
-    if (this.auditStore) {
-      const persistedEntry = { ...nextEntry };
-      this.auditWriteQueue = this.auditWriteQueue
-        .then(() => this.auditStore!.append(persistedEntry))
-        .catch(() => {});
-    }
-  }
-
-  private loadPersistedAudit(): void {
-    if (!this.auditStore) return;
-    try {
-      this.audit = this.auditStore.load(this.maxAuditEntries);
-      this.auditSeq = this.audit.reduce((max, entry) => Math.max(max, entry.id), 0);
-    } catch {
-      this.audit = [];
-      this.auditSeq = 0;
-    }
+  private record(entry: PendingPermissionAuditEntry): void {
+    this.auditLog.record(entry);
   }
 
   private requireSessionPermissionState(): SessionPermissionState {
