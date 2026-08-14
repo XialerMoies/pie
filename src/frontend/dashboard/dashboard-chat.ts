@@ -4,6 +4,7 @@
 
 let _msgKeys: string[] = [];
 let submitMessageHandler: ((text: string) => void) | null = null;
+let chatComposerView: AppChatComposer | null = null;
 
 type ChatSendContext = {
   sessionId: string;
@@ -12,24 +13,13 @@ type ChatSendContext = {
 };
 
 let activeSendContext: ChatSendContext | null = null;
-let chatNoteMode: 'steer' | 'followUp' = 'steer';
 const CHAT_LATEST_DEFAULT_THRESHOLD = 72;
 const CHAT_LATEST_ALLOWED_THRESHOLDS = [48, 72, 120];
-const CHAT_INPUT_MIN_HEIGHT = 34;
-const CHAT_INPUT_MAX_HEIGHT = 144;
 let chatLatestEnabled = true;
 let chatLatestSmooth = true;
 let chatLatestThreshold = CHAT_LATEST_DEFAULT_THRESHOLD;
 let chatFollowLatest = true;
 let chatSmoothScrollTimer: ReturnType<typeof setTimeout> | null = null;
-
-function resizeComposerInput(input: HTMLTextAreaElement): void {
-  input.style.height = 'auto';
-  const contentHeight = Math.max(CHAT_INPUT_MIN_HEIGHT, input.scrollHeight);
-  const cappedHeight = Math.min(contentHeight, CHAT_INPUT_MAX_HEIGHT);
-  input.style.height = `${cappedHeight}px`;
-  input.style.overflowY = contentHeight > CHAT_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
-}
 
 function chatReadBooleanPreference(key: string, fallback = true): boolean {
   const preferences = (App as any).Preferences;
@@ -343,6 +333,19 @@ function bind(): void {
   const ci = $('ci') as HTMLTextAreaElement | null, cs = $('cs') as HTMLButtonElement | null;
   if (!ci || !cs) return;
 
+  chatComposerView = App.ChatViews.createComposer({
+    isBusy: () => App.ChatState.isBusy(),
+    onInput: (input) => {
+      const fn = App.Chat?.handleSlash;
+      if (fn) fn(input);
+      updateUI();
+    },
+    onSubmit: submitMessage,
+    onSubmitNote: submitNote,
+    onAbort: abortRun,
+  });
+  chatComposerView.bind();
+
   const messages = $('ms');
   const jumpLatest = $('chat-jump-latest') as HTMLButtonElement | null;
   messages?.addEventListener('scroll', () => {
@@ -355,14 +358,6 @@ function bind(): void {
   });
   App.ChatTimeline?.bind();
   refreshReadingSettings();
-
-  ci.addEventListener('input', () => {
-    resizeComposerInput(ci);
-    // Slash command popup (sourced from chat-mode.ts)
-    const fn = App.Chat?.handleSlash;
-    if (fn) fn(ci);
-    updateUI();
-  });
 
   let renderFrame: number | null = null;
 
@@ -410,12 +405,11 @@ function bind(): void {
     return true;
   }
 
-  function submitNote(rawText: string): void {
+  function submitNote(rawText: string, mode: 'steer' | 'followUp'): void {
     const text = rawText.trim();
     if (!text || !App.ChatState.isBusy()) return;
     ci.value = '';
-    resizeComposerInput(ci);
-    const mode = chatNoteMode;
+    App.ChatViews.resizeComposerInput(ci);
     const noteId = 'note-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
     if (!insertQueuedNote(text, noteId, mode)) return;
     updateUI();
@@ -452,7 +446,7 @@ function bind(): void {
     const ciVal = rawText.trim();
     if (!ciVal) return;
     ci2.value = '';
-    resizeComposerInput(ci2);
+    App.ChatViews.resizeComposerInput(ci2);
 
     if (ciVal === '/clear') {
       App.ChatState.setBusy(false);
@@ -571,12 +565,7 @@ function bind(): void {
           const finalized = App.Chat?.finalizeLastMessage?.() || false;
           if (finalized) markLastMessageRendered();
           else renderMessages();
-          const _cs = $('cs') as HTMLButtonElement | null;
-          const _ci = $('ci') as HTMLTextAreaElement | null;
-          if (_cs) { _cs.disabled = false; _cs.title = '发送消息'; _cs.innerHTML = S('iup', 16); }
-          if (_ci) _ci.disabled = false;
-          const _stop = $('chat-stop') as HTMLButtonElement | null;
-          if (_stop) _stop.style.display = 'none';
+          chatComposerView?.refresh();
           const sessionId = (d as any).sessionId || activeSendContext?.sessionId || '';
           const sendContext = activeSendContext;
           activeSendContext = null;
@@ -602,12 +591,7 @@ function bind(): void {
           );
           App.ChatState.setBusy(false); App.ChatStream.close();
           renderMessages();
-          const _cs2 = $('cs') as HTMLButtonElement | null;
-          const _ci2 = $('ci') as HTMLTextAreaElement | null;
-          if (_cs2) { _cs2.disabled = false; _cs2.title = '发送消息'; _cs2.innerHTML = S('iup', 16); }
-          if (_ci2) _ci2.disabled = false;
-          const _stop2 = $('chat-stop') as HTMLButtonElement | null;
-          if (_stop2) _stop2.style.display = 'none';
+          chatComposerView?.refresh();
           const failedContext = activeSendContext;
           activeSendContext = null;
           finalizeSendContext(failedContext);
@@ -652,35 +636,6 @@ function bind(): void {
     });
   }
   App.Chat.scheduleMessagesRender = scheduleMessagesRender;
-
-  function sendOrStop(): void {
-    if (App.ChatState.isBusy()) {
-      submitNote(ci.value);
-      return;
-    }
-    submitMessage(ci.value);
-  }
-
-  ci.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendOrStop(); }
-    if (e.key === 'Escape') { const se = $('fi-slash'); if (se) se.style.display = 'none'; }
-    if (e.key === 'Tab' && ci.value.startsWith('/')) {
-      e.preventDefault();
-      const slashEl = $('fi-slash');
-      if (slashEl && slashEl.style.display !== 'none') {
-        const first = slashEl.querySelector('.fi-slash-item') as HTMLElement | null;
-        if (first) first.click();
-      }
-    }
-  });
-  cs.addEventListener('click', sendOrStop);
-  const stopButton = $('chat-stop') as HTMLButtonElement | null;
-  stopButton?.addEventListener('click', abortRun);
-  const noteModeButton = $('chat-note-mode') as HTMLButtonElement | null;
-  noteModeButton?.addEventListener('click', () => {
-    chatNoteMode = chatNoteMode === 'steer' ? 'followUp' : 'steer';
-    updateUI();
-  });
 
   // ─── Wire up model button ───
   const modelBtn = $('fi-model-btn');
@@ -765,19 +720,6 @@ function bind(): void {
       }
     });
   }
-  const slashEl = $('fi-slash');
-  if (slashEl) {
-    slashEl.querySelectorAll('.fi-slash-item').forEach(item => {
-      item.addEventListener('click', () => {
-        const cmd = (item as HTMLElement).dataset.cmd || '';
-        ci.value = cmd + ' ';
-        ci.focus();
-        slashEl.style.display = 'none';
-        resizeComposerInput(ci);
-      });
-    });
-  }
-
   // ─── Token usage events → Token Rail + Usage 面板 ───
   (window as any).startTokenUpdates?.();
 }
@@ -800,22 +742,7 @@ function updateModelName(): void {
 // ═══════════════════════════════════════════════════════════════════
 
 function updateUI(): void {
-  const ci = $("ci") as HTMLTextAreaElement | null, cs = $("cs") as HTMLButtonElement | null;
-  const stIL = App.ChatState.isBusy();
-  if (ci) ci.disabled = false;
-  if (cs) {
-    cs.disabled = !ci?.value.trim();
-    cs.innerHTML = S("iup", 16);
-    cs.title = stIL ? "发送补充" : "发送消息";
-  }
-  const stopButton = $("chat-stop") as HTMLButtonElement | null;
-  if (stopButton) stopButton.style.display = stIL ? "" : "none";
-  const noteModeButton = $("chat-note-mode") as HTMLButtonElement | null;
-  if (noteModeButton) {
-    noteModeButton.style.display = stIL ? "" : "none";
-    noteModeButton.textContent = chatNoteMode === 'followUp' ? "做完再处理" : "当前步骤后";
-    noteModeButton.title = chatNoteMode === 'followUp' ? "补充将在任务完成后处理" : "补充将在当前步骤完成后处理";
-  }
+  chatComposerView?.refresh();
   const msgsEl = $("ms");
   if (msgsEl && (window as any).msgs) {
     _applyMsgsDiff(msgsEl, false);
@@ -897,5 +824,5 @@ window.showModelPicker = showModelPicker;
   App.Chat.resetMsgKeys = resetMsgKeys;
   App.Chat.scrollToLatest = chatScrollToLatest;
   App.Chat.refreshReadingSettings = refreshReadingSettings;
-  App.Chat.resizeComposerInput = resizeComposerInput;
+  App.Chat.resizeComposerInput = (input) => App.ChatViews.resizeComposerInput(input);
 } }

@@ -72,6 +72,16 @@ describe("frontend component tree boundaries", () => {
     assert.doesNotMatch(chat, /confirmCommandAsync|\/api\/chat\/command-confirm/);
   });
 
+  it("keeps composer interaction and send/stop state in a dedicated component view", () => {
+    const chat = source("src/frontend/dashboard/dashboard-chat.ts");
+    const composer = source("src/frontend/chat/chat-composer.ts");
+    assertClass(composer, "ChatComposerView");
+    assert.match(composer, /onSubmitNote|chat-stop|chat-note-mode/);
+    assert.match(chat, /App\.ChatViews\.createComposer\(/);
+    assert.match(chat, /chatComposerView\?\.refresh\(\)/);
+    assert.doesNotMatch(chat, /function\s+sendOrStop\b|let\s+chatNoteMode\b/);
+  });
+
   it("loads the subagent component module after shared chat views and before chat rendering", () => {
     const compiler = source("scripts/compile-frontend-ts.mjs");
     const sharedIndex = compiler.indexOf('"gen/chat/chat-component-views.js"');
@@ -85,5 +95,12 @@ describe("frontend component tree boundaries", () => {
     const confirmationIndex = compiler.indexOf('"gen/chat/chat-command-confirmation.js"');
     const dashboardChatIndex = compiler.indexOf('"gen/dashboard/dashboard-chat.js"');
     assert.ok(confirmationIndex >= 0 && dashboardChatIndex > confirmationIndex);
+  });
+
+  it("loads the chat composer before dashboard chat", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const composerIndex = compiler.indexOf('"gen/chat/chat-composer.js"');
+    const dashboardChatIndex = compiler.indexOf('"gen/dashboard/dashboard-chat.js"');
+    assert.ok(composerIndex >= 0 && dashboardChatIndex > composerIndex);
   });
 });

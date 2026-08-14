@@ -414,6 +414,8 @@ interface SubagentDelegationData {
 }
 interface AppChatViews {
   configure(dependencies: { renderMarkdown?: (text: string) => string }): void;
+  createComposer(callbacks: ChatComposerCallbacks): AppChatComposer;
+  resizeComposerInput(input: HTMLTextAreaElement): void;
   FileDiffView: new (diff: FileDiffMetadata, options?: FileDiffRenderOptions) => ChatComponentView<FileDiffMetadata>;
   EditSummaryView: new (blocks: any[], expanded?: boolean) => ChatComponentView<any[]>;
   SubagentTaskView: new (task: FrontendSubagentTask, index?: number) => ChatComponentView<FrontendSubagentTask>;
@@ -426,6 +428,18 @@ interface AppChatViews {
   renderSubagentDelegation(data: SubagentDelegationData): string;
   refreshSubagentDelegation(root: HTMLElement, data: SubagentDelegationData): boolean;
   renderErrorCard(error: ChatErrorState): string;
+}
+interface ChatComposerCallbacks {
+  isBusy: () => boolean;
+  onInput: (input: HTMLTextAreaElement) => void;
+  onSubmit: (text: string) => void;
+  onSubmitNote: (text: string, mode: 'steer' | 'followUp') => void;
+  onAbort: () => void;
+}
+interface AppChatComposer {
+  bind(): void;
+  refresh(): void;
+  dispose(): void;
 }
 type McpConnectionState = 'connected' | 'connecting' | 'disconnected' | 'error';
 interface AppMcpState {
