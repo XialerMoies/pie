@@ -298,6 +298,7 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
 
   it("shows the real dashboard before its server is ready", () => {
     const electronMain = readFileSync(new URL("../src/electron/electron-main.ts", import.meta.url), "utf8");
+    const navigator = readFileSync(new URL("../src/electron/electron-dashboard-navigator.ts", import.meta.url), "utf8");
     const packagedStartup = electronMain.indexOf("const earlyServerReady = process.env.VITE_DEV_PORT ? null : startPiServer()");
     const createWindow = electronMain.indexOf("createWindow();", electronMain.indexOf("const serverReady = earlyServerReady"));
     const awaitServer = electronMain.indexOf("await serverReady", createWindow);
@@ -305,20 +306,21 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
     assert.ok(packagedStartup >= 0, "packaged and independent windows should retain a server readiness promise");
     assert.ok(createWindow > packagedStartup, "the window shell should be created after server startup begins");
     assert.ok(awaitServer > createWindow, "the visible window shell must not wait for server readiness");
-    assert.match(electronMain, /showWindowStatus:\s*showContextDashboard/);
-    assert.match(electronMain, /loadURL\(dashboardStatusUrl\(/);
-    assert.match(electronMain, /webContents\.send\(["']workspace-status["']/);
-    assert.match(electronMain, /if\s*\(!E2E_MODE\)\s*win\.show\(\)/, "normal dashboard windows should be visible immediately");
+    assert.match(electronMain, /showWindowStatus:\s*dashboardNavigator\.showWindowStatus/);
+    assert.match(navigator, /loadURL\(dashboardStatusUrl\(/);
+    assert.match(navigator, /webContents\.send\(["']workspace-status["']/);
+    assert.match(navigator, /if\s*\(!options\.isE2EMode\)\s*win\.show\(\)/, "normal dashboard windows should be visible immediately");
     assert.doesNotMatch(electronMain, /Force-showing window|}, 5000\)/, "window visibility must not depend on a five-second fallback");
   });
 
   it("renders an empty window with the real dashboard layout", () => {
     const electronMain = readFileSync(new URL("../src/electron/electron-main.ts", import.meta.url), "utf8");
+    const navigator = readFileSync(new URL("../src/electron/electron-dashboard-navigator.ts", import.meta.url), "utf8");
     const startup = readFileSync(new URL("../src/frontend/dashboard/dashboard-startup.ts", import.meta.url), "utf8");
 
-    assert.match(electronMain, /params\.set\(["']empty-workspace["'],\s*["']1["']\)/);
+    assert.match(navigator, /params\.set\(["']empty-workspace["'],\s*["']1["']\)/);
     assert.match(electronMain, /DASHBOARD_URL[\s\S]*dashboard\.html/);
-    assert.match(electronMain, /status\.state === ["']idle["']/);
+    assert.match(navigator, /status\.state === ["']idle["']/);
     assert.match(startup, /empty-workspace/);
     assert.match(startup, /layout\(\)/);
     assert.match(startup, /bootstrapApi\(\)/);
@@ -341,9 +343,10 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
 
   it("keeps the development primary window on Vite while secondary windows use the dashboard", () => {
     const electronMain = readFileSync(new URL("../src/electron/electron-main.ts", import.meta.url), "utf8");
+    const navigator = readFileSync(new URL("../src/electron/electron-dashboard-navigator.ts", import.meta.url), "utf8");
 
-    assert.match(electronMain, /context\s*===\s*initialContext[\s\S]*VITE_DEV_PORT/);
-    assert.match(electronMain, /server\.kind\s*===\s*["']external["'][\s\S]*loadContextApplication/);
+    assert.match(navigator, /options\.isInitialContext\(context\)[\s\S]*options\.vitePort/);
+    assert.match(electronMain, /server\.kind\s*===\s*["']external["'][\s\S]*dashboardNavigator\.loadApplication/);
     assert.doesNotMatch(electronMain, /showContextDashboard\([^)]*server\.origin/);
   });
 

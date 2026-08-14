@@ -38,7 +38,6 @@ import { buildCliTerminalLaunch, launchCliTerminal } from "./cli-terminal.js";
 import {
   WindowManager,
   type WindowContext,
-  type WorkspaceStatus,
   type WorkspaceOpenAction as ManagerWorkspaceOpenAction,
 } from "./window-manager.js";
 import { windowPartitionForInstance } from "./window-partition.js";
@@ -61,6 +60,7 @@ import {
   requestStatus,
   waitForServerOrigin,
 } from "./electron-http-client.js";
+import { createElectronDashboardNavigator } from "./electron-dashboard-navigator.js";
 import { createElectronE2ERuntime } from "./electron-e2e-runtime.js";
 import { createSecondInstanceCoordinator } from "./electron-launch-coordinator.js";
 
@@ -179,6 +179,16 @@ const e2eRuntime = createElectronE2ERuntime({
   e2eDataRoot: E2E_DATA_DIR,
   desktopSecurityToken: DESKTOP_SECURITY_TOKEN,
   ensureDir,
+});
+
+const dashboardNavigator = createElectronDashboardNavigator({
+  dashboardUrl: DASHBOARD_URL,
+  vitePort: Number(process.env.VITE_DEV_PORT || 0),
+  isE2EMode: E2E_MODE,
+  isInitialContext: (context) => context === initialContext,
+  recordContext: (context) => e2eRuntime.recordContext(context),
+  recordTiming: (context, event) => e2eRuntime.recordTiming(context, event),
+  logError: (message, error) => console.error(`${message}:`, error),
 });
 
 const secondLaunchCoordinator = createSecondInstanceCoordinator({
@@ -597,7 +607,7 @@ function stopPiServer(): Promise<void> {
 }
 
 function reloadWindow(_port: number): Promise<void> {
-  return initialContext ? loadContextApplication(initialContext) : Promise.resolve();
+  return initialContext ? dashboardNavigator.loadApplication(initialContext) : Promise.resolve();
 }
 
 const windowManager = new WindowManager({
@@ -623,8 +633,8 @@ const windowManager = new WindowManager({
       throw new Error(`External workspace switch failed (${result.status}): ${body}`);
     }
   },
-  showWindowStatus: showContextDashboard,
-  onServerReady: loadContextApplication,
+  showWindowStatus: dashboardNavigator.showWindowStatus,
+  onServerReady: dashboardNavigator.loadApplication,
   onError: (error, context) => {
     console.error(`Window ${context.id} server lifecycle failed:`, error);
   },
@@ -729,63 +739,7 @@ function createWindow(): WindowContext {
   return initialContext;
 }
 
-interface WorkspaceStatusLoad {
-  ready: boolean;
-  status: WorkspaceStatus;
-}
 
-const workspaceStatusLoads = new WeakMap<BrowserWindow, WorkspaceStatusLoad>();
-
-function dashboardStatusUrl(status: WorkspaceStatus): string {
-  const params = new URLSearchParams();
-  if (status.state === "idle") {
-    params.set("empty-workspace", "1");
-  } else {
-    params.set("workspace-state", status.state);
-    params.set("workspace", status.workspace);
-    if (status.state === "failed") params.set("message", status.message);
-  }
-  return `${DASHBOARD_URL}?${params.toString()}`;
-}
-
-function showContextDashboard(context: WindowContext, status: WorkspaceStatus): void {
-  if (context.window.isDestroyed()) return;
-  const win = context.window as BrowserWindow;
-  e2eRuntime.recordContext(context);
-  if (!E2E_MODE) win.show();
-
-  const current = workspaceStatusLoads.get(win);
-  if (current && (!current.ready || win.webContents.getURL().startsWith(DASHBOARD_URL))) {
-    current.status = status;
-    if (current.ready) win.webContents.send("workspace-status", status);
-    return;
-  }
-
-  const load: WorkspaceStatusLoad = { ready: false, status };
-  workspaceStatusLoads.set(win, load);
-  void win.loadURL(dashboardStatusUrl(status)).then(() => {
-    if (win.isDestroyed() || workspaceStatusLoads.get(win) !== load) return;
-    load.ready = true;
-    if (E2E_MODE) win.show();
-    e2eRuntime.recordTiming(context, "shell-visible");
-    win.webContents.send("workspace-status", load.status);
-  }).catch((error) => {
-    console.error(`Window ${context.id} dashboard status navigation failed:`, error);
-  });
-}
-
-async function loadContextApplication(context: WindowContext): Promise<void> {
-  if (context.window.isDestroyed()) return;
-  e2eRuntime.recordTiming(context, "server-ready");
-  const vitePort = context === initialContext ? Number(process.env.VITE_DEV_PORT || 0) : 0;
-  const target = vitePort > 0 ? `http://127.0.0.1:${vitePort}` : context.server.origin;
-  if (!target) return;
-  const win = context.window as BrowserWindow;
-  workspaceStatusLoads.delete(win);
-  win.show();
-  await win.loadURL(target);
-  e2eRuntime.recordTiming(context, "workbench-loaded");
-}
 
 // ─── IPC 窗口控制 ────────────────────────────────────────────────
 
@@ -867,7 +821,7 @@ app.whenReady().then(async () => {
   if (isDev) {
     console.log(`📡 Dev mode: loading from Vite at http://127.0.0.1:${isDev}`);
     const context = createWindow();
-    if (context.server.kind === "external") await loadContextApplication(context);
+    if (context.server.kind === "external") await dashboardNavigator.loadApplication(context);
   } else {
     const serverReady = earlyServerReady ?? startPiServer();
     e2eRuntime.stage("app:before-create-window");
