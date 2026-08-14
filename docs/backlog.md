@@ -218,6 +218,7 @@ server 与 AgentRuntime 仍按项目隔离在独立子进程内，因此 server 
 （每完成一项，在此追加一行：日期 / ID / 简述 / 验证）
 
 - 2026-08-09 / ④-A Task 8 / 单 Electron 主进程多窗口迁移：每项目独立 server child/AgentRuntime；duplicate workspace 聚焦、close/crash/reopen 隔离、second-instance 转发与 E2E-only diagnostics / Windows packaged E2E 通过，shell 124 ms、workbench 1564 ms
+- 2026-08-14 / 技术债 / 聊天阅读控制抽离：回到最新、滚动跟随、阈值白名单、平滑滚动、偏好读取与监听器生命周期移入 `chat-reading-controls.ts` 的 `ChatReadingControlsView`，currentMessages 动态重绑处理元素重建、dispose/detach 治理监听器；dashboard-chat 保留 scrollToLatest/refreshSettings facade 转发 / `dashboard-chat.ts` 724→644 行、typecheck、bundle、frontend 338/338、组件树门禁 19/19；提交 `71444a5`
 - 2026-08-14 / 技术债 / 事件节点组件树抽离：trace/tool/block 渲染、局部更新（replaceBlockContents 保留展开状态）、按 seq 节点插入与 delegate_tasks 委托移入 `chat-event-node.ts` 的 `ChatEventNodeView`；chat-render 保留同名 facade 转发 + `configure` 注入 mdRender / `chat-render.ts` 634→331 行、typecheck、bundle、npm test 全量、frontend 336/336、CSS 门禁、组件树门禁 17/17；提交 `cd691fd`
 - 2026-08-14 / 技术债 / 附件输入区抽离：file 按钮选择（electronAPI.selectFile）与 explorer 树 drag&drop 添加附件移入 `chat-attachment-input.ts` 的 `ChatAttachmentInputView`，新增 dispose 治理监听器；dashboard-chat 仅保留 createAttachmentInput + bind 接线；d.ts 补 `AppChatAttachmentInput` / typecheck、bundle 42 文件、frontend 334/334、组件树门禁 15/15；提交 `0ba3d5d`
 - 2026-08-14 / 技术债 / 模型选择器抽离：模型分组/高亮/切换请求/思考等级挂载/外部点击关闭移入 `chat-model-picker.ts` 的 `ChatModelPickerView`，dashboard-chat 仅保留 `openModelPicker` 接线；existing 分支补 `close()` 修复旧代码 outsideClick 监听器泄漏 / typecheck、bundle、frontend 332/332、组件树门禁 13/13；提交 `740503d`
