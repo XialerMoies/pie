@@ -45,24 +45,11 @@ import { resolveDataLayout } from "../data/data-layout.js";
 import { readDataRootPointer } from "../data/data-root-config.js";
 import { resolveStartupPaths } from "../server/startup-paths.js";
 import { createDesktopSessionToken } from "../server/security.js";
-import {
-  createElectronE2EFailureDiagnostic,
-  sanitizeE2EReopenError,
-  type ElectronE2EReopenErrorDiagnostic,
-} from "./e2e-diagnostics.js";
-import {
-  collectRendererE2EResult,
-  runRendererCookieIsolationProbe,
-  waitForRendererReady,
-} from "./electron-e2e-renderer-probe.js";
-import {
-  requestJson,
-  requestStatus,
-  waitForServerOrigin,
-} from "./electron-http-client.js";
+import { requestJson } from "./electron-http-client.js";
 import { createElectronDashboardNavigator } from "./electron-dashboard-navigator.js";
 import { createElectronE2ERuntime } from "./electron-e2e-runtime.js";
 import { createSecondInstanceCoordinator } from "./electron-launch-coordinator.js";
+import { createElectronPackagedE2EProbe } from "./electron-packaged-e2e-probe.js";
 
 function initializeElectron(): void {
 const __filename = fileURLToPath(import.meta.url);
@@ -168,7 +155,6 @@ let mainWindow: BrowserWindow | null = null;
 let initialContext: WindowContext | null = null;
 let initialServerBinding: ServerBinding = createNoneServerBinding();
 let allowAppQuit = false;
-let e2eProbeStarted = false;
 const e2eRuntime = createElectronE2ERuntime({
   enabled: E2E_MODE,
   electronPid: process.pid,
@@ -224,301 +210,6 @@ app.on("second-instance", (_event, commandLine, workingDirectory) => {
   secondLaunchCoordinator.accept(parseDesktopLaunchRequest(commandLine, workingDirectory));
 });
 
-async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
-  if (!E2E_MODE || e2eProbeStarted) return;
-  e2eProbeStarted = true;
-  try {
-    await waitForRendererReady(win);
-    // E2E 探测用 initialServerBinding.origin 发所有请求。若 server 尚未上报
-    // SERVER_PORT:（start() 未 resolve、origin 为空串），探测请求会 Failed to fetch。
-    // 必须等 server 就绪（origin 非空）再开始探测。
-    const origin = await waitForServerOrigin(initialServerBinding);
-    if (!origin) {
-      throw new Error(`E2E probe failed to wait for server origin (initialServerBinding.origin is empty)`);
-    }
-    const e2eRoot = E2E_DATA_DIR || DATA_DIR;
-    const projectA = path.join(e2eRoot, "project-a");
-    const projectB = path.join(e2eRoot, "project-b");
-    const siblingWorkspace = path.join(e2eRoot, "project-a-sibling");
-    const externalRoot = path.join(path.dirname(e2eRoot), "external");
-    ensureDir(projectA);
-    ensureDir(projectB);
-    ensureDir(siblingWorkspace);
-    ensureDir(externalRoot);
-    fs.writeFileSync(path.join(e2eRoot, "read.txt"), "packaged-read", "utf-8");
-    fs.writeFileSync(path.join(projectA, "read.txt"), "workspace-read", "utf-8");
-    fs.writeFileSync(path.join(projectB, "read.txt"), "workspace-b-read", "utf-8");
-    fs.writeFileSync(path.join(externalRoot, "read.txt"), "external-read", "utf-8");
-    fs.writeFileSync(path.join(externalRoot, ".env"), "SECRET=e2e", "utf-8");
-    fs.writeFileSync(path.join(externalRoot, "ipc.txt"), "ipc-outside", "utf-8");
-    fs.writeFileSync(path.join(siblingWorkspace, "read.txt"), "sibling-read", "utf-8");
-
-    const renderer = await collectRendererE2EResult(win, path.join(externalRoot, "ipc.txt"));
-    const textIconStatus = await requestStatus(`${origin}/icons/file_type_text.svg`);
-    const unauthorizedApiStatus = await requestStatus(`${origin}/api/dashboard`);
-    const wrongTokenApi = await requestJson(initialServerBinding, "/api/dashboard", "GET", undefined, {
-      headers: { "X-My-Code-Agent-Token": "forged-token" },
-    });
-    const hostileOriginApi = await requestJson(initialServerBinding, "/api/dashboard", "GET", undefined, {
-      headers: { Origin: "https://evil.example" },
-    });
-    const crossSiteApi = await requestJson(initialServerBinding, "/api/dashboard", "GET", undefined, {
-      headers: { "Sec-Fetch-Site": "cross-site" },
-    });
-    const unauthorizedMutationPath = path.join(e2eRoot, "unauthorized-write.txt");
-    const unauthorizedMutation = await requestJson(initialServerBinding, "/api/file/write", "POST", {
-      root: e2eRoot,
-      path: "unauthorized-write.txt",
-      content: "must-not-exist",
-    }, { includeToken: false });
-
-    const fileRead = await requestJson(
-      initialServerBinding,
-      `/api/file/read?root=${encodeURIComponent(e2eRoot)}&path=read.txt`,
-    );
-    const fileWrite = await requestJson(initialServerBinding, "/api/file/write", "POST", {
-      root: e2eRoot,
-      path: "write.txt",
-      content: "packaged-write",
-    });
-    const externalRead = await requestJson(
-      initialServerBinding,
-      `/api/file/read?root=${encodeURIComponent(externalRoot)}&path=read.txt`,
-    );
-    let sensitiveExternalReadBlocked = false;
-    try {
-      const sensitiveExternalRead = await requestJson(
-        initialServerBinding,
-        `/api/file/read?root=${encodeURIComponent(externalRoot)}&path=${encodeURIComponent(".env")}`,
-        "GET",
-        undefined,
-        { timeoutMs: 1_000 },
-      );
-      sensitiveExternalReadBlocked = sensitiveExternalRead.status !== 200;
-    } catch (error) {
-      sensitiveExternalReadBlocked = error instanceof Error && error.message.includes("timed out");
-    }
-    const persistedPreferences = await requestJson(initialServerBinding, "/api/preferences");
-
-    const contextA = initialContext;
-    if (!contextA) throw new Error("Initial Electron context is unavailable");
-    const projectASelectedAt = Date.now();
-    await windowManager.openWorkspace(contextA, projectA);
-    const workspaceRead = await requestJson(
-      contextA.server,
-      `/api/file/read?root=${encodeURIComponent(projectA)}&path=read.txt`,
-      "GET",
-      undefined,
-    );
-    const pathTraversal = await requestJson(
-      contextA.server,
-      `/api/file/read?root=${encodeURIComponent(projectA)}&path=${encodeURIComponent("../read.txt")}`,
-      "GET",
-      undefined,
-    );
-    const siblingTraversal = await requestJson(
-      contextA.server,
-      `/api/file/read?root=${encodeURIComponent(projectA)}&path=${encodeURIComponent("../project-a-sibling/read.txt")}`,
-      "GET",
-      undefined,
-    );
-
-    const contextB = createEmptyManagedWindow();
-    await waitForE2ECondition("empty B shell to become visible", () => (
-      e2eRuntime.latestTiming(contextB, "shell-visible") !== null
-    ));
-    const shellCreatedAt = e2eRuntime.latestTiming(contextB, "window-created");
-    const shellVisibleAt = e2eRuntime.latestTiming(contextB, "shell-visible");
-    if (shellCreatedAt === null || shellVisibleAt === null) {
-      throw new Error("Empty B shell timing was not recorded");
-    }
-
-    const serverChildCountBefore = e2eRuntime.countOwnedServerChildren();
-    const projectAWindow = contextA.window as BrowserWindow;
-    if (E2E_MODE && !projectAWindow.isVisible()) projectAWindow.show();
-    let focusObserved = false;
-    const observeFocus = () => { focusObserved = true; };
-    projectAWindow.on("focus", observeFocus);
-    let duplicateAction: ManagerWorkspaceOpenAction;
-    try {
-      duplicateAction = await windowManager.openWorkspace(contextB, projectA);
-      await waitForE2ECondition("existing project A window focus", () => (
-        focusObserved
-          || projectAWindow.isFocused()
-          || BrowserWindow.getFocusedWindow() === projectAWindow
-      ));
-    } finally {
-      projectAWindow.off("focus", observeFocus);
-    }
-    const focusedWindow = BrowserWindow.getFocusedWindow();
-    const focusedContextId = focusedWindow === projectAWindow && projectAWindow.isFocused()
-      ? contextA.id
-      : null;
-    const duplicateWorkspace = {
-      focusedContextId,
-      action: duplicateAction,
-      attemptedContextId: contextB.id,
-      emptyContextId: contextB.id,
-      serverKindAfter: contextB.server.kind,
-      workspaceAfter: contextB.workspace,
-      windowCount: BrowserWindow.getAllWindows().length,
-      serverChildCountBefore,
-      serverChildCountAfter: e2eRuntime.countOwnedServerChildren(),
-    };
-
-    const workspaceSelectedAt = Date.now();
-    const projectBAction = await windowManager.openWorkspace(contextB, projectB);
-    const projectBLoadedAt = e2eRuntime.latestTiming(contextB, "workbench-loaded");
-    if (projectBLoadedAt === null) throw new Error("Project B workbench timing was not recorded");
-    const rendererCookieIsolation = await runRendererCookieIsolationProbe(
-      contextA.window as BrowserWindow,
-      contextB.window as BrowserWindow,
-    );
-
-    const projectALoadedAtBefore = e2eRuntime.latestTiming(contextA, "workbench-loaded");
-    const projectBLoadedAtBeforeCrash = projectBLoadedAt;
-    const crashedChild = contextB.server.process;
-    const serverPidBefore = crashedChild?.pid || null;
-    if (!crashedChild?.pid || !crashedChild.kill()) {
-      throw new Error("Could not crash project B server child");
-    }
-    await waitForE2ECondition("project B server recovery", () => (
-      !!contextB.server.process?.pid
-        && contextB.server.process.pid !== serverPidBefore
-        && contextB.server.port > 0
-        && (e2eRuntime.latestTiming(contextB, "workbench-loaded") || 0) > projectBLoadedAtBeforeCrash
-    ));
-    const serverPidAfter = contextB.server.process?.pid || null;
-    const projectALoadedAtAfter = e2eRuntime.latestTiming(contextA, "workbench-loaded");
-    const projectADashboardAfterCrash = await requestJson(
-      contextA.server,
-      "/api/dashboard",
-      "GET",
-      undefined,
-    );
-
-    const closingChild = contextB.server.process;
-    (contextB.window as BrowserWindow).close();
-    const reopenedB = createEmptyManagedWindow();
-    let reopenAction: ManagerWorkspaceOpenAction | null = null;
-    let reopenError: ElectronE2EReopenErrorDiagnostic | null = null;
-    try {
-      reopenAction = await windowManager.openWorkspace(reopenedB, projectB);
-    } catch (error) {
-      reopenError = sanitizeE2EReopenError(error);
-    }
-    await waitForE2ECondition("closed B context disposal", () => (
-      contextB.lifecycle === "closed"
-        && contextB.server.process === null
-    ));
-    const closedServerExited = contextB.lifecycle === "closed" && contextB.server.process === null;
-    const projectADashboardAfterClose = await requestJson(
-      contextA.server,
-      "/api/dashboard",
-      "GET",
-      undefined,
-    );
-
-    e2eRuntime.writeResult({
-      state: "awaiting-second-launch",
-      electronPid: process.pid,
-      launch: {
-        workspace: projectA,
-        dataRoot: DATA_DIR,
-        instanceId: "e2e-second-executable-launch",
-      },
-    });
-    await waitForE2ECondition("second executable single-instance handoff", () => (
-      secondLaunchCoordinator.records.some((launch) => launch.request.instanceId === "e2e-second-executable-launch")
-    ));
-    const secondLaunch = secondLaunchCoordinator.records.find((launch) => (
-      launch.request.instanceId === "e2e-second-executable-launch"
-    ));
-    if (!secondLaunch) throw new Error("Second executable handoff diagnostic is missing");
-
-    const diagnostics = e2eRuntime.snapshot([contextA, reopenedB]);
-    e2eRuntime.writeResult({
-      ok: true,
-      packaged: app.isPackaged,
-      STARTUP,
-      ...diagnostics,
-      renderer,
-      textIconStatus,
-      unauthorizedApiStatus,
-      wrongTokenApiStatus: wrongTokenApi.status,
-      hostileOriginApiStatus: hostileOriginApi.status,
-      crossSiteApiStatus: crossSiteApi.status,
-      unauthorizedMutationStatus: unauthorizedMutation.status,
-      unauthorizedMutationCreated: fs.existsSync(unauthorizedMutationPath),
-      fileReadStatus: fileRead.status,
-      fileWriteStatus: fileWrite.status,
-      externalReadStatus: externalRead.status,
-      sensitiveExternalReadBlocked,
-      persistedPreferences,
-      workspaceReadStatus: workspaceRead.status,
-      pathTraversalStatus: pathTraversal.status,
-      siblingTraversalStatus: siblingTraversal.status,
-      acceptance: {
-        workspaceA: projectA,
-        workspaceB: projectB,
-        projectASelectedAt,
-        projectBAction,
-        duplicateWorkspace,
-        crashIsolation: {
-          serverPidBefore,
-          serverPidAfter,
-          projectALoadedAtBefore,
-          projectALoadedAtAfter,
-          projectADashboardStatus: projectADashboardAfterCrash.status,
-        },
-        closeReopen: {
-          closedServerPid: closingChild?.pid || null,
-          closedServerExited,
-          projectADashboardStatus: projectADashboardAfterClose.status,
-          reopenAction,
-          reopenError,
-          windowCount: BrowserWindow.getAllWindows().length,
-        },
-        rendererCookieIsolation,
-        secondLaunch: {
-          electronPid: secondLaunch.electronPid,
-          handledAt: secondLaunch.handledAt,
-          windowCount: BrowserWindow.getAllWindows().length,
-        },
-        timing: {
-          shellContextId: contextB.id,
-          workspaceContextId: contextB.id,
-          workspaceSelectedAt,
-          shellVisibleMs: shellVisibleAt - shellCreatedAt,
-          workbenchLoadedMs: projectBLoadedAt - workspaceSelectedAt,
-        },
-      },
-    });
-  } catch (error) {
-    const snapshot = e2eRuntime.failureSnapshot();
-    const redactions = e2eRuntime.failureRedactions();
-    const failureDiagnostic = createElectronE2EFailureDiagnostic({
-      error,
-      diagnostics: e2eRuntime.diagnostics,
-      snapshot,
-      ...redactions,
-    });
-    e2eRuntime.writeResult({
-      ok: false,
-      ...failureDiagnostic,
-      secondLaunches: secondLaunchCoordinator.records.map((launch) => ({
-        electronPid: launch.electronPid,
-        handledAt: launch.handledAt,
-        instanceId: launch.request.instanceId || null,
-        hasWorkspace: !!launch.request.workspace,
-      })),
-      windowCount: BrowserWindow.getAllWindows().length,
-    });
-  } finally {
-    app.quit();
-  }
-}
-
 function getAppIconPath(): string | undefined {
   const candidates = [
     path.join(APP_ROOT, "build", "icon.ico"),
@@ -558,19 +249,6 @@ function createWindowOwnedServer(input: {
       console.error(`Pi server for ${input.workspace} exited unexpectedly: ${detail}`);
     },
   });
-}
-
-async function waitForE2ECondition(
-  description: string,
-  predicate: () => boolean,
-  timeoutMs = 30_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
-  }
-  throw new Error(`Timed out waiting for E2E condition: ${description}`);
 }
 
 function createInitialServerBinding(): ServerBinding {
@@ -640,6 +318,25 @@ const windowManager = new WindowManager({
   },
 });
 
+const packagedE2EProbe = createElectronPackagedE2EProbe({
+  enabled: E2E_MODE,
+  packaged: app.isPackaged,
+  electronPid: process.pid,
+  startup: STARTUP,
+  dataRoot: DATA_DIR,
+  e2eDataRoot: E2E_DATA_DIR,
+  initialContext: () => initialContext,
+  initialServerBinding: () => initialServerBinding,
+  createEmptyManagedWindow,
+  windowManager,
+  e2eRuntime,
+  secondLaunchRecords: () => secondLaunchCoordinator.records,
+  ensureDir,
+  getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
+  getAllWindows: () => BrowserWindow.getAllWindows(),
+  quit: () => app.quit(),
+});
+
 function createEmptyManagedWindow(): WindowContext {
   const context = windowManager.createEmptyWindow();
   e2eRuntime.recordContext(context);
@@ -687,7 +384,7 @@ function createManagedBrowserWindow(instanceId: string): BrowserWindow {
 
   win.webContents.on("did-finish-load", () => {
     e2eRuntime.stage(`webContents:did-finish-load ${win.webContents.getURL() || ""}`);
-    if (initialContext?.window === win) void runPackagedE2EProbe(win);
+    if (initialContext?.window === win) void packagedE2EProbe.run(win);
     console.log("📄 Page loaded:", win.webContents.getTitle());
   });
 

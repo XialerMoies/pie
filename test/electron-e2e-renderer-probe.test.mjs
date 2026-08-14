@@ -4,12 +4,14 @@ import test from "node:test";
 
 const moduleUrl = new URL("../src/electron/electron-e2e-renderer-probe.ts", import.meta.url);
 const mainUrl = new URL("../src/electron/electron-main.ts", import.meta.url);
+const packagedProbeUrl = new URL("../src/electron/electron-packaged-e2e-probe.ts", import.meta.url);
 
 test("renderer E2E probes live outside electron-main", () => {
   assert.equal(existsSync(moduleUrl), true, "electron-e2e-renderer-probe.ts should exist");
 
   const mainSource = readFileSync(mainUrl, "utf8");
   const probeSource = readFileSync(moduleUrl, "utf8");
+  const packagedProbeSource = readFileSync(packagedProbeUrl, "utf8");
   for (const name of [
     "waitForRendererReady",
     "runRendererCookieIsolationProbe",
@@ -18,7 +20,8 @@ test("renderer E2E probes live outside electron-main", () => {
     assert.doesNotMatch(mainSource, new RegExp(`(?:async\\s+)?function\\s+${name}\\s*\\(`));
     assert.match(probeSource, new RegExp(`export\\s+async\\s+function\\s+${name}\\s*\\(`));
   }
-  assert.match(mainSource, /from "\.\/electron-e2e-renderer-probe\.js"/);
+  assert.match(packagedProbeSource, /from "\.\/electron-e2e-renderer-probe\.js"/);
+  assert.doesNotMatch(mainSource, /from "\.\/electron-e2e-renderer-probe\.js"/);
 });
 
 test("waitForRendererReady returns after the dashboard and preload API are ready", async () => {

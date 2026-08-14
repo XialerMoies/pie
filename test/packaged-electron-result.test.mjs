@@ -31,10 +31,12 @@ test("timing lookup selects the first matching event in a bounded lifecycle sequ
 });
 
 test("packaged probe captures the real reopen outcome instead of declaring lock status", () => {
-  const source = readFileSync(new URL("../src/electron/electron-main.ts", import.meta.url), "utf8");
+  const mainSource = readFileSync(new URL("../src/electron/electron-main.ts", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/electron/electron-packaged-e2e-probe.ts", import.meta.url), "utf8");
 
   assert.doesNotMatch(source, /workspaceLocked:\s*false/);
   assert.match(source, /let reopenAction:[^;]+null/);
   assert.match(source, /let reopenError:[^;]+null/);
   assert.match(source, /catch \(error\) \{[\s\S]{0,160}sanitizeE2EReopenError\(error\)/);
+  assert.doesNotMatch(mainSource, /let reopenAction:[^;]+null/);
 });

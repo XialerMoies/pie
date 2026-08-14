@@ -89,13 +89,13 @@ test("E2E failure diagnostics redact token-shaped values and arbitrary absolute 
 });
 
 test("packaged harness observes focus and validates process exit instead of trusting actions", () => {
-  const source = readFileSync(new URL("../src/electron/electron-main.ts", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/electron/electron-packaged-e2e-probe.ts", import.meta.url), "utf8");
   const harness = readFileSync(new URL("./packaged-electron.e2e.mjs", import.meta.url), "utf8");
 
   assert.doesNotMatch(source, /focusedContextId:\s*duplicateAction/);
   assert.match(source, /getFocusedWindow\(\)|\.isFocused\(\)/);
   assert.match(source, /\.on\("focus"/);
-  assert.match(source, /focusedWindow\s*=\s*BrowserWindow\.getFocusedWindow\(\)/);
+  assert.match(source, /focusedWindow\s*=\s*options\.getFocusedWindow\(\)/);
   assert.match(harness, /assert\.equal\(child\.exitCode, 0\)/);
 });
 
