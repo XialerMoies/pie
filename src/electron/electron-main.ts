@@ -47,7 +47,6 @@ import { readDataRootPointer } from "../data/data-root-config.js";
 import { resolveStartupPaths } from "../server/startup-paths.js";
 import { createDesktopSessionToken } from "../server/security.js";
 import {
-  createElectronE2EDiagnostics,
   createElectronE2EFailureDiagnostic,
   sanitizeE2EReopenError,
   type ElectronE2EReopenErrorDiagnostic,
@@ -62,6 +61,7 @@ import {
   requestStatus,
   waitForServerOrigin,
 } from "./electron-http-client.js";
+import { createElectronE2ERuntime } from "./electron-e2e-runtime.js";
 
 function initializeElectron(): void {
 const __filename = fileURLToPath(import.meta.url);
@@ -157,7 +157,7 @@ function drainPendingSecondLaunches(): void {
 
 function handleSecondLaunchRequest(request: DesktopLaunchRequest): void {
   try {
-    if (E2E_MODE) e2eStage(`second-instance ${JSON.stringify(request)}`);
+    e2eRuntime.stage(`second-instance ${JSON.stringify(request)}`);
     validateSecondLaunchDataRoot(DESKTOP_PATHS.dataRoot, request.dataRoot);
     if (pendingSecondLaunches.length >= MAX_PENDING_SECOND_LAUNCHES) {
       const message = "The pending window request queue is full.";
@@ -245,90 +245,17 @@ let initialContext: WindowContext | null = null;
 let initialServerBinding: ServerBinding = createNoneServerBinding();
 let allowAppQuit = false;
 let e2eProbeStarted = false;
-const e2eDiagnostics: string[] = [];
-const e2eRecorder = E2E_MODE
-  ? createElectronE2EDiagnostics({ electronPid: process.pid })
-  : null;
-const e2eWindowCreatedAt = new WeakMap<BrowserWindow, number>();
-const e2eRecordedContexts = new Set<string>();
-const e2eTrackedContexts = new Set<WindowContext>();
-
-function e2eFailureSnapshot() {
-  const contexts = [...e2eTrackedContexts].filter((context) => (
-    context.lifecycle !== "closed" && !context.window.isDestroyed()
-  ));
-  return e2eRecorder?.snapshot(contexts) || {
-    electronPid: process.pid,
-    windows: [],
-    timings: [],
-  };
-}
-
-function e2eFailureRedactions() {
-  const roots: Array<{ value: string; label: string }> = [];
-  const addRoot = (value: string | null | undefined, label: string) => {
-    if (!value) return;
-    roots.push({ value, label });
-    if (value.includes("\\")) roots.push({ value: value.replaceAll("\\", "/"), label });
-  };
-  addRoot(APP_ROOT, "<app-root>");
-  addRoot(RUNTIME_ROOT, "<runtime-root>");
-  addRoot(DATA_DIR, "<data-root>");
-  addRoot(E2E_DATA_DIR, "<e2e-data-root>");
-  addRoot(E2E_RESULT_FILE ? path.dirname(E2E_RESULT_FILE) : null, "<temp-root>");
-  for (const context of e2eTrackedContexts) {
-    addRoot(context.workspace, "<workspace-root>");
-    if (context.layout) {
-      for (const value of Object.values(context.layout)) addRoot(value, "<private-root>");
-    }
-  }
-  return {
-    secrets: [
-      DESKTOP_SECURITY_TOKEN,
-      ...[...e2eTrackedContexts].map((context) => context.server.token),
-    ].filter(Boolean),
-    roots,
-  };
-}
-
-function recordE2EContext(context: WindowContext): void {
-  if (!e2eRecorder || e2eRecordedContexts.has(context.id)) return;
-  e2eRecordedContexts.add(context.id);
-  e2eTrackedContexts.add(context);
-  e2eRecorder.record(
-    context,
-    "window-created",
-    e2eWindowCreatedAt.get(context.window as BrowserWindow) || Date.now(),
-  );
-}
-
-function recordE2ETiming(
-  context: WindowContext,
-  event: "shell-visible" | "server-ready" | "workbench-loaded",
-): number | null {
-  if (!e2eRecorder) return null;
-  recordE2EContext(context);
-  return e2eRecorder.record(context, event);
-}
-
-function latestE2ETiming(context: WindowContext, event: "window-created" | "shell-visible" | "server-ready" | "workbench-loaded"): number | null {
-  if (!e2eRecorder) return null;
-  return [...e2eRecorder.snapshot([]).timings].reverse().find((timing) => (
-    timing.contextId === context.id && timing.event === event
-  ))?.at || null;
-}
-
-function e2eStage(message: string): void {
-  if (!E2E_MODE) return;
-  e2eDiagnostics.push(message);
-  console.log(`[e2e] ${message}`);
-}
-
-function writeE2EResult(result: Record<string, unknown>): void {
-  if (!E2E_RESULT_FILE) return;
-  ensureDir(path.dirname(E2E_RESULT_FILE));
-  fs.writeFileSync(E2E_RESULT_FILE, JSON.stringify(result, null, 2), "utf-8");
-}
+const e2eRuntime = createElectronE2ERuntime({
+  enabled: E2E_MODE,
+  electronPid: process.pid,
+  resultFile: E2E_RESULT_FILE,
+  appRoot: APP_ROOT,
+  runtimeRoot: RUNTIME_ROOT,
+  dataRoot: DATA_DIR,
+  e2eDataRoot: E2E_DATA_DIR,
+  desktopSecurityToken: DESKTOP_SECURITY_TOKEN,
+  ensureDir,
+});
 
 async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
   if (!E2E_MODE || e2eProbeStarted) return;
@@ -431,15 +358,15 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
 
     const contextB = createEmptyManagedWindow();
     await waitForE2ECondition("empty B shell to become visible", () => (
-      latestE2ETiming(contextB, "shell-visible") !== null
+      e2eRuntime.latestTiming(contextB, "shell-visible") !== null
     ));
-    const shellCreatedAt = latestE2ETiming(contextB, "window-created");
-    const shellVisibleAt = latestE2ETiming(contextB, "shell-visible");
+    const shellCreatedAt = e2eRuntime.latestTiming(contextB, "window-created");
+    const shellVisibleAt = e2eRuntime.latestTiming(contextB, "shell-visible");
     if (shellCreatedAt === null || shellVisibleAt === null) {
       throw new Error("Empty B shell timing was not recorded");
     }
 
-    const serverChildCountBefore = countE2EOwnedServerChildren();
+    const serverChildCountBefore = e2eRuntime.countOwnedServerChildren();
     const projectAWindow = contextA.window as BrowserWindow;
     if (E2E_MODE && !projectAWindow.isVisible()) projectAWindow.show();
     let focusObserved = false;
@@ -469,19 +396,19 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
       workspaceAfter: contextB.workspace,
       windowCount: BrowserWindow.getAllWindows().length,
       serverChildCountBefore,
-      serverChildCountAfter: countE2EOwnedServerChildren(),
+      serverChildCountAfter: e2eRuntime.countOwnedServerChildren(),
     };
 
     const workspaceSelectedAt = Date.now();
     const projectBAction = await windowManager.openWorkspace(contextB, projectB);
-    const projectBLoadedAt = latestE2ETiming(contextB, "workbench-loaded");
+    const projectBLoadedAt = e2eRuntime.latestTiming(contextB, "workbench-loaded");
     if (projectBLoadedAt === null) throw new Error("Project B workbench timing was not recorded");
     const rendererCookieIsolation = await runRendererCookieIsolationProbe(
       contextA.window as BrowserWindow,
       contextB.window as BrowserWindow,
     );
 
-    const projectALoadedAtBefore = latestE2ETiming(contextA, "workbench-loaded");
+    const projectALoadedAtBefore = e2eRuntime.latestTiming(contextA, "workbench-loaded");
     const projectBLoadedAtBeforeCrash = projectBLoadedAt;
     const crashedChild = contextB.server.process;
     const serverPidBefore = crashedChild?.pid || null;
@@ -492,10 +419,10 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
       !!contextB.server.process?.pid
         && contextB.server.process.pid !== serverPidBefore
         && contextB.server.port > 0
-        && (latestE2ETiming(contextB, "workbench-loaded") || 0) > projectBLoadedAtBeforeCrash
+        && (e2eRuntime.latestTiming(contextB, "workbench-loaded") || 0) > projectBLoadedAtBeforeCrash
     ));
     const serverPidAfter = contextB.server.process?.pid || null;
-    const projectALoadedAtAfter = latestE2ETiming(contextA, "workbench-loaded");
+    const projectALoadedAtAfter = e2eRuntime.latestTiming(contextA, "workbench-loaded");
     const projectADashboardAfterCrash = await requestJson(
       contextA.server,
       "/api/dashboard",
@@ -525,7 +452,7 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
       undefined,
     );
 
-    writeE2EResult({
+    e2eRuntime.writeResult({
       state: "awaiting-second-launch",
       electronPid: process.pid,
       launch: {
@@ -542,8 +469,8 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
     ));
     if (!secondLaunch) throw new Error("Second executable handoff diagnostic is missing");
 
-    const diagnostics = e2eRecorder!.snapshot([contextA, reopenedB]);
-    writeE2EResult({
+    const diagnostics = e2eRuntime.snapshot([contextA, reopenedB]);
+    e2eRuntime.writeResult({
       ok: true,
       packaged: app.isPackaged,
       STARTUP,
@@ -601,15 +528,15 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
       },
     });
   } catch (error) {
-    const snapshot = e2eFailureSnapshot();
-    const redactions = e2eFailureRedactions();
+    const snapshot = e2eRuntime.failureSnapshot();
+    const redactions = e2eRuntime.failureRedactions();
     const failureDiagnostic = createElectronE2EFailureDiagnostic({
       error,
-      diagnostics: e2eDiagnostics,
+      diagnostics: e2eRuntime.diagnostics,
       snapshot,
       ...redactions,
     });
-    writeE2EResult({
+    e2eRuntime.writeResult({
       ok: false,
       ...failureDiagnostic,
       secondLaunches: e2eSecondLaunches.map((launch) => ({
@@ -677,14 +604,6 @@ async function waitForE2ECondition(
     await new Promise((resolveWait) => setTimeout(resolveWait, 25));
   }
   throw new Error(`Timed out waiting for E2E condition: ${description}`);
-}
-
-function countE2EOwnedServerChildren(): number {
-  return [...e2eTrackedContexts].filter((context) => (
-    context.lifecycle === "active"
-      && context.server.kind === "owned"
-      && context.server.process?.pid
-  )).length;
 }
 
 function createInitialServerBinding(): ServerBinding {
@@ -756,7 +675,7 @@ const windowManager = new WindowManager({
 
 function createEmptyManagedWindow(): WindowContext {
   const context = windowManager.createEmptyWindow();
-  recordE2EContext(context);
+  e2eRuntime.recordContext(context);
   return context;
 }
 
@@ -764,7 +683,7 @@ function createEmptyManagedWindow(): WindowContext {
 
 function createManagedBrowserWindow(instanceId: string): BrowserWindow {
   console.log(`[startup] electron-create-window wall=${Date.now()} total=${Date.now() - electronBootStartedAt}ms`);
-  e2eStage(`createWindow:start serverPort=${initialServerBinding.port} vitePort=${process.env.VITE_DEV_PORT || ""}`);
+  e2eRuntime.stage(`createWindow:start serverPort=${initialServerBinding.port} vitePort=${process.env.VITE_DEV_PORT || ""}`);
 
   const windowIcon = getAppIconPath();
   const win = new BrowserWindow({
@@ -787,10 +706,10 @@ function createManagedBrowserWindow(instanceId: string): BrowserWindow {
     show: false,
     autoHideMenuBar: true,
   });
-  e2eWindowCreatedAt.set(win, Date.now());
-  e2eStage("createWindow:browser-window-created");
+  e2eRuntime.markWindowCreated(win);
+  e2eRuntime.stage("createWindow:browser-window-created");
   hardenWindow(win);
-  e2eStage(`createWindow:loadURL ${win.webContents.getURL() || "pending"}`);
+  e2eRuntime.stage(`createWindow:loadURL ${win.webContents.getURL() || "pending"}`);
 
   if (process.env.NODE_ENV === "development") {
     win.webContents.openDevTools({ mode: "detach" });
@@ -800,32 +719,32 @@ function createManagedBrowserWindow(instanceId: string): BrowserWindow {
   console.log("✅ Window ready");
 
   win.webContents.on("did-finish-load", () => {
-    e2eStage(`webContents:did-finish-load ${win.webContents.getURL() || ""}`);
+    e2eRuntime.stage(`webContents:did-finish-load ${win.webContents.getURL() || ""}`);
     if (initialContext?.window === win) void runPackagedE2EProbe(win);
     console.log("📄 Page loaded:", win.webContents.getTitle());
   });
 
   win.webContents.on("did-fail-load", (_event: unknown, errorCode: number, errorDescription: string, url: string) => {
-    e2eStage(`webContents:did-fail-load ${errorCode} ${errorDescription} ${url}`);
+    e2eRuntime.stage(`webContents:did-fail-load ${errorCode} ${errorDescription} ${url}`);
     console.error(`❌ Window load failed: ${errorDescription} (code: ${errorCode}) url: ${url}`);
   });
 
   win.webContents.on("console-message", (details) => {
-    if (E2E_MODE) e2eDiagnostics.push(`console[${details.level}] ${details.sourceId}:${details.lineNumber} ${details.message}`);
+    e2eRuntime.captureDiagnostic(`console[${details.level}] ${details.sourceId}:${details.lineNumber} ${details.message}`);
     if (details.message.includes("[startup]") || details.message.includes("404") || details.message.includes("Failed") || details.message.includes("Error")) {
       console.warn(`[page:${details.sourceId}:${details.lineNumber}] ${details.message}`);
     }
   });
 
   win.webContents.on("preload-error" as any, (_event: Electron.Event, preloadPath: string, error: Error) => {
-    e2eStage(`webContents:preload-error ${preloadPath}`);
-    if (E2E_MODE) e2eDiagnostics.push(`preload-error-detail ${preloadPath}: ${error.stack || error.message}`);
+    e2eRuntime.stage(`webContents:preload-error ${preloadPath}`);
+    e2eRuntime.captureDiagnostic(`preload-error-detail ${preloadPath}: ${error.stack || error.message}`);
   });
 
   win.webContents.on("render-process-gone", (_event, details) => {
-    e2eStage(`webContents:render-process-gone ${details.reason} ${details.exitCode}`);
+    e2eRuntime.stage(`webContents:render-process-gone ${details.reason} ${details.exitCode}`);
   });
-  win.webContents.on("unresponsive", () => e2eStage("webContents:unresponsive"));
+  win.webContents.on("unresponsive", () => e2eRuntime.stage("webContents:unresponsive"));
 
   win.once("focus", () => console.log("🔲 Window focused"));
 
@@ -838,7 +757,7 @@ function createManagedBrowserWindow(instanceId: string): BrowserWindow {
 function createWindow(): WindowContext {
   if (initialContext?.lifecycle === "active" && !initialContext.window.isDestroyed()) {
     initialContext.window.focus();
-    e2eStage("createWindow:reused");
+    e2eRuntime.stage("createWindow:reused");
     return initialContext;
   }
   initialContext = windowManager.createInitialWindow({
@@ -848,7 +767,7 @@ function createWindow(): WindowContext {
     token: DESKTOP_SECURITY_TOKEN,
     server: initialServerBinding,
   });
-  recordE2EContext(initialContext);
+  e2eRuntime.recordContext(initialContext);
   mainWindow = initialContext.window as BrowserWindow;
   return initialContext;
 }
@@ -875,7 +794,7 @@ function dashboardStatusUrl(status: WorkspaceStatus): string {
 function showContextDashboard(context: WindowContext, status: WorkspaceStatus): void {
   if (context.window.isDestroyed()) return;
   const win = context.window as BrowserWindow;
-  recordE2EContext(context);
+  e2eRuntime.recordContext(context);
   if (!E2E_MODE) win.show();
 
   const current = workspaceStatusLoads.get(win);
@@ -891,7 +810,7 @@ function showContextDashboard(context: WindowContext, status: WorkspaceStatus): 
     if (win.isDestroyed() || workspaceStatusLoads.get(win) !== load) return;
     load.ready = true;
     if (E2E_MODE) win.show();
-    recordE2ETiming(context, "shell-visible");
+    e2eRuntime.recordTiming(context, "shell-visible");
     win.webContents.send("workspace-status", load.status);
   }).catch((error) => {
     console.error(`Window ${context.id} dashboard status navigation failed:`, error);
@@ -900,7 +819,7 @@ function showContextDashboard(context: WindowContext, status: WorkspaceStatus): 
 
 async function loadContextApplication(context: WindowContext): Promise<void> {
   if (context.window.isDestroyed()) return;
-  recordE2ETiming(context, "server-ready");
+  e2eRuntime.recordTiming(context, "server-ready");
   const vitePort = context === initialContext ? Number(process.env.VITE_DEV_PORT || 0) : 0;
   const target = vitePort > 0 ? `http://127.0.0.1:${vitePort}` : context.server.origin;
   if (!target) return;
@@ -908,7 +827,7 @@ async function loadContextApplication(context: WindowContext): Promise<void> {
   workspaceStatusLoads.delete(win);
   win.show();
   await win.loadURL(target);
-  recordE2ETiming(context, "workbench-loaded");
+  e2eRuntime.recordTiming(context, "workbench-loaded");
 }
 
 // ─── IPC 窗口控制 ────────────────────────────────────────────────
@@ -982,7 +901,7 @@ void earlyServerReady?.catch(() => undefined);
 
 app.whenReady().then(async () => {
   if (!ownsSingleInstanceLock) return;
-  e2eStage("app:when-ready");
+  e2eRuntime.stage("app:when-ready");
   ensureDir(DATA_DIR);
   ensureDir(PI_CONFIG_DIR);
   ensureDir(SESSIONS_DIR);
@@ -994,9 +913,9 @@ app.whenReady().then(async () => {
     if (context.server.kind === "external") await loadContextApplication(context);
   } else {
     const serverReady = earlyServerReady ?? startPiServer();
-    e2eStage("app:before-create-window");
+    e2eRuntime.stage("app:before-create-window");
     const context = createWindow();
-    e2eStage("app:after-create-window");
+    e2eRuntime.stage("app:after-create-window");
     try {
       const port = await serverReady;
       console.log(`✅ Pi server started on port ${port}`);
