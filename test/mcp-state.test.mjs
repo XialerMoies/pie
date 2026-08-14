@@ -23,8 +23,8 @@ describe("MCP state boundary", () => {
   });
 
   it("requires the MCP pane to normalize state before HTML interpolation", () => {
-    const paneSource = readFileSync(
-      resolve(process.cwd(), "src/frontend/pane/mcp/index.ts"),
+    const viewSource = readFileSync(
+      resolve(process.cwd(), "src/frontend/pane/mcp/mcp-views.ts"),
       "utf8",
     );
     const compilerSource = readFileSync(
@@ -32,11 +32,11 @@ describe("MCP state boundary", () => {
       "utf8",
     );
 
-    assert.match(paneSource, /App\.McpState\.normalize\(s\.state\)/);
-    assert.doesNotMatch(paneSource, /\$\{s\.state\}/);
+    assert.match(viewSource, /App\.McpState\.normalize\(server\.state\)/);
+    assert.doesNotMatch(viewSource, /\$\{server\.state\}/);
     assert.match(
       compilerSource,
-      /gen\/pane\/mcp\/mcp-state\.js[\s\S]*gen\/pane\/mcp\/index\.js/,
+      /gen\/pane\/mcp\/mcp-state\.js[\s\S]*gen\/pane\/mcp\/mcp-views\.js[\s\S]*gen\/pane\/mcp\/index\.js/,
     );
   });
 

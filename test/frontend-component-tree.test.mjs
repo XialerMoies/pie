@@ -64,6 +64,35 @@ describe("frontend component tree boundaries", () => {
     assert.doesNotMatch(controller, /class\s+(?:PermissionsPanelView|PermissionAuditView|PermissionRulesView|WorkingDirectoriesView)\b/);
   });
 
+  it("keeps MCP rendering in dedicated component views", () => {
+    const controller = source("src/frontend/pane/mcp/index.ts");
+    const views = source("src/frontend/pane/mcp/mcp-views.ts");
+    for (const name of ["McpPanelView", "McpServerListView", "McpCatalogView", "McpCustomInstallView"]) assertClass(views, name);
+    assert.match(controller, /App\.McpViews\.renderPanel\(/);
+    assert.match(controller, /App\.McpViews\.renderServers\(/);
+    assert.match(controller, /App\.McpViews\.renderCatalog\(/);
+    assert.doesNotMatch(controller, /class\s+(?:McpPanelView|McpServerListView|McpCatalogView|McpCustomInstallView)\b/);
+  });
+
+  it("keeps Explorer shell and filter menu in dedicated component views", () => {
+    const controller = source("src/frontend/pane/explorer/index.ts");
+    const views = source("src/frontend/pane/explorer/explorer-views.ts");
+    for (const name of ["ExplorerPanelView", "ExplorerEmptyView", "ExplorerFilterMenuView"]) assertClass(views, name);
+    assert.match(controller, /App\.ExplorerViews\.renderEmpty\(/);
+    assert.match(controller, /App\.ExplorerViews\.renderPanel\(/);
+    assert.match(controller, /App\.ExplorerViews\.showFilterMenu\(/);
+    assert.doesNotMatch(controller, /class\s+(?:ExplorerPanelView|ExplorerEmptyView|ExplorerFilterMenuView)\b/);
+  });
+
+  it("owns chat timeline state in one lifecycle component", () => {
+    const timeline = source("src/frontend/chat/chat-timeline.ts");
+    assertClass(timeline, "ChatTimelineView");
+    for (const method of ["bind", "sync", "refreshSettings", "handleMessagesScroll", "reset", "dispose"]) {
+      assert.match(timeline, new RegExp(`${method}\\s*\\(`), `${method} should belong to ChatTimelineView`);
+    }
+    assert.doesNotMatch(timeline, /let\s+chatTimeline(?:Items|ActiveIndex|Enabled|WindowSize|Signature|BoundHost|ScrollFrame|LastWheelAt)\b/);
+  });
+
   it("keeps subagent views in their dedicated component module", () => {
     const legacy = source("src/frontend/chat/chat-component-views.ts");
     const subagent = source("src/frontend/chat/chat-subagent-views.ts");
@@ -221,6 +250,21 @@ describe("frontend component tree boundaries", () => {
     const compiler = source("scripts/compile-frontend-ts.mjs");
     const viewsIndex = compiler.indexOf('"gen/pane/permissions/permissions-views.js"');
     const controllerIndex = compiler.indexOf('"gen/pane/permissions/index.js"');
+    assert.ok(viewsIndex >= 0 && controllerIndex > viewsIndex);
+  });
+
+  it("loads MCP views after MCP state and before the MCP controller", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const stateIndex = compiler.indexOf('"gen/pane/mcp/mcp-state.js"');
+    const viewsIndex = compiler.indexOf('"gen/pane/mcp/mcp-views.js"');
+    const controllerIndex = compiler.indexOf('"gen/pane/mcp/index.js"');
+    assert.ok(stateIndex >= 0 && viewsIndex > stateIndex && controllerIndex > viewsIndex);
+  });
+
+  it("loads Explorer views before the Explorer controller", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const viewsIndex = compiler.indexOf('"gen/pane/explorer/explorer-views.js"');
+    const controllerIndex = compiler.indexOf('"gen/pane/explorer/index.js"');
     assert.ok(viewsIndex >= 0 && controllerIndex > viewsIndex);
   });
 });

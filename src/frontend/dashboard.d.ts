@@ -518,9 +518,38 @@ interface AppChatReadingControls {
   dispose(): void;
 }
 type McpConnectionState = 'connected' | 'connecting' | 'disconnected' | 'error';
+interface McpServerStatus {
+  name: string;
+  state: unknown;
+  tools: string[];
+  error?: string;
+  config?: { command?: string; args?: string[]; url?: string; transport?: string; enabled?: boolean };
+  canDelete?: boolean;
+}
+interface CatalogEntry {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  command: string;
+  args: string[];
+  envHints?: string[];
+  postInstallHint?: string;
+}
 interface AppMcpState {
   normalize(value: unknown): McpConnectionState;
   label(value: unknown): string;
+}
+interface AppMcpViews {
+  renderPanel(): string;
+  renderServers(servers: McpServerStatus[]): string;
+  renderCatalog(catalog: CatalogEntry[]): string;
+}
+interface AppExplorerViews {
+  renderEmpty(): string;
+  renderPanel(): string;
+  showFilterMenu(anchor: HTMLElement, enabled: boolean, onChange: (enabled: boolean) => void): void;
+  dispose(): void;
 }
 interface AppConstants {
   WS_KEY: string;
@@ -578,6 +607,8 @@ interface AppNamespace {
   FileDiff: AppFileDiff;
   ChatViews: AppChatViews;
   McpState: AppMcpState;
+  McpViews: AppMcpViews;
+  ExplorerViews: AppExplorerViews;
   Tabs: AppTabs;
 }
 

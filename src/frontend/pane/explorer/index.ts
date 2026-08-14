@@ -2,25 +2,16 @@
 /// <reference path="../../dashboard.d.ts" />
 
 function explorerRender(container: HTMLElement): void {
+  App.ExplorerViews.dispose();
   bindExplorerActions(container);
   const ws = ExplorerService.getWorkspacePath();
   if (!ws) {
-    container.innerHTML = [
-      `<div class="sg-t">资源管理器</div>`,
-      `<div style="padding:12px;font-size:.72rem;color:var(--tm);text-align:center">`,
-      `  <p style="margin-bottom:10px">尚未选择工作区</p>`,
-      `  <button class="sa-btn" data-explorer-action="select-workspace">选择文件夹</button>`,
-      `</div>`,
-    ].join('');
+    container.innerHTML = App.ExplorerViews.renderEmpty();
     return;
   }
 
   container.style.cssText = 'display:flex;flex-direction:column;height:100%;min-height:0';
-  const showAll = !ExplorerService.getFilterEnabled();
-  container.innerHTML = [
-    `<div class="sg-t" style="display:flex;align-items:center;justify-content:space-between">资源管理器<button class="sg-more" data-explorer-action="toggle-filter" title="显示选项">···</button></div>`,
-    `<div id="exp-tree-cont" style="flex:1;min-height:0"></div>`,
-  ].join('');
+  container.innerHTML = App.ExplorerViews.renderPanel();
 
   // 阻止浏览器的默认右键菜单
   container.addEventListener('contextmenu', e => e.preventDefault());
@@ -263,30 +254,13 @@ function initTree(container: HTMLElement): void {
 
 // ─── 筛选切换 ──────────────────────────────────────────
 function toggleExplorerFilter(): void {
-  document.querySelectorAll('.ctx-menu').forEach(el => el.remove());
   const btn = document.querySelector('.sg-more') as HTMLElement | null;
   if (!btn) return;
-  const rect = btn.getBoundingClientRect();
   const on = ExplorerService.getFilterEnabled();
-  const menu = document.createElement('div');
-  menu.className = 'ctx-menu';
-  menu.style.position = 'fixed';
-  menu.style.left = (rect.right + 4) + 'px';
-  menu.style.top = (rect.bottom + 8) + 'px';
-
-  const items: { label: string; checked: boolean; fn: () => void }[] = [
-    { label: '显示被过滤的文件', checked: !on, fn: () => { ExplorerService.setFilterEnabled(false); ExplorerService.refreshTree(); } },
-    { label: '隐藏被过滤的文件', checked: on, fn: () => { ExplorerService.setFilterEnabled(true); ExplorerService.refreshTree(); } },
-  ];
-  for (const a of items) {
-    const item = document.createElement('div'); item.className = 'ctx-item';
-    item.style.display = 'flex'; item.style.alignItems = 'center'; item.style.gap = '8px';
-    item.innerHTML = `<span style="width:14px;text-align:center;flex-shrink:0">${a.checked ? '✓' : ''}</span><span>${a.label}</span>`;
-    item.addEventListener('click', () => { menu.remove(); a.fn(); });
-    menu.appendChild(item);
-  }
-  document.body.appendChild(menu);
-  setTimeout(() => document.addEventListener('click', () => menu.remove(), { once: true }), 0);
+  App.ExplorerViews.showFilterMenu(btn, on, (enabled) => {
+    ExplorerService.setFilterEnabled(enabled);
+    ExplorerService.refreshTree();
+  });
 }
 (window as any).toggleExplorerFilter = toggleExplorerFilter;
 

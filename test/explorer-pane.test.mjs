@@ -40,6 +40,8 @@ global.Tree = class {
 global.registerPane = (name, render) => registerCalls.push([name, render]);
 
 before(async () => {
+  await import(`../src/frontend/pane/explorer/explorer-views.ts?t=${Date.now()}`);
+  global.App = win.App;
   await import(`../src/frontend/pane/explorer/index.ts?t=${Date.now()}`);
 });
 

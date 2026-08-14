@@ -182,6 +182,8 @@ async function createMcpPaneHarness() {
   };
   context.App = context.window.App;
 
+  const viewsScript = await compileClassicScript("src/frontend/pane/mcp/mcp-views.ts");
+  new Script(viewsScript, { filename: "mcp-views.js" }).runInNewContext(context);
   const paneScript = await compileClassicScript("src/frontend/pane/mcp/index.ts");
   new Script(paneScript, { filename: "mcp-pane.js" }).runInNewContext(context);
 

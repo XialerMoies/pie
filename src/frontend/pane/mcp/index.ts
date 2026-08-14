@@ -7,26 +7,6 @@
  */
 /// <reference path="../../dashboard.d.ts" />
 
-interface McpServerStatus {
-  name: string;
-  state: unknown;
-  tools: string[];
-  error?: string;
-  config?: { command?: string; args?: string[]; url?: string; transport?: string; enabled?: boolean };
-  canDelete?: boolean;
-}
-
-interface CatalogEntry {
-  id: string;
-  name: string;
-  description: string;
-  category: string;
-  command: string;
-  args: string[];
-  envHints?: string[];
-  postInstallHint?: string;
-}
-
 // ─── 状态 ──────────────────────────────────────
 
 const MCP_PANEL_ID = "mcp-panel-root";
@@ -62,23 +42,9 @@ function startMcpUpdates(): void {
 // ─── 面板入口 ──────────────────────────────────
 
 function mcpPaneRender(container: HTMLElement): void {
-  container.innerHTML = `<div id="${MCP_PANEL_ID}">${renderMcpPanel()}</div>`;
+  container.innerHTML = `<div id="${MCP_PANEL_ID}">${App.McpViews.renderPanel()}</div>`;
   startMcpUpdates();
   switchMcpTab("installed");
-}
-
-function renderMcpPanel(): string {
-  return `
-    <div class="mcp-panel">
-      <div class="mcp-tabs">
-        <button class="mcp-tab" data-tab="installed">已安装</button>
-        <button class="mcp-tab" data-tab="explore">探索</button>
-      </div>
-      <div class="mcp-content" id="mcp-content">
-        <div class="mcp-empty">加载中…</div>
-      </div>
-    </div>
-  `;
 }
 
 // ─── 标签切换 ──────────────────────────────────
@@ -116,34 +82,8 @@ async function fetchMcpServers(): Promise<void> {
 
     const barCount = document.getElementById("mcp-bar-count");
 
-    if (servers.length === 0) {
-      content.innerHTML = '<div class="mcp-empty">未发现 MCP 服务器配置<br>切换到「探索」页签安装</div>';
-      if (barCount) barCount.textContent = "0";
-      return;
-    }
-
     if (barCount) barCount.textContent = String(servers.length);
-
-    content.innerHTML = servers.map((s) => {
-      const state = App.McpState.normalize(s.state);
-      return `
-        <div class="mcp-server" data-source="${E(s.name)}">
-          <div class="mcp-server-top">
-            <span class="mcp-dot mcp-dot--${state}"></span>
-            <span class="mcp-server-name">${E(s.name)}</span>
-            <span class="mcp-server-state mcp-state--${state}">${App.McpState.label(state)}</span>
-          </div>
-          ${s.error ? `<div class="mcp-server-error">${E(s.error)}</div>` : ""}
-          ${s.tools.length > 0 ? `<div class="mcp-server-tools">${s.tools.map((t) => `<span class="mcp-tool-tag">${E(t)}</span>`).join("")}</div>` : ""}
-          <div class="mcp-server-actions">
-            ${s.config ? `<button class="mcp-btn mcp-btn-toggle" data-name="${E(s.name)}">${s.config.enabled !== false ? "停用" : "启用"}</button>` : ""}
-            ${s.error?.includes("未信任") ? `<button class="mcp-btn mcp-btn-trust" data-name="${E(s.name)}">信任</button>` : ""}
-            ${s.canDelete !== false ? `<button class="mcp-btn mcp-btn-remove" data-name="${E(s.name)}">删除</button>` : ""}
-          </div>
-          ${s.config ? `<div class="mcp-server-cmd">${s.config.transport === "http" || s.config.transport === "sse" ? E(s.config.url ?? "") : E(s.config.command ?? "") + " " + (s.config.args || []).map(a => E(a)).join(" ")}</div>` : ""}
-        </div>
-      `;
-    }).join("");
+    content.innerHTML = App.McpViews.renderServers(servers);
 
     bindToggleEvents(content);
     bindTrustEvents(content);
@@ -221,56 +161,7 @@ async function renderExploreTab(container: HTMLElement): Promise<void> {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const catalog: CatalogEntry[] = await res.json();
 
-    const categories = [...new Set(catalog.map((e) => e.category))];
-
-    container.innerHTML = categories.map((cat) => `
-      <div class="mcp-explore-section">
-        <div class="mcp-explore-category">${E(cat)}</div>
-        ${catalog.filter((e) => e.category === cat).map((entry) => `
-          <div class="mcp-explore-item" data-id="${E(entry.id)}">
-            <div class="mcp-explore-info">
-              <div class="mcp-explore-name">${E(entry.name)}</div>
-              <div class="mcp-explore-desc">${E(entry.description)}</div>
-              <div class="mcp-explore-cmd">${E(entry.command)} ${entry.args.map((a) => E(a)).join(" ")}</div>
-              ${entry.envHints ? `<div class="mcp-explore-env">需要环境变量: ${entry.envHints.map((h) => E(h)).join(", ")}</div>` : ""}
-              ${entry.postInstallHint ? `<div class="mcp-explore-note">⚠️ ${E(entry.postInstallHint)}</div>` : ""}
-            </div>
-            <button class="mcp-btn mcp-btn-install" data-id="${E(entry.id)}">安装</button>
-          </div>
-        `).join("")}
-      </div>
-    `).join("") + `
-      <div class="mcp-explore-section">
-        <div class="mcp-explore-category">自定义安装</div>
-        <div class="mcp-custom-trigger">
-          <button class="mcp-btn mcp-btn-custom-open" id="mcp-btn-custom-open">+ 自定义安装</button>
-        </div>
-      </div>
-
-      <!-- 自定义安装弹窗 -->
-      <div class="mcp-modal-overlay" id="mcp-custom-modal" style="display:none">
-        <div class="mcp-modal">
-          <div class="mcp-modal-header">
-            <span class="mcp-modal-title">自定义安装 MCP Server</span>
-            <button class="mcp-modal-close" id="mcp-modal-close">&times;</button>
-          </div>
-          <div class="mcp-modal-body">
-            <div class="mcp-modal-field">
-              <label class="mcp-modal-label" for="mcp-custom-name">名称</label>
-              <input type="text" id="mcp-custom-name" placeholder="如 my-server" class="mcp-input">
-            </div>
-            <div class="mcp-modal-field">
-              <label class="mcp-modal-label" for="mcp-custom-cmd">启动命令</label>
-              <input type="text" id="mcp-custom-cmd" placeholder="如 npx -y @modelcontextprotocol/server-filesystem /path" class="mcp-input">
-            </div>
-            <div id="mcp-custom-msg" class="mcp-custom-msg"></div>
-          </div>
-          <div class="mcp-modal-footer">
-            <button class="mcp-btn mcp-btn-cancel" id="mcp-btn-cancel">取消</button>
-            <button class="mcp-btn mcp-btn-install-custom" id="mcp-btn-custom">安装</button>
-          </div>
-        </div>
-      </div>`;
+    container.innerHTML = App.McpViews.renderCatalog(catalog);
 
     bindInstallEvents(container);
     bindCustomInstall(container);
