@@ -306,6 +306,7 @@ describe("server startup paths", () => {
 
   it("wires Electron and server through the explicit startup contract", () => {
     const electronSource = readFileSync(resolve("src/electron/electron-main.ts"), "utf8");
+    const launchCoordinatorSource = readFileSync(resolve("src/electron/electron-launch-coordinator.ts"), "utf8");
     const serverSource = readFileSync(resolve("src/server/server.ts"), "utf8");
 
     assert.match(electronSource, /readDataRootPointer/);
@@ -326,7 +327,8 @@ describe("server startup paths", () => {
     );
     assert.match(electronSource, /app\.requestSingleInstanceLock\(\)/);
     assert.match(electronSource, /app\.on\("second-instance"/);
-    assert.match(electronSource, /pendingSecondLaunches:\s*DesktopLaunchRequest\[\]/);
+    assert.match(electronSource, /from "\.\/electron-launch-coordinator\.js"/);
+    assert.match(launchCoordinatorSource, /pending: DesktopLaunchRequest\[\] = \[\]/);
     assert.match(electronSource, /const windowManager = new WindowManager\(/);
     assert.match(
       electronSource,
@@ -347,19 +349,13 @@ describe("server startup paths", () => {
     );
     assert.match(
       electronSource,
-      /if \(request\.instanceId\) legacyLaunchWaiters\.resolve\(request\.instanceId\)/,
+      /validateSecondLaunchDataRoot\(DESKTOP_PATHS\.dataRoot, request\.dataRoot\)/,
     );
-    assert.match(
-      electronSource,
-      /if \(request\.instanceId\) legacyLaunchWaiters\.reject\(request\.instanceId, failure\)/,
-    );
-    assert.match(
-      electronSource,
-      /validateSecondLaunchDataRoot\(DESKTOP_PATHS\.dataRoot, request\.dataRoot\)[\s\S]{0,500}pendingSecondLaunches\.push\(request\)/,
-    );
-    assert.match(electronSource, /let secondLaunchHandlingReady = false/);
-    assert.match(electronSource, /secondLaunchHandlingReady = true[\s\S]{0,240}drainPendingSecondLaunches\(\)/);
-    assert.match(electronSource, /if\s*\(secondLaunchHandlingReady\)[\s\S]{0,160}drainPendingSecondLaunches\(\)/);
+    assert.match(launchCoordinatorSource, /ready = false/);
+    assert.match(launchCoordinatorSource, /ready = true/);
+    assert.match(launchCoordinatorSource, /if \(ready\) void drain\(\)/);
+    assert.match(launchCoordinatorSource, /options\.resolveWaiter\(request\.instanceId\)/);
+    assert.match(launchCoordinatorSource, /rejectWaiter\(request\.instanceId, failure\)/);
     assert.match(electronSource, /PI_WORKSPACE:\s*input\.workspace/);
     assert.match(electronSource, /PI_DATA_ROOT:\s*input\.dataRoot/);
     assert.match(electronSource, /PI_INSTANCE_ID:\s*input\.instanceId/);

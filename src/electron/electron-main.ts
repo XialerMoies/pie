@@ -62,6 +62,7 @@ import {
   waitForServerOrigin,
 } from "./electron-http-client.js";
 import { createElectronE2ERuntime } from "./electron-e2e-runtime.js";
+import { createSecondInstanceCoordinator } from "./electron-launch-coordinator.js";
 
 function initializeElectron(): void {
 const __filename = fileURLToPath(import.meta.url);
@@ -129,84 +130,7 @@ fs.mkdirSync(DESKTOP_PATHS.electronCache, { recursive: true });
 app.setPath("userData", DESKTOP_PATHS.electronUserData);
 app.setPath("cache", DESKTOP_PATHS.electronCache);
 
-const pendingSecondLaunches: DesktopLaunchRequest[] = [];
-const MAX_PENDING_SECOND_LAUNCHES = 32;
-let secondLaunchHandlingReady = false;
-let pendingSecondLaunchOverflowNoticeShown = false;
 const legacyLaunchWaiters = createLegacyLaunchWaiterRegistry();
-let drainingSecondLaunches: Promise<void> | null = null;
-const e2eSecondLaunches: Array<{ electronPid: number; request: DesktopLaunchRequest; handledAt: number }> = [];
-
-function showPendingSecondLaunchNotice(): void {
-  dialog.showErrorBox("Cannot open My Code Agent", "The pending window request queue is full.");
-}
-
-function drainPendingSecondLaunches(): void {
-  if (drainingSecondLaunches) return;
-  drainingSecondLaunches = (async () => {
-    while (pendingSecondLaunches.length > 0) {
-      const request = pendingSecondLaunches.shift();
-      if (request) await processSecondLaunchRequest(request);
-    }
-    pendingSecondLaunchOverflowNoticeShown = false;
-  })().finally(() => {
-    drainingSecondLaunches = null;
-    if (pendingSecondLaunches.length > 0) drainPendingSecondLaunches();
-  });
-}
-
-function handleSecondLaunchRequest(request: DesktopLaunchRequest): void {
-  try {
-    e2eRuntime.stage(`second-instance ${JSON.stringify(request)}`);
-    validateSecondLaunchDataRoot(DESKTOP_PATHS.dataRoot, request.dataRoot);
-    if (pendingSecondLaunches.length >= MAX_PENDING_SECOND_LAUNCHES) {
-      const message = "The pending window request queue is full.";
-      console.error(message);
-      if (request.instanceId) legacyLaunchWaiters.reject(request.instanceId, new Error(message));
-      if (!pendingSecondLaunchOverflowNoticeShown) {
-        pendingSecondLaunchOverflowNoticeShown = true;
-        showPendingSecondLaunchNotice();
-      }
-      return;
-    }
-    pendingSecondLaunches.push(request);
-    if (secondLaunchHandlingReady) drainPendingSecondLaunches();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (request.instanceId) legacyLaunchWaiters.reject(request.instanceId, new Error(message));
-    console.error(message);
-    dialog.showErrorBox("Cannot open My Code Agent", message);
-  }
-}
-
-async function processSecondLaunchRequest(request: DesktopLaunchRequest): Promise<void> {
-  try {
-    if (!request.workspace) {
-      createEmptyManagedWindow();
-    } else {
-      const existing = windowManager.contextForWorkspace(request.workspace);
-      if (existing?.lifecycle === "active") {
-        if (!existing.window.isDestroyed()) existing.window.focus();
-      } else {
-        const context = createEmptyManagedWindow();
-        await windowManager.openWorkspace(context, request.workspace);
-      }
-    }
-    if (E2E_MODE) {
-      e2eSecondLaunches.push({ electronPid: process.pid, request, handledAt: Date.now() });
-    }
-    if (request.instanceId) legacyLaunchWaiters.resolve(request.instanceId);
-  } catch (error) {
-    const failure = error instanceof Error ? error : new Error(String(error));
-    if (request.instanceId) legacyLaunchWaiters.reject(request.instanceId, failure);
-    console.error("Failed to process second launch:", failure);
-    dialog.showErrorBox("Cannot open My Code Agent", failure.message);
-  }
-}
-
-app.on("second-instance", (_event, commandLine, workingDirectory) => {
-  handleSecondLaunchRequest(parseDesktopLaunchRequest(commandLine, workingDirectory));
-});
 
 if (E2E_MODE) {
   app.disableHardwareAcceleration();
@@ -255,6 +179,39 @@ const e2eRuntime = createElectronE2ERuntime({
   e2eDataRoot: E2E_DATA_DIR,
   desktopSecurityToken: DESKTOP_SECURITY_TOKEN,
   ensureDir,
+});
+
+const secondLaunchCoordinator = createSecondInstanceCoordinator({
+  electronPid: process.pid,
+  e2eEnabled: E2E_MODE,
+  validate: (request) => {
+    e2eRuntime.stage(`second-instance ${JSON.stringify(request)}`);
+    validateSecondLaunchDataRoot(DESKTOP_PATHS.dataRoot, request.dataRoot);
+  },
+  processRequest: async (request) => {
+    if (!request.workspace) {
+      createEmptyManagedWindow();
+      return;
+    }
+    const existing = windowManager.contextForWorkspace(request.workspace);
+    if (existing?.lifecycle === "active") {
+      if (!existing.window.isDestroyed()) existing.window.focus();
+      return;
+    }
+    const context = createEmptyManagedWindow();
+    await windowManager.openWorkspace(context, request.workspace);
+  },
+  resolveWaiter: (instanceId) => legacyLaunchWaiters.resolve(instanceId),
+  rejectWaiter: (instanceId, error) => legacyLaunchWaiters.reject(instanceId, error),
+  showOverflowNotice: () => {
+    dialog.showErrorBox("Cannot open My Code Agent", "The pending window request queue is full.");
+  },
+  showError: (message) => dialog.showErrorBox("Cannot open My Code Agent", message),
+  logError: (message) => console.error(message),
+});
+
+app.on("second-instance", (_event, commandLine, workingDirectory) => {
+  secondLaunchCoordinator.accept(parseDesktopLaunchRequest(commandLine, workingDirectory));
 });
 
 async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
@@ -462,9 +419,9 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
       },
     });
     await waitForE2ECondition("second executable single-instance handoff", () => (
-      e2eSecondLaunches.some((launch) => launch.request.instanceId === "e2e-second-executable-launch")
+      secondLaunchCoordinator.records.some((launch) => launch.request.instanceId === "e2e-second-executable-launch")
     ));
-    const secondLaunch = e2eSecondLaunches.find((launch) => (
+    const secondLaunch = secondLaunchCoordinator.records.find((launch) => (
       launch.request.instanceId === "e2e-second-executable-launch"
     ));
     if (!secondLaunch) throw new Error("Second executable handoff diagnostic is missing");
@@ -539,7 +496,7 @@ async function runPackagedE2EProbe(win: BrowserWindow): Promise<void> {
     e2eRuntime.writeResult({
       ok: false,
       ...failureDiagnostic,
-      secondLaunches: e2eSecondLaunches.map((launch) => ({
+      secondLaunches: secondLaunchCoordinator.records.map((launch) => ({
         electronPid: launch.electronPid,
         handledAt: launch.handledAt,
         instanceId: launch.request.instanceId || null,
@@ -929,8 +886,7 @@ app.whenReady().then(async () => {
     }
   }
 
-  secondLaunchHandlingReady = true;
-  drainPendingSecondLaunches();
+  await secondLaunchCoordinator.markReady();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

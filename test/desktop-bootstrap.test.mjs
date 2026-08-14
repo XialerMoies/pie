@@ -99,16 +99,18 @@ describe("second launch data root validation", () => {
 describe("second launch window-manager handling", () => {
   it("keeps queued requests bounded and drains them serially through WindowManager", () => {
     const electronSource = readFileSync(resolve("src/electron/electron-main.ts"), "utf8");
+    const coordinatorSource = readFileSync(resolve("src/electron/electron-launch-coordinator.ts"), "utf8");
 
-    assert.match(electronSource, /const MAX_PENDING_SECOND_LAUNCHES = 32/);
-    assert.match(electronSource, /function drainPendingSecondLaunches\(\): void/);
-    assert.match(electronSource, /pendingSecondLaunches\.length >= MAX_PENDING_SECOND_LAUNCHES/);
-    assert.match(electronSource, /const request = pendingSecondLaunches\.shift\(\)/);
-    assert.match(electronSource, /if \(request\) await processSecondLaunchRequest\(request\)/);
+    assert.match(electronSource, /from "\.\/electron-launch-coordinator\.js"/);
+    assert.match(coordinatorSource, /const maxPending = options\.maxPending \?\? 32/);
+    assert.match(coordinatorSource, /function drain\(\): Promise<void>/);
+    assert.match(coordinatorSource, /pending\.length >= maxPending/);
+    assert.match(coordinatorSource, /const request = pending\.shift\(\)/);
+    assert.match(coordinatorSource, /if \(request\) await processOne\(request\)/);
     assert.match(
-      electronSource,
-      /if \(request\.instanceId\) legacyLaunchWaiters\.reject\(request\.instanceId, new Error\(message\)\)/,
+      coordinatorSource,
+      /rejectWaiter\(request\.instanceId, error\)/,
     );
-    assert.doesNotMatch(electronSource, /pendingSecondLaunches\.splice\(/);
+    assert.doesNotMatch(coordinatorSource, /pending\.splice\(/);
   });
 });
