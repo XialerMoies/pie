@@ -39,7 +39,6 @@ describe("UiStateStore", () => {
       "src/frontend/dashboard/dashboard-sessions.ts",
       "src/frontend/pane/git/index.ts",
       "src/frontend/pane/search/index.ts",
-      "src/frontend/editor/monaco-tsserver.ts",
       "src/frontend/editor/monaco-setup.ts",
       "src/frontend/service/explorer-service.ts",
     ];
@@ -54,6 +53,11 @@ describe("UiStateStore", () => {
     assert.match(tokenSource, /state:\s*AppStateFacade/);
     assert.match(tokenSource, /tokenState\.getWorkspacePath\(\)/);
     assert.doesNotMatch(tokenSource, /localStorage[^\n]*(?:WS_KEY|workspace_path)|(?:WS_KEY|workspace_path)[^\n]*localStorage/);
+
+    const tsserverSource = readFileSync(resolve(process.cwd(), "src/frontend/editor/monaco-tsserver.ts"), "utf8");
+    assert.match(tsserverSource, /function\s+monacoTsserverState\(\):\s*AppStateFacade/);
+    assert.match(tsserverSource, /monacoTsserverState\(\)\.getWorkspacePath\(\)/);
+    assert.doesNotMatch(tsserverSource, /localStorage[^\n]*(?:WS_KEY|workspace_path)|(?:WS_KEY|workspace_path)[^\n]*localStorage/);
 
     const explorerSource = readFileSync(resolve(process.cwd(), "src/frontend/service/explorer-service.ts"), "utf8");
     assert.match(explorerSource, /App\.State\.setWorkspacePath\(p\)/);

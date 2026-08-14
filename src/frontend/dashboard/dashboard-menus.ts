@@ -2,6 +2,16 @@
 //  文件菜单 (顶部栏下拉)
 // ═══════════════════════════════════════════════════════════════════
 
+interface DashboardMenuDependencies {
+  preferences: AppPreferences;
+}
+
+const dashboardMenuApp = (window as any).App;
+const dashboardMenuDependencies: DashboardMenuDependencies = {
+  preferences: dashboardMenuApp.Preferences,
+};
+const { preferences: dashboardMenuPreferences } = dashboardMenuDependencies;
+
 function toggleFileMenu(ev: MouseEvent, trigger?: HTMLElement): void {
   const existing = $('file-menu');
   if (existing) { existing.remove(); return; }
@@ -18,7 +28,7 @@ function toggleFileMenu(ev: MouseEvent, trigger?: HTMLElement): void {
     <div class="fm-sep"></div>
     <div class="fm-item" data-file-action="save">保存 <span style="color:var(--tm);font-size:10px;float:right">Ctrl+S</span></div>
     <div class="fm-item" data-file-action="saveAll">全部保存</div>
-    <div class="fm-item" data-file-action="toggleAutoSave">${App.Preferences.getBoolean('auto-save') ? '✓ ' : ''}自动保存</div>
+    <div class="fm-item" data-file-action="toggleAutoSave">${dashboardMenuPreferences.getBoolean('auto-save') ? '✓ ' : ''}自动保存</div>
     <div class="fm-sep"></div>
     <div class="fm-item" data-file-action="closeWindow">关闭窗口</div>
   `;
@@ -71,8 +81,8 @@ function fileAction(action: string): void {
   else if (action === 'save' && api) { /* handled by Monaco Ctrl+S */ }
   else if (action === 'saveAll' && api) { /* handled by Monaco */ }
   else if (action === 'toggleAutoSave') {
-    const v = App.Preferences.getBoolean('auto-save');
-    App.Preferences.setBoolean('auto-save', !v);
+    const v = dashboardMenuPreferences.getBoolean('auto-save');
+    dashboardMenuPreferences.setBoolean('auto-save', !v);
     toast('自动保存: ' + (v ? '关' : '开'));
   }
   else if (action === 'closeWindow' && api) api.close();

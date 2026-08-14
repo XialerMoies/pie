@@ -5,8 +5,13 @@
  * 方便独立测试和模块化加载。
  */
 
+function monacoTsserverState(): AppStateFacade {
+  const monacoTsserverApp = (globalThis as any).App;
+  return monacoTsserverApp.State;
+}
+
 export function tsserverRoot(): string {
-  return App.State.getWorkspacePath();
+  return monacoTsserverState().getWorkspacePath();
 }
 
 export function tsserverAbsPath(filePath: string): string {

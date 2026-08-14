@@ -1,7 +1,7 @@
 /**
  * Chat runtime state facade.
  *
- * App.ChatState is the sole owner; consumers must not keep browser-global
+ * The chat state facade is the sole owner; consumers must not keep browser-global
  * compatibility mirrors.
  */
 

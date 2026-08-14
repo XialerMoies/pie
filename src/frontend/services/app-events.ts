@@ -29,7 +29,7 @@ function appEventsNotify(type: AppEventSubscriptionType, event: AppEvent): void 
     try {
       handler(event);
     } catch (error) {
-      console.error(`[App.Events] ${type} handler failed`, error);
+      console.error(`[app-events] ${type} handler failed`, error);
     }
   }
 }
@@ -102,7 +102,7 @@ function appEventsStart(): Promise<void> {
     if (!isCurrent() || readinessState !== "pending") return;
     readinessState = "timed_out";
     appEventsClearHandshakeTimer();
-    console.error("[App.Events] event channel handshake timed out");
+    console.error("[app-events] event channel handshake timed out");
     rejectReadiness?.(new Error("event channel handshake timed out"));
     resolveReadiness = null;
     rejectReadiness = null;

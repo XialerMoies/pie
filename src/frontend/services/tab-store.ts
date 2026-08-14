@@ -4,7 +4,7 @@
  * TabStore — 统一标签数据层
  *
  * 将 chat/session/file 三种标签合并为 tabs.items[] + tabs.activeId 单模型。
- * 通过 App.Tabs facade 暴露，持久化由 App.State 负责。
+ * 通过公共 Tabs facade 暴露，持久化由 State facade 负责。
  *
  * Layer 1 只做数据统一，不碰 DOM 渲染。
  */
@@ -130,7 +130,7 @@ export function reset(): void {
   _items = [];
   _activeId = null;
   // 注意：不能清空 _behaviors —— 行为注册是模块级装配（file/session/chat 各自注册一次）。
-  // workspace 切换等场景调用 reset() 时若清空，App.Tabs.activate/close 将找不到 handler，
+  // workspace 切换等场景调用 reset() 时若清空，Tabs activate/close 将找不到 handler，
   // 导致标签无法切换/关闭（回归 bug1/bug2）。
 }
 

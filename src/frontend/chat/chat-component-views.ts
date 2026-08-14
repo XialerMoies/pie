@@ -2,6 +2,7 @@
 
 interface ChatViewDependencies {
   renderMarkdown: (text: string) => string;
+  fileDiff: AppFileDiff;
 }
 
 interface ChatErrorActions {
@@ -18,8 +19,10 @@ interface EditedFileSummary {
 }
 
 
+const chatViewApp = (window as any).App;
 const chatViewDependencies: ChatViewDependencies = {
   renderMarkdown: (text) => E(text || ''),
+  fileDiff: chatViewApp.FileDiff,
 };
 
 function chatViewConfigure(dependencies: Partial<ChatViewDependencies>): void {
@@ -111,7 +114,7 @@ function chatViewCollectEditedFiles(blocks: any[]): EditedFileSummary[] {
     const key = chatViewNormalizeDiffPath(filePath);
     const added = Number.isFinite(Number(diff.linesAdded))
       ? Number(diff.linesAdded)
-      : (diff.type === 'create' ? App.FileDiff.countContentLines(String(diff.content || '')) : 0);
+      : (diff.type === 'create' ? chatViewDependencies.fileDiff.countContentLines(String(diff.content || '')) : 0);
     const removed = Number.isFinite(Number(diff.linesRemoved)) ? Number(diff.linesRemoved) : 0;
     const current = files.get(key);
     if (current) {

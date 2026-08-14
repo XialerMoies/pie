@@ -18,6 +18,25 @@ function assertDelegates(src, fn, view) {
 }
 
 describe("frontend component tree boundaries", () => {
+  it("keeps low-reference frontend modules free of direct App access", () => {
+    const files = [
+      "src/frontend/ui/tree.ts",
+      "src/frontend/editor/monaco-tsserver.ts",
+      "src/frontend/chat/chat-component-views.ts",
+      "src/frontend/services/chat-runtime-store.ts",
+      "src/frontend/chat/chat-model-picker.ts",
+      "src/frontend/services/app-events.ts",
+      "src/frontend/services/tab-store.ts",
+      "src/frontend/dashboard/dashboard-menus.ts",
+      "src/frontend/dashboard/session-list-panel.ts",
+      "src/frontend/chat/chat-timeline.ts",
+      "src/frontend/pane/mcp/mcp-views.ts",
+    ];
+    for (const file of files) {
+      assert.doesNotMatch(source(file), /\bApp(?:\.|\s+as\s+any)/, `${file} must localize App dependencies at its boundary`);
+    }
+  });
+
   it("uses component views for token usage modal panes", () => {
     const src = source("src/frontend/chat/chat-token.ts");
     for (const name of ["UsageModalView", "UsageCurrentView", "UsageSummaryView"]) assertClass(src, name);

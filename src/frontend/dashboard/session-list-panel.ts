@@ -5,6 +5,16 @@ interface SessionDataCache {
   others: { project: string; path?: string; sessions: SessionInfo[] }[];
 }
 
+interface SessionListPanelDependencies {
+  state: AppStateFacade;
+}
+
+const sessionListPanelApp = (window as any).App;
+const sessionListPanelDependencies: SessionListPanelDependencies = {
+  state: sessionListPanelApp.State,
+};
+const { state: sessionListPanelState } = sessionListPanelDependencies;
+
 function parseSessionTime(value?: string): number {
   if (!value) return 0;
   const time = Date.parse(value);
@@ -173,7 +183,7 @@ class SessionListPanelView implements AppSessionListPanel {
   }
 
   fetchIndex(): Promise<void> {
-    const workspace = App.State.getWorkspacePath();
+    const workspace = sessionListPanelState.getWorkspacePath();
     return fetch('/api/sessions?workspace=' + encodeURIComponent(workspace) + '&other=1')
       .then(response => {
         if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -287,7 +297,7 @@ class SessionListPanelView implements AppSessionListPanel {
   }
 }
 
-App.SessionViews = {
-  ...(App.SessionViews || {}),
+sessionListPanelApp.SessionViews = {
+  ...(sessionListPanelApp.SessionViews || {}),
   createSessionListPanel: (callbacks: SessionListPanelCallbacks): AppSessionListPanel => new SessionListPanelView(callbacks),
 };

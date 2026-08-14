@@ -1,5 +1,8 @@
 /// <reference path="../../dashboard.d.ts" />
 
+const mcpViewsApp = (window as any).App || ((window as any).App = {});
+const mcpViewsState: AppMcpState = mcpViewsApp.McpState;
+
 class McpPanelView {
   static render(): string {
     return `
@@ -23,7 +26,7 @@ class McpServerListView {
     }
 
     return servers.map((server) => {
-      const state = App.McpState.normalize(server.state);
+      const state = mcpViewsState.normalize(server.state);
       const command = server.config?.transport === "http" || server.config?.transport === "sse"
         ? E(server.config.url ?? "")
         : `${E(server.config?.command ?? "")} ${(server.config?.args || []).map((arg) => E(arg)).join(" ")}`;
@@ -32,7 +35,7 @@ class McpServerListView {
           <div class="mcp-server-top">
             <span class="mcp-dot mcp-dot--${state}"></span>
             <span class="mcp-server-name">${E(server.name)}</span>
-            <span class="mcp-server-state mcp-state--${state}">${App.McpState.label(state)}</span>
+            <span class="mcp-server-state mcp-state--${state}">${mcpViewsState.label(state)}</span>
           </div>
           ${server.error ? `<div class="mcp-server-error">${E(server.error)}</div>` : ""}
           ${server.tools.length > 0 ? `<div class="mcp-server-tools">${server.tools.map((tool) => `<span class="mcp-tool-tag">${E(tool)}</span>`).join("")}</div>` : ""}
@@ -106,7 +109,6 @@ class McpCatalogView {
   }
 }
 
-const mcpViewsApp = (window as any).App || ((window as any).App = {});
 mcpViewsApp.McpViews = {
   renderPanel: () => McpPanelView.render(),
   renderServers: (servers: McpServerStatus[]) => McpServerListView.render(servers),

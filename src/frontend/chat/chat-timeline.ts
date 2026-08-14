@@ -4,6 +4,18 @@ type ChatTimelineItem = {
   prompt: string;
 };
 
+interface ChatTimelineDependencies {
+  preferences: AppPreferences;
+  chatState: AppChatState;
+}
+
+const chatTimelineApp = (window as any).App || ((window as any).App = {});
+const chatTimelineDependencies: ChatTimelineDependencies = {
+  preferences: chatTimelineApp.Preferences,
+  chatState: chatTimelineApp.ChatState,
+};
+const { preferences: timelinePreferences, chatState: timelineChatState } = chatTimelineDependencies;
+
 const CHAT_TIMELINE_MIN_ITEMS = 3;
 const CHAT_TIMELINE_DEFAULT_WINDOW_SIZE = 9;
 const CHAT_TIMELINE_ALLOWED_WINDOW_SIZES = [5, 7, 9];
@@ -46,7 +58,7 @@ class ChatTimelineView {
   }
 
   private readBooleanPreference(key: string, fallback = true): boolean {
-    const preferences = (App as any).Preferences;
+    const preferences = timelinePreferences;
     if (typeof preferences?.getBoolean !== 'function') return fallback;
     try {
       const value = preferences.getBoolean(key, fallback);
@@ -58,7 +70,7 @@ class ChatTimelineView {
 
   private readSettings(): void {
     this.enabled = this.readBooleanPreference('chat-timeline-enabled');
-    const preferences = (App as any).Preferences;
+    const preferences = timelinePreferences;
     const windowSize = preferences?.getNumber
       ? preferences.getNumber('chat-timeline-window-size', CHAT_TIMELINE_DEFAULT_WINDOW_SIZE)
       : CHAT_TIMELINE_DEFAULT_WINDOW_SIZE;
@@ -132,7 +144,7 @@ class ChatTimelineView {
       return;
     }
 
-    this.items = this.deriveItems(App.ChatState.getMessages());
+    this.items = this.deriveItems(timelineChatState.getMessages());
     if (this.items.length < CHAT_TIMELINE_MIN_ITEMS) {
       this.activeIndex = 0;
       this.hide(host);
@@ -255,7 +267,6 @@ class ChatTimelineView {
 }
 
 const timelineView = new ChatTimelineView();
-const chatTimelineApp = (window as any).App || ((window as any).App = {});
 chatTimelineApp.ChatTimeline = {
   bind: () => timelineView.bind(),
   sync: () => timelineView.sync(),

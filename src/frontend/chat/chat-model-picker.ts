@@ -5,6 +5,18 @@ interface ChatPickerModel {
   id: string;
 }
 
+interface ChatModelPickerDependencies {
+  chat?: AppChat;
+  chatState: AppChatState;
+}
+
+const chatModelPickerApp = (window as any).App;
+const chatModelPickerDependencies: ChatModelPickerDependencies = {
+  chat: chatModelPickerApp.Chat,
+  chatState: chatModelPickerApp.ChatState,
+};
+const { chat: modelPickerChat, chatState: modelPickerChatState } = chatModelPickerDependencies;
+
 class ChatModelPickerView {
   private picker: HTMLElement | null = null;
   private outsideClick: ((event: MouseEvent) => void) | null = null;
@@ -64,7 +76,7 @@ class ChatModelPickerView {
     }
 
     picker.appendChild(modelList);
-    App.Chat?.mountThinkingControl?.(picker);
+    modelPickerChat?.mountThinkingControl?.(picker);
     document.body.appendChild(picker);
     this.picker = picker;
     this.outsideClick = (event: MouseEvent) => {
@@ -77,7 +89,7 @@ class ChatModelPickerView {
 
   private appendModel(list: HTMLElement, provider: string, model: ChatPickerModel): void {
     const item = document.createElement('div');
-    const dashboard = App.ChatState.getDashboard();
+    const dashboard = modelPickerChatState.getDashboard();
     const active = model.provider === dashboard?.modelProvider && model.id === dashboard?.modelId;
     item.style.cssText = `padding:6px 10px;border-radius:4px;cursor:pointer;font-size:.78rem;font-family:var(--fm);color:${active ? 'var(--am)' : 'var(--ts)'};background:${active ? 'rgba(245,158,11,.1)' : 'transparent'}`;
     item.textContent = model.id;
@@ -92,7 +104,7 @@ class ChatModelPickerView {
         if (result.ok) {
           toast('已切换 ' + model.id, 'success');
           getD();
-          void App.Chat?.syncThinkingLevel?.();
+          void modelPickerChat?.syncThinkingLevel?.();
           this.close();
         } else {
           toast('切换失败: ' + (result.error || ''), 'error');
@@ -104,7 +116,6 @@ class ChatModelPickerView {
 }
 
 const chatModelPicker = new ChatModelPickerView();
-const chatModelPickerApp = (window as any).App;
 if (chatModelPickerApp) {
   chatModelPickerApp.ChatViews = {
     ...(chatModelPickerApp.ChatViews || {}),

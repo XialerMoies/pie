@@ -32,7 +32,7 @@ describe("MCP state boundary", () => {
       "utf8",
     );
 
-    assert.match(viewSource, /App\.McpState\.normalize\(server\.state\)/);
+    assert.match(viewSource, /mcpViewsState\.normalize\(server\.state\)/);
     assert.doesNotMatch(viewSource, /\$\{server\.state\}/);
     assert.match(
       compilerSource,

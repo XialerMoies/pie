@@ -13,6 +13,10 @@ interface TreeOptions {
   indent?: number;
 }
 
+function treePreferences(): AppPreferences | undefined {
+  return (globalThis as any).App?.Preferences;
+}
+
 export class Tree {
   private el: HTMLDivElement;
   private _expanded = new Set<string>();
@@ -66,7 +70,7 @@ export class Tree {
     if (!this._loadQueued) {
       this._loadQueued = true;
       try {
-        const raw = App.Preferences.get(this._stateKey);
+        const raw = treePreferences()?.get(this._stateKey);
         if (!raw) { this._loadQueued = false; this.render(); return; }
         const s = JSON.parse(raw);
         const toExpand: string[] = s.expanded || [];
@@ -279,7 +283,7 @@ export class Tree {
 
   private _saveState(): void {
     try {
-      App.Preferences.setJson(this._stateKey, {
+      treePreferences()?.setJson(this._stateKey, {
         expanded: Array.from(this._expanded),
         selected: this._selected,
       });
