@@ -198,6 +198,7 @@ describe("chat ui state", () => {
     await import(`../src/frontend/chat/chat-attachment-input.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-component-views.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-subagent-views.ts?t=${ts}`);
+    await import(`../src/frontend/chat/chat-event-node.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
     await import(`../src/frontend/chat/chat-timeline.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/dashboard-chat.ts?t=${ts}`);

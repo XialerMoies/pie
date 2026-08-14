@@ -103,6 +103,7 @@ before(async () => {
   Object.assign(globalThis, await import(`../src/frontend/chat/subagent-state.ts?t=${ts}`));
   await import(`../src/frontend/chat/chat-component-views.ts?t=${ts}`);
   await import(`../src/frontend/chat/chat-subagent-views.ts?t=${ts}`);
+  await import(`../src/frontend/chat/chat-event-node.ts?t=${ts}`);
   await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-layout.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/layout-tabs.ts?t=${ts}`);

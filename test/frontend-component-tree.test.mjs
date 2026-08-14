@@ -101,6 +101,19 @@ describe("frontend component tree boundaries", () => {
     assert.doesNotMatch(chat, /electronAPI.*selectFile|dataTransfer/);
   });
 
+  it("keeps event-node rendering and block reconciliation in a dedicated component view", () => {
+    const chat = source("src/frontend/chat/chat-render.ts");
+    const eventNode = source("src/frontend/chat/chat-event-node.ts");
+    assertClass(eventNode, "ChatEventNodeView");
+    for (const method of ["renderEventBlock", "renderBlocks", "renderBlockNode", "replaceBlockContents", "insertBlockNode"]) {
+      assert.match(eventNode, new RegExp(`static\\s+${method}\\s*\\(`), `${method} should belong to ChatEventNodeView`);
+    }
+    assert.match(chat, /ChatEventNodeView\.renderBlocks\(/);
+    assert.match(chat, /ChatEventNodeView\.replaceBlockContents\(/);
+    assert.doesNotMatch(chat, /function\\s+renderTraceItem\\b/);
+    assert.doesNotMatch(chat, /function\\s+renderEventBlock\\b/);
+  });
+
   it("loads the subagent component module after shared chat views and before chat rendering", () => {
     const compiler = source("scripts/compile-frontend-ts.mjs");
     const sharedIndex = compiler.indexOf('"gen/chat/chat-component-views.js"');
@@ -135,5 +148,13 @@ describe("frontend component tree boundaries", () => {
     const attachmentIndex = compiler.indexOf('"gen/chat/chat-attachment-input.js"');
     const dashboardChatIndex = compiler.indexOf('"gen/dashboard/dashboard-chat.js"');
     assert.ok(attachmentIndex >= 0 && dashboardChatIndex > attachmentIndex);
+  });
+
+  it("loads event-node rendering after subagent views and before chat rendering", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const subagentIndex = compiler.indexOf('"gen/chat/chat-subagent-views.js"');
+    const eventNodeIndex = compiler.indexOf('"gen/chat/chat-event-node.js"');
+    const renderIndex = compiler.indexOf('"gen/chat/chat-render.js"');
+    assert.ok(subagentIndex >= 0 && eventNodeIndex > subagentIndex && renderIndex > eventNodeIndex);
   });
 });

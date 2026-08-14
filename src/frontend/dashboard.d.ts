@@ -430,6 +430,18 @@ interface AppChatViews {
   renderSubagentDelegation(data: SubagentDelegationData): string;
   refreshSubagentDelegation(root: HTMLElement, data: SubagentDelegationData): boolean;
   renderErrorCard(error: ChatErrorState): string;
+  ChatEventNodeView: AppChatEventNodeView;
+}
+interface AppChatEventNodeView {
+  configure(dependencies: { renderMarkdown?: (text: string) => string }): void;
+  renderEventBlock(block: any, blocks: any[], defaultOpen?: boolean, batches?: readonly FrontendSubagentBatch[]): string;
+  renderBlocks(blocks: any[], batches?: readonly FrontendSubagentBatch[]): string;
+  renderBlockNode(block: any, blocks: any[]): HTMLElement | null;
+  replaceBlockContents(target: HTMLElement, html: string): void;
+  insertBlockNode(flow: HTMLElement, block: any, blocks: any[]): boolean;
+  refreshEditSummary(flow: HTMLElement, blocks: any[]): void;
+  subagentDelegationData(block: any, blocks: any[], batches?: readonly FrontendSubagentBatch[]): SubagentDelegationData;
+  blockId(block: any): string;
 }
 interface ChatComposerCallbacks {
   isBusy: () => boolean;
