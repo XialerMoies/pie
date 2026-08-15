@@ -3,7 +3,7 @@
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, mkdirSync, writeFileSync, unlinkSync, utimesSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, utimesSync } from "node:fs";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -19,6 +19,40 @@ function mkSessionFile(dir, id, lines) {
 
 before(async () => {
   mod = await import("../src/server/usage-index.ts");
+});
+
+describe("session title helper", () => {
+  it("selects a specific reply title instead of a generic introduction", async () => {
+    const titleModulePath = resolve(process.cwd(), "src/server/session-title.ts");
+    assert.strictEqual(existsSync(titleModulePath), true, "session-title.ts must own title selection");
+
+    const { extractReplyTitle } = await import("../src/server/session-title.ts");
+    const title = extractReplyTitle([
+      "可以，先看核心问题",
+      "",
+      "1. 支付回调签名校验风险",
+      "2. 订单状态并发更新问题",
+    ].join("\n"));
+
+    assert.strictEqual(title, "支付回调签名校验风险");
+  });
+
+  it("keeps both consumers behind the shared route-independent helper", () => {
+    const titleModulePath = resolve(process.cwd(), "src/server/session-title.ts");
+    assert.strictEqual(existsSync(titleModulePath), true, "session-title.ts must own title selection");
+
+    const titleSource = readFileSync(titleModulePath, "utf8");
+    const parserSource = readFileSync(resolve(process.cwd(), "src/server/routes/session-message-parser.ts"), "utf8");
+    const usageSource = readFileSync(resolve(process.cwd(), "src/server/usage-index.ts"), "utf8");
+    const localTitleHelpers = /function (?:summarizeText|normalizeTitleLine|isGenericReplyIntro|scoreTitleLine|extractReplyTitle)\(/;
+
+    assert.match(titleSource, /export function extractReplyTitle\(/);
+    assert.doesNotMatch(titleSource, /from "\.\/(?:routes|usage-index)/);
+    assert.match(parserSource, /from "\.\.\/session-title\.js"/);
+    assert.match(usageSource, /from "\.\/session-title\.js"/);
+    assert.doesNotMatch(parserSource, localTitleHelpers);
+    assert.doesNotMatch(usageSource, localTitleHelpers);
+  });
 });
 
 describe("scanSessionFile", () => {
