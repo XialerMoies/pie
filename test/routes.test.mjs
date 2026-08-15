@@ -35,6 +35,31 @@ describe("route implementation cleanup", () => {
   });
 });
 
+describe("dashboard MCP route ownership", () => {
+  it("delegates MCP routes after session readiness to a focused module", () => {
+    const dashboardPath = resolve(ROOT, "src/server/routes/dashboard.ts");
+    const mcpPath = resolve(ROOT, "src/server/routes/dashboard-mcp.ts");
+    const pathUtilsPath = resolve(ROOT, "src/server/routes/route-path-utils.ts");
+    assert.strictEqual(existsSync(mcpPath), true, "dashboard-mcp.ts must own dashboard MCP routes");
+    assert.strictEqual(existsSync(pathUtilsPath), true, "shared route path helpers must have neutral ownership");
+
+    const dashboardSource = readFileSync(dashboardPath, "utf8");
+    const mcpSource = readFileSync(mcpPath, "utf8");
+    const readinessIndex = dashboardSource.indexOf("waitForSessionReady");
+    const delegationIndex = dashboardSource.indexOf("handleDashboardMcp(");
+
+    assert.match(dashboardSource, /from "\.\/dashboard-mcp\.js"/);
+    assert.ok(readinessIndex >= 0 && delegationIndex > readinessIndex, "MCP delegation must remain behind session readiness");
+    assert.doesNotMatch(dashboardSource, /\/api\/mcp\//);
+    assert.doesNotMatch(dashboardSource, /\b(?:TrustStore|MCP_CATALOG|updateMcpConfigFile|publishMcpChanged)\b/);
+    assert.match(dashboardSource, /from "\.\/route-path-utils\.js"/);
+    assert.match(mcpSource, /export const handleDashboardMcp: RouteHandler/);
+    assert.match(mcpSource, /from "\.\/route-path-utils\.js"/);
+    assert.doesNotMatch(mcpSource, /from "\.\/dashboard\.js"/);
+    assert.doesNotMatch(`${dashboardSource}\n${mcpSource}`, /function (?:existingAncestorForPath|pathExists)\b/);
+  });
+});
+
 // ─── Mock 工厂 ─────────────────────────────────────────────
 
 function mockModel(overrides) {
