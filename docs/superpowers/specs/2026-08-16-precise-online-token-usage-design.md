@@ -112,10 +112,10 @@ Usage 当前会话面板显示相同标签，并将原“Token 用量”标题�
 继续使用现有 `usage.changed` 应用事件，不引入轮询。
 
 - `agent_start` 立即发布一次，显示用户新消息带来的 mixed/estimated 状态。
-- `message_update` 期间采用每 500ms 最多一次的节流发布，更新流式 assistant 尾部估算。
+- `message_update` 期间采用时间戳门控，每 500ms 最多发布一次，更新流式 assistant 尾部估算；不创建延迟计时器。
 - `agent_end` 不直接宣称精确；沿用现有 `waitForIdle()` 边界，在 PI 完成消息和 usage 落位后发布最终事件。
-- 最终发布取消尚未触发的流式节流任务，避免旧的 mixed 事件晚于 exact 状态到达。
-- session 切换后，旧 session 的延迟事件和计时器不得更新新窗口状态。
+- `agent_end` 后没有待触发的流式计时器，因此不会出现旧的 mixed 事件晚于 exact 状态到达。
+- session 切换后，现有 source-session 校验继续拒绝旧 session 的延迟事件。
 - compaction start/end 继续发布 usage 变化，并重新计算来源；压缩后尚无有效 provider usage 时不得显示 `exact`。
 
 节流只减少事件数量，不缓存 Token 数值。每次 API 请求都从当前 session 重新计算，避免快照过期。
@@ -143,7 +143,7 @@ Usage 当前会话面板显示相同标签，并将原“Token 用量”标题�
 - 两个 usage API 保留旧字段并增加 provenance 字段。
 - 流式 `message_update` 发布受 500ms 节流约束。
 - `waitForIdle()` 后最终事件能读取到精确 usage。
-- 最终事件、session 切换和 dispose 会清理延迟发布，不发生跨 session 污染。
+- 最终事件和 session 切换不发生延迟发布或跨 session 污染。
 
 ### 前端
 
