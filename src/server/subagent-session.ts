@@ -45,7 +45,7 @@ export interface EmbeddedSubagentSessionInput {
   }
 }
 
-type RuntimeForSubagents = Pick<AgentRuntime, "authStorage" | "modelRegistry" | "config" | "session">
+type RuntimeForSubagents = Pick<AgentRuntime, "modelRuntime" | "modelRegistry" | "config" | "session">
 type ResourceLoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0]
 
 export interface EmbeddedSubagentFactoryDependencies {
@@ -111,8 +111,7 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
     const { session } = await createSession({
       cwd: input.workspace,
       agentDir: runtime.config.agentDir,
-      authStorage: runtime.authStorage,
-      modelRegistry: runtime.modelRegistry,
+      modelRuntime: runtime.modelRuntime,
       model,
       thinkingLevel: "off",
       tools,

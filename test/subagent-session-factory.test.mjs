@@ -16,7 +16,7 @@ function createHarness() {
   let promptResolutions = 0;
 
   const runtime = {
-    authStorage: { kind: "shared-auth" },
+    modelRuntime: { kind: "shared-model-runtime" },
     modelRegistry: {
       find(provider, id) {
         modelFinds.push({ provider, id });
@@ -59,6 +59,7 @@ function createHarness() {
 
   return {
     factory,
+    modelRuntime: runtime.modelRuntime,
     modelRegistry: runtime.modelRegistry,
     inheritedModel,
     overrideModel,
@@ -112,8 +113,9 @@ describe("embedded subagent session factory", () => {
     const options = harness.sessionOptions[0];
     assert.strictEqual(options.cwd, "/repo");
     assert.strictEqual(options.agentDir, "/agent");
-    assert.strictEqual(options.authStorage.kind, "shared-auth");
-    assert.strictEqual(options.modelRegistry, harness.modelRegistry);
+    assert.strictEqual(options.modelRuntime, harness.modelRuntime);
+    assert.strictEqual("authStorage" in options, false);
+    assert.strictEqual("modelRegistry" in options, false);
     assert.strictEqual(options.model, harness.inheritedModel);
     assert.strictEqual(options.thinkingLevel, "off");
     assert.deepStrictEqual(options.tools, READ_ONLY_SUBAGENT_TOOLS);

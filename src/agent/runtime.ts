@@ -7,7 +7,7 @@
 import { readdirSync, existsSync } from "fs"
 import { resolve } from "path"
 import type { AgentSession } from "@xiamol/pi-coding-agent"
-import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from "@xiamol/pi-coding-agent"
+import { createAgentSession, ModelRuntime, ModelRegistry, SessionManager, DefaultResourceLoader } from "@xiamol/pi-coding-agent"
 import { resolveSystemPrompt } from "./prompts.js"
 import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools/index.js"
 import type { SessionPermissionState, ToolContext } from "./types.js"
@@ -125,8 +125,8 @@ export function recoverConversationLeaf(sessionManager: SessionManager): boolean
 
 export class AgentRuntime {
   private _session?: AgentSession
+  modelRuntime!: ModelRuntime
   modelRegistry!: ModelRegistry
-  authStorage!: AuthStorage
   sessionManager!: SessionManager
   config!: RuntimeConfig
   currentWorkspace!: string
@@ -464,8 +464,8 @@ export class AgentRuntime {
   private async _initSession(cwd: string, existingSessionFile?: string, forceNew?: boolean): Promise<void> {
     const { agentDir, sessionsDir, authFile, modelsFile } = this.config
 
-    this.authStorage = AuthStorage.create(authFile)
-    this.modelRegistry = ModelRegistry.create(this.authStorage, modelsFile)
+    this.modelRuntime = await ModelRuntime.create({ authPath: authFile, modelsPath: modelsFile })
+    this.modelRegistry = new ModelRegistry(this.modelRuntime)
 
     const systemPrompt = resolveSystemPrompt()
     const loader = new DefaultResourceLoader({
@@ -507,8 +507,7 @@ export class AgentRuntime {
 
     const { session } = await createAgentSession({
       agentDir,
-      authStorage: this.authStorage,
-      modelRegistry: this.modelRegistry,
+      modelRuntime: this.modelRuntime,
       resourceLoader: loader,
       cwd,
       sessionManager: this.sessionManager,

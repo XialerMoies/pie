@@ -131,7 +131,7 @@ function switchSettingsModal(tab: string): void {
       <h3 class="s-title">关于</h3>
       <p class="s-desc">My Code Agent — 基于 PI 框架的自定义编程助手</p>
       <div class="s-section"><span class="s-label">版本</span><span class="s-value">0.0.1</span></div>
-      <div class="s-section"><span class="s-label">框架</span><span class="s-value">@xiamol/pi-coding-agent v0.80.3</span></div>
+      <div class="s-section"><span class="s-label">框架</span><span class="s-value">@xiamol/pi-coding-agent v0.84.2-xiamol.0</span></div>
     `;
   }
 }

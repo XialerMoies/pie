@@ -13,6 +13,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { ModelRegistry, ModelRuntime } from "@xiamol/pi-coding-agent";
 import { workspaceDataPaths } from "../src/server/routes/session-dir.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1036,9 +1037,11 @@ describe("settings routes", () => {
   it("reveals a configured key only after an explicit provider request", async () => {
     const ctx = mockContext({
       runtime: mockRuntime({
-        authStorage: {
-          getAuthStatus: (provider) => provider === "openai" ? { configured: true, source: "stored" } : { configured: false },
-          getApiKey: async (provider) => provider === "openai" ? "sk-test-secret-value" : undefined,
+        modelRuntime: {
+          getProviderAuthStatus: (provider) => provider === "openai" ? { configured: true, source: "stored" } : { configured: false },
+          getAuth: async (provider) => provider === "openai"
+            ? { auth: { apiKey: "sk-test-secret-value" } }
+            : undefined,
         },
       }),
     });
@@ -1051,6 +1054,39 @@ describe("settings routes", () => {
       const { status, body } = await callHandler(handleSettings, "POST", "/api/auth/reveal", { provider: "openai" }, ctx);
       assert.strictEqual(status, 200);
       assert.deepStrictEqual(parseJSON(body), { ok: true, apiKey: "sk-test-secret-value" });
+    } finally {
+      if (ctx.paths._tmpDir) rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes ModelRuntime after saving an API key", async () => {
+    const ctx = mockContext();
+    try {
+      mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+      const modelRuntime = await ModelRuntime.create({
+        authPath: resolve(ctx.paths.PI_CONFIG_DIR, "auth.json"),
+        modelsPath: null,
+        allowModelNetwork: false,
+      });
+      ctx.runtime = mockRuntime({
+        modelRuntime,
+        modelRegistry: new ModelRegistry(modelRuntime),
+      });
+
+      assert.strictEqual(modelRuntime.getProviderAuthStatus("openai").configured, false);
+      assert.strictEqual(ctx.runtime.modelRegistry.getAvailable().some((model) => model.provider === "openai"), false);
+
+      const saved = await callHandler(handleSettings, "POST", "/api/auth", {
+        provider: "openai",
+        apiKey: "sk-test-secret-value",
+      }, ctx);
+      assert.strictEqual(saved.status, 200);
+      assert.deepStrictEqual(parseJSON(saved.body), { ok: true });
+      assert.deepStrictEqual(modelRuntime.getProviderAuthStatus("openai"), { configured: true, source: "stored" });
+
+      const models = await callHandler(handleSettings, "GET", "/api/models", undefined, ctx);
+      assert.strictEqual(models.status, 200);
+      assert.ok(parseJSON(models.body).models.some((model) => model.provider === "openai"));
     } finally {
       if (ctx.paths._tmpDir) rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
     }

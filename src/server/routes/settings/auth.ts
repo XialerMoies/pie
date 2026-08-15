@@ -16,9 +16,9 @@ export function storedApiKey(value: unknown): string {
 }
 
 function authStatus(runtime: AgentRuntime, provider: string): { configured?: boolean; source?: string } | undefined {
-  const storage = (runtime as any).authStorage;
-  if (typeof storage?.getAuthStatus !== "function") return undefined;
-  try { return storage.getAuthStatus(provider); } catch { return undefined; }
+  const modelRuntime = runtime.modelRuntime;
+  if (typeof modelRuntime?.getProviderAuthStatus !== "function") return undefined;
+  try { return modelRuntime.getProviderAuthStatus(provider); } catch { return undefined; }
 }
 
 export function hasProviderAuth(runtime: AgentRuntime, provider: string, stored: unknown): boolean {
@@ -27,10 +27,10 @@ export function hasProviderAuth(runtime: AgentRuntime, provider: string, stored:
 }
 
 export async function resolveProviderApiKey(runtime: AgentRuntime, provider: string, stored: unknown): Promise<string> {
-  const storage = (runtime as any).authStorage;
-  if (typeof storage?.getApiKey === "function") {
+  const modelRuntime = runtime.modelRuntime;
+  if (typeof modelRuntime?.getAuth === "function") {
     try {
-      const key = await storage.getApiKey(provider);
+      const key = (await modelRuntime.getAuth(provider))?.auth?.apiKey;
       if (typeof key === "string" && key) return key;
     } catch {}
   }
@@ -107,6 +107,7 @@ export const handleAuthSettings: RouteHandler = async (req, res, ctx) => {
         authData[provider] = { type: "api_key", key: apiKey };
         return authData;
       }, { trailingNewline: false });
+      await runtime.modelRuntime.refresh({ providers: [provider], allowNetwork: false });
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {

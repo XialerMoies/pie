@@ -14,7 +14,7 @@
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
-import { createAgentSession, SessionManager, SettingsManager, AuthStorage, ModelRegistry, DefaultResourceLoader } from "@xiamol/pi-coding-agent";
+import { createAgentSession, SessionManager, SettingsManager, ModelRuntime, ModelRegistry, DefaultResourceLoader } from "@xiamol/pi-coding-agent";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -22,14 +22,18 @@ import { resolve } from "node:path";
 const RO = ["read", "grep", "find", "ls"];
 
 describe("④-B 子 agent 真实 SDK 隔离", () => {
-  let dir, auth, registry, settings, loader;
+  let dir, modelRuntime, registry, settings, loader;
   const sessions = [];
 
   before(async () => {
     dir = mkdtempSync(resolve(tmpdir(), "pi-subagent-test-"));
     mkdirSync(resolve(dir, ".pi/agent"), { recursive: true });
-    auth = AuthStorage.create(resolve(dir, ".pi/agent/auth.json"));
-    registry = ModelRegistry.create(auth, resolve(dir, ".pi/agent/models.json"));
+    modelRuntime = await ModelRuntime.create({
+      authPath: resolve(dir, ".pi/agent/auth.json"),
+      modelsPath: resolve(dir, ".pi/agent/models.json"),
+      refreshOnCreate: false,
+    });
+    registry = new ModelRegistry(modelRuntime);
     settings = SettingsManager.inMemory();
     loader = new DefaultResourceLoader({ cwd: dir, agentDir: resolve(dir, ".pi/agent"), settingsManager: settings });
     await loader.reload();
@@ -45,8 +49,7 @@ describe("④-B 子 agent 真实 SDK 隔离", () => {
     const { session } = await createAgentSession({
       cwd: ws,
       agentDir: resolve(dir, ".pi/agent"),
-      authStorage: auth,
-      modelRegistry: registry,
+      modelRuntime,
       settingsManager: settings,
       sessionManager: sm,
       resourceLoader: loader,

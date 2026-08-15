@@ -18,7 +18,7 @@
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
-import { createAgentSession, SessionManager, SettingsManager, AuthStorage, ModelRegistry, DefaultResourceLoader } from "@xiamol/pi-coding-agent";
+import { createAgentSession, SessionManager, SettingsManager, ModelRuntime, ModelRegistry, DefaultResourceLoader } from "@xiamol/pi-coding-agent";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -47,14 +47,18 @@ function makeStreamSimple(reply, { blockMs = 0, blocks = 1 } = {}) {
 }
 
 describe("④-B 子 agent 真实并发执行", () => {
-  let dir, auth, registry, settings, loader;
+  let dir, modelRuntime, registry, settings, loader;
   const sessions = [];
 
   before(async () => {
     dir = mkdtempSync(resolve(tmpdir(), "pi-subagent-conc-"));
     mkdirSync(resolve(dir, ".pi/agent"), { recursive: true });
-    auth = AuthStorage.create(resolve(dir, ".pi/agent/auth.json"));
-    registry = ModelRegistry.create(auth, resolve(dir, ".pi/agent/models.json"));
+    modelRuntime = await ModelRuntime.create({
+      authPath: resolve(dir, ".pi/agent/auth.json"),
+      modelsPath: resolve(dir, ".pi/agent/models.json"),
+      refreshOnCreate: false,
+    });
+    registry = new ModelRegistry(modelRuntime);
     settings = SettingsManager.inMemory({ defaultProvider: CONCURRENT_PROVIDER, defaultModel: "c-1", defaultThinkingLevel: "off" });
 
     // 并发 provider：150ms 一块、1 块 → 单次 ~150ms
@@ -77,7 +81,7 @@ describe("④-B 子 agent 真实并发执行", () => {
     const sm = SessionManager.inMemory(ws);
     const { session } = await createAgentSession({
       cwd: ws, agentDir: resolve(dir, ".pi/agent"),
-      authStorage: auth, modelRegistry: registry, settingsManager: settings,
+      modelRuntime, settingsManager: settings,
       sessionManager: sm, resourceLoader: loader, tools: ["read", "ls"],
     });
     sessions.push(session);
@@ -123,7 +127,7 @@ describe("④-B 子 agent 真实并发执行", () => {
     const smA = SessionManager.inMemory("/ws-abort");
     const { session: a } = await createAgentSession({
       cwd: "/ws-abort", agentDir: resolve(dir, ".pi/agent"),
-      authStorage: auth, modelRegistry: registry, settingsManager: settingsA,
+      modelRuntime, settingsManager: settingsA,
       sessionManager: smA, resourceLoader: loader, tools: ["read", "ls"],
     });
     sessions.push(a);

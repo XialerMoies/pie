@@ -571,6 +571,16 @@ describe("settings DOM boundary", () => {
     }
   });
 
+  it("shows the installed PI fork version in About", async () => {
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+
+    document.querySelector('.ms-item[data-st="about"]')?.click();
+    await flushAsyncWork();
+
+    assert.match(document.getElementById("mc-settings")?.textContent ?? "", /@xiamol\/pi-coding-agent v0\.84\.2-xiamol\.0/);
+  });
+
   it("unmounts Permissions when closing an existing Permissions Settings modal", async () => {
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();
