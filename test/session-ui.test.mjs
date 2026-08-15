@@ -29,7 +29,12 @@ global.registerPane = (name, render) => {
 };
 
 global.$ = (id) => doc.getElementById(id);
-global.E = (value) => String(value ?? "");
+global.E = (value) => String(value ?? "")
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
 global.S = (name, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24"><use href="#${name}"/></svg>`;
 
 function cssBlocks(css, selector) {
@@ -216,6 +221,21 @@ const sessionListRunning = {
   other: [],
   activeSessionId: "sess-a",
 };
+const hostileSessionName = `hostile\"><img data-session-xss=\"yes\" onerror=alert(1)>`;
+const sessionListHostile = {
+  sessions: [{
+    id: "sess-hostile",
+    name: hostileSessionName,
+    active: false,
+    messageCount: 1,
+    createdAt: "2026-07-12T10:00:00.000Z",
+    updatedAt: "2026-07-12T10:10:00.000Z",
+    file: hostileSessionName,
+    branchFrom: { id: "sess-root", name: hostileSessionName },
+  }],
+  other: [],
+  activeSessionId: null,
+};
 
 global.fetch = async (url, init = {}) => {
   fetchCalls.push([url, init.method || "GET", init]);
@@ -258,7 +278,7 @@ global.fetch = async (url, init = {}) => {
     };
   }
   if (String(url).includes("/api/sessions?")) {
-    const payload = sessionListState === 0 ? sessionListBefore : sessionListState === 1 ? sessionListAfter : sessionListState === 3 ? sessionListBranch : sessionListState === 4 ? sessionListRunning : sessionListEmpty;
+    const payload = sessionListState === 0 ? sessionListBefore : sessionListState === 1 ? sessionListAfter : sessionListState === 3 ? sessionListBranch : sessionListState === 4 ? sessionListRunning : sessionListState === 5 ? sessionListHostile : sessionListEmpty;
     sessionListState += 1;
     return {
       ok: true,
@@ -287,6 +307,22 @@ before(async () => {
 }, 10000);
 
 describe("session ui state", () => {
+  it("renders hostile session metadata as text", async () => {
+    sessionListState = 5;
+    localStorage.setItem("workspace_path", "E:\\my-code-agent");
+
+    try {
+      await win.App.Session.loadSessions();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      assert.strictEqual(doc.querySelector('[data-session-xss="yes"]'), null);
+      assert.strictEqual(doc.querySelector("#sl script"), null);
+      assert.ok(doc.querySelector("#sl")?.textContent.includes("<img"), "hostile metadata should remain visible as text");
+    } finally {
+      sessionListState = 0;
+    }
+  });
+
   it("无标签时主区空白，无默认 chat", () => {
     store["session-tabs"] = "[]";
     delete store["chat-tab-open"];

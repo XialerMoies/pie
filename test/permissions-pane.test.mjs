@@ -18,7 +18,9 @@ global.S = (name, size = 16) => `<svg width="${size}" height="${size}" viewBox="
 global.E = (value) => String(value ?? "")
   .replaceAll("&", "&amp;")
   .replaceAll("<", "&lt;")
-  .replaceAll(">", "&gt;");
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
 global.toast = (msg, type) => {
   win.__toasts = [...(win.__toasts || []), { msg, type }];
 };
@@ -203,6 +205,38 @@ before(async () => {
 });
 
 describe("permissions pane", { concurrency: 1 }, () => {
+  it("renders hostile rule and audit fields as text", async () => {
+    const payload = `hostile\"><img data-permission-xss=\"yes\" onerror=alert(1)>`;
+    state.rules.alwaysAllowRules = [{
+      toolName: payload,
+      ruleContent: `Read(${payload})`,
+      match: "exact",
+      scope: "session",
+      index: 0,
+    }];
+    state.audit = [{
+      id: 99,
+      timestamp: "2026-07-29T10:00:00.000Z",
+      source: payload,
+      operation: "write",
+      root: payload,
+      path: payload,
+      decision: "deny",
+      reason: payload,
+    }];
+    const container = doc.createElement("div");
+    doc.body.appendChild(container);
+
+    win.App.Permissions.mount(container);
+    await waitTick();
+    await waitTick();
+
+    assert.strictEqual(container.querySelector('[data-permission-xss="yes"]'), null);
+    assert.strictEqual(container.querySelector("script"), null);
+    assert.ok(container.textContent.includes("<img"), "hostile fields should remain visible as text");
+    container.remove();
+  });
+
   it("publishes a reusable Permissions facade and manages mounted roots", async () => {
     assert.strictEqual(typeof win.App.Permissions?.mount, "function");
     assert.strictEqual(typeof win.App.Permissions?.refresh, "function");

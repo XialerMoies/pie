@@ -17,4 +17,8 @@ describe("timing-sensitive test serialization", () => {
   it("runs frontend tests with file-level concurrency one", () => {
     assert.match(packageJson.scripts["test:frontend"], /--test-concurrency=1/);
   });
+
+  it("keeps the reviewed frontend HTML sink baseline in the frontend suite", () => {
+    assert.match(packageJson.scripts["test:frontend"], /test\/frontend-xss-sinks\.test\.mjs/);
+  });
 });

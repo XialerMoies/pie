@@ -189,6 +189,36 @@ describe("chat component views", () => {
     assert.strictEqual(host.childElementCount, 0);
   });
 
+  it("Subagent views render delegated payloads as text instead of executable markup", () => {
+    const originalE = globalThis.E;
+    const payload = `hostile\"><img data-subagent-xss=\"yes\" onerror=alert(1)>`;
+    globalThis.E = (value) => String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+
+    try {
+      const html = win.App.ChatViews.renderSubagentDelegation({
+        input: {
+          maxConcurrent: 1,
+          tasks: [{ agentId: payload, profile: payload, prompt: payload }],
+        },
+        output: payload,
+        status: "success",
+      });
+      const host = doc.createElement("div");
+      host.innerHTML = html;
+
+      assert.strictEqual(host.querySelector('[data-subagent-xss="yes"]'), null);
+      assert.strictEqual(host.querySelector("script"), null);
+      assert.ok(host.textContent.includes("<img"), "hostile markup should remain visible as text");
+    } finally {
+      globalThis.E = originalE;
+    }
+  });
+
   it("ChatErrorView keeps action ownership local and releases it on dispose", () => {
     const host = doc.createElement("div");
     const calls = [];
