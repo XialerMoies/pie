@@ -141,6 +141,10 @@ const bundlePrev = existsSync(bundleOut) ? readFileSync(bundleOut, "utf-8") : nu
 const REQUIRED_BUNDLE_ENTRIES = [
   "gen/pane/permissions/permissions-views.js",
   "gen/pane/permissions/index.js",
+  "gen/dashboard/settings-general.js",
+  "gen/dashboard/settings-provider-model.js",
+  "gen/dashboard/settings-custom-subagents.js",
+  "gen/dashboard/settings-storage.js",
   "gen/dashboard/dashboard-settings.js",
 ];
 const bundleOrder = [
@@ -192,6 +196,10 @@ const bundleOrder = [
   "gen/pane/permissions/permissions-views.js",
   "gen/pane/permissions/index.js",
   "gen/dashboard/dashboard-menus.js",
+  "gen/dashboard/settings-general.js",
+  "gen/dashboard/settings-provider-model.js",
+  "gen/dashboard/settings-custom-subagents.js",
+  "gen/dashboard/settings-storage.js",
   "gen/dashboard/dashboard-settings.js",
 ];
 
@@ -201,9 +209,19 @@ if (missingBundleEntries.length > 0) {
 }
 const permissionViewsBundleIndex = bundleOrder.indexOf("gen/pane/permissions/permissions-views.js");
 const permissionsBundleIndex = bundleOrder.indexOf("gen/pane/permissions/index.js");
+const settingsOwnerBundleIndexes = [
+  "gen/dashboard/settings-general.js",
+  "gen/dashboard/settings-provider-model.js",
+  "gen/dashboard/settings-custom-subagents.js",
+  "gen/dashboard/settings-storage.js",
+].map(entry => bundleOrder.indexOf(entry));
 const settingsBundleIndex = bundleOrder.indexOf("gen/dashboard/dashboard-settings.js");
-if (permissionViewsBundleIndex === -1 || permissionsBundleIndex <= permissionViewsBundleIndex || settingsBundleIndex <= permissionsBundleIndex) {
-  throw new Error("dashboard bundle 顺序错误: Permissions Views 必须位于 Permissions 和 Settings 之前");
+if (
+  permissionViewsBundleIndex === -1
+  || permissionsBundleIndex <= permissionViewsBundleIndex
+  || settingsOwnerBundleIndexes.some(index => index <= permissionsBundleIndex || index >= settingsBundleIndex)
+) {
+  throw new Error("dashboard bundle 顺序错误: Permissions 和 Settings owners 必须位于 Settings facade 之前");
 }
 
 const bundleFiles = bundleOrder.filter(f => existsSync(resolve(SRC, f)));

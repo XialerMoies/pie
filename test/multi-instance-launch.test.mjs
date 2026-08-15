@@ -420,7 +420,7 @@ describe("multi-instance launch and migration UX", () => {
   it("exposes the new-instance capability and settings status fields", () => {
     const preload = readFileSync(resolve("src/electron/preload.ts"), "utf8");
     const declarations = readFileSync(resolve("src/frontend/dashboard.d.ts"), "utf8");
-    const settings = readFileSync(resolve("src/frontend/dashboard/dashboard-settings.ts"), "utf8");
+    const storageSettings = readFileSync(resolve("src/frontend/dashboard/settings-storage.ts"), "utf8");
     const electronMain = readFileSync(resolve("src/electron/electron-main.ts"), "utf8");
     const launchBridge = readFileSync(resolve("src/electron/desktop-launch.ts"), "utf8");
     const sessionRoutes = readFileSync(resolve("src/server/routes/sessions.ts"), "utf8");
@@ -429,8 +429,8 @@ describe("multi-instance launch and migration UX", () => {
     assert.doesNotMatch(preload, /launchProjectInstance/);
     assert.doesNotMatch(declarations, /launchProjectInstance/);
     assert.match(declarations, /instanceId/);
-    assert.match(settings, /workspaceLock/);
-    assert.match(settings, /migration/);
+    assert.match(storageSettings, /workspaceLock/);
+    assert.match(storageSettings, /migration/);
     assert.match(electronMain, /new WindowManager\(/);
     assert.match(electronMain, /windowManager\.createEmptyWindow\(\)/);
     assert.match(electronMain, /windowManager\.createInitialWindow\(/);

@@ -60,6 +60,10 @@ global.fetch = (...args) => fetchImpl(...args);
 before(async () => {
   await import(`../src/frontend/services/chat-runtime-store.ts?settings-ui=${Date.now()}`);
   await import(`../src/frontend/services/preferences.ts?settings-ui=${Date.now()}`);
+  await import("../src/frontend/dashboard/settings-general.ts");
+  await import("../src/frontend/dashboard/settings-provider-model.ts");
+  await import("../src/frontend/dashboard/settings-custom-subagents.ts");
+  await import("../src/frontend/dashboard/settings-storage.ts");
   await import("../src/frontend/dashboard/dashboard-settings.ts");
 });
 
@@ -127,8 +131,17 @@ describe("settings DOM boundary", () => {
   });
 
   it("does not use inline event attributes", () => {
-    const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-settings.ts"), "utf8");
-    assert.doesNotMatch(source, /\son(?:click|change|dragstart|dragover|drop)\s*=/i);
+    const files = [
+      "dashboard-settings.ts",
+      "settings-general.ts",
+      "settings-provider-model.ts",
+      "settings-custom-subagents.ts",
+      "settings-storage.ts",
+    ];
+    for (const file of files) {
+      const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard", file), "utf8");
+      assert.doesNotMatch(source, /\son(?:click|change|dragstart|dragover|drop)\s*=/i, `${file} must use delegated events`);
+    }
   });
 
   it("renders a dedicated Subagent tab with independently persisted 1..30 limits", async () => {

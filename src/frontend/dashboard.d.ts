@@ -350,6 +350,46 @@ interface AppSettings {
   setSearchType(type: 'filename' | 'text'): void;
   toggleCaseSensitive(): void;
 }
+interface SettingsGeneralApi {
+  renderGeneralTab(container: HTMLElement): void;
+  renderSubagentLimits(container: HTMLElement): void;
+  toggleAutoSave(): void;
+  changeFontSize(delta: number): void;
+  applyGeneral(): void;
+  applyReading(target: HTMLElement): void;
+  applySubagent(target: HTMLInputElement): void;
+  changeSubagent(inputId: string, delta: number): void;
+}
+interface SettingsProviderModelApi {
+  renderTab(container: HTMLElement): void;
+  selectProvider(provider: string): void;
+  toggleKeyVisibility(provider: string): void;
+  saveApiKey(provider: string): void;
+  loadProviderModels(provider: string): void;
+  selectModel(provider: string, modelId: string): void;
+  dragStart(event: DragEvent, index: number): void;
+  dragOver(event: DragEvent, index: number): void;
+  drop(event: DragEvent, index: number): void;
+}
+interface SettingsCustomSubagentApi {
+  mount(container: HTMLElement): void;
+  startNew(): void;
+  select(id: string): void;
+  save(): Promise<void>;
+  delete(id: string): Promise<void>;
+}
+interface SettingsStorageApi {
+  mount(container: HTMLElement): void;
+  previewMigration(root?: ParentNode): Promise<void>;
+  confirmMigration(): Promise<void>;
+  chooseDataRoot(): Promise<void>;
+}
+interface AppSettingsComponents {
+  general: SettingsGeneralApi;
+  providers: SettingsProviderModelApi;
+  subagents: SettingsCustomSubagentApi;
+  storage: SettingsStorageApi;
+}
 // ─── TabBehavior / TabStoreAPI ──────────────────────
 /** Options 透传至 _applySessionMessages，控制会话激活后的副作用 */
 interface SessionActivationOptions {
@@ -603,6 +643,7 @@ interface AppNamespace {
   SessionRestore: AppSessionRestore;
   Permissions: AppPermissions;
   Settings: AppSettings;
+  SettingsComponents: AppSettingsComponents;
   Git: AppGit;
   FileDiff: AppFileDiff;
   ChatViews: AppChatViews;

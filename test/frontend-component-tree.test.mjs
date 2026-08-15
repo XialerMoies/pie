@@ -81,11 +81,45 @@ describe("frontend component tree boundaries", () => {
     assert.doesNotMatch(src, /\bApp\./);
   });
 
-  it("uses component views for settings storage and custom subagents", () => {
-    const src = source("src/frontend/dashboard/dashboard-settings.ts");
-    for (const name of ["SettingsStorageLocationView", "SettingsCustomSubagentManagerView"]) assertClass(src, name);
-    assertDelegates(src, "renderCustomSubagentManager", "SettingsCustomSubagentManagerView");
-    assertDelegates(src, "renderStorageLocationSettings", "SettingsStorageLocationView");
+  it("keeps settings responsibilities in dedicated component owners", () => {
+    const shell = source("src/frontend/dashboard/dashboard-settings.ts");
+    const general = source("src/frontend/dashboard/settings-general.ts");
+    const providers = source("src/frontend/dashboard/settings-provider-model.ts");
+    const subagents = source("src/frontend/dashboard/settings-custom-subagents.ts");
+    const storage = source("src/frontend/dashboard/settings-storage.ts");
+
+    assertClass(general, "SettingsGeneralController");
+    assertClass(providers, "SettingsProviderModelController");
+    assertClass(subagents, "SettingsCustomSubagentController");
+    assertClass(storage, "SettingsStorageController");
+
+    for (const owner of [general, providers, subagents, storage]) {
+      assert.doesNotMatch(owner, /\bApp\./, "settings owners must localize App dependencies at their boundary");
+    }
+    assert.match(shell, /settingsComponents\.providers\.renderTab\(sc\)/);
+    assert.match(shell, /settingsComponents\.general\.renderGeneralTab\(sc\)/);
+    assert.match(shell, /settingsComponents\.general\.renderSubagentLimits\(sc\)/);
+    assert.match(shell, /settingsComponents\.subagents\.mount\(sc\)/);
+    assert.match(shell, /settingsComponents\.storage\.mount\(sc\)/);
+    assert.doesNotMatch(shell, /class\s+(?:SettingsGeneralController|SettingsProviderModelController|SettingsCustomSubagentController|SettingsStorageController)\b/);
+    assert.doesNotMatch(shell, /\/api\/(?:auth|models|model\/switch|subagents|storage-location|storage-migration)/);
+    assert.doesNotMatch(shell, /let\s+(?:_selectedProvider|_provKeys|_customSubagents|_storageMigrationPreviewId|_dragIdx)\b/);
+    assert.ok(shell.split(/\r?\n/).length <= 400, "dashboard-settings.ts must remain a thin modal and event facade");
+  });
+
+  it("loads settings component owners before the settings facade", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const facadeIndex = compiler.indexOf('"gen/dashboard/dashboard-settings.js"');
+    for (const entry of [
+      "settings-general",
+      "settings-provider-model",
+      "settings-custom-subagents",
+      "settings-storage",
+    ]) {
+      const ownerIndex = compiler.indexOf(`"gen/dashboard/${entry}.js"`);
+      assert.ok(ownerIndex >= 0, `${entry} must be included in the dashboard bundle`);
+      assert.ok(ownerIndex < facadeIndex, `${entry} must load before dashboard-settings`);
+    }
   });
 
   it("uses component views for git pane content", () => {

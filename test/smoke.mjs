@@ -109,7 +109,7 @@ console.log("\n📁 前端源文件检查");
 const requiredSrc = [
   "dashboard.html", "dashboard.css",
   "dashboard/dashboard-helpers.ts", "dashboard/dashboard-layout.ts", "dashboard/layout-tabs.ts", "dashboard/layout-panel.ts", "dashboard/layout-shortcuts.ts", "dashboard/dashboard-chat.ts",
-  "dashboard/session-restore.ts", "dashboard/session-activation.ts", "dashboard/session-list-panel.ts", "dashboard/dashboard-sessions.ts", "dashboard/dashboard-settings.ts", "dashboard/dashboard-menus.ts",
+  "dashboard/session-restore.ts", "dashboard/session-activation.ts", "dashboard/session-list-panel.ts", "dashboard/dashboard-sessions.ts", "dashboard/settings-general.ts", "dashboard/settings-provider-model.ts", "dashboard/settings-custom-subagents.ts", "dashboard/settings-storage.ts", "dashboard/dashboard-settings.ts", "dashboard/dashboard-menus.ts",
   "services/chat-runtime-store.ts", "services/chat-stream.ts",
   "chat/chat-render.ts", "chat/chat-mode.ts", "chat/chat-token.ts", "chat/chat-attachments.ts",
   "pane/permissions/permissions-views.ts", "pane/mcp/mcp-views.ts", "pane/explorer/explorer-views.ts",
