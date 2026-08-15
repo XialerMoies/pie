@@ -8,6 +8,10 @@ import ts from "typescript";
 const FRONTEND_ROOT = resolve(process.cwd(), "src/frontend");
 const SINK_PROPERTIES = new Set(["innerHTML", "outerHTML"]);
 const SINK_CALLS = new Set(["insertAdjacentHTML"]);
+const SINK_ASSIGNMENTS = new Map([
+  [ts.SyntaxKind.EqualsToken, ""],
+  [ts.SyntaxKind.PlusEqualsToken, "+="],
+]);
 const ALLOWED_CLASSIFICATIONS = new Set([
   "dom-reset",
   "escaped-template",
@@ -110,6 +114,7 @@ const APPROVED_SINKS = new Map([
   ["src/frontend/pane/chat/index.ts|renderConvResults|innerHTML|list", approved(2, "599d6c9009ec", REVIEW.escaped)],
   ["src/frontend/pane/explorer/explorer-views.ts|show|innerHTML|item", approved(1, "83122a0a0032", REVIEW.primitive)],
   ["src/frontend/pane/explorer/index.ts|explorerRender|innerHTML|container", approved(2, "e27766353b01", REVIEW.renderer)],
+  ["src/frontend/pane/explorer/index.ts|initTree|innerHTML+=|container", approved(3, "e0f22a654d33", REVIEW.static)],
   ["src/frontend/pane/git/index.ts|gitPaneRender|innerHTML|container", approved(1, "ab0070f7c191", REVIEW.renderer)],
   ["src/frontend/pane/git/index.ts|renderGit|innerHTML|container", approved(1, "a0f534bb8b33", REVIEW.renderer)],
   ["src/frontend/pane/mcp/index.ts|fetchMcpServers|innerHTML|content", approved(2, "495a414edef2", REVIEW.escaped)],
@@ -182,12 +187,13 @@ function collectHtmlSinks() {
     const visit = (node) => {
       if (
         ts.isBinaryExpression(node)
-        && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+        && SINK_ASSIGNMENTS.has(node.operatorToken.kind)
         && ts.isPropertyAccessExpression(node.left)
         && SINK_PROPERTIES.has(node.left.name.text)
       ) {
+        const operatorSuffix = SINK_ASSIGNMENTS.get(node.operatorToken.kind);
         add(
-          sinkIdentity(file, node, node.left.name.text, node.left.expression.getText(sourceFile), sourceFile),
+          sinkIdentity(file, node, `${node.left.name.text}${operatorSuffix}`, node.left.expression.getText(sourceFile), sourceFile),
           node.right.getText(sourceFile),
         );
       }
