@@ -114,15 +114,22 @@ async function waitFor(predicate, message, timeoutMs = 5_000) {
   assert.fail(message);
 }
 
-function switchWorkspace(running, instanceId, workspace) {
-  return fetch(`http://127.0.0.1:${running.port}/api/workspace/switch`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-My-Code-Agent-Token": `token-${instanceId}`,
-    },
-    body: JSON.stringify({ workspace }),
-  });
+async function switchWorkspace(running, instanceId, workspace) {
+  try {
+    return await fetch(`http://127.0.0.1:${running.port}/api/workspace/switch`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-My-Code-Agent-Token": `token-${instanceId}`,
+      },
+      body: JSON.stringify({ workspace }),
+    });
+  } catch (error) {
+    throw new Error(
+      `workspace switch request failed\nstdout:\n${running.stdout()}\nstderr:\n${running.stderr()}`,
+      { cause: error },
+    );
+  }
 }
 
 describe("workspace ownership lock", () => {
@@ -380,12 +387,20 @@ describe("workspace ownership lock", () => {
 
       const failed = await switchWorkspace(running, instanceId, missingTarget);
       assert.strictEqual(failed.status, 400);
-      assert.strictEqual(readUserSettings(settingsFile).startup?.lastWorkspace, canonicalWorkspacePath(target));
+      assert.strictEqual(
+        readUserSettings(settingsFile).startup?.lastWorkspace,
+        canonicalWorkspacePath(target),
+        `failed workspace switch changed the recorded workspace\nstdout:\n${running.stdout()}\nstderr:\n${running.stderr()}`,
+      );
 
       await blocker.acquireInitial(lockedTarget);
       const conflicted = await switchWorkspace(running, instanceId, lockedTarget);
       assert.strictEqual(conflicted.status, 409);
-      assert.strictEqual(readUserSettings(settingsFile).startup?.lastWorkspace, canonicalWorkspacePath(target));
+      assert.strictEqual(
+        readUserSettings(settingsFile).startup?.lastWorkspace,
+        canonicalWorkspacePath(target),
+        `conflicting workspace switch changed the recorded workspace\nstdout:\n${running.stdout()}\nstderr:\n${running.stderr()}`,
+      );
     } finally {
       try {
         if (running?.child.exitCode === null) {
@@ -439,11 +454,26 @@ describe("workspace ownership lock", () => {
       const exit = waitForExit(running.child);
       running.child.stdin.write("PI_SERVER_SHUTDOWN\n");
       running.child.stdin.end();
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+      await waitFor(
+        () => running.stdout().includes("[server] stdin, shutting down"),
+        "server did not begin graceful shutdown",
+      );
+      assert.strictEqual(running.child.exitCode, null, "server must wait while the workspace record is locked");
+      assert.strictEqual(
+        readUserSettings(settingsFile).startup?.lastWorkspace,
+        canonicalWorkspacePath(f.workspace),
+        "the queued workspace record must still be blocked by the held settings lock",
+      );
       releaseSettingsLock();
+      await settingsLockOwner;
+      settingsLockOwner = undefined;
       await exit;
 
-      assert.strictEqual(readUserSettings(settingsFile).startup?.lastWorkspace, canonicalWorkspacePath(target));
+      assert.strictEqual(
+        readUserSettings(settingsFile).startup?.lastWorkspace,
+        canonicalWorkspacePath(target),
+        `queued workspace record was not flushed\nstdout:\n${running.stdout()}\nstderr:\n${running.stderr()}`,
+      );
     } finally {
       try {
         releaseSettingsLock?.();
