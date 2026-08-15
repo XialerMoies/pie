@@ -15,6 +15,8 @@ test("uses the PI 0.84 model runtime SDK contract", () => {
     "SessionManager",
     "DefaultResourceLoader",
     "SettingsManager",
+    "calculateContextTokens",
+    "estimateTokens",
   ]) {
     assert.equal(typeof pi[name], "function", `${name} must be exported`)
   }

@@ -13,6 +13,7 @@ import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools/index.
 import type { SessionPermissionState, ToolContext } from "./types.js"
 import { applySessionPermissionSuggestions, normalizePermissionPath, resetSessionPermissionState } from "./permissions.js"
 import { wsDir } from "../server/routes/session-dir.js"
+import { calculateContextUsageSnapshot, type ContextUsageSnapshot } from "./context-usage.js"
 
 import { setCurrentRuntime as _setGlobalRuntime, getCurrentRuntime as _getGlobalRuntime } from "./globals.js";
 // 重导出供 tools 使用，实际实现在 globals.ts（零依赖，防循环）
@@ -147,6 +148,10 @@ export class AgentRuntime {
   async waitForSessionReady(): Promise<AgentSession> {
     await (this._transitionTail ?? Promise.resolve())
     return this.session
+  }
+
+  getContextUsageSnapshot(): ContextUsageSnapshot | undefined {
+    return calculateContextUsageSnapshot(this.session)
   }
 
   /** 仅在会话完整初始化后更新对外可见对象。 */
