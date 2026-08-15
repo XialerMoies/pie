@@ -70,6 +70,7 @@ interface ChatErrorState {
 
 interface ProviderKeyInfo {
   hasKey: boolean;
+  canReveal: boolean;
   keyPreview: string;
 }
 

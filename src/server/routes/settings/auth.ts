@@ -26,17 +26,6 @@ export function hasProviderAuth(runtime: AgentRuntime, provider: string, stored:
   return Boolean(storedApiKey(stored) || status?.configured || status?.source);
 }
 
-export async function resolveProviderApiKey(runtime: AgentRuntime, provider: string, stored: unknown): Promise<string> {
-  const modelRuntime = runtime.modelRuntime;
-  if (typeof modelRuntime?.getAuth === "function") {
-    try {
-      const key = (await modelRuntime.getAuth(provider))?.auth?.apiKey;
-      if (typeof key === "string" && key) return key;
-    } catch {}
-  }
-  return storedApiKey(stored);
-}
-
 export const handleAuthSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
   const { runtime, paths: p } = ctx;
@@ -50,11 +39,15 @@ export const handleAuthSettings: RouteHandler = async (req, res, ctx) => {
         ? modelRegistry.getAvailable().map((model: { provider: string }) => model.provider)
         : [];
       const providers = [...new Set([...Object.keys(authData), ...availableProviders])];
-      const providerKeys = providers.map((provider) => ({
-        provider,
-        hasKey: hasProviderAuth(runtime, provider, authData[provider]),
-        keyPreview: storedApiKey(authData[provider]) ? storedApiKey(authData[provider]).slice(0, 8) + "..." : "",
-      }));
+      const providerKeys = providers.map((provider) => {
+        const apiKey = storedApiKey(authData[provider]);
+        return {
+          provider,
+          hasKey: hasProviderAuth(runtime, provider, authData[provider]),
+          canReveal: Boolean(apiKey),
+          keyPreview: apiKey ? apiKey.slice(0, 8) + "..." : "",
+        };
+      });
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ providers: providerKeys }));
     } catch (err: unknown) {
@@ -81,7 +74,7 @@ export const handleAuthSettings: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ error: "provider is not configured" }));
         return true;
       }
-      const apiKey = await resolveProviderApiKey(runtime, provider, authData[provider]);
+      const apiKey = storedApiKey(authData[provider]);
       if (!apiKey) {
         res.writeHead(404, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ error: "provider key unavailable" }));

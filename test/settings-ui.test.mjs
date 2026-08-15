@@ -285,7 +285,7 @@ describe("settings DOM boundary", () => {
   it("shows the configured key after the explicit reveal request", async () => {
     fetchImpl = async (url) => {
       if (String(url) === "/api/auth") {
-        return { ok: true, json: async () => ({ providers: [{ provider: "openai", hasKey: true, keyPreview: "sk-test-..." }] }) };
+        return { ok: true, json: async () => ({ providers: [{ provider: "openai", hasKey: true, canReveal: true, keyPreview: "sk-test-..." }] }) };
       }
       if (String(url) === "/api/auth/reveal") {
         return { ok: true, json: async () => ({ ok: true, apiKey: "sk-test-secret-value" }) };
@@ -303,6 +303,32 @@ describe("settings DOM boundary", () => {
     const input = document.querySelector("#key-input");
     assert.strictEqual(input?.type, "text");
     assert.strictEqual(input?.value, "sk-test-secret-value");
+  });
+
+  it("does not reveal providers configured without a stored API key", async () => {
+    let revealRequests = 0;
+    fetchImpl = async (url) => {
+      if (String(url) === "/api/auth") {
+        return { ok: true, json: async () => ({ providers: [{ provider: "openai", hasKey: true, canReveal: false, keyPreview: "" }] }) };
+      }
+      if (String(url) === "/api/auth/reveal") {
+        revealRequests += 1;
+        return { ok: false, json: async () => ({ error: "provider key unavailable" }) };
+      }
+      if (String(url) === "/api/models") {
+        return { ok: true, json: async () => ({ models: [] }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const input = document.querySelector("#key-input");
+    assert.strictEqual(revealRequests, 0);
+    assert.strictEqual(input?.type, "password");
+    assert.strictEqual(input?.value, "");
   });
 
   it("does not render persisted numeric preferences as HTML", async () => {

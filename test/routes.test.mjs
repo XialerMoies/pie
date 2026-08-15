@@ -1051,6 +1051,7 @@ describe("settings routes", () => {
       const openai = data.providers.find((item) => item.provider === "openai");
       assert.ok(openai);
       assert.strictEqual(openai.hasKey, true);
+      assert.strictEqual(openai.canReveal, true);
       assert.strictEqual(openai.keyPreview, "sk-test-...");
       assert.strictEqual(Object.hasOwn(openai, "keyFull"), false);
       assert.strictEqual(JSON.stringify(data).includes("secret-value"), false);
@@ -1079,6 +1080,36 @@ describe("settings routes", () => {
       const { status, body } = await callHandler(handleSettings, "POST", "/api/auth/reveal", { provider: "openai" }, ctx);
       assert.strictEqual(status, 200);
       assert.deepStrictEqual(parseJSON(body), { ok: true, apiKey: "sk-test-secret-value" });
+    } finally {
+      if (ctx.paths._tmpDir) rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("distinguishes configured providers from revealable stored API keys", async () => {
+    const ctx = mockContext({
+      runtime: mockRuntime({
+        modelRuntime: {
+          getProviderAuthStatus: (provider) => provider === "openai"
+            ? { configured: true, source: "oauth" }
+            : { configured: false },
+        },
+      }),
+    });
+    try {
+      mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+      writeFileSync(resolve(ctx.paths.PI_CONFIG_DIR, "auth.json"), JSON.stringify({
+        openai: { type: "oauth", accessToken: "oauth-secret-value" },
+      }));
+
+      const { status, body } = await callHandler(handleSettings, "GET", "/api/auth", undefined, ctx);
+
+      assert.strictEqual(status, 200);
+      const openai = parseJSON(body).providers.find((item) => item.provider === "openai");
+      assert.ok(openai);
+      assert.strictEqual(openai.hasKey, true);
+      assert.strictEqual(openai.canReveal, false);
+      assert.strictEqual(openai.keyPreview, "");
+      assert.strictEqual(JSON.stringify(openai).includes("oauth-secret-value"), false);
     } finally {
       if (ctx.paths._tmpDir) rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
     }

@@ -27,12 +27,16 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
         </div>
       </div>
     `;
-    fetch('/api/auth').then(r => r.json()).then((data: { providers: Array<{ provider: string; hasKey: boolean; keyPreview: string }> }) => {
+    fetch('/api/auth').then(r => r.json()).then((data: { providers: Array<{ provider: string; hasKey: boolean; canReveal?: boolean; keyPreview: string }> }) => {
       const list = $('msl-list');
       if (!list) return;
       const configuredKeys: Record<string, ProviderKeyInfo> = {};
       data.providers?.forEach(provider => {
-        configuredKeys[provider.provider] = { hasKey: provider.hasKey, keyPreview: provider.keyPreview || '' };
+        configuredKeys[provider.provider] = {
+          hasKey: provider.hasKey,
+          canReveal: provider.canReveal ?? Boolean(provider.keyPreview),
+          keyPreview: provider.keyPreview || '',
+        };
         this.providerKeys[provider.provider] = configuredKeys[provider.provider];
       });
       const allProviders = ['anthropic', 'deepseek', 'openai', 'openrouter', 'google'];
@@ -65,9 +69,11 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     });
     const content = $('ms-right-content');
     if (!content) return;
-    const info = this.providerKeys[provider] || { hasKey: false, keyPreview: '' };
-    const placeholder = info.hasKey
+    const info = this.providerKeys[provider] || { hasKey: false, canReveal: false, keyPreview: '' };
+    const placeholder = info.canReveal
       ? `已保存: ${info.keyPreview || '********'}，输入新 Key 覆盖`
+      : info.hasKey
+        ? '已通过其他方式认证，输入 API Key 覆盖'
       : '输入 API Key...';
     let html = `
       <div class="rp-header">
@@ -80,17 +86,15 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       <div class="rp-key-section">
         <div class="rp-key-label">API Key</div>
         <div class="rp-key-row">
-          <input class="rp-key-input" type="${info.hasKey ? 'text' : 'password'}" id="key-input" data-provider="${E(provider)}" placeholder="${E(placeholder)}" value="${E(info.keyPreview || '')}"/>
+          <input class="rp-key-input" type="${info.canReveal ? 'text' : 'password'}" id="key-input" data-provider="${E(provider)}" placeholder="${E(placeholder)}" value="${E(info.keyPreview || '')}"/>
           <button type="button" class="rp-key-toggle" data-settings-action="toggle-key" data-provider="${E(provider)}" aria-label="显示或隐藏 API Key">👁</button>
           <button type="button" class="rp-save-btn" data-settings-action="save-key" data-provider="${E(provider)}">保存</button>
         </div>
       </div>
     `;
     content.innerHTML = html;
-    if (info.hasKey) {
-      void this.revealProviderKey(provider);
-      this.loadProviderModels(provider);
-    }
+    if (info.canReveal) void this.revealProviderKey(provider);
+    if (info.hasKey) this.loadProviderModels(provider);
   }
 
   toggleKeyVisibility(provider: string): void {
@@ -115,7 +119,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
         return;
       }
       this.dependencies.notify('已保存');
-      this.providerKeys[provider] = { hasKey: true, keyPreview: input.value.trim().slice(0, 8) + '...' };
+      this.providerKeys[provider] = { hasKey: true, canReveal: true, keyPreview: input.value.trim().slice(0, 8) + '...' };
       this.selectProvider(provider);
     }).catch(() => this.dependencies.notify('保存失败'));
   }
