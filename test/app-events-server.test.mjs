@@ -426,6 +426,58 @@ describe("server lifecycle publishers", () => {
     assert.deepStrictEqual(published.slice(-2).map((event) => event.isStreaming), [false, false]);
   });
 
+  it("throttles streaming usage changes to one publish per 500ms", () => {
+    let eventHandler;
+    const session = {
+      sessionFile: "",
+      sessionManager: { getSessionId: () => "session-stream" },
+      isStreaming: true,
+      agent: { waitForIdle: async () => {} },
+    };
+    const runtime = {
+      session,
+      onEvent(handler) { eventHandler = handler; return () => {}; },
+    };
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: null, turnId: "turn-stream", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0,
+      eventSeq: 0, eventHistory: [], currentWorkspace: "",
+    };
+    const published = [];
+    const originalNow = Date.now;
+    let now = 1_000;
+    Date.now = () => now;
+
+    try {
+      attachSessionEvents(runtime, chatStream, { appEvents: { publish(type) { published.push(type); } } });
+      eventHandler({ type: "agent_start" });
+      assert.strictEqual(published.filter((type) => type === "usage.changed").length, 1);
+
+      const update = {
+        type: "message_update",
+        message: { role: "assistant", content: [{ type: "text", text: "streaming" }] },
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "streaming" },
+      };
+      now = 1_100;
+      eventHandler(update);
+      assert.strictEqual(published.filter((type) => type === "usage.changed").length, 1);
+
+      now = 1_500;
+      eventHandler(update);
+      assert.strictEqual(published.filter((type) => type === "usage.changed").length, 2);
+
+      now = 1_700;
+      eventHandler(update);
+      assert.strictEqual(published.filter((type) => type === "usage.changed").length, 2);
+
+      now = 2_000;
+      eventHandler(update);
+      assert.strictEqual(published.filter((type) => type === "usage.changed").length, 3);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
   it("keeps agent lifecycle and idle handling fail-open", async () => {
     let eventHandler;
     const runtime = {
@@ -646,6 +698,11 @@ describe("server lifecycle publishers", () => {
       args: { value: "old" },
     }, oldSession);
     eventHandler({ type: "message_start", message: { role: "assistant" } }, oldSession);
+    eventHandler({
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "text", text: "old" }] },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "old" },
+    }, oldSession);
     eventHandler({ type: "turn_end", turnIndex: 1 }, oldSession);
     await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
 

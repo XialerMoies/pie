@@ -269,8 +269,15 @@ export function attachSessionEvents(
   chatStream: ChatStreamState,
   ctx?: ServerContext,
 ): void {
+  let lastStreamingUsagePublishAt = 0;
   const publishUsageChanged = (): void => {
     try { ctx?.appEvents.publish("usage.changed"); } catch {}
+  };
+  const publishStreamingUsageChanged = (): void => {
+    const now = Date.now();
+    if (now - lastStreamingUsagePublishAt < 500) return;
+    lastStreamingUsagePublishAt = now;
+    publishUsageChanged();
   };
   const publishLifecycleChanged = (): void => {
     try { ctx?.appEvents.publish("dashboard.changed"); } catch {}
@@ -331,7 +338,10 @@ export function attachSessionEvents(
       });
       return;
     }
-    if (event.type === "agent_start") publishLifecycleChanged();
+    if (event.type === "agent_start") {
+      publishLifecycleChanged();
+      lastStreamingUsagePublishAt = Date.now();
+    }
     if (event.type === "compaction_start") {
       if ((runtime.session as any).isCompacting) publishUsageChanged();
       else queueMicrotask(publishUsageChanged);
@@ -463,6 +473,7 @@ export function attachSessionEvents(
     if (event.type === "message_update" && turnId) {
       const msg = event.message;
       if (msg?.role === "assistant" && msg?.content) {
+        publishStreamingUsageChanged();
         const fullThinking = msg.content.filter((c: any) => c.type === "thinking").map((c: any) => c.thinking || "").join("");
         const thinkingState = appendAssistantSnapshot(chatStream.thinkingBuffer, chatStream.currentThinkingSnapshot, fullThinking);
         chatStream.currentThinkingSnapshot = thinkingState.snapshot;

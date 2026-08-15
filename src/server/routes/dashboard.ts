@@ -28,6 +28,35 @@ function activeWorkspaceStorage(ctx: ServerContext): { sessionsDir: string; usag
   };
 }
 
+interface ContextUsageLike {
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+  source?: "exact" | "mixed" | "estimated";
+  exactTokens?: number;
+  estimatedTokens?: number;
+}
+
+function readContextUsage(runtime: ServerContext["runtime"], session: any): ContextUsageLike | null {
+  try {
+    const current = (runtime as any).getContextUsageSnapshot?.();
+    if (current) return current;
+  } catch {}
+  try { return session.getContextUsage?.() ?? null; } catch { return null; }
+}
+
+function serializeContextUsage(usage: ContextUsageLike): ContextUsageLike {
+  const response: ContextUsageLike = {
+    tokens: usage.tokens ?? null,
+    contextWindow: usage.contextWindow ?? 200000,
+    percent: usage.percent ?? null,
+  };
+  if (usage.source) response.source = usage.source;
+  if (typeof usage.exactTokens === "number") response.exactTokens = usage.exactTokens;
+  if (typeof usage.estimatedTokens === "number") response.estimatedTokens = usage.estimatedTokens;
+  return response;
+}
+
 export const handleDashboard: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
   const cors = { "Access-Control-Allow-Origin": "*" };
@@ -76,13 +105,13 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
 
   // Token usage — context + session stats + cost + provider
   if (url === "/api/token-usage") {
-    let cu: { tokens: number; contextWindow: number; percent: number } | null = null;
+    let cu: ContextUsageLike | null = null;
     let stats: { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }; cost: number } | null = null;
-    try { cu = (session as any).getContextUsage?.(); } catch {}
+    cu = readContextUsage(runtime, session);
     try { stats = (session as any).getSessionStats?.(); } catch {}
     const provider = session.model?.provider ?? "unknown";
     const out: { contextUsage: typeof cu; sessionStats: typeof stats; provider: string } = { contextUsage: null, sessionStats: null, provider };
-    if (cu) out.contextUsage = { tokens: cu.tokens ?? null, contextWindow: cu.contextWindow ?? 200000, percent: cu.percent ?? null };
+    if (cu) out.contextUsage = serializeContextUsage(cu);
     if (stats) out.sessionStats = { tokens: stats.tokens ?? null, cost: stats.cost ?? null };
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
     res.end(JSON.stringify(out));
@@ -91,9 +120,9 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
 
   // GET /api/usage/current — 当前会话 usage 数据（Token Rail + Usage 面板）
   if (url === "/api/usage/current") {
-    let cu: { tokens: number | null; contextWindow: number; percent: number | null } | null = null;
+    let cu: ContextUsageLike | null = null;
     let stats: SessionStatsLike | null = null;
-    try { cu = (session as any).getContextUsage?.(); } catch {}
+    cu = readContextUsage(runtime, session);
     try { stats = (session as any).getSessionStats?.(); } catch {}
 
     const tokens = stats?.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -133,11 +162,7 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
       sessionId,
       provider,
       hasActiveSession: !!sessionId,
-      contextUsage: cu ? {
-        tokens: cu.tokens,
-        contextWindow: cu.contextWindow,
-        percent: cu.percent,
-      } : null,
+      contextUsage: cu ? serializeContextUsage(cu) : null,
       tokens,
       cacheHitRate: hitRate,
       cost: stats?.cost ?? 0,

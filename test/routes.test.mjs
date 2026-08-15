@@ -113,6 +113,17 @@ function mockRuntime(overrides) {
   };
 }
 
+function mockContextUsageSnapshot() {
+  return {
+    tokens: 1300,
+    contextWindow: 200000,
+    percent: 0.65,
+    source: "mixed",
+    exactTokens: 1234,
+    estimatedTokens: 66,
+  };
+}
+
 function mockAppEvents(overrides) {
   const published = [];
   return {
@@ -268,23 +279,37 @@ describe("dashboard routes", () => {
   });
 
   it("GET /api/token-usage 返回用量数据", async () => {
-    const { status, body } = await callHandler(handleDashboard, "GET", "/api/token-usage");
+    const runtime = mockRuntime({ getContextUsageSnapshot: mockContextUsageSnapshot });
+    const { status, body } = await callHandler(
+      handleDashboard,
+      "GET",
+      "/api/token-usage",
+      undefined,
+      mockContext({ runtime }),
+    );
     assert.strictEqual(status, 200);
     const data = parseJSON(body);
     assert.ok(data.contextUsage);
-    assert.strictEqual(data.contextUsage.tokens, 1234);
+    assert.deepStrictEqual(data.contextUsage, mockContextUsageSnapshot());
     assert.ok(data.sessionStats);
   });
 
   it("GET /api/usage/current 返回当前用量", async () => {
-    const { status, body } = await callHandler(handleDashboard, "GET", "/api/usage/current");
+    const runtime = mockRuntime({ getContextUsageSnapshot: mockContextUsageSnapshot });
+    const { status, body } = await callHandler(
+      handleDashboard,
+      "GET",
+      "/api/usage/current",
+      undefined,
+      mockContext({ runtime }),
+    );
     assert.strictEqual(status, 200);
     const data = parseJSON(body);
     assert.ok(data.hasActiveSession, "应有活跃会话");
     assert.ok(data.sessionId, "应有 sessionId");
     assert.strictEqual(data.provider, "test-provider", "应有 provider");
     assert.ok(data.contextUsage, "应有 contextUsage");
-    assert.strictEqual(data.contextUsage.tokens, 1234);
+    assert.deepStrictEqual(data.contextUsage, mockContextUsageSnapshot());
     assert.ok(data.tokens, "应有 tokens");
     assert.strictEqual(data.tokens.input, 500);
     // B-4：命中率口径修正 = cacheRead/(input+cacheRead+cacheWrite)
