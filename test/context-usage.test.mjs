@@ -69,6 +69,22 @@ describe("calculateContextUsageSnapshot", () => {
     })
   })
 
+  it("stays mixed when a trailing context message currently estimates to zero tokens", () => {
+    const snapshot = calculateContextUsageSnapshot(session([
+      assistant({ totalTokens: 100 }),
+      { role: "user", content: "" },
+    ], 100))
+
+    assert.deepStrictEqual(snapshot, {
+      tokens: 100,
+      contextWindow: 200,
+      percent: 50,
+      source: "mixed",
+      exactTokens: 100,
+      estimatedTokens: 0,
+    })
+  })
+
   it("marks the whole context estimated before any valid provider usage", () => {
     const snapshot = calculateContextUsageSnapshot(session([
       { role: "user", content: "12345678" },

@@ -109,6 +109,7 @@ function buildMainArea(): string {
     <div class="mc">
       <div class="tr-rail" id="tr-rail" title="点击查看用量详情">
         <span class="tr-pct" id="tr-pct" title="上下文占用">--%</span>
+        <span class="tr-source" id="tr-source" aria-live="polite"></span>
         <span class="tr-cr" id="tr-cr" title="缓存命中率">--%</span>
         <button class="tr-btn" id="tr-btn" title="压缩上下文">压缩</button>
       </div>

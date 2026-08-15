@@ -215,8 +215,15 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
   it("token usage rail keeps percent text compact and clipped", () => {
     const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
     const tokenCode = readFileSync(new URL("../src/frontend/chat/chat-token.ts", import.meta.url), "utf8");
+    const layoutCode = readFileSync(new URL("../src/frontend/dashboard/dashboard-layout.ts", import.meta.url), "utf8");
 
     assert.match(tokenCode, /function\s+formatPercent\(/);
+    assert.match(tokenCode, /function\s+contextUsageSourceLabel\(/);
+    assert.match(tokenCode, /source\s*===\s*'exact'[\s\S]*?'精确'/);
+    assert.match(tokenCode, /source\s*===\s*'mixed'[\s\S]*?'含估算'/);
+    assert.match(tokenCode, /source\s*===\s*'estimated'[\s\S]*?'估算'/);
+    assert.match(tokenCode, /累计计费用量/);
+    assert.match(layoutCode, /id="tr-source"/);
     assert.match(tokenCode, /pctEl\.textContent\s*=\s*formatPercent\(pct\)/);
     assert.match(tokenCode, /crEl\.textContent\s*=\s*formatPercent\(data\.cacheHitRate\)/);
     assert.match(tokenCode, /const\s+pctDisplay\s*=\s*formatPercent\(pct\)/);
@@ -231,6 +238,8 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     assertCssDecl(railValueCss, "overflow", "hidden");
     assertCssDecl(railValueCss, "text-overflow", "ellipsis");
     assertCssDecl(railValueCss, "white-space", "nowrap");
+    const sourceCss = cssBlocks(css, ".tr-source");
+    assertCssDecl(sourceCss, "white-space", "nowrap");
   });
 
   it("token usage rail keeps a fixed height when the composer grows", () => {

@@ -82,6 +82,6 @@ export function calculateContextUsageSnapshot(session: ContextUsageSession): Con
   }
 
   const estimatedTokens = estimateMessages(messages, usage.index + 1)
-  const source: ContextUsageSource = estimatedTokens > 0 ? "mixed" : "exact"
+  const source: ContextUsageSource = usage.index < messages.length - 1 ? "mixed" : "exact"
   return snapshot(usage.tokens + estimatedTokens, contextWindow, source, usage.tokens, estimatedTokens)
 }

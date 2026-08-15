@@ -52,11 +52,21 @@ async function compileClassicScript(file) {
   return result.code.replace(/^export\s+/gm, "");
 }
 
-async function createTokenUpdatesHarness() {
+async function createTokenUpdatesHarness(harnessOptions = {}) {
   const subscriptions = new Map();
   const requests = [];
   const usageResolvers = [];
   const intervals = [];
+  const nodes = new Map();
+  for (const id of ["tr-pct", "tr-cr", "tr-source", "tr-btn"]) {
+    nodes.set(id, {
+      textContent: "",
+      title: "",
+      disabled: false,
+      style: {},
+      classList: { toggle: () => {} },
+    });
+  }
   const context = {
     window: {
       App: {
@@ -66,7 +76,7 @@ async function createTokenUpdatesHarness() {
             return () => subscriptions.delete(type);
           },
         },
-        Tabs: { getActiveTab: () => null },
+        Tabs: { getActiveTab: () => harnessOptions.activeTab ?? null },
         State: { getWorkspacePath: () => "" },
         ChatState: { replaceMessages: () => {} },
         Chat: {},
@@ -74,7 +84,7 @@ async function createTokenUpdatesHarness() {
       addEventListener: () => {},
     },
     document: {
-      getElementById: () => null,
+      getElementById: (id) => nodes.get(id) || null,
       querySelector: () => null,
       createElement: () => ({ textContent: "", innerHTML: "" }),
       body: { appendChild: () => {} },
@@ -88,6 +98,7 @@ async function createTokenUpdatesHarness() {
     clearInterval: () => {},
     setTimeout,
     clearTimeout,
+    $: (id) => nodes.get(id) || null,
     fetch: async (url, options) => {
       requests.push({ url, options });
       if (url === "/api/compact") {
@@ -97,7 +108,7 @@ async function createTokenUpdatesHarness() {
         return { json: async () => ({}) };
       }
       return new Promise((resolve) => usageResolvers.push(() => resolve({
-        json: async () => ({
+        json: async () => harnessOptions.usageData ?? ({
           sessionId: "session-1",
           provider: "test",
           hasActiveSession: false,
@@ -119,7 +130,7 @@ async function createTokenUpdatesHarness() {
 
   const tokenScript = await compileClassicScript("src/frontend/chat/chat-token.ts");
   new Script(tokenScript, { filename: "chat-token.js" }).runInNewContext(context);
-  return { context, subscriptions, requests, usageResolvers, intervals };
+  return { context, subscriptions, requests, usageResolvers, intervals, nodes };
 }
 
 async function createMcpPaneHarness() {
@@ -1033,6 +1044,41 @@ describe("App.Events frontend event bus", () => {
     await new Promise((resolve) => setImmediate(resolve));
     context.window.stopTokenUpdates();
     assert.strictEqual(subscriptions.size, 0);
+  });
+
+  it("renders exact, mixed, estimated, and legacy context precision on the rail", async () => {
+    const cases = [
+      ["exact", "精确"],
+      ["mixed", "含估算"],
+      ["estimated", "估算"],
+      [undefined, ""],
+    ];
+
+    for (const [source, expected] of cases) {
+      const usageData = {
+        sessionId: "session-1",
+        provider: "test",
+        hasActiveSession: true,
+        contextUsage: { tokens: 100, contextWindow: 200, percent: 50, ...(source ? { source } : {}) },
+        tokens: { input: 80, output: 20, cacheRead: 0, cacheWrite: 0 },
+        cacheHitRate: 0,
+        cost: 0,
+        compactCount: 0,
+        lastCompactionAt: null,
+        lastCompactionSummary: null,
+        isStreaming: source !== "exact",
+        isCompacting: false,
+      };
+      const { context, usageResolvers, nodes } = await createTokenUpdatesHarness({
+        activeTab: { kind: "chat", id: "chat" },
+        usageData,
+      });
+
+      const refresh = context.window.refreshTokenUsage();
+      usageResolvers.shift()();
+      await refresh;
+      assert.strictEqual(nodes.get("tr-source").textContent, expected);
+    }
   });
 
   it("refreshes current token usage after compaction through the shared loader", async () => {

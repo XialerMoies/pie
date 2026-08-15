@@ -784,9 +784,12 @@ declare class Tree {
 
 // ─── Token / Session Stats (from API /api/token-usage) ────────
 interface TokenUsage {
-  tokens: number;
+  tokens: number | null;
   contextWindow: number;
-  percent: number;
+  percent: number | null;
+  source?: 'exact' | 'mixed' | 'estimated';
+  exactTokens?: number;
+  estimatedTokens?: number;
 }
 
 interface SessionStats {

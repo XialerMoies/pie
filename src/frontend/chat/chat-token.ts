@@ -42,6 +42,14 @@ function formatPercent(value: number | null | undefined): string {
   return clamped.toFixed(digits).replace(/\.0$/, '') + '%';
 }
 
+function contextUsageSourceLabel(source: unknown): string {
+  if (source === 'exact') return '精确';
+  if (source === 'mixed') return '含估算';
+  if (source === 'estimated') return '估算';
+  if (source == null) return '';
+  return '估算';
+}
+
 // ─── Currency helpers ────────────────────────────────────
 const CNY_PER_USD = 7.2;
 
@@ -71,7 +79,14 @@ interface UsageCurrentResponse {
   sessionId: string;
   provider: string;
   hasActiveSession: boolean;
-  contextUsage: { tokens: number | null; contextWindow: number; percent: number | null } | null;
+  contextUsage: {
+    tokens: number | null;
+    contextWindow: number;
+    percent: number | null;
+    source?: 'exact' | 'mixed' | 'estimated';
+    exactTokens?: number;
+    estimatedTokens?: number;
+  } | null;
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
   cacheHitRate: number;
   cost: number;
@@ -91,6 +106,7 @@ function isChatTabActive(): boolean {
 
 function updateRail(data: UsageCurrentResponse): void {
   const pctEl = $('tr-pct');
+  const sourceEl = $('tr-source');
   const crEl = $('tr-cr');
   const btnEl = $('tr-btn') as HTMLButtonElement | null;
 
@@ -99,6 +115,7 @@ function updateRail(data: UsageCurrentResponse): void {
   // 当前活跃 tab 不是 chat/session 时显示无会话
   if (!data.hasActiveSession || !isChatTabActive()) {
     pctEl.textContent = '--%';
+    if (sourceEl) { sourceEl.textContent = ''; sourceEl.title = ''; }
     crEl.textContent = '--%';
     if (btnEl) { btnEl.disabled = true; btnEl.textContent = '详情'; btnEl.title = '打开会话后可查看详情'; }
     return;
@@ -110,6 +127,11 @@ function updateRail(data: UsageCurrentResponse): void {
   // 警戒色（使用 CSS 类而非 inline style，确保 --uw/--ud 变量生效）
   pctEl.classList.toggle('danger', pct != null && pct >= 85);
   pctEl.classList.toggle('warn', pct != null && pct >= 70 && pct < 85);
+  if (sourceEl) {
+    const sourceLabel = contextUsageSourceLabel(data.contextUsage?.source);
+    sourceEl.textContent = sourceLabel;
+    sourceEl.title = sourceLabel ? `上下文计数：${sourceLabel}` : '';
+  }
 
   // 缓存命中率
   crEl.textContent = formatPercent(data.cacheHitRate);
@@ -226,12 +248,14 @@ class UsageCurrentView {
     const pct = d.contextUsage?.percent;
     const pctDisplay = formatPercent(pct);
     const pctClass = pct != null && pct >= 85 ? 'usage-danger' : pct != null && pct >= 70 ? 'usage-warn' : '';
+    const precisionLabel = contextUsageSourceLabel(d.contextUsage?.source);
+    const precisionHtml = precisionLabel ? `<span class="usage-precision">${precisionLabel}</span>` : '';
 
     container.innerHTML = `
     <div class="usage-grid">
       <div class="usage-card">
         <div class="usage-card-val ${pctClass}">${pctDisplay}</div>
-        <div class="usage-card-lb">上下文窗口</div>
+        <div class="usage-card-lb">上下文窗口${precisionHtml}</div>
         <div style="font-size:.65rem;color:var(--tm);margin-top:2px">${d.contextUsage?.tokens != null ? fmt(d.contextUsage.tokens) : '--'} / ${d.contextUsage?.contextWindow ? fmt(d.contextUsage.contextWindow) : '--'}</div>
       </div>
       <div class="usage-card">
@@ -245,7 +269,7 @@ class UsageCurrentView {
     </div>
 
     <div class="usage-section">
-      <div class="usage-section-hd">Token 用量</div>
+      <div class="usage-section-hd">累计计费用量</div>
       <div class="usage-detail">
         <span class="usage-dl">输入</span><span class="usage-dv">${fmt(d.tokens.input)}</span>
         <span class="usage-dl">输出</span><span class="usage-dv">${fmt(d.tokens.output)}</span>
@@ -309,7 +333,7 @@ function renderCurrentSessionUsage(container: HTMLElement): void {
     </div>
 
     <div class="usage-section">
-      <div class="usage-section-hd">Token 用量</div>
+      <div class="usage-section-hd">累计计费用量</div>
       <div class="usage-detail">
         <span class="usage-dl">输入</span><span class="usage-dv">${fmt(d.tokens.input)}</span>
         <span class="usage-dl">输出</span><span class="usage-dv">${fmt(d.tokens.output)}</span>
