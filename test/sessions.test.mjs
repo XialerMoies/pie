@@ -3,17 +3,36 @@
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
+describe("session message parser structure", () => {
+  it("keeps JSONL replay parsing in a focused route-independent module", () => {
+    const parserPath = resolve(ROOT, "src/server/routes/session-message-parser.ts");
+    const sessionsPath = resolve(ROOT, "src/server/routes/sessions.ts");
+
+    assert.strictEqual(existsSync(parserPath), true, "session-message-parser.ts must own replay parsing");
+
+    const parserSource = readFileSync(parserPath, "utf8");
+    const sessionsSource = readFileSync(sessionsPath, "utf8");
+
+    assert.match(parserSource, /export function parseSessionMessages\(/);
+    assert.doesNotMatch(parserSource, /\b(?:RouteHandler|ServerContext|authorizeRoutePath)\b/);
+    assert.match(sessionsSource, /from "\.\/session-message-parser\.js"/);
+    assert.match(sessionsSource, /export \{ parseSessionMessages \}/);
+    assert.doesNotMatch(sessionsSource, /function parseSessionMessages\(/);
+  });
+});
+
 describe("parseSessionMessages", () => {
   let mod;
 
   before(async () => {
-    mod = await import("../src/server/routes/sessions.ts");
+    mod = await import("../src/server/routes/session-message-parser.ts");
   });
 
   it("解析正常 user/assistant 消息", () => {
