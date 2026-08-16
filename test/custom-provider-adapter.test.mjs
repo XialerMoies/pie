@@ -64,7 +64,14 @@ function noAuthDefinition(overrides = {}) {
 class FakeRuntime {
   registrations = new Map()
   calls = []
+  reads = []
   fail = undefined
+
+  getProvider(id) {
+    this.reads.push(id)
+    const registration = this.registrations.get(id)
+    return registration?.value ?? registration
+  }
 
   registerProvider(id, config) {
     this.#maybeFail("registerProvider", id, "before")
@@ -256,6 +263,30 @@ describe("PiCustomProviderAdapter", () => {
 
     assert.throws(() => adapter.replaceRuntimeProviders(runtime, [first, second]), /duplicate.*acme-gateway/i)
     assert.deepEqual(runtime.calls, [])
+    assert.deepEqual(runtime.reads, [])
+  })
+
+  it("rejects an unowned same-ID collision without unregistering it", () => {
+    const adapter = new PiCustomProviderAdapter()
+    const runtime = new FakeRuntime()
+    const unowned = { id: "acme-gateway", kind: "unowned" }
+    runtime.registrations.set("acme-gateway", unowned)
+    runtime.fail = { operation: "registerProvider", id: "acme-gateway", phase: "before", remaining: 1 }
+    const prepared = adapter.prepare(definition(), secrets())
+
+    assert.throws(
+      () => adapter.replaceRuntimeProviders(runtime, [prepared]),
+      (error) => {
+        assert.match(error.message, /collision.*acme-gateway|acme-gateway.*already registered/i)
+        return true
+      },
+    )
+
+    assert.equal(runtime.registrations.get("acme-gateway"), unowned)
+    assert.deepEqual(runtime.reads, ["acme-gateway"])
+    assert.equal(runtime.calls.some(([operation, id]) => (
+      operation === "unregisterProvider" && id === "acme-gateway"
+    )), false)
   })
 
   it("fully replaces owned providers without unregistering unowned IDs", () => {

@@ -174,6 +174,12 @@ export class PiCustomProviderAdapter {
     }
 
     const prior = this.#ownedByRuntime.get(runtime) ?? new Map<string, PreparedCustomProvider>();
+    for (const registration of registrations) {
+      if (runtime.getProvider(registration.providerId) !== undefined && !prior.has(registration.providerId)) {
+        throw new Error(`Provider ID collision: ${registration.providerId} is already registered`);
+      }
+    }
+
     const attempted: PreparedRegistration[] = [];
     try {
       for (const providerId of prior.keys()) runtime.unregisterProvider(providerId);
