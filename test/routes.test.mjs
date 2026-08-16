@@ -8,6 +8,7 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
 import { createServer } from "node:http";
+import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -209,6 +210,48 @@ async function callHandler(handler, method, url, body, ctx) {
 
   const handled = await handler(req, res, ctxFinal);
   return { handled, status: res._status, body: res._body, headers: res._headers, ctx: ctxFinal };
+}
+
+function startHandlerWithLifecycle(handler, method, url, body, ctx, initial = {}) {
+  const req = Object.assign(new EventEmitter(), {
+    url,
+    method,
+    headers: { host: "localhost:3099", "content-type": "application/json" },
+    complete: false,
+    aborted: false,
+    destroyed: false,
+    ...initial.req,
+  });
+  const res = Object.assign(new EventEmitter(), {
+    _status: 0,
+    _headers: {},
+    _body: "",
+    writableEnded: false,
+    destroyed: false,
+    closed: false,
+    writeHead(status, headers) {
+      res._status = status;
+      if (headers) Object.assign(res._headers, headers);
+      return res;
+    },
+    end(data) {
+      if (data) res._body += data.toString();
+      res.writableEnded = true;
+      return res;
+    },
+    write(data) {
+      res._body += data.toString();
+      return true;
+    },
+    ...initial.res,
+  });
+  const pending = handler(req, res, ctx);
+  setImmediate(() => {
+    if (body !== undefined) req.emit("data", Buffer.from(JSON.stringify(body)));
+    req.complete = true;
+    req.emit("end");
+  });
+  return { req, res, pending };
 }
 
 function parseJSON(body) {
@@ -1320,6 +1363,40 @@ describe("custom provider settings routes", () => {
     };
   }
 
+  async function networkService(ctx, networkClient) {
+    const store = new CustomProviderStore({
+      configFile: resolve(ctx.paths.PI_CONFIG_DIR, "custom-providers.json"),
+      secretsFile: resolve(ctx.paths.PI_CONFIG_DIR, "custom-provider-secrets.json"),
+    });
+    await store.commit({
+      expectedRevision: 0,
+      provider: {
+        id: providerDraft.id,
+        name: providerDraft.name,
+        protocol: providerDraft.protocol,
+        baseUrl: providerDraft.baseUrl,
+        authMode: providerDraft.authMode,
+        headers: ["X-Tenant"],
+        models: providerDraft.models,
+      },
+      secretPatch: {
+        apiKey: apiSecret,
+        headers: providerDraft.headers,
+      },
+    });
+    return new CustomProviderService({
+      store,
+      networkClient,
+      coordinator: { sync: async () => (await store.readSnapshot()).revision },
+      referenceChecker: new ProviderReferenceChecker({
+        currentModel: () => undefined,
+        defaultModel: () => undefined,
+        customAgents: () => [],
+      }),
+      referenceLock: new FileProviderReferenceMutationLock(resolve(ctx.paths.PI_CONFIG_DIR, "provider-references.lock")),
+    });
+  }
+
   it("serves capabilities and redacted official/custom lists", async () => {
     const modelRuntime = { marker: "model-runtime" };
     let listedRuntime;
@@ -1458,6 +1535,110 @@ describe("custom provider settings routes", () => {
     for (const [, , signal] of calls) assert.ok(signal instanceof AbortSignal);
   });
 
+  it("propagates request aborts that occur while stored-credential authorization is pending", async () => {
+    for (const disconnect of ["aborted", "close"]) {
+      let signalAuthorization;
+      let releaseAuthorization;
+      const authorizationStarted = new Promise((resolveStarted) => { signalAuthorization = resolveStarted; });
+      const authorizationRelease = new Promise((resolveRelease) => { releaseAuthorization = resolveRelease; });
+      let receivedSignal;
+      let meaningfulNetworkCalls = 0;
+      const ctx = customContext({
+        permissionService: {
+          async authorizePath(root, target, operation) {
+            signalAuthorization();
+            await authorizationRelease;
+            return { root, path: resolve(root, target), relativePath: target, operation };
+          },
+        },
+      });
+      ctx.customProviderService = await networkService(ctx, {
+          async testConnection(_draft, signal) {
+            receivedSignal = signal;
+            if (!signal.aborted) meaningfulNetworkCalls += 1;
+            return {
+              ok: false,
+              providerId: "acme",
+              modelId: "model-a",
+              code: "aborted",
+              message: "Provider request was aborted",
+            };
+          },
+          discoverModels: async () => assert.fail("model discovery was not requested"),
+      });
+      const invocation = startHandlerWithLifecycle(
+        handleSettings,
+        "POST",
+        "/api/custom-providers/test",
+        { provider: { ...providerDraft, apiKey: undefined } },
+        ctx,
+      );
+      await authorizationStarted;
+      if (disconnect === "aborted") {
+        invocation.req.aborted = true;
+        invocation.req.emit("aborted");
+      } else {
+        invocation.res.destroyed = true;
+        invocation.res.closed = true;
+        invocation.res.emit("close");
+      }
+      releaseAuthorization();
+      await invocation.pending;
+
+      assert.ok(receivedSignal instanceof AbortSignal, `${disconnect} must reach the network client`);
+      assert.equal(receivedSignal.aborted, true, `${disconnect} must abort before network work starts`);
+      assert.equal(meaningfulNetworkCalls, 0);
+      assert.equal(invocation.req.listenerCount("aborted"), 0);
+      assert.equal(invocation.req.listenerCount("close"), 0);
+      assert.equal(invocation.res.listenerCount("close"), 0);
+    }
+  });
+
+  it("starts network operations aborted when the request lifecycle is already closed", async () => {
+    for (const initial of [
+      { req: { aborted: true } },
+      { req: { destroyed: true } },
+      { res: { destroyed: true, closed: true } },
+    ]) {
+      let receivedSignal;
+      const ctx = customContext({
+        permissionService: {
+          async authorizePath(root, target, operation) {
+            return { root, path: resolve(root, target), relativePath: target, operation };
+          },
+        },
+      });
+      ctx.customProviderService = await networkService(ctx, {
+          async testConnection(_draft, signal) {
+            receivedSignal = signal;
+            return {
+              ok: false,
+              providerId: "acme",
+              modelId: "model-a",
+              code: "aborted",
+              message: "Provider request was aborted",
+            };
+          },
+          discoverModels: async () => assert.fail("model discovery was not requested"),
+      });
+      const invocation = startHandlerWithLifecycle(
+        handleSettings,
+        "POST",
+        "/api/custom-providers/test",
+        { provider: { ...providerDraft, apiKey: undefined } },
+        ctx,
+        initial,
+      );
+      await invocation.pending;
+
+      assert.ok(receivedSignal instanceof AbortSignal);
+      assert.equal(receivedSignal.aborted, true);
+      assert.equal(invocation.req.listenerCount("aborted"), 0);
+      assert.equal(invocation.req.listenerCount("close"), 0);
+      assert.equal(invocation.res.listenerCount("close"), 0);
+    }
+  });
+
   it("does not persist network operations, reuses saved credentials in memory, and permits save after failure", async () => {
     const ctx = customContext();
     const configFile = resolve(ctx.paths.PI_CONFIG_DIR, "custom-providers.json");
@@ -1519,7 +1700,7 @@ describe("custom provider settings routes", () => {
 
     const saved = await callHandler(handleSettings, "POST", "/api/custom-providers", {
       expectedRevision: 0,
-      provider: providerDraft,
+      provider: { ...providerDraft, modelDiscovery: "/models" },
     }, ctx);
     assert.equal(saved.status, 201);
     assert.equal((await store.readSnapshot()).revision, 1);
@@ -1529,7 +1710,7 @@ describe("custom provider settings routes", () => {
       ...providerDraft,
       apiKey: undefined,
       headers: [{ name: "X-Tenant" }],
-      modelDiscovery: "https://api.example.test/models",
+      modelDiscovery: "../models",
     };
     const testedSaved = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
       provider: draftWithoutSecrets,
@@ -1546,6 +1727,7 @@ describe("custom provider settings routes", () => {
       assert.equal(input.secrets.apiKey, apiSecret);
       assert.equal(input.secrets.headers["X-Tenant"], headerSecret);
       assert.equal(input.modelId, "model-a");
+      assert.equal(input.provider.modelDiscovery, "../models");
     }
 
     const missingCredentials = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {

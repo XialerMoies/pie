@@ -306,10 +306,23 @@ void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, succe
     for (const baseUrl of ["/relative", "ftp://example.test/models", "not a url"]) {
       assert.throws(() => validateCustomProviderDefinition(provider({ baseUrl })), /provider\.baseUrl/);
     }
-    assert.throws(
-      () => validateCustomProviderDefinition(provider({ modelDiscovery: "/models" })),
-      /provider\.modelDiscovery/,
+    assert.equal(
+      validateCustomProviderDefinition(provider({ modelDiscovery: "../models" })).modelDiscovery,
+      "../models",
     );
+    const relativeDraft = {
+      ...provider({ modelDiscovery: "/models" }),
+      apiKey: "draft-secret",
+      headers: [{ name: "X-Tenant", value: "tenant-secret" }],
+    };
+    delete relativeDraft.apiKeyRef;
+    assert.equal(validateCustomProviderDraft(relativeDraft).modelDiscovery, "/models");
+    for (const modelDiscovery of ["", "   ", "javascript:alert(1)", "data:text/plain,models", "ftp://example.test/models", "http://["]) {
+      assert.throws(
+        () => validateCustomProviderDefinition(provider({ modelDiscovery })),
+        /provider\.modelDiscovery/,
+      );
+    }
     assert.throws(
       () => validateCustomProviderDefinition(provider({ authMode: "none" })),
       /provider\.apiKeyRef.*must not/i,

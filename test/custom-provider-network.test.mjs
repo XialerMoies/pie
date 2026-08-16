@@ -238,6 +238,33 @@ describe("ProviderNetworkClient model discovery", () => {
     }
   });
 
+  it("redacts secret prefixes split by the error excerpt boundary", async () => {
+    for (const [kind, secret] of [
+      ["apiKey", "APIKE-boundary-secret-value"],
+      ["header", "HDRSE-boundary-secret-value"],
+    ]) {
+      const server = await fixture((_req, res) => {
+        res.writeHead(500, { "content-type": "text/plain" });
+        res.end(`${"x".repeat(1_019)}${secret}`);
+      });
+      try {
+        const draft = resolvedDraft(server.origin, {
+          secrets: kind === "apiKey"
+            ? { apiKey: secret }
+            : { headers: { "X-Tenant": secret } },
+        });
+        const error = await captureError(() => new ProviderNetworkClient().discoverModels(draft));
+
+        assert.equal(error.code, "upstream");
+        assert.equal(error.excerpt.includes(secret), false);
+        assert.equal(error.excerpt.includes(secret.slice(0, 5)), false);
+        assert.ok(Buffer.byteLength(error.excerpt, "utf8") <= 1_024);
+      } finally {
+        await server.close();
+      }
+    }
+  });
+
   it("maps caller cancellation to aborted", async () => {
     const controller = new AbortController();
     const server = await fixture(() => {});

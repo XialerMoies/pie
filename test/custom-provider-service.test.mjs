@@ -100,7 +100,13 @@ async function fixture(options = {}) {
     sourceState,
     syncs,
     referenceLock,
-    service: new CustomProviderService({ store, coordinator, referenceChecker: checker, referenceLock }),
+    service: new CustomProviderService({
+      store,
+      coordinator,
+      referenceChecker: checker,
+      referenceLock,
+      ...(options.networkClient === undefined ? {} : { networkClient: options.networkClient }),
+    }),
     cleanup: () => rm(root, { recursive: true, force: true }),
   };
 }
@@ -142,6 +148,28 @@ describe("custom provider service", () => {
       }
       assert.deepEqual(capabilities.price, { currency: "USD", unit: "millionTokens" });
       assert.equal(capabilities.protocols.some((entry) => entry.id === "google-generative-ai"), false);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("passes a relative model discovery reference through the service without persisting it", async () => {
+    let received;
+    const env = await fixture({
+      networkClient: {
+        testConnection: async () => assert.fail("connection test was not requested"),
+        async discoverModels(input) {
+          received = input;
+          return { ids: ["relative-model"] };
+        },
+      },
+    });
+    try {
+      const result = await env.service.discoverModels(draft({ modelDiscovery: "../models" }));
+
+      assert.deepEqual(result, { ids: ["relative-model"] });
+      assert.equal(received.provider.modelDiscovery, "../models");
+      assert.equal((await env.store.readSnapshot()).revision, 0);
     } finally {
       await env.cleanup();
     }

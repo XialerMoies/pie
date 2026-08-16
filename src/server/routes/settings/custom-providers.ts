@@ -154,26 +154,30 @@ function routeFor(url: string): CustomProviderRoute | undefined {
   return match ? { kind: "item", allow: ["PUT", "DELETE"], encodedProviderId: match[1] } : undefined;
 }
 
-async function runNetworkOperation<T>(
+function createRequestLifecycleScope(
   req: Parameters<RouteHandler>[0],
   res: Parameters<RouteHandler>[1],
-  operation: (signal: AbortSignal) => Promise<T>,
-): Promise<T> {
+): { signal: AbortSignal; dispose: () => void } {
   const controller = new AbortController();
   const abort = () => controller.abort();
   const abortOnIncompleteRequest = () => {
-    if (req.aborted || !req.complete) abort();
+    if (req.aborted || req.destroyed || !req.complete) abort();
+  };
+  const abortOnIncompleteResponse = () => {
+    if (!res.writableEnded) abort();
   };
   req.on("aborted", abort);
   req.on("close", abortOnIncompleteRequest);
-  res.on("close", abort);
-  try {
-    return await operation(controller.signal);
-  } finally {
-    req.off?.("aborted", abort);
-    req.off?.("close", abortOnIncompleteRequest);
-    res.off?.("close", abort);
-  }
+  res.on("close", abortOnIncompleteResponse);
+  if (req.aborted || req.destroyed || res.destroyed || res.closed) abort();
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      req.off?.("aborted", abort);
+      req.off?.("close", abortOnIncompleteRequest);
+      res.off?.("close", abortOnIncompleteResponse);
+    },
+  };
 }
 
 async function authorizeMutationFiles(ctx: ServerContext): Promise<void> {
@@ -258,13 +262,18 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
       return true;
     }
     if (route.kind === "test" || route.kind === "discover") {
-      const draft = networkDraftInput(await parseBody(req));
-      await authorizeStoredCredentialsIfNeeded(ctx, draft);
-      const result = route.kind === "test"
-        ? await runNetworkOperation(req, res, (signal) => service.testConnection(draft, signal))
-        : await runNetworkOperation(req, res, (signal) => service.discoverModels(draft, signal));
-      writeJson(res, 200, result);
-      return true;
+      const lifecycle = createRequestLifecycleScope(req, res);
+      try {
+        const draft = networkDraftInput(await parseBody(req));
+        await authorizeStoredCredentialsIfNeeded(ctx, draft);
+        const result = route.kind === "test"
+          ? await service.testConnection(draft, lifecycle.signal)
+          : await service.discoverModels(draft, lifecycle.signal);
+        if (!res.destroyed && !res.closed) writeJson(res, 200, result);
+        return true;
+      } finally {
+        lifecycle.dispose();
+      }
     }
     if (route.kind === "list" && req.method === "POST") {
       const input = mutationInput(await parseBody(req));

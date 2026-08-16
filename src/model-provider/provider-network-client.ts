@@ -70,6 +70,19 @@ function redact(value: string, secrets: readonly string[]): string {
   return redacted;
 }
 
+function redactTruncatedExcerpt(value: string, secrets: readonly string[]): string {
+  let redacted = redact(value, secrets);
+  for (const secret of secrets) {
+    const maxPrefixLength = Math.min(secret.length - 1, redacted.length);
+    for (let prefixLength = maxPrefixLength; prefixLength > 0; prefixLength -= 1) {
+      if (!redacted.endsWith(secret.slice(0, prefixLength))) continue;
+      redacted = `${redacted.slice(0, -prefixLength)}${REDACTED}`;
+      break;
+    }
+  }
+  return truncateUtf8(redacted, MAX_ERROR_EXCERPT_BYTES);
+}
+
 function statusCode(error: unknown): number | undefined {
   if (error === null || typeof error !== "object") return undefined;
   const direct = (error as { status?: unknown }).status;
@@ -339,7 +352,7 @@ export class ProviderNetworkClient {
       if (!response.ok) {
         const excerpt = await readErrorExcerpt(response, MAX_ERROR_EXCERPT_BYTES);
         const code = codeForStatus(response.status);
-        throw networkError(code, secrets, truncateUtf8(excerpt, MAX_ERROR_EXCERPT_BYTES));
+        throw networkError(code, secrets, redactTruncatedExcerpt(excerpt, secrets));
       }
       const body = await readLimitedBody(response, MAX_DISCOVERY_BODY_BYTES);
       return { ids: parseModelIds(body, secrets) };

@@ -229,6 +229,20 @@ function expectHttpUrl(value: unknown, path: string): asserts value is string {
   }
 }
 
+function expectHttpUrlReference(value: unknown, baseUrl: string, path: string): asserts value is string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    fail(path, "must be an HTTP(S) URL or relative URL reference");
+  }
+  try {
+    const parsed = new URL(value, baseUrl);
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname) {
+      fail(path, "must be an HTTP(S) URL or relative URL reference");
+    }
+  } catch {
+    fail(path, "must be an HTTP(S) URL or relative URL reference");
+  }
+}
+
 function expectPositiveInteger(value: unknown, path: string): asserts value is number {
   if (!Number.isFinite(value) || !Number.isInteger(value) || (value as number) <= 0) {
     fail(path, "must be a positive finite integer");
@@ -326,7 +340,9 @@ function validateProviderIdentityAndTransport(
   if (typeof value.authMode !== "string" || !authModes.includes(value.authMode)) {
     fail("provider.authMode", `${protocol} supports authentication modes: ${authModes.join(", ")}`);
   }
-  if (value.modelDiscovery !== undefined) expectHttpUrl(value.modelDiscovery, "provider.modelDiscovery");
+  if (value.modelDiscovery !== undefined) {
+    expectHttpUrlReference(value.modelDiscovery, value.baseUrl, "provider.modelDiscovery");
+  }
   return { protocol, authMode: value.authMode as ProviderAuthMode };
 }
 
