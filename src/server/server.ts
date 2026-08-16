@@ -44,8 +44,13 @@ import { WorkspaceFileWatcher } from "./workspace-file-watcher.js";
 import { getServersStatus, subscribeStatusChanges } from "../agent/mcp/MCPClientService.js";
 import { resolveStartupPaths, startupPathsSnapshot } from "./startup-paths.js";
 import { canonicalWorkspacePath } from "../data/data-layout.js";
-import { readUserPreferences, readUserSettings, recordOpenedWorkspace } from "../data/user-settings.js";
-import { readSubagentDefinitions } from "../data/subagent-config.js";
+import {
+  readUserPreferences,
+  readUserPreferencesStrict,
+  readUserSettingsStrict,
+  recordOpenedWorkspace,
+} from "../data/user-settings.js";
+import { readSubagentDefinitions, readSubagentDefinitionsStrict } from "../data/subagent-config.js";
 import { WorkspaceLockCoordinator } from "./workspace-lock.js";
 import { workspaceDataPaths, writeWorkspaceMetadata } from "./routes/session-dir.js";
 import { readWorkspaceUiState } from "./routes/ui-state.js";
@@ -60,6 +65,7 @@ import { PiCustomProviderAdapter } from "../model-provider/pi-custom-provider-ad
 import { CustomProviderRuntimeCoordinator } from "../model-provider/runtime-coordinator.js";
 import { ProviderReferenceChecker } from "../model-provider/provider-reference-checker.js";
 import { CustomProviderService } from "../model-provider/custom-provider-service.js";
+import { FileProviderReferenceMutationLock } from "../model-provider/provider-reference-lock.js";
 
 import { attachSessionEvents, recordUserNoteBlock } from "./agent-event-router.js";
 export { attachSessionEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
@@ -214,24 +220,29 @@ async function main() {
     store: customProviderStore,
     adapter: customProviderAdapter,
   });
+  const providerReferenceLock = new FileProviderReferenceMutationLock(
+    STARTUP.layout.providerReferenceLockFile,
+    { instanceId: STARTUP.instanceId },
+  );
   const providerReferenceChecker = new ProviderReferenceChecker({
     currentModel: () => {
       const model = runtime.session.model;
       return model ? { provider: model.provider, id: model.id } : undefined;
     },
     defaultModel: () => {
-      const settings = readUserSettings(SETTINGS_FILE);
-      const preferences = readUserPreferences(SETTINGS_FILE);
+      const settings = readUserSettingsStrict(SETTINGS_FILE);
+      const preferences = readUserPreferencesStrict(SETTINGS_FILE);
       const provider = settings.defaultProvider ?? preferences.defaultProvider;
       const id = settings.defaultModel ?? preferences.defaultModel;
       return provider && id ? { provider, id } : undefined;
     },
-    customAgents: () => readSubagentDefinitions(SUBAGENTS_FILE),
+    customAgents: () => readSubagentDefinitionsStrict(SUBAGENTS_FILE),
   });
   const customProviderService = new CustomProviderService({
     store: customProviderStore,
     coordinator: customProviderCoordinator,
     referenceChecker: providerReferenceChecker,
+    referenceLock: providerReferenceLock,
   });
 
   runtime = await initAgent({
@@ -309,6 +320,7 @@ async function main() {
     permissionMode,
     workspaceLock,
     customProviderService,
+    providerReferenceLock,
     rootRegistry,
     recordUserNote: (note) => recordUserNoteBlock(runtime, chatStream, note, {
       authorizeSessionWrite: (sessionFile, source) => {

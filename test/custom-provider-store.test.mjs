@@ -165,6 +165,51 @@ describe("custom provider store", () => {
     }
   });
 
+  it("clears and later restores an API key without invalidating the provider definition", async () => {
+    const env = await fixture();
+    try {
+      const first = await createProvider(env.store);
+      const cleared = await env.store.commit({
+        expectedRevision: 1,
+        provider: mutationFromStored(first.providers[0]),
+        secretPatch: { apiKey: null, headers: [] },
+      });
+      assert.equal(cleared.providers[0].authMode, "apiKey");
+      assert.equal(cleared.providers[0].apiKeyRef, undefined);
+      assert.equal((await env.store.readRedacted()).providers[0].apiKeyConfigured, false);
+      assert.equal(await env.store.revealApiKey("acme"), undefined);
+
+      const restored = await env.store.commit({
+        expectedRevision: 2,
+        provider: mutationFromStored(cleared.providers[0]),
+        secretPatch: { apiKey: "restored-secret", headers: [] },
+      });
+      assert.match(restored.providers[0].apiKeyRef, /^credential:/);
+      assert.equal(await env.store.revealApiKey("acme"), "restored-secret");
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("rejects empty API key patches before persistence", async () => {
+    const env = await fixture();
+    try {
+      for (const apiKey of ["", "  \r\n  "]) {
+        await assert.rejects(
+          () => env.store.commit({
+            expectedRevision: 0,
+            provider: providerMutation({ headers: [] }),
+            secretPatch: { apiKey, headers: [] },
+          }),
+          /secretPatch\.apiKey/,
+        );
+      }
+      assert.equal((await env.store.readSnapshot()).revision, 0);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
   it("matches header patches case-insensitively and rejects duplicate header names", async () => {
     const env = await fixture();
     try {
@@ -588,7 +633,7 @@ describe("custom provider store", () => {
           provider: forgedProvider,
           secretPatch: { headers: [] },
         }),
-        /apiKeyRef|headers\[0\]/,
+        /provider.*unknown field/,
       );
       assert.equal(await env.store.revealApiKey("api-attacker"), undefined);
       assert.equal(await env.store.revealApiKey("acme"), "api-secret-v1");
@@ -637,18 +682,72 @@ describe("custom provider store", () => {
     const env = await fixture();
     try {
       await writeFile(env.configFile, "{broken", "utf8");
-      await assert.rejects(() => env.store.readSnapshot(), SyntaxError);
+      await assert.rejects(() => env.store.readSnapshot(), /custom provider configuration: invalid JSON/);
 
       await rm(env.configFile, { force: true });
       const committed = await createProvider(env.store);
       await writeFile(env.secretsFile, "{broken", "utf8");
-      await assert.rejects(() => env.store.readSnapshot(), SyntaxError);
-      await assert.rejects(() => env.store.readRedacted(), SyntaxError);
-      await assert.rejects(() => env.store.revealApiKey("acme"), SyntaxError);
+      await assert.rejects(() => env.store.readSnapshot(), /custom provider secrets: invalid JSON/);
+      await assert.rejects(() => env.store.readRedacted(), /custom provider secrets: invalid JSON/);
+      await assert.rejects(() => env.store.revealApiKey("acme"), /custom provider secrets: invalid JSON/);
 
       await writeFile(env.secretsFile, JSON.stringify({ schemaVersion: 1, values: {} }), "utf8");
       await assert.rejects(() => env.store.resolveSecrets(committed.providers[0]), /missing secret/i);
       await assert.rejects(() => env.store.readSnapshot(), /missing secret/i);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("never includes credential references or secret values in corruption errors", async () => {
+    const env = await fixture();
+    const credentialId = "credential:fixture-sensitive-reference";
+    const secretValue = "fixture-secret-value";
+    try {
+      await writeFile(env.secretsFile, JSON.stringify({
+        schemaVersion: 1,
+        values: { "credential:bad ref": secretValue },
+      }), "utf8");
+      await assert.rejects(() => env.store.readSnapshot(), (error) => {
+        assert.equal(error.message.includes("credential:"), false);
+        assert.equal(error.message.includes(secretValue), false);
+        return true;
+      });
+
+      await writeFile(env.configFile, JSON.stringify({
+        schemaVersion: 1,
+        revision: 1,
+        providers: [{
+          ...providerMutation({ headers: [] }),
+          apiKeyRef: credentialId,
+        }],
+      }), "utf8");
+      await writeFile(env.secretsFile, JSON.stringify({ schemaVersion: 1, values: {} }), "utf8");
+      await assert.rejects(() => env.store.readSnapshot(), (error) => {
+        assert.equal(error.message.includes(credentialId), false);
+        assert.equal(error.message.includes("credential:"), false);
+        return true;
+      });
+
+      await writeFile(env.secretsFile, `{"${credentialId}":"${secretValue}"`, "utf8");
+      await assert.rejects(() => env.store.readSnapshot(), (error) => {
+        assert.equal(error.message.includes(credentialId), false);
+        assert.equal(error.message.includes(secretValue), false);
+        assert.equal(error.message.includes("credential:"), false);
+        return true;
+      });
+
+      await writeFile(env.secretsFile, JSON.stringify({
+        schemaVersion: 1,
+        values: {},
+        [credentialId]: secretValue,
+      }), "utf8");
+      await assert.rejects(() => env.store.readSnapshot(), (error) => {
+        assert.equal(error.message.includes(credentialId), false);
+        assert.equal(error.message.includes(secretValue), false);
+        assert.equal(error.message.includes("credential:"), false);
+        return true;
+      });
     } finally {
       await env.cleanup();
     }

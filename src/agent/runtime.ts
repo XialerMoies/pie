@@ -137,6 +137,9 @@ export class AgentRuntime {
   private _transitionTail: Promise<void> = Promise.resolve()
   private _pendingOpens = new Map<string, Promise<void>>()
   private _modelProviderSync?: Promise<number>
+  private _modelProviderSyncGeneration = 0
+  private _modelProviderSyncStarted = false
+  private _modelProviderSyncWake?: Promise<number>
 
   private constructor() {}
 
@@ -164,24 +167,50 @@ export class AgentRuntime {
   syncModelProviders(): Promise<number> {
     const sync = this.config.syncModelProviders
     if (!sync) return Promise.resolve(0)
-    if (this._modelProviderSync) return this._modelProviderSync
+    this._modelProviderSyncGeneration = (this._modelProviderSyncGeneration ?? 0) + 1
+    if (this._modelProviderSync) {
+      if (this._modelProviderSyncStarted) {
+        try {
+          this._modelProviderSyncWake = sync(this.modelRuntime)
+        } catch (error) {
+          this._modelProviderSyncWake = Promise.reject(error)
+        }
+      }
+      return this._modelProviderSync
+    }
 
     const operation = Promise.resolve().then(async () => {
       if (this._session?.isStreaming) await this._session.waitForIdle()
       const session = this._session
       const activeModel = session?.model
-      const revision = await sync(this.modelRuntime)
-      if (activeModel && session && this._session === session) {
-        const refreshedModel = this.modelRegistry.find(activeModel.provider, activeModel.id)
-        if (refreshedModel && refreshedModel !== activeModel) {
-          await session.setModel(refreshedModel)
+      let revision = 0
+      this._modelProviderSyncStarted = true
+      try {
+        while (true) {
+          const generation = this._modelProviderSyncGeneration
+          const wake = this._modelProviderSyncWake
+          this._modelProviderSyncWake = undefined
+          revision = await (wake ?? sync(this.modelRuntime))
+          if (activeModel && session && this._session === session) {
+            const refreshedModel = this.modelRegistry.find(activeModel.provider, activeModel.id)
+            if (refreshedModel && refreshedModel !== session.model) {
+              await session.setModel(refreshedModel)
+            }
+          }
+          if (generation === this._modelProviderSyncGeneration && !this._modelProviderSyncWake) break
         }
+      } finally {
+        this._modelProviderSyncStarted = false
       }
       return revision
     })
     let pending: Promise<number>
     pending = operation.finally(() => {
-      if (this._modelProviderSync === pending) this._modelProviderSync = undefined
+      if (this._modelProviderSync === pending) {
+        this._modelProviderSync = undefined
+        this._modelProviderSyncStarted = false
+        this._modelProviderSyncWake = undefined
+      }
     })
     this._modelProviderSync = pending
     return pending

@@ -15,9 +15,15 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync
 import { tmpdir } from "node:os";
 import { ModelRegistry, ModelRuntime } from "@xiamol/pi-coding-agent";
 import { workspaceDataPaths } from "../src/server/routes/session-dir.ts";
-import { CustomProviderRevisionConflict } from "../src/model-provider/custom-provider-store.ts";
-import { CustomProviderIdConflict } from "../src/model-provider/custom-provider-service.ts";
-import { CustomProviderReferenceConflict } from "../src/model-provider/provider-reference-checker.ts";
+import { CustomProviderRevisionConflict, CustomProviderStore } from "../src/model-provider/custom-provider-store.ts";
+import {
+  CustomProviderIdConflict,
+  CustomProviderNotFoundError,
+  CustomProviderService,
+} from "../src/model-provider/custom-provider-service.ts";
+import { CustomProviderReferenceConflict, ProviderReferenceChecker } from "../src/model-provider/provider-reference-checker.ts";
+import { FileProviderReferenceMutationLock } from "../src/model-provider/provider-reference-lock.ts";
+import { ServerPermissionError } from "../src/server/permission-service.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -174,7 +180,7 @@ async function callHandler(handler, method, url, body, ctx) {
     method,
     headers: { host: "localhost:3099", "content-type": "application/json" },
     on(event, cb) {
-      if (event === "data" && body) cb(Buffer.from(JSON.stringify(body)));
+      if (event === "data" && body) cb(Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body)));
       if (event === "end") cb();
       return req;
     },
@@ -1245,6 +1251,15 @@ describe("settings routes", () => {
 describe("custom provider settings routes", () => {
   const apiSecret = "api-secret-route-fixture";
   const headerSecret = "header-secret-route-fixture";
+  const model = {
+    id: "model-a",
+    name: "Model A",
+    contextWindow: 16_384,
+    maxTokens: 4_096,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
+  };
   const redacted = (revision) => ({
     schemaVersion: 1,
     revision,
@@ -1256,7 +1271,7 @@ describe("custom provider settings routes", () => {
       authMode: "apiKey",
       apiKeyConfigured: true,
       headers: [{ name: "X-Tenant", configured: true }],
-      models: [],
+      models: [model],
     }],
   });
   const providerDraft = {
@@ -1267,8 +1282,14 @@ describe("custom provider settings routes", () => {
     authMode: "apiKey",
     apiKey: apiSecret,
     headers: [{ name: "X-Tenant", value: headerSecret }],
-    models: [],
+    models: [model],
   };
+
+  function customContext(overrides = {}) {
+    const ctx = mockContext(overrides);
+    mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+    return ctx;
+  }
 
   function service(overrides = {}) {
     return {
@@ -1295,7 +1316,7 @@ describe("custom provider settings routes", () => {
   it("serves capabilities and redacted official/custom lists", async () => {
     const modelRuntime = { marker: "model-runtime" };
     let listedRuntime;
-    const ctx = mockContext({
+    const ctx = customContext({
       runtime: mockRuntime({ modelRuntime }),
       customProviderService: service({
         list: async (received) => {
@@ -1329,7 +1350,7 @@ describe("custom provider settings routes", () => {
     const calls = [];
     const syncCalls = [];
     const modelRuntime = { marker: "model-runtime" };
-    const ctx = mockContext({
+    const ctx = customContext({
       runtime: mockRuntime({
         modelRuntime,
         syncModelProviders() {
@@ -1409,7 +1430,7 @@ describe("custom provider settings routes", () => {
     ];
 
     for (const entry of cases) {
-      const ctx = mockContext({ customProviderService: service({ create: async () => { throw entry.error; } }) });
+      const ctx = customContext({ customProviderService: service({ create: async () => { throw entry.error; } }) });
       const result = await callHandler(handleSettings, "POST", "/api/custom-providers", {
         expectedRevision: 0,
         provider: providerDraft,
@@ -1427,7 +1448,7 @@ describe("custom provider settings routes", () => {
       "GET",
       "/api/custom-providers",
       undefined,
-      mockContext({ customProviderService: undefined }),
+      customContext({ customProviderService: undefined }),
     );
     assert.strictEqual(missing.status, 503);
     assert.deepStrictEqual(parseJSON(missing.body), {
@@ -1435,7 +1456,7 @@ describe("custom provider settings routes", () => {
       code: "service_unavailable",
     });
 
-    const ctx = mockContext({
+    const ctx = customContext({
       customProviderService: service({
         create: async () => { throw new Error(`upstream included ${apiSecret} and ${headerSecret}`); },
       }),
@@ -1455,7 +1476,7 @@ describe("custom provider settings routes", () => {
 
   it("reveals only the explicitly requested provider API key and never Header values", async () => {
     const requested = [];
-    const ctx = mockContext({
+    const ctx = customContext({
       customProviderService: service({
         async revealApiKey(providerId) {
           requested.push(providerId);
@@ -1472,6 +1493,260 @@ describe("custom provider settings routes", () => {
     assert.deepStrictEqual(requested, ["acme"]);
     assert.equal(result.body.includes(headerSecret), false);
     assert.equal(Object.hasOwn(parseJSON(result.body), "headers"), false);
+  });
+
+  it("authorizes credential reads and both mutation files before service calls", async () => {
+    const authorizations = [];
+    const ctx = customContext({
+      permissionService: {
+        async authorizePath(root, target, operation, source) {
+          authorizations.push({ target, operation, source });
+          return { root, path: resolve(root, target), relativePath: target, operation };
+        },
+      },
+      customProviderService: service(),
+    });
+
+    assert.strictEqual((await callHandler(handleSettings, "POST", "/api/custom-providers/reveal", { providerId: "acme" }, ctx)).status, 200);
+    assert.strictEqual((await callHandler(handleSettings, "POST", "/api/custom-providers", {
+      expectedRevision: 0,
+      provider: providerDraft,
+    }, ctx)).status, 201);
+    assert.deepStrictEqual(authorizations, [
+      { target: "custom-provider-secrets.json", operation: "read", source: "settings.custom-providers.reveal" },
+      { target: "custom-providers.json", operation: "write", source: "settings.custom-providers.config" },
+      { target: "custom-provider-secrets.json", operation: "write", source: "settings.custom-providers.secrets" },
+    ]);
+  });
+
+  it("maps permission denial before reveal or mutation service calls", async () => {
+    let called = false;
+    const ctx = customContext({
+      permissionService: {
+        async authorizePath() { throw new ServerPermissionError("Denied by policy"); },
+      },
+      customProviderService: service({
+        revealApiKey: async () => { called = true; return apiSecret; },
+        create: async () => { called = true; return redacted(1); },
+      }),
+    });
+    for (const [method, url, body] of [
+      ["POST", "/api/custom-providers/reveal", { providerId: "acme" }],
+      ["POST", "/api/custom-providers", { expectedRevision: 0, provider: providerDraft }],
+    ]) {
+      const result = await callHandler(handleSettings, method, url, body, ctx);
+      assert.strictEqual(result.status, 403);
+      assert.deepStrictEqual(parseJSON(result.body), { error: "Denied by policy", code: "permission_denied" });
+    }
+    assert.equal(called, false);
+  });
+
+  it("handles query strings, method ownership, malformed paths, and typed request errors", async () => {
+    const ctx = customContext({
+      customProviderService: service({
+        delete: async () => { throw new CustomProviderNotFoundError("missing"); },
+      }),
+    });
+    assert.strictEqual((await callHandler(handleSettings, "GET", "/api/custom-providers?view=all", undefined, ctx)).status, 200);
+
+    const method = await callHandler(handleSettings, "PATCH", "/api/custom-providers/acme?x=1", undefined, ctx);
+    assert.strictEqual(method.status, 405);
+    assert.strictEqual(method.headers.Allow, "PUT, DELETE");
+    const baseMethod = await callHandler(handleSettings, "PUT", "/api/custom-providers?x=1", undefined, ctx);
+    assert.strictEqual(baseMethod.status, 405);
+    assert.strictEqual(baseMethod.headers.Allow, "GET, POST");
+
+    for (const url of ["/api/custom-providers/%E0%A4%A", "/api/custom-providers/Bad_ID"]) {
+      const invalid = await callHandler(handleSettings, "DELETE", url, { expectedRevision: 0 }, ctx);
+      assert.strictEqual(invalid.status, 400);
+      assert.deepStrictEqual(parseJSON(invalid.body), {
+        error: "Invalid custom provider request",
+        code: "invalid_request",
+        fieldPath: "providerId",
+      });
+    }
+
+    const malformed = await callHandler(handleSettings, "POST", "/api/custom-providers", Buffer.from("{broken"), ctx);
+    assert.strictEqual(malformed.status, 400);
+    assert.deepStrictEqual(parseJSON(malformed.body), { error: "Invalid JSON", code: "invalid_json" });
+
+    const oversized = await callHandler(
+      handleSettings,
+      "POST",
+      "/api/custom-providers",
+      Buffer.alloc(1024 * 1024 + 1, "x"),
+      ctx,
+    );
+    assert.strictEqual(oversized.status, 413);
+    assert.deepStrictEqual(parseJSON(oversized.body), { error: "Request body is too large", code: "body_too_large" });
+
+    const missingRevision = await callHandler(handleSettings, "POST", "/api/custom-providers", { provider: providerDraft }, ctx);
+    assert.strictEqual(missingRevision.status, 400);
+    assert.equal(parseJSON(missingRevision.body).fieldPath, "expectedRevision");
+
+    const unknownFieldSecret = "credential:route-unknown-field-secret";
+    const unknownField = await callHandler(handleSettings, "POST", "/api/custom-providers", {
+      expectedRevision: 0,
+      provider: providerDraft,
+      [unknownFieldSecret]: apiSecret,
+    }, ctx);
+    assert.strictEqual(unknownField.status, 400);
+    assert.equal(unknownField.body.includes(unknownFieldSecret), false);
+    assert.equal(unknownField.body.includes(apiSecret), false);
+
+    const missing = await callHandler(handleSettings, "DELETE", "/api/custom-providers/missing", { expectedRevision: 0 }, ctx);
+    assert.strictEqual(missing.status, 404);
+    assert.deepStrictEqual(parseJSON(missing.body), { error: "Custom provider was not found", code: "provider_not_found" });
+  });
+
+  it("persists and clears a key through the real route, service, and store", async () => {
+    const ctx = customContext();
+    const configFile = resolve(ctx.paths.PI_CONFIG_DIR, "custom-providers.json");
+    const secretsFile = resolve(ctx.paths.PI_CONFIG_DIR, "custom-provider-secrets.json");
+    const store = new CustomProviderStore({ configFile, secretsFile });
+    const modelRuntime = {
+      getProviders: () => [{ id: "openai", name: "OpenAI" }],
+      getProviderAuthStatus: () => ({ configured: true }),
+    };
+    const realService = new CustomProviderService({
+      store,
+      coordinator: { sync: async () => (await store.readSnapshot()).revision },
+      referenceChecker: new ProviderReferenceChecker({
+        currentModel: () => undefined,
+        defaultModel: () => undefined,
+        customAgents: () => [],
+      }),
+      referenceLock: new FileProviderReferenceMutationLock(resolve(ctx.paths.PI_CONFIG_DIR, "provider-references.lock")),
+    });
+    ctx.runtime = mockRuntime({ modelRuntime, syncModelProviders: async () => 0 });
+    ctx.customProviderService = realService;
+
+    const created = await callHandler(handleSettings, "POST", "/api/custom-providers", {
+      expectedRevision: 0,
+      provider: providerDraft,
+    }, ctx);
+    assert.strictEqual(created.status, 201);
+    assert.equal(parseJSON(created.body).providers[0].apiKeyConfigured, true);
+
+    const cleared = await callHandler(handleSettings, "PUT", "/api/custom-providers/acme", {
+      expectedRevision: 1,
+      provider: { ...providerDraft, apiKey: null },
+    }, ctx);
+    assert.strictEqual(cleared.status, 200);
+    assert.equal(parseJSON(cleared.body).providers[0].apiKeyConfigured, false);
+    assert.equal(JSON.stringify(JSON.parse(readFileSync(configFile, "utf8"))).includes("apiKeyRef"), false);
+    assert.equal(readFileSync(secretsFile, "utf8").includes(apiSecret), false);
+  });
+});
+
+describe("provider reference writer locking", () => {
+  function orderedLock(events) {
+    return {
+      async runExclusive(operation) {
+        events.push("reference-lock:enter");
+        try { return await operation(); } finally { events.push("reference-lock:exit"); }
+      },
+    };
+  }
+
+  it("holds the outer reference lock while syncing, validating, and saving the default model", async () => {
+    const events = [];
+    const target = { provider: "custom", id: "model-a" };
+    const ctx = mockContext({
+      providerReferenceLock: orderedLock(events),
+      runtime: mockRuntime({
+        async syncModelProviders() { events.push("sync"); return 2; },
+        modelRegistry: {
+          find(provider, id) {
+            events.push(`find:${provider}/${id}`);
+            return provider === target.provider && id === target.id ? target : undefined;
+          },
+        },
+      }),
+    });
+    mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+
+    const result = await callHandler(handleSettings, "POST", "/api/settings", {
+      defaultProvider: target.provider,
+      defaultModel: target.id,
+    }, ctx);
+    assert.strictEqual(result.status, 200);
+    assert.deepStrictEqual(events, [
+      "reference-lock:enter",
+      "sync",
+      "find:custom/model-a",
+      "reference-lock:exit",
+    ]);
+  });
+
+  it("takes the reference lock before the stable-session lock for active model switches", async () => {
+    const events = [];
+    const target = { provider: "custom", id: "model-a" };
+    const session = mockSession({
+      model: { provider: "openai", id: "old" },
+      async setModel() { events.push("set-model"); },
+    });
+    const ctx = mockContext({
+      providerReferenceLock: orderedLock(events),
+      runtime: mockRuntime({
+        session,
+        async runWithStableSession(operation) {
+          events.push("stable-session:enter");
+          try { return await operation(); } finally { events.push("stable-session:exit"); }
+        },
+        async syncModelProviders() { events.push("sync"); return 2; },
+        modelRegistry: { find: () => target },
+      }),
+    });
+    mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+
+    const result = await callHandler(handleSettings, "POST", "/api/model/switch", {
+      provider: target.provider,
+      modelId: target.id,
+    }, ctx);
+    assert.strictEqual(result.status, 200);
+    assert.deepStrictEqual(events, [
+      "reference-lock:enter",
+      "stable-session:enter",
+      "sync",
+      "set-model",
+      "stable-session:exit",
+      "reference-lock:exit",
+    ]);
+  });
+
+  it("holds the reference lock while syncing, validating, and replacing custom agents", async () => {
+    const events = [];
+    const ctx = mockContext({
+      providerReferenceLock: orderedLock(events),
+      runtime: mockRuntime({
+        async syncModelProviders() { events.push("sync"); return 2; },
+        modelRegistry: {
+          find(provider, id) {
+            events.push(`find:${provider}/${id}`);
+            return { provider, id };
+          },
+        },
+      }),
+    });
+    ctx.paths.SUBAGENTS_FILE = resolve(ctx.paths.PI_CONFIG_DIR, "subagents.json");
+    mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+
+    const result = await callHandler(handleSettings, "PUT", "/api/subagents", { agents: [{
+      id: "reviewer",
+      name: "Reviewer",
+      description: "Review changes",
+      prompt: "Review the implementation.",
+      tools: ["search"],
+      model: { provider: "custom", id: "model-a" },
+    }] }, ctx);
+    assert.strictEqual(result.status, 200);
+    assert.deepStrictEqual(events, [
+      "reference-lock:enter",
+      "sync",
+      "find:custom/model-a",
+      "reference-lock:exit",
+    ]);
   });
 });
 

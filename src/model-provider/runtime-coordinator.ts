@@ -74,7 +74,10 @@ export class CustomProviderRuntimeCoordinator {
       return state.loadedRevision;
     }
 
-    const prepared = await Promise.all(snapshot.providers.map(async (provider) => (
+    const availableProviders = snapshot.providers.filter((provider) => (
+      provider.authMode !== "apiKey" || provider.apiKeyRef !== undefined
+    ));
+    const prepared = await Promise.all(availableProviders.map(async (provider) => (
       this.#adapter.prepare(provider, await this.#store.resolveSecrets(provider))
     )));
     if (generation !== state.requestedGeneration || snapshot.revision <= state.loadedRevision) {

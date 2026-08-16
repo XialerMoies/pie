@@ -1,22 +1,33 @@
 import type { ServerResponse } from "node:http";
 
-import type {
-  CustomProviderDeleteInput,
-  CustomProviderMutationInput,
+import {
+  CustomProviderInvalidRequestError,
+  CustomProviderValidationError,
+  validateCustomProviderDraft,
+  validateCustomProviderId,
+  type CustomProviderDeleteInput,
+  type CustomProviderMutationInput,
 } from "../../../model-provider/contracts.js";
 import { CustomProviderRevisionConflict } from "../../../model-provider/custom-provider-store.js";
 import {
   CustomProviderApiKeyUnavailable,
   CustomProviderIdConflict,
   CustomProviderImmutableIdError,
+  CustomProviderNotFoundError,
 } from "../../../model-provider/custom-provider-service.js";
 import { CustomProviderReferenceConflict } from "../../../model-provider/provider-reference-checker.js";
-import { parseBody } from "../parse-body.js";
+import { authorizeRoutePath, writeServerPermissionError } from "../../permission-service.js";
+import { BodyTooLargeError, InvalidJsonBodyError, parseBody } from "../parse-body.js";
+import { writePathGuardError } from "../path-guard.js";
 import type { RouteHandler, ServerContext } from "../types.js";
 import { cors } from "./common.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json", ...cors };
 const ITEM_ROUTE = /^\/api\/custom-providers\/([^/]+)$/;
+
+type CustomProviderRoute =
+  | { kind: "capabilities" | "list" | "reveal"; allow: readonly string[] }
+  | { kind: "item"; allow: readonly string[]; encodedProviderId: string };
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, JSON_HEADERS);
@@ -28,25 +39,37 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function mutationInput(value: unknown): CustomProviderMutationInput {
-  if (!isRecord(value) || !Number.isSafeInteger(value.expectedRevision) || !isRecord(value.provider)) {
-    throw new InvalidCustomProviderRequest();
+  if (!isRecord(value)) throw new CustomProviderInvalidRequestError();
+  const unknown = Object.keys(value).find((key) => key !== "expectedRevision" && key !== "provider");
+  if (unknown) throw new CustomProviderInvalidRequestError("request");
+  if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) {
+    throw new CustomProviderInvalidRequestError("expectedRevision");
   }
   return {
     expectedRevision: value.expectedRevision as number,
-    provider: value.provider as unknown as CustomProviderMutationInput["provider"],
+    provider: validateCustomProviderDraft(value.provider),
   };
 }
 
 function deleteInput(value: unknown): CustomProviderDeleteInput {
-  if (!isRecord(value) || !Number.isSafeInteger(value.expectedRevision)) {
-    throw new InvalidCustomProviderRequest();
+  if (!isRecord(value)) throw new CustomProviderInvalidRequestError();
+  const unknown = Object.keys(value).find((key) => key !== "expectedRevision");
+  if (unknown) throw new CustomProviderInvalidRequestError("request");
+  if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) {
+    throw new CustomProviderInvalidRequestError("expectedRevision");
   }
   return { expectedRevision: value.expectedRevision as number };
 }
 
-class InvalidCustomProviderRequest extends Error {}
-
 function writeError(res: ServerResponse, error: unknown): void {
+  if (error instanceof InvalidJsonBodyError) {
+    writeJson(res, 400, { error: error.message, code: "invalid_json" });
+    return;
+  }
+  if (error instanceof BodyTooLargeError) {
+    writeJson(res, 413, { error: error.message, code: "body_too_large" });
+    return;
+  }
   if (error instanceof CustomProviderRevisionConflict) {
     writeJson(res, 409, {
       error: "Custom provider revision conflict",
@@ -87,8 +110,16 @@ function writeError(res: ServerResponse, error: unknown): void {
     });
     return;
   }
-  if (error instanceof InvalidCustomProviderRequest) {
-    writeJson(res, 400, { error: "Invalid custom provider request", code: "invalid_request" });
+  if (error instanceof CustomProviderNotFoundError) {
+    writeJson(res, 404, { error: error.message, code: "provider_not_found" });
+    return;
+  }
+  if (error instanceof CustomProviderInvalidRequestError || error instanceof CustomProviderValidationError) {
+    writeJson(res, 400, {
+      error: "Invalid custom provider request",
+      code: "invalid_request",
+      ...(error.fieldPath ? { fieldPath: error.fieldPath } : {}),
+    });
     return;
   }
   writeJson(res, 500, { error: "Custom provider request failed", code: "internal_error" });
@@ -100,16 +131,46 @@ function scheduleRuntimeSync(ctx: ServerContext): void {
     .catch(() => console.error("[custom-provider] background sync failed"));
 }
 
-function handlesRoute(url: string, method: string | undefined): boolean {
-  if (url === "/api/custom-providers/capabilities") return method === "GET";
-  if (url === "/api/custom-providers/reveal") return method === "POST";
-  if (url === "/api/custom-providers") return method === "GET" || method === "POST";
-  return ITEM_ROUTE.test(url) && (method === "PUT" || method === "DELETE");
+function routeFor(url: string): CustomProviderRoute | undefined {
+  const pathname = new URL(url, "http://localhost").pathname;
+  if (pathname === "/api/custom-providers/capabilities") return { kind: "capabilities", allow: ["GET"] };
+  if (pathname === "/api/custom-providers/reveal") return { kind: "reveal", allow: ["POST"] };
+  if (pathname === "/api/custom-providers") return { kind: "list", allow: ["GET", "POST"] };
+  const match = ITEM_ROUTE.exec(pathname);
+  return match ? { kind: "item", allow: ["PUT", "DELETE"], encodedProviderId: match[1] } : undefined;
+}
+
+async function authorizeMutationFiles(ctx: ServerContext): Promise<void> {
+  await authorizeRoutePath(
+    ctx,
+    ctx.paths.PI_CONFIG_DIR,
+    "custom-providers.json",
+    "write",
+    "settings.custom-providers.config",
+  );
+  await authorizeRoutePath(
+    ctx,
+    ctx.paths.PI_CONFIG_DIR,
+    "custom-provider-secrets.json",
+    "write",
+    "settings.custom-providers.secrets",
+  );
 }
 
 export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) => {
-  const url = req.url ?? "";
-  if (!handlesRoute(url, req.method)) return false;
+  let route: CustomProviderRoute | undefined;
+  try {
+    route = routeFor(req.url ?? "");
+  } catch {
+    writeError(res, new CustomProviderInvalidRequestError("url"));
+    return true;
+  }
+  if (!route) return false;
+  if (!route.allow.includes(req.method ?? "")) {
+    res.writeHead(405, { ...JSON_HEADERS, Allow: route.allow.join(", ") });
+    res.end(JSON.stringify({ error: "Method not allowed", code: "method_not_allowed" }));
+    return true;
+  }
 
   const service = ctx.customProviderService;
   if (!service) {
@@ -118,24 +179,34 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
   }
 
   try {
-    if (url === "/api/custom-providers/capabilities") {
+    if (route.kind === "capabilities") {
       writeJson(res, 200, service.capabilities());
       return true;
     }
-    if (url === "/api/custom-providers" && req.method === "GET") {
+    if (route.kind === "list" && req.method === "GET") {
       writeJson(res, 200, await service.list(ctx.runtime.modelRuntime));
       return true;
     }
-    if (url === "/api/custom-providers/reveal") {
+    if (route.kind === "reveal") {
       const body = await parseBody(req);
-      if (!isRecord(body) || typeof body.providerId !== "string" || body.providerId.length === 0) {
-        throw new InvalidCustomProviderRequest();
+      if (!isRecord(body) || Object.keys(body).some((key) => key !== "providerId")) {
+        throw new CustomProviderInvalidRequestError("providerId");
       }
-      writeJson(res, 200, { apiKey: await service.revealApiKey(body.providerId) });
+      const providerId = validateCustomProviderId(body.providerId, "providerId");
+      await authorizeRoutePath(
+        ctx,
+        ctx.paths.PI_CONFIG_DIR,
+        "custom-provider-secrets.json",
+        "read",
+        "settings.custom-providers.reveal",
+      );
+      writeJson(res, 200, { apiKey: await service.revealApiKey(providerId) });
       return true;
     }
-    if (url === "/api/custom-providers" && req.method === "POST") {
-      const snapshot = await service.create(mutationInput(await parseBody(req)), ctx.runtime.modelRuntime);
+    if (route.kind === "list" && req.method === "POST") {
+      const input = mutationInput(await parseBody(req));
+      await authorizeMutationFiles(ctx);
+      const snapshot = await service.create(input, ctx.runtime.modelRuntime);
       const payload = JSON.stringify(snapshot);
       scheduleRuntimeSync(ctx);
       res.writeHead(201, JSON_HEADERS);
@@ -143,18 +214,29 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
       return true;
     }
 
-    const match = ITEM_ROUTE.exec(url);
-    if (!match) return false;
-    const providerId = decodeURIComponent(match[1]);
+    if (route.kind !== "item") return false;
+    let providerId: string;
+    try {
+      providerId = validateCustomProviderId(decodeURIComponent(route.encodedProviderId), "providerId");
+    } catch (error) {
+      if (error instanceof URIError) throw new CustomProviderInvalidRequestError("providerId");
+      throw error;
+    }
+    const input = req.method === "PUT"
+      ? mutationInput(await parseBody(req))
+      : deleteInput(await parseBody(req));
+    await authorizeMutationFiles(ctx);
     const snapshot = req.method === "PUT"
-      ? await service.update(providerId, mutationInput(await parseBody(req)), ctx.runtime.modelRuntime)
-      : await service.delete(providerId, deleteInput(await parseBody(req)), ctx.runtime.modelRuntime);
+      ? await service.update(providerId, input as CustomProviderMutationInput, ctx.runtime.modelRuntime)
+      : await service.delete(providerId, input as CustomProviderDeleteInput, ctx.runtime.modelRuntime);
     const payload = JSON.stringify(snapshot);
     scheduleRuntimeSync(ctx);
     res.writeHead(200, JSON_HEADERS);
     res.end(payload);
     return true;
   } catch (error) {
+    if (writeServerPermissionError(res, cors, error)) return true;
+    if (writePathGuardError(res, cors, error)) return true;
     writeError(res, error);
     return true;
   }

@@ -8,6 +8,8 @@ import { describe, it } from "node:test";
 import {
   PROVIDER_PROTOCOLS,
   PROVIDER_PROTOCOL_AUTH_MODES,
+  CustomProviderInvalidRequestError,
+  CustomProviderValidationError,
 } from "../src/model-provider/contracts.ts";
 import {
   CustomProviderRevisionConflict,
@@ -15,12 +17,14 @@ import {
 } from "../src/model-provider/custom-provider-store.ts";
 import {
   CustomProviderIdConflict,
+  CustomProviderNotFoundError,
   CustomProviderService,
 } from "../src/model-provider/custom-provider-service.ts";
 import {
   CustomProviderReferenceConflict,
   ProviderReferenceChecker,
 } from "../src/model-provider/provider-reference-checker.ts";
+import { FileProviderReferenceMutationLock } from "../src/model-provider/provider-reference-lock.ts";
 
 function model(id = "model-a", name = id) {
   return {
@@ -66,7 +70,7 @@ function runtime(providers = [providerSummary("openai", "OpenAI", true)]) {
   };
 }
 
-async function fixture() {
+async function fixture(options = {}) {
   const root = await mkdtemp(resolve(tmpdir(), "custom-provider-service-"));
   const store = new CustomProviderStore({
     configFile: resolve(root, "custom-providers.json"),
@@ -89,12 +93,14 @@ async function fixture() {
       return (await store.readSnapshot()).revision;
     },
   };
+  const referenceLock = options.referenceLock ?? new FileProviderReferenceMutationLock(resolve(root, "provider-references.lock"));
   return {
     root,
     store,
     sourceState,
     syncs,
-    service: new CustomProviderService({ store, coordinator, referenceChecker: checker }),
+    referenceLock,
+    service: new CustomProviderService({ store, coordinator, referenceChecker: checker, referenceLock }),
     cleanup: () => rm(root, { recursive: true, force: true }),
   };
 }
@@ -227,6 +233,121 @@ describe("custom provider service", () => {
     }
   });
 
+  it("validates direct service inputs and returns typed request and not-found errors", async () => {
+    const env = await fixture();
+    try {
+      await assert.rejects(
+        () => env.service.create({
+          expectedRevision: 0,
+          provider: { ...draft(), unknownSecretField: "fixture-secret" },
+        }, runtime()),
+        (error) => error instanceof CustomProviderValidationError
+          && error.fieldPath === "provider"
+          && !error.message.includes("fixture-secret"),
+      );
+      await assert.rejects(
+        () => env.service.create({ expectedRevision: -1, provider: draft() }, runtime()),
+        (error) => error instanceof CustomProviderInvalidRequestError
+          && error.fieldPath === "expectedRevision",
+      );
+      await assert.rejects(
+        () => env.service.update("missing", {
+          expectedRevision: 0,
+          provider: draft({ id: "missing" }),
+        }, runtime()),
+        (error) => error instanceof CustomProviderNotFoundError && error.providerId === "missing",
+      );
+      await assert.rejects(
+        () => env.service.delete("missing", { expectedRevision: 0 }, runtime()),
+        (error) => error instanceof CustomProviderNotFoundError && error.providerId === "missing",
+      );
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("keeps a cleared Google provider redacted and unconfigured until a key is restored", async () => {
+    const env = await fixture();
+    try {
+      const google = draft({
+        id: "google-custom",
+        name: "Google Custom",
+        protocol: "google-generative-ai",
+        headers: [],
+        models: [model("gemini-custom", "Gemini Custom")],
+      });
+      await env.service.create({ expectedRevision: 0, provider: google }, runtime());
+      const cleared = await env.service.update("google-custom", {
+        expectedRevision: 1,
+        provider: { ...google, apiKey: null },
+      }, runtime());
+      assert.equal(cleared.providers[0].apiKeyConfigured, false);
+      assert.equal((await env.service.list(runtime())).custom[0].apiKeyConfigured, false);
+
+      const restored = await env.service.update("google-custom", {
+        expectedRevision: 2,
+        provider: { ...google, apiKey: "restored-google-key" },
+      }, runtime());
+      assert.equal(restored.providers[0].apiKeyConfigured, true);
+      assert.equal(await env.service.revealApiKey("google-custom"), "restored-google-key");
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("does not reclassify a stale deleted custom runtime provider as official", async () => {
+    const env = await fixture();
+    try {
+      const official = providerSummary("openai", "OpenAI", true);
+      await createAcme(env, runtime([official]));
+      const delayedRuntime = runtime([official, providerSummary("acme", "Stale Acme", true)]);
+      assert.deepEqual((await env.service.list(delayedRuntime)).official.map((provider) => provider.id), ["openai"]);
+
+      await env.service.delete("acme", { expectedRevision: 1 }, delayedRuntime);
+      assert.deepEqual((await env.service.list(delayedRuntime)).official.map((provider) => provider.id), ["openai"]);
+
+      const recreated = await env.service.create({ expectedRevision: 2, provider: draft() }, delayedRuntime);
+      assert.equal(recreated.revision, 3);
+      assert.equal(recreated.providers[0].id, "acme");
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("remembers a preexisting custom ID when delete is the service's first snapshot mutation", async () => {
+    const env = await fixture();
+    try {
+      await env.store.commit({
+        expectedRevision: 0,
+        provider: {
+          id: "external-custom",
+          name: "External Custom",
+          protocol: "openai-completions",
+          baseUrl: "https://external.example.test/v1",
+          authMode: "apiKey",
+          headers: [],
+          models: [model()],
+        },
+        secretPatch: { apiKey: "external-secret", headers: [] },
+      });
+      const delayedRuntime = runtime([
+        providerSummary("openai", "OpenAI", true),
+        providerSummary("external-custom", "Stale External Custom", true),
+      ]);
+
+      await env.service.delete("external-custom", { expectedRevision: 1 }, delayedRuntime);
+
+      assert.deepEqual((await env.service.list(delayedRuntime)).official.map((provider) => provider.id), ["openai"]);
+      const recreated = await env.service.create({
+        expectedRevision: 2,
+        provider: draft({ id: "external-custom", name: "External Custom" }),
+      }, delayedRuntime);
+      assert.equal(recreated.providers[0].id, "external-custom");
+    } finally {
+      await env.cleanup();
+    }
+  });
+
   it("returns every current, default, and custom-agent reference when an update removes a model", async () => {
     const env = await fixture();
     try {
@@ -312,6 +433,81 @@ describe("custom provider service", () => {
       assert.equal((await env.store.readSnapshot()).revision, 1);
     } finally {
       await env.cleanup();
+    }
+  });
+
+  it("holds the shared outer reference lock through provider and model removal commits", async () => {
+    for (const removal of ["provider", "model"]) {
+      const root = await mkdtemp(resolve(tmpdir(), `custom-provider-${removal}-race-`));
+      const baseStore = new CustomProviderStore({
+        configFile: resolve(root, "custom-providers.json"),
+        secretsFile: resolve(root, "custom-provider-secrets.json"),
+      });
+      const referenceLock = new FileProviderReferenceMutationLock(resolve(root, "provider-references.lock"));
+      let reference;
+      let signalCommitEntered;
+      let releaseCommit;
+      const commitEntered = new Promise((resolveEntered) => { signalCommitEntered = resolveEntered; });
+      const commitRelease = new Promise((resolveRelease) => { releaseCommit = resolveRelease; });
+      const store = {
+        readSnapshot: () => baseStore.readSnapshot(),
+        readRedacted: () => baseStore.readRedacted(),
+        revealApiKey: (id) => baseStore.revealApiKey(id),
+        async commit(mutation) {
+          const destructive = mutation.removeProviderId
+            || (mutation.provider && mutation.provider.models.every((candidate) => candidate.id !== "model-a"));
+          if (destructive) {
+            signalCommitEntered();
+            await commitRelease;
+          }
+          return baseStore.commit(mutation);
+        },
+      };
+      const checker = new ProviderReferenceChecker({
+        currentModel: () => reference,
+        defaultModel: () => undefined,
+        customAgents: () => [],
+      });
+      const service = new CustomProviderService({
+        store,
+        coordinator: { sync: async () => 0 },
+        referenceChecker: checker,
+        referenceLock,
+      });
+      try {
+        const provider = draft({ models: [model("model-a"), model("model-b")] });
+        await service.create({ expectedRevision: 0, provider }, runtime());
+        const destructiveMutation = removal === "provider"
+          ? service.delete("acme", { expectedRevision: 1 }, runtime())
+          : service.update("acme", {
+            expectedRevision: 1,
+            provider: { ...provider, models: [model("model-b")] },
+          }, runtime());
+        await commitEntered;
+
+        let writerEntered = false;
+        let writerCommitted = false;
+        const writer = referenceLock.runExclusive(async () => {
+          writerEntered = true;
+          const snapshot = await baseStore.readSnapshot();
+          const target = snapshot.providers.find((candidate) => candidate.id === "acme");
+          if (target?.models.some((candidate) => candidate.id === "model-a")) {
+            reference = { provider: "acme", id: "model-a" };
+            writerCommitted = true;
+          }
+        });
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
+        assert.equal(writerEntered, false, removal);
+
+        releaseCommit();
+        await destructiveMutation;
+        await writer;
+        assert.equal(writerEntered, true, removal);
+        assert.equal(writerCommitted, false, removal);
+        assert.equal(reference, undefined, removal);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     }
   });
 });

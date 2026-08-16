@@ -69,7 +69,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function rejectUnknownFields(value: Record<string, unknown>, allowed: readonly string[], path: string): void {
   const allowedSet = new Set(allowed);
   const unknown = Object.keys(value).find((key) => !allowedSet.has(key));
-  if (unknown !== undefined) throw new Error(`${path}.${unknown}: unknown field`);
+  if (unknown !== undefined) throw new Error(`${path}: contains an unknown field`);
 }
 
 function validateSecretDocument(value: unknown): SecretDocument {
@@ -79,18 +79,19 @@ function validateSecretDocument(value: unknown): SecretDocument {
   if (!isPlainObject(value.values)) throw new Error("secrets.values: must be a plain object");
   for (const [reference, secret] of Object.entries(value.values)) {
     if (!CREDENTIAL_REF_PATTERN.test(reference)) {
-      throw new Error(`secrets.values.${reference}: invalid credential reference`);
+      throw new Error("secrets.values: contains an invalid credential reference");
     }
-    if (typeof secret !== "string") throw new Error(`secrets.values.${reference}: must be a string`);
+    if (typeof secret !== "string") throw new Error("secrets.values: credential values must be strings");
   }
   return value as unknown as SecretDocument;
 }
 
-async function readJsonOrDefault<T>(filePath: string, fallback: () => T): Promise<unknown> {
+async function readJsonOrDefault<T>(filePath: string, fallback: () => T, label: string): Promise<unknown> {
   try {
     return JSON.parse(await readFile(filePath, "utf8")) as unknown;
   } catch (error: any) {
     if (error?.code === "ENOENT") return fallback();
+    if (error instanceof SyntaxError) throw new Error(`${label}: invalid JSON`);
     throw error;
   }
 }
@@ -126,7 +127,7 @@ function referencedCredentials(snapshot: CustomProviderSnapshot): Set<Credential
 function requireReferencedSecrets(snapshot: CustomProviderSnapshot, secrets: SecretDocument): void {
   for (const reference of referencedCredentials(snapshot)) {
     if (!Object.prototype.hasOwnProperty.call(secrets.values, reference)) {
-      throw new Error(`Missing secret for credential reference: ${reference}`);
+      throw new Error("Missing secret for a configured custom provider credential");
     }
   }
 }
@@ -144,6 +145,9 @@ function validateSecretPatch(patch: SecretPatch): Map<string, SecretPatch["heade
   rejectUnknownFields(patch, ["apiKey", "headers"], "secretPatch");
   if (patch.apiKey !== undefined && patch.apiKey !== null && typeof patch.apiKey !== "string") {
     throw new Error("secretPatch.apiKey: must be a string, null, or undefined");
+  }
+  if (typeof patch.apiKey === "string" && patch.apiKey.trim().length === 0) {
+    throw new Error("secretPatch.apiKey: must be a non-empty string");
   }
   if (!Array.isArray(patch.headers)) throw new Error("secretPatch.headers: must be an array");
 
@@ -217,11 +221,15 @@ export class CustomProviderStore {
   }
 
   private async readSnapshotUnlocked(): Promise<CustomProviderSnapshot> {
-    return validateCustomProviderSnapshot(await readJsonOrDefault(this.configFile, EMPTY_SNAPSHOT));
+    return validateCustomProviderSnapshot(
+      await readJsonOrDefault(this.configFile, EMPTY_SNAPSHOT, "custom provider configuration"),
+    );
   }
 
   private async readSecretsUnlocked(): Promise<SecretDocument> {
-    return validateSecretDocument(await readJsonOrDefault(this.secretsFile, EMPTY_SECRETS));
+    return validateSecretDocument(
+      await readJsonOrDefault(this.secretsFile, EMPTY_SECRETS, "custom provider secrets"),
+    );
   }
 
   private async readStateUnlocked(): Promise<StoreState> {

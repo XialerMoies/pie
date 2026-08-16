@@ -111,12 +111,60 @@ export function readUserSettings(settingsFile: string): UserSettingsDocument {
   }
 }
 
+export function readUserSettingsStrict(settingsFile: string): UserSettingsDocument {
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(settingsFile, "utf8")) as unknown;
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return {};
+    throw error;
+  }
+  if (!isRecord(value)) throw new Error("settings: must be a JSON object");
+  if (value.defaultProvider !== undefined && typeof value.defaultProvider !== "string") {
+    throw new Error("settings.defaultProvider: must be a string");
+  }
+  if (value.defaultModel !== undefined && typeof value.defaultModel !== "string") {
+    throw new Error("settings.defaultModel: must be a string");
+  }
+  if ((value.defaultProvider === undefined) !== (value.defaultModel === undefined)) {
+    throw new Error("settings defaultProvider and defaultModel must be configured together");
+  }
+  if (value.preferences !== undefined) {
+    if (!isRecord(value.preferences)) throw new Error("settings.preferences: must be an object");
+    const provider = value.preferences.defaultProvider;
+    const model = value.preferences.defaultModel;
+    if (provider !== undefined && typeof provider !== "string") {
+      throw new Error("settings.preferences.defaultProvider: must be a string");
+    }
+    if (model !== undefined && typeof model !== "string") {
+      throw new Error("settings.preferences.defaultModel: must be a string");
+    }
+    if ((provider === undefined) !== (model === undefined)) {
+      throw new Error("settings preferences defaultProvider and defaultModel must be configured together");
+    }
+  }
+  return value as UserSettingsDocument;
+}
+
 export function readStartupWorkspace(settingsFile: string): string | null {
   return readUserSettings(settingsFile).startup?.lastWorkspace ?? null;
 }
 
 export function readUserPreferences(settingsFile: string): Record<string, string> {
   return readUserSettings(settingsFile).preferences ?? {};
+}
+
+export function readUserPreferencesStrict(settingsFile: string): Record<string, string> {
+  const settings = readUserSettingsStrict(settingsFile);
+  if (settings.preferences !== undefined && !isRecord(settings.preferences)) {
+    throw new Error("settings.preferences: must be an object");
+  }
+  const preferences = sanitizePreferences(settings.preferences);
+  if (settings.preferences?.defaultProvider !== undefined) {
+    preferences.defaultProvider = settings.preferences.defaultProvider;
+    preferences.defaultModel = settings.preferences.defaultModel;
+  }
+  return preferences;
 }
 
 function rawDocument(value: unknown): Record<string, unknown> {

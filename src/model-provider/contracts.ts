@@ -173,8 +173,25 @@ const FORBIDDEN_HEADERS = new Set([
 ]);
 const MAX_ADVANCED_JSON_BYTES = 16 * 1024;
 
+export class CustomProviderValidationError extends Error {
+  constructor(
+    public readonly fieldPath: string,
+    message: string,
+  ) {
+    super(`${fieldPath}: ${message}`);
+    this.name = "CustomProviderValidationError";
+  }
+}
+
+export class CustomProviderInvalidRequestError extends Error {
+  constructor(public readonly fieldPath?: string) {
+    super("Invalid custom provider request");
+    this.name = "CustomProviderInvalidRequestError";
+  }
+}
+
 function fail(path: string, message: string): never {
-  throw new Error(`${path}: ${message}`);
+  throw new CustomProviderValidationError(path, message);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -189,7 +206,7 @@ function expectPlainObject(value: unknown, path: string): asserts value is Recor
 function rejectUnknownFields(value: Record<string, unknown>, allowed: readonly string[], path: string): void {
   const allowedSet = new Set(allowed);
   const unknown = Object.keys(value).find((key) => !allowedSet.has(key));
-  if (unknown !== undefined) fail(`${path}.${unknown}`, "unknown field");
+  if (unknown !== undefined) fail(path, "contains an unknown field");
 }
 
 function expectNonEmptyString(value: unknown, path: string): asserts value is string {
@@ -297,15 +314,10 @@ function validateModel(value: unknown, path: string): asserts value is ModelDesc
   if (value.compatibility !== undefined) validateAdvancedObject(value.compatibility, `${path}.compatibility`);
 }
 
-export function validateCustomProviderDefinition(value: unknown): CustomProviderDefinition {
-  expectPlainObject(value, "provider");
-  rejectUnknownFields(value, [
-    "id", "name", "protocol", "baseUrl", "authMode", "apiKeyRef", "headers", "modelDiscovery", "models",
-  ], "provider");
-
-  if (typeof value.id !== "string" || !PROVIDER_ID_PATTERN.test(value.id)) {
-    fail("provider.id", "must use lowercase letters, numbers, and hyphens");
-  }
+function validateProviderIdentityAndTransport(
+  value: Record<string, unknown>,
+): { protocol: ProviderProtocol; authMode: ProviderAuthMode } {
+  validateCustomProviderId(value.id);
   expectNonEmptyString(value.name, "provider.name");
   if (typeof value.protocol !== "string" || !PROTOCOL_SET.has(value.protocol)) {
     fail("provider.protocol", "must be a supported provider protocol");
@@ -316,14 +328,79 @@ export function validateCustomProviderDefinition(value: unknown): CustomProvider
   if (typeof value.authMode !== "string" || !authModes.includes(value.authMode)) {
     fail("provider.authMode", `${protocol} supports authentication modes: ${authModes.join(", ")}`);
   }
+  if (value.modelDiscovery !== undefined) expectHttpUrl(value.modelDiscovery, "provider.modelDiscovery");
+  return { protocol, authMode: value.authMode as ProviderAuthMode };
+}
+
+export function validateCustomProviderId(value: unknown, fieldPath = "provider.id"): string {
+  if (typeof value !== "string" || !PROVIDER_ID_PATTERN.test(value)) {
+    fail(fieldPath, "must use lowercase letters, numbers, and hyphens");
+  }
+  return value;
+}
+
+function validateModels(value: unknown): asserts value is ModelDescriptor[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    fail("provider.models", "must contain at least one model");
+  }
+  const modelIds = new Set<string>();
+  const modelNames = new Set<string>();
+  for (let index = 0; index < value.length; index += 1) {
+    const path = `models[${index}]`;
+    const descriptor = value[index];
+    validateModel(descriptor, path);
+    if (modelIds.has(descriptor.id)) fail(`${path}.id`, "duplicate model id");
+    if (modelNames.has(descriptor.name.toLowerCase())) fail(`${path}.name`, "duplicate model name");
+    modelIds.add(descriptor.id);
+    modelNames.add(descriptor.name.toLowerCase());
+  }
+}
+
+export function validateCustomProviderDraft(value: unknown): CustomProviderDraft {
+  expectPlainObject(value, "provider");
+  rejectUnknownFields(value, [
+    "id", "name", "protocol", "baseUrl", "authMode", "apiKey", "headers", "modelDiscovery", "models",
+  ], "provider");
+  const { authMode } = validateProviderIdentityAndTransport(value);
+
+  if (value.apiKey !== undefined && value.apiKey !== null) {
+    expectNonEmptyString(value.apiKey, "provider.apiKey");
+    if (authMode === "none") fail("provider.apiKey", "must not be set when authMode is none");
+  }
+  if (!Array.isArray(value.headers)) fail("provider.headers", "must be an array");
+  const headerNames = new Set<string>();
+  for (let index = 0; index < value.headers.length; index += 1) {
+    const path = `provider.headers[${index}]`;
+    const header = value.headers[index];
+    expectPlainObject(header, path);
+    rejectUnknownFields(header, ["name", "value", "remove"], path);
+    assertSafeHeaderName(header.name, `${path}.name`);
+    const normalizedName = header.name.toLowerCase();
+    if (headerNames.has(normalizedName)) fail(`${path}.name`, "duplicate header name");
+    headerNames.add(normalizedName);
+    if (header.value !== undefined) expectNonEmptyString(header.value, `${path}.value`);
+    if (header.remove !== undefined && typeof header.remove !== "boolean") {
+      fail(`${path}.remove`, "must be a boolean");
+    }
+    if (header.remove === true && header.value !== undefined) {
+      fail(path, "cannot set value and remove together");
+    }
+  }
+  validateModels(value.models);
+  return value as unknown as CustomProviderDraft;
+}
+
+export function validateCustomProviderDefinition(value: unknown): CustomProviderDefinition {
+  expectPlainObject(value, "provider");
+  rejectUnknownFields(value, [
+    "id", "name", "protocol", "baseUrl", "authMode", "apiKeyRef", "headers", "modelDiscovery", "models",
+  ], "provider");
+
+  validateProviderIdentityAndTransport(value);
   if (value.authMode === "none" && value.apiKeyRef !== undefined) {
     fail("provider.apiKeyRef", "must not be set when authMode is none");
   }
-  if (value.authMode === "apiKey" && value.apiKeyRef === undefined) {
-    fail("provider.apiKeyRef", "is required when authMode is apiKey");
-  }
   if (value.apiKeyRef !== undefined) expectCredentialRef(value.apiKeyRef, "provider.apiKeyRef");
-  if (value.modelDiscovery !== undefined) expectHttpUrl(value.modelDiscovery, "provider.modelDiscovery");
 
   if (!Array.isArray(value.headers)) fail("provider.headers", "must be an array");
   const headerNames = new Set<string>();
@@ -339,20 +416,7 @@ export function validateCustomProviderDefinition(value: unknown): CustomProvider
     expectCredentialRef(header.credentialRef, `${path}.credentialRef`);
   }
 
-  if (!Array.isArray(value.models) || value.models.length === 0) {
-    fail("provider.models", "must contain at least one model");
-  }
-  const modelIds = new Set<string>();
-  const modelNames = new Set<string>();
-  for (let index = 0; index < value.models.length; index += 1) {
-    const path = `models[${index}]`;
-    const descriptor = value.models[index];
-    validateModel(descriptor, path);
-    if (modelIds.has(descriptor.id)) fail(`${path}.id`, `duplicate model id: ${descriptor.id}`);
-    if (modelNames.has(descriptor.name.toLowerCase())) fail(`${path}.name`, `duplicate model name: ${descriptor.name}`);
-    modelIds.add(descriptor.id);
-    modelNames.add(descriptor.name.toLowerCase());
-  }
+  validateModels(value.models);
   return value as unknown as CustomProviderDefinition;
 }
 

@@ -12,6 +12,7 @@ import type { AppEventHub } from "../app-events.js";
 import type { StartupPathsSnapshot } from "../startup-paths.js";
 import type { WorkspaceLockCoordinator } from "../workspace-lock.js";
 import type { CustomProviderService } from "../../model-provider/custom-provider-service.js";
+import type { ProviderReferenceMutationLock } from "../../model-provider/provider-reference-lock.js";
 
 // ─── Trace Event 类型 ────────────────────────────────────
 
@@ -81,6 +82,7 @@ export interface ServerContext {
   permissionMode?: PermissionModeController;
   workspaceLock?: WorkspaceLockCoordinator;
   customProviderService?: CustomProviderService;
+  providerReferenceLock?: ProviderReferenceMutationLock;
   paths: {
     APP_ROOT: string;
     DATA_DIR: string;

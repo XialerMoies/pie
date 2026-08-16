@@ -81,6 +81,38 @@ function createHarness(snapshots = [snapshot(0)]) {
 }
 
 describe("CustomProviderRuntimeCoordinator", () => {
+  it("skips unconfigured API-key providers and restores them after reconfiguration", async () => {
+    const configured = runtimeProvider("google-custom")
+    configured.protocol = "google-generative-ai"
+    const unconfigured = structuredClone(configured)
+    delete unconfigured.apiKeyRef
+    let current = { schemaVersion: 1, revision: 1, providers: [unconfigured] }
+    const applications = []
+    const coordinator = new CustomProviderRuntimeCoordinator({
+      store: {
+        async readSnapshot() { return current },
+        async resolveSecrets(provider) {
+          return { apiKey: provider.apiKeyRef ? "google-secret" : undefined, headers: {} }
+        },
+      },
+      adapter: {
+        prepare(provider) { return { providerId: provider.id } },
+        replaceRuntimeProviders(_runtime, prepared) {
+          applications.push(prepared.map((provider) => provider.providerId))
+        },
+      },
+    })
+    const runtime = {}
+
+    assert.equal(await coordinator.sync(runtime), 1)
+    current = { schemaVersion: 1, revision: 2, providers: [configured] }
+    assert.equal(await coordinator.sync(runtime), 2)
+    current = { schemaVersion: 1, revision: 3, providers: [unconfigured] }
+    assert.equal(await coordinator.sync(runtime), 3)
+
+    assert.deepEqual(applications, [[], ["google-custom"], []])
+  })
+
   it("loads revision zero once and skips an unchanged revision", async () => {
     const harness = createHarness([snapshot(0)])
 
@@ -460,6 +492,84 @@ describe("AgentRuntime custom provider synchronization", () => {
     assert.deepEqual(await Promise.all([background, foreground]), [7, 7])
     assert.deepEqual(events, ["wait", "sync", "find:custom/active", "set"])
     assert.strictEqual(session.model, refreshedModel)
+  })
+
+  it("notifies and drains the coordinator when a newer save arrives during an outer sync", async () => {
+    let currentSnapshot = snapshot(1, ["revision-one"])
+    const firstPreparationStarted = deferred()
+    const releaseFirstPreparation = deferred()
+    const applications = []
+    const coordinator = new CustomProviderRuntimeCoordinator({
+      store: {
+        async readSnapshot() { return currentSnapshot },
+        async resolveSecrets(provider) {
+          if (provider.id === "revision-one") {
+            firstPreparationStarted.resolve()
+            await releaseFirstPreparation.promise
+          }
+          return { apiKey: `secret:${provider.id}`, headers: {} }
+        },
+      },
+      adapter: {
+        prepare(provider) { return { providerId: provider.id } },
+        replaceRuntimeProviders(_runtime, prepared) {
+          applications.push(prepared.map((provider) => provider.providerId))
+        },
+      },
+    })
+    const runtime = Object.create(AgentRuntime.prototype)
+    runtime.session = { isStreaming: false, model: undefined }
+    runtime.modelRuntime = {}
+    runtime.modelRegistry = { find: () => undefined }
+    runtime.config = { syncModelProviders: (modelRuntime) => coordinator.sync(modelRuntime) }
+
+    const first = runtime.syncModelProviders()
+    await firstPreparationStarted.promise
+    currentSnapshot = snapshot(2, ["revision-two"])
+    const second = runtime.syncModelProviders()
+    assert.strictEqual(second, first)
+    releaseFirstPreparation.resolve()
+
+    assert.deepEqual(await Promise.all([first, second]), [2, 2])
+    assert.deepEqual(applications, [["revision-two"]])
+  })
+
+  it("drains a newer save that arrives while the active model is being rebound", async () => {
+    let revision = 1
+    const firstRebindStarted = deferred()
+    const releaseFirstRebind = deferred()
+    const rebound = []
+    const activeModel = { provider: "custom", id: "active", revision: 0 }
+    const session = {
+      isStreaming: false,
+      model: activeModel,
+      async setModel(model) {
+        rebound.push(model.revision)
+        if (model.revision === 1) {
+          firstRebindStarted.resolve()
+          await releaseFirstRebind.promise
+        }
+        this.model = model
+      },
+    }
+    const runtime = Object.create(AgentRuntime.prototype)
+    runtime.session = session
+    runtime.modelRuntime = {}
+    runtime.modelRegistry = {
+      find: () => ({ provider: "custom", id: "active", revision }),
+    }
+    runtime.config = { async syncModelProviders() { return revision } }
+
+    const first = runtime.syncModelProviders()
+    await firstRebindStarted.promise
+    revision = 2
+    const second = runtime.syncModelProviders()
+    assert.strictEqual(second, first)
+    releaseFirstRebind.resolve()
+
+    assert.deepEqual(await Promise.all([first, second]), [2, 2])
+    assert.deepEqual(rebound, [1, 2])
+    assert.equal(session.model.revision, 2)
   })
 
   it("makes foreground chat await an in-flight background refresh", async () => {

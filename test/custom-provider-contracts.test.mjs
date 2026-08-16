@@ -7,8 +7,10 @@ import { describe, it } from "node:test";
 
 import {
   PROVIDER_PROTOCOLS,
+  CustomProviderValidationError,
   assertSafeHeaderName,
   validateCustomProviderDefinition,
+  validateCustomProviderDraft,
   validateCustomProviderSnapshot,
 } from "../src/model-provider/contracts.ts";
 
@@ -176,6 +178,37 @@ void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, succe
     assert.deepEqual(validateCustomProviderSnapshot(fixture), fixture);
   });
 
+  it("strictly validates drafts with stable typed field paths", () => {
+    const valid = {
+      id: "acme-gateway",
+      name: "Acme Gateway",
+      protocol: "openai-responses",
+      baseUrl: "https://api.example.test/v1",
+      authMode: "apiKey",
+      apiKey: null,
+      headers: [
+        { name: "X-Tenant", value: "tenant-secret" },
+        { name: "X-Old", remove: true },
+      ],
+      modelDiscovery: "https://api.example.test/v1/models",
+      models: [model()],
+    };
+    assert.deepEqual(validateCustomProviderDraft(valid), valid);
+
+    for (const [candidate, fieldPath] of [
+      [{ ...valid, expectedRevision: 2 }, "provider"],
+      [{ ...valid, apiKey: "   " }, "provider.apiKey"],
+      [{ ...valid, headers: [{ name: "X-One", value: "" }] }, "provider.headers[0].value"],
+      [{ ...valid, headers: [{ name: "X-One", value: "secret", remove: true }] }, "provider.headers[0]"],
+      [{ ...valid, protocol: "google-generative-ai", authMode: "none" }, "provider.authMode"],
+    ]) {
+      assert.throws(
+        () => validateCustomProviderDraft(candidate),
+        (error) => error instanceof CustomProviderValidationError && error.fieldPath === fieldPath,
+      );
+    }
+  });
+
   it("advertises and enforces authentication modes for every protocol", async () => {
     const { PROVIDER_PROTOCOL_AUTH_MODES } = await import("../src/model-provider/contracts.ts");
     const keylessProtocols = PROVIDER_PROTOCOLS.filter((protocol) => protocol !== "google-generative-ai");
@@ -199,11 +232,33 @@ void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, succe
   });
 
   it("rejects unknown fields at snapshot, provider, and model levels", () => {
-    assert.throws(() => validateCustomProviderSnapshot({ ...snapshot(), extra: true }), /snapshot\.extra/);
-    assert.throws(() => validateCustomProviderDefinition({ ...provider(), extra: true }), /provider\.extra/);
+    assert.throws(() => validateCustomProviderSnapshot({ ...snapshot(), extra: true }), /snapshot.*unknown field/);
+    assert.throws(() => validateCustomProviderDefinition({ ...provider(), extra: true }), /provider.*unknown field/);
     assert.throws(
       () => validateCustomProviderDefinition(provider({ models: [{ ...model(), extra: true }] })),
-      /models\[0\]\.extra/,
+      /models\[0\].*unknown field/,
+    );
+  });
+
+  it("does not echo attacker-controlled unknown field names in validation errors", () => {
+    const credentialId = "credential:fixture-sensitive-reference";
+    const candidate = {
+      id: "acme-gateway",
+      name: "Acme Gateway",
+      protocol: "openai-responses",
+      baseUrl: "https://api.example.test/v1",
+      authMode: "apiKey",
+      apiKey: null,
+      headers: [],
+      models: [model()],
+      [credentialId]: "fixture-secret-value",
+    };
+    assert.throws(
+      () => validateCustomProviderDraft(candidate),
+      (error) => error instanceof CustomProviderValidationError
+        && error.fieldPath === "provider"
+        && !error.message.includes(credentialId)
+        && !error.message.includes("fixture-secret-value"),
     );
   });
 
@@ -266,7 +321,7 @@ void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, succe
     );
     const noRef = provider();
     delete noRef.apiKeyRef;
-    assert.throws(() => validateCustomProviderDefinition(noRef), /provider\.apiKeyRef.*required/i);
+    assert.doesNotThrow(() => validateCustomProviderDefinition(noRef));
     assert.throws(
       () => validateCustomProviderDefinition(provider({ apiKeyRef: "secret:not-stable" })),
       /provider\.apiKeyRef/,

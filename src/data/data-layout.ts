@@ -20,6 +20,7 @@ export interface DataLayout {
   subagentsFile: string;
   customProvidersFile: string;
   customProviderSecretsFile: string;
+  providerReferenceLockFile: string;
   workspaceMetadataFile: string;
   workspaceLockFile: string;
   sessionsDir: string;
@@ -83,6 +84,7 @@ export function resolveDataLayout(options: DataLayoutOptions): DataLayout {
     subagentsFile: join(userRoot, "subagents.json"),
     customProvidersFile: join(userRoot, "custom-providers.json"),
     customProviderSecretsFile: join(userRoot, "custom-provider-secrets.json"),
+    providerReferenceLockFile: join(userRoot, "provider-references.lock"),
     workspaceMetadataFile: join(workspaceRoot, "metadata.json"),
     workspaceLockFile: join(workspaceRoot, "workspace.lock"),
     sessionsDir: join(workspaceRoot, "sessions"),

@@ -11,7 +11,9 @@ import {
   patchUserPreferences,
   readStartupWorkspace,
   readUserPreferences,
+  readUserPreferencesStrict,
   readUserSettings,
+  readUserSettingsStrict,
   recordOpenedWorkspace,
 } from "../src/data/user-settings.ts";
 
@@ -122,6 +124,41 @@ describe("shared user settings", () => {
       },
       preferences: { "editor-theme": "vs" },
     });
+  });
+
+  it("fails closed when strict reference settings are malformed or unreadable", () => {
+    const { root, settingsFile } = makeFixture();
+    assert.deepStrictEqual(readUserSettingsStrict(settingsFile), {});
+    writeSettings(settingsFile, "{not-json");
+    assert.throws(() => readUserSettingsStrict(settingsFile), SyntaxError);
+
+    writeSettings(settingsFile, { defaultProvider: "acme", defaultModel: 42 });
+    assert.throws(() => readUserSettingsStrict(settingsFile), /defaultModel/);
+
+    writeSettings(settingsFile, {
+      preferences: { defaultProvider: 42, defaultModel: "model-a" },
+    });
+    assert.throws(() => readUserSettingsStrict(settingsFile), /preferences\.defaultProvider/);
+
+    writeSettings(settingsFile, {
+      preferences: { defaultProvider: "acme" },
+    });
+    assert.throws(() => readUserSettingsStrict(settingsFile), /preferences.*configured together/);
+
+    writeSettings(settingsFile, {
+      preferences: { defaultProvider: "acme", defaultModel: "model-a" },
+    });
+    assert.deepStrictEqual(readUserPreferencesStrict(settingsFile), {
+      defaultProvider: "acme",
+      defaultModel: "model-a",
+    });
+
+    const directory = join(root, "settings-as-directory");
+    mkdirSync(directory);
+    assert.throws(
+      () => readUserSettingsStrict(directory),
+      (error) => ["EISDIR", "EACCES", "EPERM"].includes(error?.code),
+    );
   });
 
   it("returns only an absolute existing directory as the startup workspace", () => {

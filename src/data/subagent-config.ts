@@ -102,6 +102,20 @@ export function readSubagentDefinitions(file: string): SubagentDefinition[] {
   }
 }
 
+export function readSubagentDefinitionsStrict(file: string): SubagentDefinition[] {
+  let document: unknown;
+  try {
+    document = JSON.parse(readFileSync(file, "utf8")) as unknown;
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+  if (!isRecord(document) || document.version !== 1) {
+    throw new Error("Subagent configuration version must equal 1");
+  }
+  return validateSubagentDefinitions(document.agents);
+}
+
 export async function replaceSubagentDefinitions(
   file: string,
   value: unknown,

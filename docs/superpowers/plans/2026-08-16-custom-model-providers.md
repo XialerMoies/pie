@@ -638,9 +638,18 @@ class CustomProviderService {
 }
 ```
 
-Derive reserved official IDs from `runtime.getProviders()` excluding IDs present in the current custom snapshot. Every mutation must require `expectedRevision`. On removed models/provider, throw `CustomProviderReferenceConflict` with `references`; on stale revision throw a stable conflict containing current revision. The service returns after persistence and does not own `AgentRuntime` lifecycle.
+Capture official IDs independently for each runtime before its first custom sync, and retain a process-lifetime set of IDs observed as custom. Do not infer that a delayed runtime entry is official merely because it is absent from the current disk snapshot. Every mutation must require `expectedRevision`. On removed models/provider, throw `CustomProviderReferenceConflict` with `references`; on stale revision throw a stable conflict containing current revision. The service returns after persistence and does not own `AgentRuntime` lifecycle.
 
 HTTP write bodies use the same explicit envelopes: create/update receive `{ expectedRevision, provider }`, and delete receives `{ expectedRevision }`. `expectedRevision` must not be added to or inferred from `CustomProviderDraft`.
+
+Hardening requirements for this task:
+
+- Validate exact request and draft shapes in project contracts and again at the service boundary, with typed safe field paths. Unknown-field and corrupt JSON errors use stable parent paths/messages and never echo attacker-controlled keys or credential data.
+- Treat `apiKey: null` as an explicit clear; stored API-key definitions may be unconfigured and the runtime coordinator skips them until a non-empty key is restored.
+- Use one user-level cross-process provider-reference lock. Lock order is provider-reference lock, runtime stable-session/transition lock, then the existing settings/subagent/provider-store file lock.
+- Hold that outer lock across strict reference reads and destructive provider commit. Model/default-model and custom-agent writers acquire the same lock before syncing, validating, and mutating references.
+- Strict settings/subagent readers fail closed for malformed or unreadable data during destructive checks; tolerant readers remain for non-destructive UI paths.
+- Custom-provider routes authorize the secrets read for reveal and both config/secrets writes for mutations, then use the established permission response and audit path.
 
 - [ ] **Step 4: Run service tests**
 

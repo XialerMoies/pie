@@ -235,6 +235,8 @@ Settings UI
 
 创建和更新请求使用 `{ expectedRevision, provider: CustomProviderDraft }`，删除请求使用 `{ expectedRevision }`。修订号属于并发控制元数据，不进入 `CustomProviderDraft`；所有写操作都必须显式携带修订号。
 
+涉及厂商引用的写操作共享一个用户级跨进程锁。锁顺序固定为：厂商引用锁、AgentRuntime stable-session/transition 锁、各 settings/subagent/custom-provider 文件锁。删除厂商或模型时，服务在最外层持有厂商引用锁，使用严格读取器检查当前模型、默认模型和自定义 Agent，并在同一临界区内提交配置；设置默认/当前模型和替换自定义 Agent 也必须先获取同一把锁并重新同步、校验模型。损坏或不可读的 settings/subagent 文件会阻止破坏性修改，普通 UI 读取仍可使用容错读取器。
+
 ## 10. 校验与安全
 
 - 厂商 ID 禁止与官方厂商或已有自定义厂商重名。
@@ -247,7 +249,10 @@ Settings UI
 - `maxTokens` 不得大于 `contextWindow`；Token 数必须为正整数；价格必须非负。
 - 高级 JSON 只接受对象并限制大小，不允许函数、命令或环境变量展开。
 - API Key、Header 值和 Authorization 内容必须从日志、异常、审计详情和测试快照中脱敏。
+- 未知字段和损坏 JSON 的错误只返回稳定的父级字段路径或通用消息，不回显调用方提供的字段名、凭据引用或 Secret 内容。
 - `authMode: none` 必须显式选择，空 Key 不自动改变认证模式；Google Generative AI 不提供该选项。
+- `apiKey: null` 表示显式清除。`apiKey` 模式的定义可以保持未配置状态，但不会注册到 runtime；空字符串和纯空白字符串无效。重新保存非空 Key 后，下一次同步重新注册。
+- 官方厂商 ID 由每个 runtime 的初始官方基线维护，并结合进程生命周期内见过的自定义 ID 分类；磁盘删除后尚未完成同步的旧自定义 runtime 条目不得被重新分类为官方厂商。
 
 ## 11. 连接测试与模型发现
 

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import {
   READ_ONLY_SUBAGENT_TOOL_NAMES,
   readSubagentDefinitions,
+  readSubagentDefinitionsStrict,
   replaceSubagentDefinitions,
   validateSubagentDefinitions,
 } from "../src/data/subagent-config.ts";
@@ -53,6 +54,18 @@ describe("subagent configuration store", () => {
     mkdirSync(join(file, ".."), { recursive: true });
     writeFileSync(file, "{broken", { encoding: "utf8", flag: "w" });
     assert.deepStrictEqual(readSubagentDefinitions(file), []);
+  });
+
+  it("keeps missing strict reference config empty but fails closed on malformed data", () => {
+    const file = tempFile();
+    assert.deepStrictEqual(readSubagentDefinitionsStrict(file), []);
+    mkdirSync(join(file, ".."), { recursive: true });
+    writeFileSync(file, "{broken", "utf8");
+    assert.throws(() => readSubagentDefinitionsStrict(file), SyntaxError);
+    writeFileSync(file, JSON.stringify({ version: 2, agents: [] }), "utf8");
+    assert.throws(() => readSubagentDefinitionsStrict(file), /version/);
+    writeFileSync(file, JSON.stringify({ version: 1, agents: [{}] }), "utf8");
+    assert.throws(() => readSubagentDefinitionsStrict(file), /required/);
   });
 
   it("rejects duplicate ids, unknown tools, and invalid fields", () => {

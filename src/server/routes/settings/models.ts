@@ -50,12 +50,26 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/settings" && method === "POST") {
     try {
       const data = await parseBody(req);
+      if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Invalid settings body");
+      const { defaultProvider, defaultModel } = data as Record<string, unknown>;
+      if (typeof defaultProvider !== "string" || typeof defaultModel !== "string") {
+        throw new Error("defaultProvider and defaultModel are required");
+      }
       const settingsFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "settings.json", "write", "settings.save")).path;
-      await updateLockedJson<Record<string, unknown>>(settingsFile, () => ({}), (settings) => {
-        if (data.defaultProvider) settings.defaultProvider = data.defaultProvider;
-        if (data.defaultModel) settings.defaultModel = data.defaultModel;
-        return settings;
-      }, { trailingNewline: false });
+      const save = async () => {
+        if (typeof runtime.syncModelProviders === "function") await runtime.syncModelProviders();
+        const findModel = runtime.modelRegistry?.find;
+        if (typeof findModel === "function" && !findModel.call(runtime.modelRegistry, defaultProvider, defaultModel)) {
+          throw new Error("Default model is not available");
+        }
+        await updateLockedJson<Record<string, unknown>>(settingsFile, () => ({}), (settings) => {
+          settings.defaultProvider = defaultProvider;
+          settings.defaultModel = defaultModel;
+          return settings;
+        }, { trailingNewline: false });
+      };
+      if (ctx.providerReferenceLock) await ctx.providerReferenceLock.runExclusive(save);
+      else await save();
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {
@@ -72,7 +86,7 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
       const { provider, modelId } = await parseBody(req);
       const settingsFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "settings.json", "write", "settings.model-switch")).path;
       let found = false;
-      await runtime.runWithStableSession(async () => {
+      const switchModel = () => runtime.runWithStableSession(async () => {
         await runtime.syncModelProviders();
         const model = runtime.modelRegistry.find(provider, modelId);
         if (!model) return;
@@ -99,6 +113,8 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
           throw persistenceError;
         }
       });
+      if (ctx.providerReferenceLock) await ctx.providerReferenceLock.runExclusive(switchModel);
+      else await switchModel();
       if (!found) {
         res.writeHead(404, { ...cors });
         res.end(JSON.stringify({ error: "未找到模型: " + provider + "/" + modelId }));

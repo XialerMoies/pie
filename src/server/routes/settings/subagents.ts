@@ -11,8 +11,6 @@ import { cors, publishDashboardChanged } from "./common.js";
 export const handleSubagentSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
   const { runtime, paths: p } = ctx;
-  const modelRegistry = runtime.modelRegistry;
-
   if (url === "/api/subagents" && method === "GET") {
     const file = p.SUBAGENTS_FILE || resolve(p.PI_CONFIG_DIR, "subagents.json");
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
@@ -23,14 +21,21 @@ export const handleSubagentSettings: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/subagents" && method === "PUT") {
     try {
       const body = await parseBody(req);
-      const agents = validateSubagentDefinitions(body.agents);
-      for (const agent of agents) {
-        if (agent.model && !modelRegistry.find(agent.model.provider, agent.model.id)) {
-          throw new Error(`Subagent model is not available: ${agent.model.provider}/${agent.model.id}`);
-        }
-      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Invalid subagent body");
+      const agents = validateSubagentDefinitions((body as Record<string, unknown>).agents);
       const file = p.SUBAGENTS_FILE || resolve(p.PI_CONFIG_DIR, "subagents.json");
-      const saved = await replaceSubagentDefinitions(file, agents);
+      let saved = agents;
+      const replace = async () => {
+        await runtime.syncModelProviders();
+        for (const agent of agents) {
+          if (agent.model && !runtime.modelRegistry.find(agent.model.provider, agent.model.id)) {
+            throw new Error(`Subagent model is not available: ${agent.model.provider}/${agent.model.id}`);
+          }
+        }
+        saved = await replaceSubagentDefinitions(file, agents);
+      };
+      if (ctx.providerReferenceLock) await ctx.providerReferenceLock.runExclusive(replace);
+      else await replace();
       publishDashboardChanged(ctx);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true, agents: saved }));
