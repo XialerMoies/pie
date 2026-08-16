@@ -82,6 +82,10 @@ function mutationFromStored(provider, overrides = {}) {
   };
 }
 
+function headerDictionary(values) {
+  return Object.assign(Object.create(null), values);
+}
+
 describe("custom provider store", () => {
   it("returns versioned empty defaults for missing files", async () => {
     const env = await fixture();
@@ -148,7 +152,7 @@ describe("custom provider store", () => {
       assert.notEqual(changed.providers[0].headers[0].credentialRef, original.headers[0].credentialRef);
       assert.deepEqual(await env.store.resolveSecrets(changed.providers[0]), {
         apiKey: "api-secret-v2",
-        headers: { "x-tenant": "tenant-secret-v2" },
+        headers: headerDictionary({ "x-tenant": "tenant-secret-v2" }),
       });
 
       const secrets = JSON.parse(await readFile(env.secretsFile, "utf8"));
@@ -203,8 +207,96 @@ describe("custom provider store", () => {
       assert.equal("revealHeader" in env.store, false);
       assert.deepEqual(await env.store.resolveSecrets(committed.providers[0]), {
         apiKey: "api-secret-v1",
-        headers: { "X-Tenant": "tenant-secret-v1" },
+        headers: headerDictionary({ "X-Tenant": "tenant-secret-v1" }),
       });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("rejects a provider definition forged with another provider's credential refs", async () => {
+    const env = await fixture();
+    try {
+      await createProvider(env.store);
+      const snapshot = await env.store.commit({
+        expectedRevision: 1,
+        provider: providerMutation({ id: "second", name: "Second" }),
+        secretPatch: {
+          apiKey: "second-api-secret",
+          headers: [{ name: "X-Tenant", value: "second-header-secret" }],
+        },
+      });
+      const first = snapshot.providers.find((provider) => provider.id === "acme");
+      const second = snapshot.providers.find((provider) => provider.id === "second");
+      const forged = {
+        ...structuredClone(first),
+        apiKeyRef: second.apiKeyRef,
+        headers: [{ ...first.headers[0], credentialRef: second.headers[0].credentialRef }],
+      };
+
+      await assert.rejects(
+        () => env.store.resolveSecrets(forged),
+        /provider definition.*stale|does not match/i,
+      );
+      assert.deepEqual(await env.store.resolveSecrets(first), {
+        apiKey: "api-secret-v1",
+        headers: headerDictionary({ "X-Tenant": "tenant-secret-v1" }),
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("rejects stale definitions after secret rotation and resolves the current definition", async () => {
+    const env = await fixture();
+    try {
+      const first = await createProvider(env.store);
+      const stale = first.providers[0];
+      const rotated = await env.store.commit({
+        expectedRevision: 1,
+        provider: mutationFromStored(stale),
+        secretPatch: {
+          apiKey: "rotated-api-secret",
+          headers: [{ name: "X-Tenant", value: "rotated-header-secret" }],
+        },
+      });
+
+      await assert.rejects(
+        () => env.store.resolveSecrets(stale),
+        /provider definition.*stale|does not match/i,
+      );
+      assert.deepEqual(await env.store.resolveSecrets(rotated.providers[0]), {
+        apiKey: "rotated-api-secret",
+        headers: headerDictionary({ "X-Tenant": "rotated-header-secret" }),
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("resolves prototype-shaped Header names as own properties without prototype mutation", async () => {
+    const env = await fixture();
+    try {
+      const names = ["__proto__", "constructor", "prototype"];
+      const committed = await env.store.commit({
+        expectedRevision: 0,
+        provider: providerMutation({
+          id: "prototype-headers",
+          name: "Prototype Headers",
+          authMode: "none",
+          headers: names,
+        }),
+        secretPatch: {
+          headers: names.map((name) => ({ name, value: `value:${name}` })),
+        },
+      });
+      const { headers } = await env.store.resolveSecrets(committed.providers[0]);
+
+      assert.equal(Object.getPrototypeOf(headers), null);
+      for (const name of names) {
+        assert.equal(Object.hasOwn(headers, name), true);
+        assert.equal(headers[name], `value:${name}`);
+      }
     } finally {
       await env.cleanup();
     }
@@ -298,7 +390,42 @@ describe("custom provider store", () => {
       assert.equal(await env.store.revealApiKey("acme"), "api-secret-v1");
       assert.deepEqual(await env.store.resolveSecrets(first.providers[0]), {
         apiKey: "api-secret-v1",
-        headers: { "X-Tenant": "tenant-secret-v1" },
+        headers: headerDictionary({ "X-Tenant": "tenant-secret-v1" }),
+      });
+      const secretsText = await readFile(env.secretsFile, "utf8");
+      assert.equal(secretsText.includes("uncommitted-api-key"), false);
+      assert.equal(secretsText.includes("uncommitted-header"), false);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("treats a config writer throw after rename as a committed success", async () => {
+    const env = await fixture();
+    try {
+      const first = await createProvider(env.store);
+      const afterRenameStore = new CustomProviderStore({
+        configFile: env.configFile,
+        secretsFile: env.secretsFile,
+        atomicWrite: async (filePath, contents) => {
+          await atomicWrite(filePath, contents);
+          if (filePath === env.configFile) throw new Error("injected error after config rename");
+        },
+      });
+
+      const committed = await afterRenameStore.commit({
+        expectedRevision: 1,
+        provider: mutationFromStored(first.providers[0]),
+        secretPatch: {
+          apiKey: "committed-api-secret",
+          headers: [{ name: "X-Tenant", value: "committed-header-secret" }],
+        },
+      });
+      assert.equal(committed.revision, 2);
+      assert.deepEqual(await env.store.readSnapshot(), committed);
+      assert.deepEqual(await env.store.resolveSecrets(committed.providers[0]), {
+        apiKey: "committed-api-secret",
+        headers: headerDictionary({ "X-Tenant": "committed-header-secret" }),
       });
     } finally {
       await env.cleanup();
@@ -420,7 +547,7 @@ describe("custom provider store", () => {
       assert.equal(snapshot.providers.some((provider) => provider.id === "header-attacker"), false);
       assert.deepEqual(await env.store.resolveSecrets(victim), {
         apiKey: "api-secret-v1",
-        headers: { "X-Tenant": "tenant-secret-v1" },
+        headers: headerDictionary({ "X-Tenant": "tenant-secret-v1" }),
       });
     } finally {
       await env.cleanup();
@@ -443,6 +570,45 @@ describe("custom provider store", () => {
       await writeFile(env.secretsFile, JSON.stringify({ schemaVersion: 1, values: {} }), "utf8");
       await assert.rejects(() => env.store.resolveSecrets(committed.providers[0]), /missing secret/i);
       await assert.rejects(() => env.store.readSnapshot(), /missing secret/i);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("rejects unsafe expected revisions and refuses to increment MAX_SAFE_INTEGER", async () => {
+    const env = await fixture();
+    try {
+      await writeFile(env.configFile, JSON.stringify({
+        schemaVersion: 1,
+        revision: Number.MAX_SAFE_INTEGER,
+        providers: [],
+      }), "utf8");
+      await writeFile(env.secretsFile, JSON.stringify({ schemaVersion: 1, values: {} }), "utf8");
+      assert.equal((await env.store.readSnapshot()).revision, Number.MAX_SAFE_INTEGER);
+
+      for (const id of ["overflow-one", "overflow-two"]) {
+        await assert.rejects(
+          () => env.store.commit({
+            expectedRevision: Number.MAX_SAFE_INTEGER,
+            provider: providerMutation({ id, name: id, authMode: "none", headers: [] }),
+            secretPatch: { headers: [] },
+          }),
+          /revision.*maximum safe integer/i,
+        );
+      }
+      await assert.rejects(
+        () => env.store.commit({
+          expectedRevision: Number.MAX_SAFE_INTEGER + 1,
+          provider: providerMutation({ id: "unsafe", name: "Unsafe", authMode: "none", headers: [] }),
+          secretPatch: { headers: [] },
+        }),
+        /expectedRevision.*safe integer/i,
+      );
+      assert.deepEqual(await env.store.readSnapshot(), {
+        schemaVersion: 1,
+        revision: Number.MAX_SAFE_INTEGER,
+        providers: [],
+      });
     } finally {
       await env.cleanup();
     }

@@ -197,6 +197,13 @@ void [list, resolved, capabilities, success, failure, invalidDraft];
     assert.throws(() => validateCustomProviderSnapshot({ ...snapshot(), schemaVersion: 2 }), /snapshot\.schemaVersion/);
     assert.throws(() => validateCustomProviderSnapshot({ ...snapshot(), revision: -1 }), /snapshot\.revision/);
     assert.throws(() => validateCustomProviderSnapshot({ ...snapshot(), revision: 1.5 }), /snapshot\.revision/);
+    assert.doesNotThrow(
+      () => validateCustomProviderSnapshot({ schemaVersion: 1, revision: Number.MAX_SAFE_INTEGER, providers: [] }),
+    );
+    assert.throws(
+      () => validateCustomProviderSnapshot({ schemaVersion: 1, revision: Number.MAX_SAFE_INTEGER + 1, providers: [] }),
+      /snapshot\.revision.*safe integer/,
+    );
     assert.throws(
       () => validateCustomProviderSnapshot(snapshot({ providers: [provider(), provider()] })),
       /providers\[1\]\.id.*duplicate/i,

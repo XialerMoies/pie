@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { withFileLock, type FileLockOptions } from "../data/file-lock.js";
 import {
@@ -215,24 +216,30 @@ export class CustomProviderStore {
     return withFileLock(`${this.configFile}.lock`, this.lock, callback);
   }
 
-  private async readState(): Promise<StoreState> {
-    const [rawSnapshot, rawSecrets] = await Promise.all([
-      readJsonOrDefault(this.configFile, EMPTY_SNAPSHOT),
-      readJsonOrDefault(this.secretsFile, EMPTY_SECRETS),
+  private async readSnapshotUnlocked(): Promise<CustomProviderSnapshot> {
+    return validateCustomProviderSnapshot(await readJsonOrDefault(this.configFile, EMPTY_SNAPSHOT));
+  }
+
+  private async readSecretsUnlocked(): Promise<SecretDocument> {
+    return validateSecretDocument(await readJsonOrDefault(this.secretsFile, EMPTY_SECRETS));
+  }
+
+  private async readStateUnlocked(): Promise<StoreState> {
+    const [snapshot, secrets] = await Promise.all([
+      this.readSnapshotUnlocked(),
+      this.readSecretsUnlocked(),
     ]);
-    const snapshot = validateCustomProviderSnapshot(rawSnapshot);
-    const secrets = validateSecretDocument(rawSecrets);
     requireReferencedSecrets(snapshot, secrets);
     return { snapshot, secrets };
   }
 
   async readSnapshot(): Promise<CustomProviderSnapshot> {
-    return this.withLock(async () => cloneSnapshot((await this.readState()).snapshot));
+    return this.withLock(async () => cloneSnapshot((await this.readStateUnlocked()).snapshot));
   }
 
   async readRedacted(): Promise<RedactedCustomProviderSnapshot> {
     return this.withLock(async () => {
-      const { snapshot } = await this.readState();
+      const { snapshot } = await this.readStateUnlocked();
       return {
         schemaVersion: 1,
         revision: snapshot.revision,
@@ -247,7 +254,7 @@ export class CustomProviderStore {
 
   async revealApiKey(providerId: string): Promise<string | undefined> {
     return this.withLock(async () => {
-      const { snapshot, secrets } = await this.readState();
+      const { snapshot, secrets } = await this.readStateUnlocked();
       const provider = snapshot.providers.find((candidate) => candidate.id === providerId);
       if (provider?.apiKeyRef === undefined) return undefined;
       return secrets.values[provider.apiKeyRef];
@@ -255,19 +262,22 @@ export class CustomProviderStore {
   }
 
   async resolveSecrets(providerDefinition: CustomProviderDefinition): Promise<ResolvedProviderSecrets> {
-    const provider = validateCustomProviderDefinition(providerDefinition);
     return this.withLock(async () => {
-      const { secrets } = await this.readState();
-      const resolved: ResolvedProviderSecrets = { headers: {} };
+      const input = validateCustomProviderDefinition(providerDefinition);
+      const { snapshot, secrets } = await this.readStateUnlocked();
+      const provider = snapshot.providers.find((candidate) => candidate.id === input.id);
+      if (provider === undefined || !isDeepStrictEqual(input, provider)) {
+        throw new Error(`Provider definition is stale or does not match stored provider: ${input.id}`);
+      }
+
+      const resolved: ResolvedProviderSecrets = {
+        headers: Object.create(null) as Record<string, string>,
+      };
       if (provider.apiKeyRef !== undefined) {
-        const apiKey = secrets.values[provider.apiKeyRef];
-        if (apiKey === undefined) throw new Error(`Missing secret for credential reference: ${provider.apiKeyRef}`);
-        resolved.apiKey = apiKey;
+        resolved.apiKey = secrets.values[provider.apiKeyRef];
       }
       for (const header of provider.headers) {
-        const value = secrets.values[header.credentialRef];
-        if (value === undefined) throw new Error(`Missing secret for credential reference: ${header.credentialRef}`);
-        resolved.headers[header.name] = value;
+        resolved.headers[header.name] = secrets.values[header.credentialRef];
       }
       return resolved;
     });
@@ -288,12 +298,15 @@ export class CustomProviderStore {
 
   async commit(mutation: CustomProviderCommit): Promise<CustomProviderSnapshot> {
     return this.withLock(async () => {
-      const { snapshot: current, secrets } = await this.readState();
-      if (!Number.isInteger(mutation.expectedRevision) || mutation.expectedRevision < 0) {
-        throw new Error("expectedRevision: must be a non-negative integer");
+      const { snapshot: current, secrets } = await this.readStateUnlocked();
+      if (!Number.isSafeInteger(mutation.expectedRevision) || mutation.expectedRevision < 0) {
+        throw new Error("expectedRevision: must be a non-negative safe integer");
       }
       if (mutation.expectedRevision !== current.revision) {
         throw new CustomProviderRevisionConflict(mutation.expectedRevision, current.revision);
+      }
+      if (current.revision >= Number.MAX_SAFE_INTEGER) {
+        throw new Error("revision cannot increment beyond the maximum safe integer");
       }
       if ((mutation.provider === undefined) === (mutation.removeProviderId === undefined)) {
         throw new Error("commit must contain exactly one provider or removeProviderId");
@@ -395,7 +408,30 @@ export class CustomProviderStore {
       requireReferencedSecrets(committed, mergedSecrets);
 
       if (wroteNewSecret) await this.atomicWrite(this.secretsFile, serialize(mergedSecrets));
-      await this.atomicWrite(this.configFile, serialize(committed));
+      try {
+        await this.atomicWrite(this.configFile, serialize(committed));
+      } catch (configError) {
+        if (!wroteNewSecret) throw configError;
+
+        let persisted: CustomProviderSnapshot;
+        try {
+          persisted = await this.readSnapshotUnlocked();
+        } catch {
+          throw configError;
+        }
+        if (isDeepStrictEqual(persisted, committed)) {
+          await this.cleanOrphans(committed, mergedSecrets);
+          return cloneSnapshot(committed);
+        }
+        if (isDeepStrictEqual(persisted, current)) {
+          try {
+            await this.atomicWrite(this.secretsFile, serialize(secrets));
+          } catch {
+            // Keep the original config error; merged values are harmless orphans.
+          }
+        }
+        throw configError;
+      }
       await this.cleanOrphans(committed, mergedSecrets);
       return cloneSnapshot(committed);
     });

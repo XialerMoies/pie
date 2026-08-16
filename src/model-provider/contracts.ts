@@ -333,8 +333,8 @@ export function validateCustomProviderSnapshot(value: unknown): CustomProviderSn
   expectPlainObject(value, "snapshot");
   rejectUnknownFields(value, ["schemaVersion", "revision", "providers"], "snapshot");
   if (value.schemaVersion !== 1) fail("snapshot.schemaVersion", "must equal 1");
-  if (!Number.isInteger(value.revision) || (value.revision as number) < 0) {
-    fail("snapshot.revision", "must be a non-negative integer");
+  if (!Number.isSafeInteger(value.revision) || (value.revision as number) < 0) {
+    fail("snapshot.revision", "must be a non-negative safe integer");
   }
   if (!Array.isArray(value.providers)) fail("snapshot.providers", "must be an array");
 
