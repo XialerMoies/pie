@@ -35,14 +35,19 @@ class SettingsCustomSubagentController implements SettingsCustomSubagentApi {
           <aside class="sa-agent-pane">
             <div class="sa-sidebar-head">
               <span>Agent 列表</span>
-              <button type="button" class="sa-add-btn" data-settings-action="new-subagent" aria-label="新建 Agent" title="新建 Agent"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><use href="#iplus"></use></svg></button>
             </div>
+            <div class="list-add-action-mount" data-list-add-action-mount></div>
             <div class="sa-agent-list" id="sa-agent-list"><div class="sa-empty">加载中...</div></div>
           </aside>
           <div class="sa-editor" id="sa-editor"><div class="sa-empty">选择或新建 Agent</div></div>
         </div>
       </div>
     `);
+    const addActionMount = container.querySelector<HTMLElement>('[data-list-add-action-mount]');
+    addActionMount?.prepend(settingsSubagentApp.Ui.ListAddAction.create({
+      label: '新建 Agent',
+      onActivate: () => this.startNew(),
+    }));
     void this.load();
   }
 

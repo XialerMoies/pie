@@ -10,6 +10,7 @@ const settingsSpies = {
   refreshCalls: [],
   toastCalls: [],
 };
+let ListAddAction;
 
 global.window = win;
 global.document = win.document;
@@ -58,6 +59,7 @@ let fetchImpl = async () => ({ ok: true, json: async () => ({}) });
 global.fetch = (...args) => fetchImpl(...args);
 
 before(async () => {
+  ({ ListAddAction } = await import("../src/frontend/ui/list-add-action.ts"));
   await import(`../src/frontend/services/chat-runtime-store.ts?settings-ui=${Date.now()}`);
   await import(`../src/frontend/services/preferences.ts?settings-ui=${Date.now()}`);
   await import("../src/frontend/dashboard/settings-general.ts");
@@ -90,6 +92,15 @@ async function flushAsyncWork() {
   await Promise.resolve();
 }
 
+function activateButtonFromKeyboard(button, key) {
+  const keydown = new win.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+  const keyup = new win.KeyboardEvent("keyup", { key, bubbles: true, cancelable: true });
+  const allowKeydownDefault = button.dispatchEvent(keydown);
+  if (!button.disabled && key === "Enter" && allowKeydownDefault) button.click();
+  const allowKeyupDefault = button.dispatchEvent(keyup);
+  if (!button.disabled && key === " " && allowKeyupDefault) button.click();
+}
+
 async function openGeneralSettings() {
   win.App.Settings.openSettingsModal();
   await flushAsyncWork();
@@ -113,6 +124,48 @@ function getControl(id) {
 }
 
 describe("settings DOM boundary", () => {
+  it("publishes a native ListAddAction with single click and keyboard activation", () => {
+    assert.strictEqual(win.App.Ui.ListAddAction, ListAddAction);
+
+    for (const [name, activate] of [
+      ["click", (button) => button.click()],
+      ["Enter", (button) => activateButtonFromKeyboard(button, "Enter")],
+      ["Space", (button) => activateButtonFromKeyboard(button, " ")],
+    ]) {
+      let activations = 0;
+      const button = ListAddAction.create({
+        id: `list-add-${name}`,
+        label: `Add with ${name}`,
+        onActivate: () => { activations += 1; },
+      });
+      document.body.append(button);
+      activate(button);
+      assert.strictEqual(activations, 1, `${name} should activate exactly once`);
+      assert.strictEqual(button.type, "button");
+    }
+  });
+
+  it("keeps disabled ListAddAction inert and renders hostile labels as text", () => {
+    let activations = 0;
+    const hostileLabel = '<img src=x onerror="globalThis.__listAddInjected=true">';
+    const button = ListAddAction.create({
+      label: hostileLabel,
+      disabled: true,
+      onActivate: () => { activations += 1; },
+    });
+    document.body.append(button);
+
+    button.click();
+    activateButtonFromKeyboard(button, "Enter");
+    activateButtonFromKeyboard(button, " ");
+
+    assert.strictEqual(activations, 0);
+    assert.strictEqual(button.disabled, true);
+    assert.strictEqual(button.querySelector(".list-add-action-label")?.textContent, hostileLabel);
+    assert.strictEqual(button.querySelector("img"), null);
+    assert.strictEqual(globalThis.__listAddInjected, undefined);
+  });
+
   it("removes the standalone Permissions sidebar entry while keeping the mode badge", () => {
     const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-layout.ts"), "utf8");
 
@@ -201,7 +254,12 @@ describe("settings DOM boundary", () => {
     await openSubagentSettings();
     await flushAsyncWork();
     assert.strictEqual(document.querySelector('.sa-section-title')?.textContent, '自定义 Agent');
-    assert.ok(document.querySelector('.sa-agent-pane > .sa-sidebar-head [data-settings-action="new-subagent"]'));
+    const addAction = document.querySelector('.sa-agent-pane .list-add-action');
+    assert.ok(addAction);
+    assert.strictEqual(addAction.textContent?.replace('+', '').trim(), '新建 Agent');
+    addAction.click();
+    assert.strictEqual(getControl("sa-name").value, "");
+    document.querySelector(`.sa-agent-item[data-agent-id="${existing.id}"]`).click();
     assert.strictEqual(document.querySelectorAll(".sa-agent-item").length, 1);
     const deleteButton = document.querySelector('.sa-agent-item [data-settings-action="delete-subagent"]');
     assert.ok(deleteButton, 'delete action should live inside the Agent list item');

@@ -260,9 +260,7 @@ function renderConvResults(list: HTMLElement, data: any): void {
 function chatPaneRender(container: HTMLElement): void {
   container.style.cssText = "display:flex;flex-direction:column;height:100%;min-height:0";
   container.innerHTML = `
-    <div class="ch-new" id="ch-new-btn">
-      <span class="ch-new-icon">+</span> 开启新对话
-    </div>
+    <div class="list-add-action-mount" id="ch-new-action-mount"></div>
     <div class="ch-search">
       <span class="ch-search-icon">${S('isearch', 14)}</span>
       <input class="ch-search-input" id="chat-search-input" placeholder="搜索会话…">
@@ -270,6 +268,16 @@ function chatPaneRender(container: HTMLElement): void {
     </div>
     <div class="session-list" id="sl">加载中...</div>
   `.trim();
+
+  const newActionMount = document.getElementById("ch-new-action-mount");
+  const ListAddAction = App.Ui?.ListAddAction;
+  if (newActionMount && ListAddAction) {
+    newActionMount.prepend(ListAddAction.create({
+      id: "ch-new-btn",
+      label: "开启新对话",
+      onActivate: () => App.Session.newSession(),
+    }));
+  }
 
   // 恢复搜索状态（面板重建时保持搜索结果）
   const q = _convQuery.trim();
@@ -284,14 +292,6 @@ function chatPaneRender(container: HTMLElement): void {
   }
 
   // ─── 事件绑定（无 inline onclick）─────────────────────
-
-  // 新会话按钮
-  const newBtn = document.getElementById("ch-new-btn");
-  if (newBtn) {
-    newBtn.addEventListener("click", () => {
-      App.Session.newSession();
-    });
-  }
 
   // 清除搜索按钮
   const clearBtn = document.getElementById("ch-search-clear");

@@ -87,9 +87,14 @@ body{background:var(--bg);height:100vh}
 .session-list.is-loading{opacity:.85}
 
 /* ─── Chat Pane ────────────────────────────────────────────── */
-.ch-new{display:flex;align-items:center;gap:10px;padding:10px 16px;font-size:.82rem;cursor:pointer;border-bottom:1px solid var(--bd);color:var(--ts)}
-.ch-new:hover{background:var(--bc);color:var(--tx)}
-.ch-new-icon{font-size:1.05rem;font-weight:300;line-height:1;color:var(--ts)}
+.list-add-action-mount{width:100%;min-width:0;flex-shrink:0}
+.list-add-action{display:flex;align-items:center;gap:10px;width:100%;height:40px;min-width:0;padding:0 16px;border:0;border-bottom:1px solid var(--bd);background:transparent;color:var(--ts);font:400 .82rem var(--fb);text-align:left;cursor:pointer}
+.list-add-action:hover{background:var(--bc);color:var(--tx)}
+.list-add-action:focus-visible{outline:1px solid var(--am);outline-offset:-2px}
+.list-add-action:disabled{color:var(--tm);cursor:default;opacity:.65}
+.list-add-action:disabled:hover{background:transparent}
+.list-add-action-icon{flex-shrink:0;font-size:1.05rem;font-weight:300;line-height:1;color:inherit}
+.list-add-action-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ch-search{display:flex;align-items:center;gap:10px;padding:8px 12px}
 .ch-search-clear{background:none;border:none;color:var(--tm);cursor:pointer;padding:2px;border-radius:4px;display:none;flex-shrink:0;line-height:1;transition:color .1s}
 .ch-search-clear:hover{color:var(--tx);background:var(--bc)}
@@ -628,13 +633,12 @@ body{background:var(--bg);height:100vh}
 .sa-section{margin-top:22px}
 .sa-section-title{display:block;margin:0;padding:1px 0 2px;color:var(--tx);font-family:var(--fb);font-size:.82rem;font-weight:700;line-height:1.5;letter-spacing:0;overflow:visible}
 .sa-section-note{margin-top:4px;font-size:.67rem;color:var(--tm);line-height:1.45}
-.sa-add-btn,.sa-save-btn,.sa-delete-btn{height:28px;padding:0 10px;border:1px solid var(--bd);border-radius:5px;background:var(--bc);color:var(--ts);font-size:.7rem;cursor:pointer;white-space:nowrap}
-.sa-add-btn:hover,.sa-save-btn:hover{border-color:var(--am);color:var(--am)}
+.sa-save-btn,.sa-delete-btn{height:28px;padding:0 10px;border:1px solid var(--bd);border-radius:5px;background:var(--bc);color:var(--ts);font-size:.7rem;cursor:pointer;white-space:nowrap}
+.sa-save-btn:hover{border-color:var(--am);color:var(--am)}
 .sa-save-btn{border-color:var(--am);color:var(--am);background:rgba(245,158,11,.08)}
 .sa-manager{display:grid;grid-template-columns:180px minmax(0,1fr);min-height:330px;margin-top:12px;border-top:1px solid var(--bd);border-bottom:1px solid var(--bd)}
 .sa-agent-pane{min-width:0;padding:8px 8px 8px 0;border-right:1px solid var(--bd)}
 .sa-sidebar-head{display:flex;align-items:center;justify-content:space-between;min-height:30px;margin-bottom:6px;padding-left:8px;color:var(--tm);font-size:.66rem;font-weight:600}
-.sa-sidebar-head .sa-add-btn{width:24px;height:24px;padding:0;display:flex;align-items:center;justify-content:center}
 .sa-agent-list{padding:0;min-width:0}
 .sa-agent-item{display:flex;align-items:center;gap:4px;width:100%;min-width:0;padding:5px 4px 5px 8px;border-radius:5px;color:var(--ts)}
 .sa-agent-item:hover{background:var(--bc)}

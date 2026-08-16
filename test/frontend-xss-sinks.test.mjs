@@ -100,7 +100,7 @@ const APPROVED_SINKS = new Map([
   ["src/frontend/dashboard/session-list-panel.ts|load|innerHTML|list", approved(1, "4af39681ccf9", REVIEW.renderer)],
   ["src/frontend/dashboard/session-list-panel.ts|render|innerHTML|element", approved(2, "11946cdeaf2a", REVIEW.renderer)],
   ["src/frontend/dashboard/settings-custom-subagents.ts|load|innerHTML|list", approved(1, "f1a3f62d3955", REVIEW.static)],
-  ["src/frontend/dashboard/settings-custom-subagents.ts|mount|insertAdjacentHTML|container", approved(1, "fde7a7e6f3c1", REVIEW.static)],
+  ["src/frontend/dashboard/settings-custom-subagents.ts|mount|insertAdjacentHTML|container", approved(1, "065fc11c73be", REVIEW.static)],
   ["src/frontend/dashboard/settings-custom-subagents.ts|render|innerHTML|editor", approved(2, "45e0805a7395", REVIEW.escaped)],
   ["src/frontend/dashboard/settings-custom-subagents.ts|render|innerHTML|list", approved(1, "e587b641983f", REVIEW.escaped)],
   ["src/frontend/dashboard/settings-general.ts|renderGeneralTab|innerHTML|container", approved(1, "ddb6c319c780", REVIEW.static)],
@@ -111,7 +111,7 @@ const APPROVED_SINKS = new Map([
   ["src/frontend/dashboard/settings-provider-model.ts|renderTab|innerHTML|list", approved(2, "ca98aa041c5f", REVIEW.renderer)],
   ["src/frontend/dashboard/settings-provider-model.ts|selectProvider|innerHTML|content", approved(1, "e5e239560bc1", REVIEW.escaped)],
   ["src/frontend/dashboard/settings-storage.ts|mount|insertAdjacentHTML|container", approved(1, "7dbaa78485c6", REVIEW.static)],
-  ["src/frontend/pane/chat/index.ts|chatPaneRender|innerHTML|container", approved(1, "a9aea4566c5b", REVIEW.static)],
+  ["src/frontend/pane/chat/index.ts|chatPaneRender|innerHTML|container", approved(1, "772eb1f8e30d", REVIEW.static)],
   ["src/frontend/pane/chat/index.ts|chatPaneRender|innerHTML|list", approved(1, "2efb387f77d0", REVIEW.static)],
   ["src/frontend/pane/chat/index.ts|doConvSearch|innerHTML|list", approved(2, "269b7740a622", REVIEW.escaped)],
   ["src/frontend/pane/chat/index.ts|renderConvResults|innerHTML|list", approved(2, "599d6c9009ec", REVIEW.escaped)],
@@ -222,6 +222,13 @@ function collectHtmlSinks() {
 }
 
 describe("frontend HTML sink boundary", () => {
+  it("renders ListAddAction labels through textContent instead of an HTML sink", () => {
+    const source = readFileSync(resolve(FRONTEND_ROOT, "ui/list-add-action.ts"), "utf8");
+
+    assert.match(source, /label\.textContent\s*=\s*options\.label/);
+    assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML/);
+  });
+
   it("requires every direct HTML sink to remain in the reviewed structural baseline", () => {
     const actual = [...collectHtmlSinks()].sort(([left], [right]) => left.localeCompare(right));
     const expected = [...APPROVED_SINKS].map(([identity, approval]) => [identity, {

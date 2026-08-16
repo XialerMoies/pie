@@ -18,6 +18,39 @@ function assertDelegates(src, fn, view) {
 }
 
 describe("frontend component tree boundaries", () => {
+  it("shares the DOM-backed ListAddAction across chat and subagent consumers", () => {
+    const action = source("src/frontend/ui/list-add-action.ts");
+    const chat = source("src/frontend/pane/chat/index.ts");
+    const subagents = source("src/frontend/dashboard/settings-custom-subagents.ts");
+    const styles = source("src/frontend/dashboard.css");
+
+    assertClass(action, "ListAddAction");
+    assert.match(action, /export\s+class\s+ListAddAction/);
+    assert.match(action, /\.Ui\.ListAddAction\s*=\s*ListAddAction/);
+    assert.match(chat, /ListAddAction\.create\(\{/);
+    assert.match(chat, /id:\s*["']ch-new-btn["']/);
+    assert.match(chat, /label:\s*["']开启新对话["']/);
+    assert.match(subagents, /ListAddAction\.create\(\{/);
+    assert.match(subagents, /label:\s*["']新建 Agent["']/);
+    assert.doesNotMatch(chat, /class=["'][^"']*\bch-new(?:-icon)?\b/);
+    assert.doesNotMatch(subagents, /sa-add-btn/);
+    assert.doesNotMatch(styles, /\.ch-new(?:-icon)?|\.sa-add-btn/);
+  });
+
+  it("loads ListAddAction before chat, subagent, and settings consumers", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const actionIndex = compiler.indexOf('"gen/ui/list-add-action.js"');
+    assert.ok(actionIndex >= 0, "ListAddAction must be included in the dashboard bundle");
+    for (const consumer of [
+      "gen/pane/chat/index.js",
+      "gen/dashboard/settings-custom-subagents.js",
+      "gen/dashboard/dashboard-settings.js",
+    ]) {
+      const consumerIndex = compiler.indexOf(`"${consumer}"`);
+      assert.ok(consumerIndex > actionIndex, `${consumer} must load after ListAddAction`);
+    }
+  });
+
   it("keeps low-reference frontend modules free of direct App access", () => {
     const files = [
       "src/frontend/ui/tree.ts",

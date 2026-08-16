@@ -139,6 +139,7 @@ const bundlePrev = existsSync(bundleOut) ? readFileSync(bundleOut, "utf-8") : nu
 
 // 与 dashboard.html 原 script 顺序一致（已移除 problems/index 和 pane/problems）
 const REQUIRED_BUNDLE_ENTRIES = [
+  "gen/ui/list-add-action.js",
   "gen/pane/permissions/permissions-views.js",
   "gen/pane/permissions/index.js",
   "gen/dashboard/settings-general.js",
@@ -150,6 +151,7 @@ const REQUIRED_BUNDLE_ENTRIES = [
 const bundleOrder = [
   "gen/services/app-events.js",
   "gen/dashboard/dashboard-helpers.js",
+  "gen/ui/list-add-action.js",
   "gen/services/ui-state-store.js",
   "gen/services/preferences.js",
   "gen/services/chat-runtime-store.js",

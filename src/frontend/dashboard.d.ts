@@ -160,6 +160,17 @@ interface AppUI {
   openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video', options?: { activate?: boolean }): void;
   saveCurrentFile(): Promise<void>;
 }
+interface ListAddActionOptions {
+  id?: string;
+  label: string;
+  disabled?: boolean;
+  onActivate: () => void;
+}
+interface AppUiComponents {
+  ListAddAction: {
+    create(options: ListAddActionOptions): HTMLButtonElement;
+  };
+}
 interface AppChat {
   msgs(): string;
   appendDelta(text: string): void;
@@ -630,6 +641,7 @@ interface AppNamespace {
   Constants: AppConstants;
   State: AppStateFacade;
   UI: AppUI;
+  Ui: AppUiComponents;
   Chat: AppChat;
   ChatState: AppChatState;
   ChatTimeline: AppChatTimeline;
