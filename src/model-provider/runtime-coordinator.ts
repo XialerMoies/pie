@@ -1,6 +1,7 @@
 import type { ModelRuntime } from "@xiamol/pi-coding-agent";
 
 import type { CustomProviderStore } from "./custom-provider-store.js";
+import { IncompleteCustomProviderRollbackError } from "./pi-custom-provider-adapter.js";
 import type { PiCustomProviderAdapter } from "./pi-custom-provider-adapter.js";
 
 interface RuntimeSyncState {
@@ -68,7 +69,14 @@ export class CustomProviderRuntimeCoordinator {
       return state.loadedRevision;
     }
 
-    this.#adapter.replaceRuntimeProviders(runtime, prepared);
+    try {
+      await this.#adapter.replaceRuntimeProviders(runtime, prepared);
+    } catch (error) {
+      if (generation === state.generation && error instanceof IncompleteCustomProviderRollbackError) {
+        state.loadedRevision = -1;
+      }
+      throw error;
+    }
     state.loadedRevision = snapshot.revision;
     return state.loadedRevision;
   }

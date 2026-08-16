@@ -37,6 +37,28 @@ interface PreparedRegistration {
   provider: Provider<ProviderProtocol>;
 }
 
+export class IncompleteCustomProviderRollbackError extends AggregateError {
+  constructor(errors: readonly unknown[]) {
+    super(errors, "Custom provider replacement failed and rollback was incomplete");
+    this.name = "IncompleteCustomProviderRollbackError";
+  }
+}
+
+async function refreshRuntimeProviders(runtime: ModelRuntime, providerIds: readonly string[]): Promise<void> {
+  const providers = [...new Set(providerIds)];
+  if (providers.length === 0) return;
+  const result = await runtime.refresh({ providers, allowNetwork: false });
+  if (result.aborted) throw new Error("Custom provider availability refresh was aborted");
+  const failures = providers.flatMap((providerId) => {
+    const error = result.errors.get(providerId);
+    return error === undefined ? [] : [error];
+  });
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Custom provider availability refresh failed");
+  }
+}
+
 const API_FACTORIES = {
   "openai-completions": openAICompletionsApi,
   "openai-responses": openAIResponsesApi,
@@ -251,10 +273,10 @@ export class PiCustomProviderAdapter {
     return prepared;
   }
 
-  replaceRuntimeProviders(
+  async replaceRuntimeProviders(
     runtime: ModelRuntime,
     prepared: readonly PreparedCustomProvider[],
-  ): void {
+  ): Promise<void> {
     const next = new Map<string, PreparedCustomProvider>();
     const registrations: PreparedRegistration[] = [];
     for (const entry of prepared) {
@@ -287,6 +309,10 @@ export class PiCustomProviderAdapter {
     }
 
     const attempted: PreparedRegistration[] = [];
+    const changedProviderIds = [
+      ...prior.keys(),
+      ...registrations.map((registration) => registration.providerId),
+    ];
     try {
       for (const [providerId, provider] of prior) {
         if (runtime.getRegisteredNativeProvider(providerId) === provider) {
@@ -303,6 +329,7 @@ export class PiCustomProviderAdapter {
       this.#ownedByRuntime.set(runtime, new Map(
         registrations.map((registration) => [registration.providerId, registration.provider]),
       ));
+      await refreshRuntimeProviders(runtime, changedProviderIds);
     } catch (primaryFailure) {
       const rollbackFailures: unknown[] = [];
       for (const registration of attempted) {
@@ -314,15 +341,22 @@ export class PiCustomProviderAdapter {
         }
       }
 
-      const restored = new Map<string, Provider<ProviderProtocol>>();
+      const survivingOwned = new Map<string, Provider<ProviderProtocol>>();
+      for (const registration of attempted) {
+        if (runtime.getRegisteredNativeProvider(registration.providerId) === registration.provider) {
+          survivingOwned.set(registration.providerId, registration.provider);
+        }
+      }
       for (const [providerId, provider] of prior) {
         const currentNative = runtime.getRegisteredNativeProvider(providerId);
         if (currentNative === provider) {
-          restored.set(providerId, provider);
+          survivingOwned.set(providerId, provider);
           continue;
         }
         if (currentNative !== undefined || runtime.getProvider(providerId) !== undefined) {
-          rollbackFailures.push(new Error(`Rollback could not restore provider replaced externally: ${providerId}`));
+          if (!survivingOwned.has(providerId)) {
+            rollbackFailures.push(new Error(`Rollback could not restore provider replaced externally: ${providerId}`));
+          }
           continue;
         }
         try {
@@ -330,21 +364,24 @@ export class PiCustomProviderAdapter {
           if (runtime.getRegisteredNativeProvider(providerId) !== provider) {
             throw new Error(`Rollback did not retain restored provider: ${providerId}`);
           }
-          restored.set(providerId, provider);
+          survivingOwned.set(providerId, provider);
         } catch (error) {
           rollbackFailures.push(error);
           if (runtime.getRegisteredNativeProvider(providerId) === provider) {
-            restored.set(providerId, provider);
+            survivingOwned.set(providerId, provider);
           }
         }
       }
-      this.#ownedByRuntime.set(runtime, restored);
+      this.#ownedByRuntime.set(runtime, survivingOwned);
+
+      try {
+        await refreshRuntimeProviders(runtime, changedProviderIds);
+      } catch (error) {
+        rollbackFailures.push(error);
+      }
 
       if (rollbackFailures.length > 0) {
-        throw new AggregateError(
-          [primaryFailure, ...rollbackFailures],
-          "Custom provider replacement failed and rollback was incomplete",
-        );
+        throw new IncompleteCustomProviderRollbackError([primaryFailure, ...rollbackFailures]);
       }
       throw primaryFailure;
     }

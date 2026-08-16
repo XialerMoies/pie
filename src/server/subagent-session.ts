@@ -47,7 +47,7 @@ export interface EmbeddedSubagentSessionInput {
 
 type RuntimeForSubagents = Pick<
   AgentRuntime,
-  "modelRuntime" | "modelRegistry" | "config" | "session" | "syncModelProviders"
+  "modelRuntime" | "modelRegistry" | "config" | "session" | "syncModelProvidersForSubagent"
 >
 type ResourceLoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0]
 
@@ -110,7 +110,7 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
         })
       })
 
-    await runtime.syncModelProviders()
+    await runtime.syncModelProvidersForSubagent()
     const model = resolveModel(runtime.modelRegistry, runtime.session.model, input.model)
     const { session } = await createSession({
       cwd: input.workspace,

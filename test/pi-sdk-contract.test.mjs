@@ -79,7 +79,7 @@ test("wires main and subagent sessions through ModelRuntime", async () => {
   assert.ok(createRuntime >= 0 && initSync > createRuntime)
   assert.ok(createRegistry > initSync && createMainSession > initSync)
 
-  const subagentSync = subagentSource.indexOf("await runtime.syncModelProviders()")
+  const subagentSync = subagentSource.indexOf("await runtime.syncModelProvidersForSubagent()")
   assert.ok(subagentSync >= 0)
   assert.ok(subagentSource.indexOf("resolveModel(", subagentSync) > subagentSync)
   assert.ok(subagentSource.indexOf("createSession({", subagentSync) > subagentSync)

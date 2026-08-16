@@ -152,6 +152,11 @@ export class AgentRuntime {
     return this.session
   }
 
+  /** Run an operation after pending transitions and prevent a new session transition until it settles. */
+  runWithStableSession<T>(operation: () => Promise<T>): Promise<T> {
+    return this._enqueueSessionTransition(operation)
+  }
+
   getContextUsageSnapshot(): ContextUsageSnapshot | undefined {
     return calculateContextUsageSnapshot(this.session)
   }
@@ -180,6 +185,11 @@ export class AgentRuntime {
     })
     this._modelProviderSync = pending
     return pending
+  }
+
+  /** Sync shared provider state for an embedded subagent without waiting on or rebinding its parent session. */
+  syncModelProvidersForSubagent(): Promise<number> {
+    return this.config.syncModelProviders?.(this.modelRuntime) ?? Promise.resolve(0)
   }
 
   /** 仅在会话完整初始化后更新对外可见对象。 */

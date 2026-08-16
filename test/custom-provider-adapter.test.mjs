@@ -8,6 +8,7 @@ import { InMemoryCredentialStore } from "@earendil-works/pi-ai"
 import { ModelRuntime } from "@xiamol/pi-coding-agent"
 
 import { PiCustomProviderAdapter } from "../src/model-provider/pi-custom-provider-adapter.ts"
+import { CustomProviderRuntimeCoordinator } from "../src/model-provider/runtime-coordinator.ts"
 
 const PROTOCOLS = [
   "openai-completions",
@@ -76,6 +77,8 @@ class FakeRuntime {
   reads = []
   fail = undefined
   failures = []
+  refreshes = []
+  refreshResponses = []
 
   getProvider(id) {
     this.reads.push(id)
@@ -107,6 +110,11 @@ class FakeRuntime {
     this.calls.push(["unregisterProvider", id])
     this.registrations.delete(id)
     this.#maybeFail("unregisterProvider", id, "after")
+  }
+
+  async refresh(options) {
+    this.refreshes.push(options)
+    return this.refreshResponses.shift() ?? { aborted: false, errors: new Map() }
   }
 
   #maybeFail(operation, id, phase) {
@@ -173,7 +181,7 @@ function expectedModel(input, provider) {
 }
 
 describe("PiCustomProviderAdapter", () => {
-  it("maps all seven protocols to exact PI models and native lazy providers", () => {
+  it("maps all seven protocols to exact PI models and native lazy providers", async () => {
     for (const protocol of PROTOCOLS) {
       const adapter = new PiCustomProviderAdapter()
       const input = definition({ id: `custom-${protocol}`, protocol })
@@ -183,7 +191,7 @@ describe("PiCustomProviderAdapter", () => {
       const prepared = adapter.prepare(input, inputSecrets)
       const runtime = new FakeRuntime()
 
-      adapter.replaceRuntimeProviders(runtime, [prepared])
+      await adapter.replaceRuntimeProviders(runtime, [prepared])
 
       assert.equal(prepared.providerId, input.id)
       assert.deepEqual(prepared.models, [expectedModel(input.models[0], input)])
@@ -216,7 +224,7 @@ describe("PiCustomProviderAdapter", () => {
     const prepared = adapter.prepare(input, { apiKey: "api-secret", headers: headerSecrets })
     const runtime = new FakeRuntime()
 
-    adapter.replaceRuntimeProviders(runtime, [prepared])
+    await adapter.replaceRuntimeProviders(runtime, [prepared])
 
     assert.equal(runtime.calls[0][0], "registerNativeProvider")
     assert.equal(runtime.calls.some(([operation]) => operation === "registerProvider"), false)
@@ -288,7 +296,7 @@ describe("PiCustomProviderAdapter", () => {
       headers: { "X-Tenant": "tenant-value" },
     })
     const runtime = new FakeRuntime()
-    adapter.replaceRuntimeProviders(runtime, [prepared])
+    await adapter.replaceRuntimeProviders(runtime, [prepared])
     const provider = runtime.registrations.get(input.id).value
 
     assert.equal(provider.headers, undefined)
@@ -324,7 +332,7 @@ describe("PiCustomProviderAdapter", () => {
         : noAuthDefinition({ id: "empty-none-headers", headers: [] })
       const prepared = adapter.prepare(input, inputSecrets)
       const runtime = new FakeRuntime()
-      adapter.replaceRuntimeProviders(runtime, [prepared])
+      await adapter.replaceRuntimeProviders(runtime, [prepared])
       const provider = runtime.getRegisteredNativeProvider(input.id)
 
       const resolution = await provider.auth.apiKey.resolve()
@@ -354,7 +362,7 @@ describe("PiCustomProviderAdapter", () => {
         headers: { "X-Template": literalHeader },
       })
 
-      adapter.replaceRuntimeProviders(runtime, [prepared])
+      await adapter.replaceRuntimeProviders(runtime, [prepared])
       const provider = runtime.getRegisteredNativeProvider(input.id)
       const resolution = await runtime.getAuth(input.id, { env: { NAME: "expanded" } })
 
@@ -394,7 +402,7 @@ describe("PiCustomProviderAdapter", () => {
     }
     const prepared = adapter.prepare(input, { headers: literalHeaders })
 
-    adapter.replaceRuntimeProviders(runtime, [prepared])
+    await adapter.replaceRuntimeProviders(runtime, [prepared])
     const provider = runtime.getRegisteredNativeProvider(input.id)
     const resolution = await runtime.getAuth(input.id, { env: { NAME: "expanded" } })
 
@@ -424,7 +432,7 @@ describe("PiCustomProviderAdapter", () => {
           models: [model({ reasoning: false, input: ["text"] })],
         })
         const prepared = adapter.prepare(input, { headers: { "X-Tenant": `tenant-${index}` } })
-        adapter.replaceRuntimeProviders(runtime, [prepared])
+        await adapter.replaceRuntimeProviders(runtime, [prepared])
         const captures = []
         const stream = runtime[method](prepared.models[0], {
           messages: [{ role: "user", content: "ping", timestamp: 1 }],
@@ -478,7 +486,7 @@ describe("PiCustomProviderAdapter", () => {
         const prepared = adapter.prepare(input, {
           headers: { Authorization: authorization, "X-API-Key": apiKeyHeader, "X-Tenant": tenant },
         })
-        adapter.replaceRuntimeProviders(runtime, [prepared])
+        await adapter.replaceRuntimeProviders(runtime, [prepared])
         const captures = []
         const result = await runtime[method](prepared.models[0], {
           messages: [{ role: "user", content: "ping", timestamp: 1 }],
@@ -526,7 +534,7 @@ describe("PiCustomProviderAdapter", () => {
           models: [model({ reasoning: false, input: ["text"] })],
         })
         const prepared = adapter.prepare(input, { headers: {} })
-        adapter.replaceRuntimeProviders(runtime, [prepared])
+        await adapter.replaceRuntimeProviders(runtime, [prepared])
         return { runtime, prepared, sentinel }
       }))
     } finally {
@@ -565,18 +573,18 @@ describe("PiCustomProviderAdapter", () => {
     }
   })
 
-  it("rejects duplicate prepared IDs before changing the runtime", () => {
+  it("rejects duplicate prepared IDs before changing the runtime", async () => {
     const adapter = new PiCustomProviderAdapter()
     const first = adapter.prepare(definition(), secrets())
     const second = adapter.prepare(definition(), secrets())
     const runtime = new FakeRuntime()
 
-    assert.throws(() => adapter.replaceRuntimeProviders(runtime, [first, second]), /duplicate.*acme-gateway/i)
+    await assert.rejects(adapter.replaceRuntimeProviders(runtime, [first, second]), /duplicate.*acme-gateway/i)
     assert.deepEqual(runtime.calls, [])
     assert.deepEqual(runtime.reads, [])
   })
 
-  it("rejects an unowned same-ID collision without unregistering it", () => {
+  it("rejects an unowned same-ID collision without unregistering it", async () => {
     const adapter = new PiCustomProviderAdapter()
     const runtime = new FakeRuntime()
     const unowned = { id: "acme-gateway", kind: "unowned" }
@@ -584,8 +592,8 @@ describe("PiCustomProviderAdapter", () => {
     runtime.fail = { operation: "registerNativeProvider", id: "acme-gateway", phase: "before", remaining: 1 }
     const prepared = adapter.prepare(definition(), secrets())
 
-    assert.throws(
-      () => adapter.replaceRuntimeProviders(runtime, [prepared]),
+    await assert.rejects(
+      adapter.replaceRuntimeProviders(runtime, [prepared]),
       (error) => {
         assert.match(error.message, /collision.*acme-gateway|acme-gateway.*already registered/i)
         return true
@@ -599,7 +607,7 @@ describe("PiCustomProviderAdapter", () => {
     )), false)
   })
 
-  it("fully replaces owned providers without unregistering unowned IDs", () => {
+  it("fully replaces owned providers without unregistering unowned IDs", async () => {
     const adapter = new PiCustomProviderAdapter()
     const runtime = new FakeRuntime()
     const official = { kind: "official" }
@@ -608,9 +616,9 @@ describe("PiCustomProviderAdapter", () => {
     const second = adapter.prepare(noAuthDefinition({ id: "second" }), { headers: { "X-Tenant": "two" } })
     const third = adapter.prepare(definition({ id: "third" }), secrets())
 
-    adapter.replaceRuntimeProviders(runtime, [first, second])
+    await adapter.replaceRuntimeProviders(runtime, [first, second])
     runtime.calls = []
-    adapter.replaceRuntimeProviders(runtime, [third])
+    await adapter.replaceRuntimeProviders(runtime, [third])
 
     assert.deepEqual(runtime.calls.map(([operation, id]) => [operation, id]), [
       ["unregisterProvider", "first"],
@@ -621,15 +629,15 @@ describe("PiCustomProviderAdapter", () => {
     assert.deepEqual([...runtime.registrations.keys()], ["openai", "third"])
   })
 
-  it("deterministically replaces the same prepared set", () => {
+  it("deterministically replaces the same prepared set", async () => {
     const adapter = new PiCustomProviderAdapter()
     const runtime = new FakeRuntime()
     const first = adapter.prepare(definition({ id: "first" }), secrets())
     const second = adapter.prepare(noAuthDefinition({ id: "second" }), { headers: { "X-Tenant": "two" } })
-    adapter.replaceRuntimeProviders(runtime, [first, second])
+    await adapter.replaceRuntimeProviders(runtime, [first, second])
     runtime.calls = []
 
-    adapter.replaceRuntimeProviders(runtime, [first, second])
+    await adapter.replaceRuntimeProviders(runtime, [first, second])
 
     assert.deepEqual(runtime.calls.map(([operation, id]) => [operation, id]), [
       ["unregisterProvider", "first"],
@@ -639,17 +647,17 @@ describe("PiCustomProviderAdapter", () => {
     ])
   })
 
-  it("does not unregister a prior ID replaced by an external native provider", () => {
+  it("does not unregister a prior ID replaced by an external native provider", async () => {
     const adapter = new PiCustomProviderAdapter()
     const runtime = new FakeRuntime()
     const prepared = adapter.prepare(definition({ id: "owned" }), secrets())
-    adapter.replaceRuntimeProviders(runtime, [prepared])
+    await adapter.replaceRuntimeProviders(runtime, [prepared])
     const installed = runtime.getRegisteredNativeProvider("owned")
     const external = { id: "owned", kind: "external" }
     runtime.registrations.set("owned", { kind: "native", value: external })
     runtime.calls = []
 
-    adapter.replaceRuntimeProviders(runtime, [])
+    await adapter.replaceRuntimeProviders(runtime, [])
 
     assert.notEqual(installed, external)
     assert.equal(runtime.getRegisteredNativeProvider("owned"), external)
@@ -658,7 +666,7 @@ describe("PiCustomProviderAdapter", () => {
     )), false)
   })
 
-  it("does not remove an external replacement while rolling back an attempted provider", () => {
+  it("does not remove an external replacement while rolling back an attempted provider", async () => {
     const adapter = new PiCustomProviderAdapter()
     const runtime = new FakeRuntime()
     const external = { id: "next", kind: "external" }
@@ -671,8 +679,8 @@ describe("PiCustomProviderAdapter", () => {
       replaceWith: external,
     }
 
-    assert.throws(
-      () => adapter.replaceRuntimeProviders(runtime, [next]),
+    await assert.rejects(
+      adapter.replaceRuntimeProviders(runtime, [next]),
       /injected registerNativeProvider failure/,
     )
 
@@ -682,18 +690,18 @@ describe("PiCustomProviderAdapter", () => {
     )), false)
   })
 
-  it("rolls back to the prior set when synchronous registration fails", () => {
+  it("rolls back to the prior set when synchronous registration fails", async () => {
     const adapter = new PiCustomProviderAdapter()
     const runtime = new FakeRuntime()
     const prior = adapter.prepare(definition({ id: "prior" }), secrets())
     const next = adapter.prepare(definition({ id: "next" }), secrets())
     const broken = adapter.prepare(noAuthDefinition({ id: "broken" }), { headers: { "X-Tenant": "broken" } })
-    adapter.replaceRuntimeProviders(runtime, [prior])
+    await adapter.replaceRuntimeProviders(runtime, [prior])
     const priorRegistration = runtime.registrations.get("prior")
     runtime.fail = { operation: "registerNativeProvider", id: "broken", phase: "after", remaining: 1 }
 
-    assert.throws(
-      () => adapter.replaceRuntimeProviders(runtime, [next, broken]),
+    await assert.rejects(
+      adapter.replaceRuntimeProviders(runtime, [next, broken]),
       /injected registerNativeProvider failure/,
     )
 
@@ -701,43 +709,67 @@ describe("PiCustomProviderAdapter", () => {
     assert.equal(runtime.registrations.get("prior").value, priorRegistration.value)
     runtime.fail = undefined
     runtime.calls = []
-    adapter.replaceRuntimeProviders(runtime, [])
+    await adapter.replaceRuntimeProviders(runtime, [])
     assert.deepEqual(runtime.calls.map(([operation, id]) => [operation, id]), [
       ["unregisterProvider", "prior"],
     ])
   })
 
-  it("rolls back to the prior set when synchronous unregistration fails", () => {
+  it("rolls back to the prior set when synchronous unregistration fails", async () => {
     const adapter = new PiCustomProviderAdapter()
     const runtime = new FakeRuntime()
     const first = adapter.prepare(definition({ id: "first" }), secrets())
     const second = adapter.prepare(definition({ id: "second" }), secrets())
     const next = adapter.prepare(definition({ id: "next" }), secrets())
-    adapter.replaceRuntimeProviders(runtime, [first, second])
+    await adapter.replaceRuntimeProviders(runtime, [first, second])
     const before = new Map(runtime.registrations)
     runtime.fail = { operation: "unregisterProvider", id: "second", phase: "after", remaining: 1 }
 
-    assert.throws(() => adapter.replaceRuntimeProviders(runtime, [next]), /injected unregisterProvider failure/)
+    await assert.rejects(adapter.replaceRuntimeProviders(runtime, [next]), /injected unregisterProvider failure/)
 
     assert.deepEqual([...runtime.registrations.keys()], ["first", "second"])
     assert.equal(runtime.registrations.get("first").value, before.get("first").value)
     assert.equal(runtime.registrations.get("second").value, before.get("second").value)
   })
 
-  it("aggregates rollback failures and retains ownership only for restored providers", () => {
+  it("rolls back and refreshes restored availability when targeted refresh fails", async () => {
+    const adapter = new PiCustomProviderAdapter()
+    const runtime = new FakeRuntime()
+    const prior = adapter.prepare(definition({ id: "prior" }), secrets())
+    const next = adapter.prepare(definition({ id: "next" }), secrets())
+    await adapter.replaceRuntimeProviders(runtime, [prior])
+    runtime.refreshes = []
+    runtime.refreshResponses.push({
+      aborted: false,
+      errors: new Map([["next", new Error("availability failed")]]),
+    })
+
+    await assert.rejects(
+      adapter.replaceRuntimeProviders(runtime, [next]),
+      /availability failed/,
+    )
+
+    assert.deepEqual([...runtime.registrations.keys()], ["prior"])
+    assert.deepEqual(runtime.refreshes, [
+      { providers: ["prior", "next"], allowNetwork: false },
+      { providers: ["prior", "next"], allowNetwork: false },
+    ])
+  })
+
+  it("aggregates rollback failures and retains ownership only for restored providers", async () => {
     const adapter = new PiCustomProviderAdapter()
     const runtime = new FakeRuntime()
     const first = adapter.prepare(definition({ id: "first" }), secrets())
     const second = adapter.prepare(definition({ id: "second" }), secrets())
     const next = adapter.prepare(definition({ id: "next" }), secrets())
-    adapter.replaceRuntimeProviders(runtime, [first, second])
+    await adapter.replaceRuntimeProviders(runtime, [first, second])
     runtime.failures = [
       { operation: "registerNativeProvider", id: "next", phase: "after", remaining: 1 },
       { operation: "registerNativeProvider", id: "second", phase: "before", remaining: 1 },
     ]
 
-    assert.throws(
-      () => adapter.replaceRuntimeProviders(runtime, [next]),
+    await assert.rejects(
+      adapter.replaceRuntimeProviders(runtime, [next]),
       (error) => {
         assert.equal(error instanceof AggregateError, true)
         assert.equal(error.errors.length, 2)
@@ -750,10 +782,50 @@ describe("PiCustomProviderAdapter", () => {
     assert.deepEqual([...runtime.registrations.keys()], ["first"])
     runtime.failures = []
     runtime.calls = []
-    adapter.replaceRuntimeProviders(runtime, [])
+    await adapter.replaceRuntimeProviders(runtime, [])
     assert.deepEqual(runtime.calls.map(([operation, id]) => [operation, id]), [
       ["unregisterProvider", "first"],
     ])
+  })
+
+  it("poisons the coordinator and reconciles every surviving adapter provider after incomplete rollback", async () => {
+    const adapter = new PiCustomProviderAdapter()
+    const runtime = new FakeRuntime()
+    let currentSnapshot = {
+      schemaVersion: 1,
+      revision: 1,
+      providers: [definition({ id: "prior" })],
+    }
+    const coordinator = new CustomProviderRuntimeCoordinator({
+      store: {
+        async readSnapshot() { return currentSnapshot },
+        async resolveSecrets() { return secrets() },
+      },
+      adapter,
+    })
+    assert.equal(await coordinator.sync(runtime), 1)
+
+    currentSnapshot = {
+      schemaVersion: 1,
+      revision: 2,
+      providers: [definition({ id: "next" })],
+    }
+    runtime.failures = [
+      { operation: "registerNativeProvider", id: "next", phase: "after", remaining: 1 },
+      { operation: "unregisterProvider", id: "next", phase: "before", remaining: 1 },
+    ]
+
+    await assert.rejects(
+      coordinator.sync(runtime),
+      (error) => error instanceof AggregateError && error.errors.length >= 2,
+    )
+    assert.equal(coordinator.loadedRevision(runtime), -1)
+    assert.deepEqual([...runtime.registrations.keys()], ["next", "prior"])
+
+    runtime.failures = []
+    assert.equal(await coordinator.sync(runtime), 2)
+    assert.equal(coordinator.loadedRevision(runtime), 2)
+    assert.deepEqual([...runtime.registrations.keys()], ["next"])
   })
 
   it("converts PI usage without double-counting reasoning", () => {

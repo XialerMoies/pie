@@ -99,6 +99,8 @@ function mockRuntime(overrides) {
     session,
     modelRegistry: { getModels: () => [] },
     currentWorkspace: ROOT,
+    syncModelProviders: async () => 0,
+    runWithStableSession: async (operation) => operation(),
     switchWorkspace: async (ws) => {},
     openSession: async (file, ws) => {},
     createNewSession: async () => "sess-mock-" + Date.now().toString(36),
@@ -1009,6 +1011,9 @@ describe("settings routes", () => {
       }),
     });
     mkdirSync(rejectedModelCtx.paths.PI_CONFIG_DIR, { recursive: true });
+    const rejectedSettingsFile = resolve(rejectedModelCtx.paths.PI_CONFIG_DIR, "settings.json");
+    const priorSettings = { defaultProvider: "openai", defaultModel: "gpt-stable" };
+    writeFileSync(rejectedSettingsFile, JSON.stringify(priorSettings));
     try {
       const rejected = await callHandler(handleSettings, "POST", "/api/model/switch", {
         provider: model.provider,
@@ -1017,6 +1022,7 @@ describe("settings routes", () => {
       assert.strictEqual(rejected.status, 400);
       assert.deepStrictEqual(parseJSON(rejected.body), { error: "model rejected" });
       assert.deepStrictEqual(rejectedModelCtx.appEvents.published, []);
+      assert.deepStrictEqual(JSON.parse(readFileSync(rejectedSettingsFile, "utf8")), priorSettings);
     } finally {
       rmSync(rejectedModelCtx.paths._tmpDir, { recursive: true, force: true });
     }
@@ -1033,6 +1039,90 @@ describe("settings routes", () => {
     const succeeded = await callHandler(handleSettings, "POST", "/api/thinking-level", { level: "low" }, failOpenCtx);
     assert.strictEqual(succeeded.status, 200);
     assert.strictEqual(parseJSON(succeeded.body).level, "low");
+  });
+
+  it("model switch uses the current session when authorization changes the runtime", async () => {
+    const oldModel = mockModel({ provider: "custom", id: "target", generation: "old" });
+    const newModel = mockModel({ provider: "custom", id: "target", generation: "new" });
+    let oldSetCalls = 0;
+    let newSetCalls = 0;
+    const oldSession = mockSession({
+      async setModel() {
+        oldSetCalls += 1;
+        throw new Error("disposed old session");
+      },
+    });
+    const newSession = mockSession({
+      async setModel(model) {
+        newSetCalls += 1;
+        this.model = model;
+      },
+    });
+    const runtime = mockRuntime({
+      session: oldSession,
+      modelRegistry: { find: () => oldModel },
+      syncModelProviders: async () => 1,
+    });
+    const ctx = mockContext({
+      runtime,
+      permissionService: {
+        async authorizePath(root, target) {
+          runtime.session = newSession;
+          runtime.modelRegistry = { find: (provider, id) => (
+            provider === newModel.provider && id === newModel.id ? newModel : undefined
+          ) };
+          return { path: resolve(root, target), root };
+        },
+      },
+    });
+    mkdirSync(ctx.paths.PI_CONFIG_DIR, { recursive: true });
+    try {
+      const result = await callHandler(handleSettings, "POST", "/api/model/switch", {
+        provider: "custom",
+        modelId: "target",
+      }, ctx);
+
+      assert.strictEqual(result.status, 200);
+      assert.deepStrictEqual(parseJSON(result.body), { ok: true });
+      assert.strictEqual(oldSetCalls, 0);
+      assert.strictEqual(newSetCalls, 1);
+      assert.strictEqual(newSession.model, newModel);
+    } finally {
+      rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rolls back the runtime model when settings persistence fails", async () => {
+    const priorModel = mockModel({ provider: "openai", id: "stable" });
+    const targetModel = mockModel({ provider: "custom", id: "target" });
+    const appliedModels = [];
+    const session = mockSession({
+      model: priorModel,
+      async setModel(model) {
+        appliedModels.push(model);
+        this.model = model;
+      },
+    });
+    const ctx = mockContext({
+      runtime: mockRuntime({
+        session,
+        modelRegistry: { find: () => targetModel },
+      }),
+    });
+    mkdirSync(resolve(ctx.paths.PI_CONFIG_DIR, "settings.json"), { recursive: true });
+    try {
+      const result = await callHandler(handleSettings, "POST", "/api/model/switch", {
+        provider: targetModel.provider,
+        modelId: targetModel.id,
+      }, ctx);
+
+      assert.strictEqual(result.status, 400);
+      assert.deepStrictEqual(appliedModels, [targetModel, priorModel]);
+      assert.strictEqual(session.model, priorModel);
+      assert.deepStrictEqual(ctx.appEvents.published, []);
+    } finally {
+      rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("GET /api/auth redacts stored provider keys", async () => {

@@ -98,6 +98,42 @@ describe("Chat SSE", () => {
     }
   });
 
+  it("POST /api/chat provider sync failure terminates SSE without leaking details", async () => {
+    let promptCalls = 0;
+    const sseResponse = makeResWithEvents();
+    const chatStream = {
+      textBuffer: "",
+      thinkingBuffer: "",
+      response: sseResponse,
+      currentWorkspace: "",
+    };
+    const ctx = {
+      runtime: {
+        session: { model: {}, prompt: async () => { promptCalls += 1; } },
+        currentWorkspace: ROOT,
+        async syncModelProviders() {
+          throw new Error("secret-provider-token-should-not-leak");
+        },
+      },
+      paths: { APP_ROOT: ROOT },
+      chatStream,
+      sseClients: [],
+    };
+    const response = makeResWithEvents();
+
+    await handleChat(makeReq("POST", "/api/chat", { message: "test" }), response, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assert.strictEqual(promptCalls, 0);
+    assert.strictEqual(response._status, 503);
+    assert.deepStrictEqual(JSON.parse(response._body), { error: "模型提供商同步失败，请重试。" });
+    assert.match(sseResponse._body, /"type":"error"/);
+    assert.match(sseResponse._body, /模型提供商同步失败，请重试。/);
+    assert.strictEqual(sseResponse._ended, true);
+    assert.strictEqual(chatStream.response, null);
+    assert.strictEqual(`${response._body}${sseResponse._body}`.includes("secret-provider-token"), false);
+  });
+
   it("POST /api/chat 设置 currentWorkspace", async () => {
     const targetWorkspace = resolve(ROOT, "src");
     const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" };

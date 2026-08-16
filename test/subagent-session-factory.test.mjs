@@ -30,8 +30,8 @@ function createHarness() {
       agentDir: "/agent",
       desktopApiToken: "desktop-token",
     },
-    async syncModelProviders() {
-      lifecycle.push("sync");
+    async syncModelProvidersForSubagent() {
+      lifecycle.push("subagent-sync");
       return 1;
     },
     session: { model: inheritedModel },
@@ -66,6 +66,7 @@ function createHarness() {
 
   return {
     factory,
+    runtime,
     modelRuntime: runtime.modelRuntime,
     modelRegistry: runtime.modelRegistry,
     inheritedModel,
@@ -141,7 +142,7 @@ describe("embedded subagent session factory", () => {
 
     await harness.factory(input);
 
-    assert.deepStrictEqual(harness.lifecycle, ["sync", "find", "create"]);
+    assert.deepStrictEqual(harness.lifecycle, ["subagent-sync", "find", "create"]);
     assert.deepStrictEqual(harness.modelFinds, [{ provider: "review", id: "review-model" }]);
     assert.strictEqual(harness.sessionOptions[0].model, harness.overrideModel);
     assert.strictEqual(harness.inheritedModel.id, "main-model");
@@ -185,5 +186,28 @@ describe("embedded subagent session factory", () => {
 
     await assert.rejects(harness.factory(input), /Unknown subagent profile: explore/);
     assert.strictEqual(harness.sessionOptions.length, 0);
+  });
+
+  it("does not wait for the streaming parent session before creating a subagent", async () => {
+    const harness = createHarness();
+    let parentSyncCalls = 0;
+    let subagentSyncCalls = 0;
+    harness.runtime.syncModelProviders = () => {
+      parentSyncCalls += 1;
+      return new Promise(() => {});
+    };
+    harness.runtime.syncModelProvidersForSubagent = async () => {
+      subagentSyncCalls += 1;
+      return 2;
+    };
+
+    const result = await Promise.race([
+      harness.factory(factoryInput()).then(() => "created"),
+      new Promise((resolve) => setTimeout(() => resolve("deadlocked"), 50)),
+    ]);
+
+    assert.strictEqual(result, "created");
+    assert.strictEqual(parentSyncCalls, 0);
+    assert.strictEqual(subagentSyncCalls, 1);
   });
 });

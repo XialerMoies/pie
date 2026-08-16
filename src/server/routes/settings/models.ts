@@ -70,24 +70,40 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/model/switch" && method === "POST") {
     try {
       const { provider, modelId } = await parseBody(req);
-      await runtime.syncModelProviders?.();
-      const session = runtime.session;
-      const modelRegistry = runtime.modelRegistry;
-      const model = modelRegistry.find(provider, modelId);
-      if (!model) {
+      const settingsFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "settings.json", "write", "settings.model-switch")).path;
+      let found = false;
+      await runtime.runWithStableSession(async () => {
+        await runtime.syncModelProviders();
+        const model = runtime.modelRegistry.find(provider, modelId);
+        if (!model) return;
+        found = true;
+        const session = runtime.session;
+        const priorModel = session.model;
+        if (!priorModel) throw new Error("Current session has no active model");
+        await session.setModel(model);
+        try {
+          await updateLockedJson<Record<string, unknown>>(settingsFile, () => ({}), (settings) => {
+            settings.defaultProvider = provider;
+            settings.defaultModel = modelId;
+            return settings;
+          }, { trailingNewline: false });
+        } catch (persistenceError) {
+          try {
+            await session.setModel(priorModel);
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [persistenceError, rollbackError],
+              "Model settings persistence failed and model rollback failed",
+            );
+          }
+          throw persistenceError;
+        }
+      });
+      if (!found) {
         res.writeHead(404, { ...cors });
         res.end(JSON.stringify({ error: "未找到模型: " + provider + "/" + modelId }));
         return true;
       }
-      // Persist to settings
-      const settingsFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "settings.json", "write", "settings.model-switch")).path;
-      await updateLockedJson<Record<string, unknown>>(settingsFile, () => ({}), (settings) => {
-        settings.defaultProvider = provider;
-        settings.defaultModel = modelId;
-        return settings;
-      }, { trailingNewline: false });
-      // Hot switch
-      await session.setModel(model);
       publishDashboardChanged(ctx);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true }));

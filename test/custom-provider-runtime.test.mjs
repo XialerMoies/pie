@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai"
+import { ModelRegistry, ModelRuntime } from "@xiamol/pi-coding-agent"
+
 import { AgentRuntime } from "../src/agent/runtime.ts"
+import { PiCustomProviderAdapter } from "../src/model-provider/pi-custom-provider-adapter.ts"
 import { CustomProviderRuntimeCoordinator } from "../src/model-provider/runtime-coordinator.ts"
 import { handleChat } from "../src/server/routes/chat.ts"
 import { makeReq, makeResWithEvents } from "./helpers/http.mjs"
@@ -11,6 +15,27 @@ function snapshot(revision, providerIds = []) {
     schemaVersion: 1,
     revision,
     providers: providerIds.map((id) => ({ id })),
+  }
+}
+
+function runtimeProvider(id = "runtime-provider") {
+  return {
+    id,
+    name: "Runtime Provider",
+    protocol: "openai-responses",
+    baseUrl: "https://runtime.example.test/v1",
+    authMode: "apiKey",
+    apiKeyRef: `credential:${id}`,
+    headers: [],
+    models: [{
+      id: "runtime-model",
+      name: "Runtime Model",
+      contextWindow: 32_000,
+      maxTokens: 4_096,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }],
   }
 }
 
@@ -171,6 +196,47 @@ describe("CustomProviderRuntimeCoordinator", () => {
     assert.equal(await harness.coordinator.sync(harness.runtime), 2)
     assert.equal(harness.coordinator.loadedRevision(harness.runtime), 2)
     assert.deepEqual(harness.runtime.providers.map((provider) => provider.providerId), ["replacement"])
+  })
+
+  it("preserves the loaded revision after an aggregate apply failure with complete rollback", async () => {
+    const harness = createHarness([
+      snapshot(1, ["stable"]),
+      snapshot(2, ["replacement"]),
+    ])
+    assert.equal(await harness.coordinator.sync(harness.runtime), 1)
+    const stableProviders = harness.runtime.providers
+    harness.adapter.replaceRuntimeProviders = (runtime) => {
+      runtime.providers = stableProviders
+      throw new AggregateError([new Error("provider one"), new Error("provider two")], "apply failed")
+    }
+
+    await assert.rejects(harness.coordinator.sync(harness.runtime), /apply failed/)
+
+    assert.equal(harness.coordinator.loadedRevision(harness.runtime), 1)
+    assert.strictEqual(harness.runtime.providers, stableProviders)
+  })
+
+  it("resolves only after real PI model availability is refreshed", async () => {
+    const provider = runtimeProvider()
+    const runtime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsPath: null,
+      refreshOnCreate: false,
+    })
+    const coordinator = new CustomProviderRuntimeCoordinator({
+      store: {
+        async readSnapshot() { return { schemaVersion: 1, revision: 1, providers: [provider] } },
+        async resolveSecrets() { return { apiKey: "runtime-secret", headers: {} } },
+      },
+      adapter: new PiCustomProviderAdapter(),
+    })
+    const registry = new ModelRegistry(runtime)
+
+    assert.equal(await coordinator.sync(runtime), 1)
+    assert.equal(coordinator.loadedRevision(runtime), 1)
+    assert.ok(registry.getAvailable().some((model) => (
+      model.provider === provider.id && model.id === provider.models[0].id
+    )))
   })
 })
 

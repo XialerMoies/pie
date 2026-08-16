@@ -494,6 +494,35 @@ describe("chat ui state", () => {
     assert.strictEqual(last.streaming, false);
   });
 
+  it("terminal provider sync SSE errors clear busy state and close the stream", () => {
+    const streams = [];
+    class MockEventSource {
+      constructor() {
+        this.closed = false;
+        this.onmessage = null;
+        this.onerror = null;
+        attachEventListeners(this);
+        streams.push(this);
+      }
+      close() { this.closed = true; }
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "触发同步";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    assert.strictEqual(env.win.App.ChatState.isBusy(), true);
+
+    streams[0].onmessage({
+      data: JSON.stringify({ type: "error", message: "模型提供商同步失败，请重试。" }),
+    });
+
+    assert.strictEqual(env.win.App.ChatState.isBusy(), false);
+    assert.strictEqual(streams[0].closed, true);
+    assert.strictEqual(env.win.App.ChatState.getMessages().at(-1).streaming, false);
+  });
+
   it("block SSE 更新不重绘整个消息区", () => {
     let blockUpdates = 0;
     env.win.App.Chat.updateLastBlock = () => {

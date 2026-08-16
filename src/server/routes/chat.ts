@@ -12,6 +12,24 @@ import { replayChatEvents, resetChatEventHistory, writeChatEvent, writeChatStrea
 import { serverConfirmationRegistry } from "../confirmation-registry.js";
 
 const COMMAND_CONFIRM_TIMEOUT_MS = 120_000;
+const MODEL_PROVIDER_SYNC_ERROR = "模型提供商同步失败，请重试。";
+
+function terminateChatTurn(chatStream: ChatStreamState, message: string): void {
+  writeChatEvent(chatStream, { type: "error", message });
+  try { chatStream.response?.end(); } catch { /* ignore */ }
+  chatStream.response = null;
+  chatStream.textBuffer = "";
+  chatStream.thinkingBuffer = "";
+  chatStream.currentTextSnapshot = "";
+  chatStream.currentThinkingSnapshot = "";
+  chatStream.turnId = "";
+  chatStream.traceSeq = 0;
+  chatStream.blockSeq = 0;
+  chatStream.blocks = [];
+  chatStream.textSegments = [];
+  chatStream.emittedTraces = new Set();
+  chatStream.currentWorkspace = "";
+}
 
 export function createCommandConfirmCallback(chatStream: ChatStreamState) {
   return async (cmd: string, reason: string, request?: CommandConfirmationRequest): Promise<CommandConfirmationResult> => {
@@ -191,7 +209,14 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
             console.log(`📎 Added ${blocks.length} file(s) to context`);
           }
         }
-        await runtime.syncModelProviders?.();
+        try {
+          await runtime.syncModelProviders?.();
+        } catch {
+          terminateChatTurn(chatStream, MODEL_PROVIDER_SYNC_ERROR);
+          res.writeHead(503, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ error: MODEL_PROVIDER_SYNC_ERROR }));
+          return;
+        }
         const session = runtime.session;
         // 立即返回，不 await prompt()，SSE 流式推送 + agent_end 处理 workspace 标记
         console.log(`[chat] → session.prompt()`);

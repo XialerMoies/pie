@@ -148,6 +148,7 @@ Settings UI
 - 两种认证方式都使用 `registerNativeProvider()`。API Key 和 Header 值只由私有认证解析闭包按字面值返回，不进入 PI 会解析 `!command`、`$NAME` 或 `${NAME}` 的配置表达式通道。
 - `authMode: none` 适用于除 Google Generative AI 外的六种协议，表示不使用专用 API Key 字段；用户显式配置的秘密 Header（包括 `Authorization` 或 `X-API-Key`）仍按原值发送。适配器可在单次请求内使用唯一兼容值通过 PI SDK 的前置检查，但必须在实际 transport 前删除由该兼容值生成的 Header/查询参数，并从事件、结果和错误中脱敏；兼容值不持久化、不记录日志、不发送到网络，也不修改全局 `fetch`。
 - Google Generative AI 的 PI 0.84 transport 不支持安全的逐请求 keyless 注入，因此能力表和契约校验只允许它使用 `apiKey`；设置页必须据此限制选项。
+- 完整厂商集注册后执行限定厂商 ID 且 `allowNetwork: false` 的 PI refresh；同步调用只有在 `ModelRegistry.getAvailable()` 已可立即读取新模型后才成功。注册或 refresh 失败时事务性恢复旧集合并再次 refresh；若回滚不完整，则只记录运行时中仍以精确对象身份存在的适配器对象，并要求 revision coordinator 在下次边界完整重试。
 - 将 PI 的 usage 和错误转换为项目契约。
 - 在每次创建主会话或子 Agent session 时注册同一份自定义厂商快照。
 
@@ -161,6 +162,9 @@ Settings UI
 - 当前窗口正在流式生成时，持久化可以完成，但运行时切换排队到本轮结束。
 - 其他窗口在读取模型列表、切换模型或发送下一条消息前读取配置文件头部的全局 revision；版本变化时，在继续操作前同步完整快照。
 - 每个 server 记录 `loadedRevision`。同一进程内并发同步合并为一个 Promise，且只允许较新的 revision 替换当前运行时快照。
+- 主聊天和模型读取使用前台同步：流式中先等待当前 session 空闲，同步后在对象已变化时重绑当前模型。同步失败时主聊天必须向已连接 SSE 发送脱敏终止错误并关闭该轮流。
+- 嵌入式子 Agent 使用只同步共享 `ModelRuntime` 的专用边界，不等待也不重绑正在执行 `delegate_tasks` 的父 session；否则父工具返回与 `waitForIdle()` 会形成循环等待。
+- 模型切换与 session transition 串行化；授权完成后在稳定区间同步、从当前 registry 重新解析目标、更新同一个当前 session 后再持久化，持久化失败则恢复旧模型，目标消失时返回稳定错误。
 - 如果当前模型仍存在，运行时切换到刷新后的模型对象。
 - 厂商或模型仍被当前会话、默认模型或自定义 Agent 引用时，禁止删除。
 

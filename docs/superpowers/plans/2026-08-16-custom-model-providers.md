@@ -414,7 +414,7 @@ auth: {
 
 For `none`, omit `apiKey` from the resolved auth and wrap `stream`/`streamSimple` for the six supported protocols with a request-local keyless transport. Use a unique in-memory compatibility value only to pass SDK prechecks, remove only sentinel-derived authentication before the actual fetch, preserve explicit custom Header values, and redact the sentinel from events/results/errors. Do not mutate `globalThis.fetch`. Reject Google Generative AI `none` through the project-owned per-protocol auth capability table.
 
-Expose `prepare()`, `replaceRuntimeProviders()`, and `toProviderUsage()`. `prepare()` must finish all validation and provider construction before mutating a runtime. `replaceRuntimeProviders()` unregisters only IDs previously owned by this adapter, registers the complete prepared set, and restores the previous prepared set if a synchronous registration unexpectedly throws.
+Expose `prepare()`, async `replaceRuntimeProviders()`, and `toProviderUsage()`. `prepare()` must finish all validation and provider construction before mutating a runtime. `replaceRuntimeProviders()` unregisters only exact provider objects previously owned by this adapter, registers the complete prepared set, and awaits a targeted non-network `ModelRuntime.refresh()` before succeeding. Registration or refresh failure restores and refreshes the previous set; incomplete rollback reports a distinct aggregate failure while retaining truthful ownership of every exact adapter-installed object still present.
 
 - [ ] **Step 5: Run adapter and SDK tests**
 
@@ -496,7 +496,7 @@ async sync(runtime: ModelRuntime): Promise<number> {
 }
 ```
 
-`loadAndApply` reads the validated snapshot, skips `revision <= loadedRevision`, resolves secrets only for that snapshot, prepares all providers, applies once, then sets `loadedRevision`. Never advance revision before adapter success.
+`loadAndApply` reads the validated snapshot, skips `revision <= loadedRevision`, resolves secrets only for that snapshot, prepares all providers, awaits one apply, then sets `loadedRevision`. Never advance revision before adapter success and provider availability refresh. A normal failed apply preserves the prior revision; an explicitly incomplete rollback poisons it to `-1` so the same disk revision fully reconciles on the next boundary.
 
 - [ ] **Step 4: Run coordinator tests**
 
@@ -542,9 +542,13 @@ async syncModelProviders(): Promise<number> {
   }
   return revision
 }
+
+syncModelProvidersForSubagent(): Promise<number> {
+  return this.config.syncModelProviders?.(this.modelRuntime) ?? Promise.resolve(0)
+}
 ```
 
-Call the config hook directly after `ModelRuntime.create()` during initialization, before constructing `ModelRegistry`. At request boundaries call `await runtime.syncModelProviders()` before capturing `session` or `modelRegistry`; move current top-of-handler captures in `settings/models.ts` below that call. In `subagent-session.ts`, add `syncModelProviders` to `RuntimeForSubagents` and await it before `resolveModel()`.
+Call the config hook directly after `ModelRuntime.create()` during initialization, before constructing `ModelRegistry`. Foreground model-list/chat boundaries call `await runtime.syncModelProviders()` before capturing `session` or `modelRegistry`; this method waits for an active stream to become idle and may rebind the active model object. The embedded subagent boundary instead awaits `syncModelProvidersForSubagent()` before `resolveModel()`; it synchronizes only the shared `ModelRuntime`, never waits on or rebinds the invoking parent session, avoiding a delegate-tool deadlock. Serialize model switching with session transitions, then synchronize, re-resolve against the current registry, call `setModel()` on that same stable session, and persist only after the switch succeeds; restore the prior model if persistence fails. If pre-prompt synchronization fails, terminate the attached SSE turn through the normal sanitized error lifecycle before returning an HTTP error.
 
 Saving settings later will trigger `void runtime.syncModelProviders()` so persistence can respond immediately; foreground model/chat operations still await it.
 

@@ -54,6 +54,8 @@ async function callSettings(method, url, body, paths, options = {}) {
       session: {},
       modelRegistry: {},
       currentWorkspace: paths.STARTUP?.workspace,
+      syncModelProviders: async () => 0,
+      runWithStableSession: async (operation) => operation(),
       ...options.runtime,
     },
     paths,
@@ -192,7 +194,10 @@ describe("preferences REST boundary", () => {
     };
     const runtime = {
       currentWorkspace: workspace,
-      session: { setModel: async () => {} },
+      session: {
+        model: { provider: "openai", id: "gpt-prior" },
+        setModel: async () => {},
+      },
       modelRegistry: { find: () => model },
     };
 
