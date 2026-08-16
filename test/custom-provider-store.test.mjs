@@ -366,15 +366,14 @@ describe("custom provider store", () => {
     }
   });
 
-  it("rejects caller-forged credential refs and cannot expose another provider secret", async () => {
+  it("rejects caller-forged API key refs and cannot expose another provider secret", async () => {
     const env = await fixture();
     try {
       const first = await createProvider(env.store);
       const victim = first.providers[0];
       const forgedProvider = {
-        ...providerMutation({ id: "attacker", name: "Attacker" }),
+        ...providerMutation({ id: "api-attacker", name: "API Attacker", headers: [] }),
         apiKeyRef: victim.apiKeyRef,
-        headers: [{ name: "X-Stolen", credentialRef: victim.headers[0].credentialRef }],
       };
 
       await assert.rejects(
@@ -385,9 +384,44 @@ describe("custom provider store", () => {
         }),
         /apiKeyRef|headers\[0\]/,
       );
-      assert.equal(await env.store.revealApiKey("attacker"), undefined);
+      assert.equal(await env.store.revealApiKey("api-attacker"), undefined);
       assert.equal(await env.store.revealApiKey("acme"), "api-secret-v1");
       assert.equal((await env.store.readSnapshot()).revision, 1);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("rejects header-only forged credential refs and cannot reuse another provider header secret", async () => {
+    const env = await fixture();
+    try {
+      const first = await createProvider(env.store);
+      const victim = first.providers[0];
+      const forgedProvider = {
+        ...providerMutation({
+          id: "header-attacker",
+          name: "Header Attacker",
+          authMode: "none",
+        }),
+        headers: [{ name: "X-Stolen", credentialRef: victim.headers[0].credentialRef }],
+      };
+      assert.equal("apiKeyRef" in forgedProvider, false);
+
+      await assert.rejects(
+        () => env.store.commit({
+          expectedRevision: 1,
+          provider: forgedProvider,
+          secretPatch: { headers: [] },
+        }),
+        /provider\.headers\[0\]/,
+      );
+      const snapshot = await env.store.readSnapshot();
+      assert.equal(snapshot.revision, 1);
+      assert.equal(snapshot.providers.some((provider) => provider.id === "header-attacker"), false);
+      assert.deepEqual(await env.store.resolveSecrets(victim), {
+        apiKey: "api-secret-v1",
+        headers: { "X-Tenant": "tenant-secret-v1" },
+      });
     } finally {
       await env.cleanup();
     }
