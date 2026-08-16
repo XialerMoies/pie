@@ -36,6 +36,8 @@ describe("multi-instance data layout", () => {
     assert.strictEqual(first.sessionsDir, second.sessionsDir);
     assert.strictEqual(first.usageIndexFile, second.usageIndexFile);
     assert.strictEqual(first.workspaceLockFile, second.workspaceLockFile);
+    assert.strictEqual(first.customProvidersFile, second.customProvidersFile);
+    assert.strictEqual(first.customProviderSecretsFile, second.customProviderSecretsFile);
     assert.notStrictEqual(first.instanceRoot, second.instanceRoot);
     assert.notStrictEqual(first.portFile, second.portFile);
     assert.notStrictEqual(first.desktopTokenFile, second.desktopTokenFile);
@@ -52,6 +54,8 @@ describe("multi-instance data layout", () => {
     assert.strictEqual(layout.dataRoot, dataRoot);
     assert.strictEqual(layout.userRoot, resolve(dataRoot, "user"));
     assert.strictEqual(layout.subagentsFile, resolve(layout.userRoot, "subagents.json"));
+    assert.strictEqual(layout.customProvidersFile, resolve(layout.userRoot, "custom-providers.json"));
+    assert.strictEqual(layout.customProviderSecretsFile, resolve(layout.userRoot, "custom-provider-secrets.json"));
     assert.strictEqual(layout.sessionsDir, resolve(layout.workspaceRoot, "sessions"));
     assert.strictEqual(layout.cacheDir, resolve(layout.instanceRoot, "cache"));
     assert.strictEqual(layout.workspaceLockFile, resolve(layout.workspaceRoot, "workspace.lock"));
