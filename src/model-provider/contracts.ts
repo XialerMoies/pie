@@ -12,6 +12,16 @@ export type ProviderProtocol = typeof PROVIDER_PROTOCOLS[number];
 export type ProviderAuthMode = "none" | "apiKey";
 export type CredentialRef = `credential:${string}`;
 
+export const PROVIDER_PROTOCOL_AUTH_MODES = {
+  "openai-completions": ["none", "apiKey"],
+  "openai-responses": ["none", "apiKey"],
+  "anthropic-messages": ["none", "apiKey"],
+  "google-generative-ai": ["apiKey"],
+  "mistral-conversations": ["none", "apiKey"],
+  "azure-openai-responses": ["none", "apiKey"],
+  "pi-messages": ["none", "apiKey"],
+} as const satisfies Readonly<Record<ProviderProtocol, readonly ProviderAuthMode[]>>;
+
 export interface ModelCostRates {
   input: number;
   output: number;
@@ -110,8 +120,14 @@ export interface ResolvedCustomProviderDraft {
   modelId?: string;
 }
 
+export interface CustomProviderProtocolCapability {
+  id: ProviderProtocol;
+  authModes: readonly ProviderAuthMode[];
+  supportsCompatibility: boolean;
+}
+
 export interface CustomProviderCapabilities {
-  protocols: Array<{ id: ProviderProtocol; supportsCompatibility: boolean }>;
+  protocols: CustomProviderProtocolCapability[];
   price: { currency: "USD"; unit: "millionTokens" };
 }
 
@@ -286,11 +302,10 @@ export function validateCustomProviderDefinition(value: unknown): CustomProvider
     fail("provider.protocol", "must be a supported provider protocol");
   }
   expectHttpUrl(value.baseUrl, "provider.baseUrl");
-  if (value.authMode !== "none" && value.authMode !== "apiKey") {
-    fail("provider.authMode", "must be none or apiKey");
-  }
-  if (value.protocol === "google-generative-ai" && value.authMode === "none") {
-    fail("provider.authMode", "google-generative-ai requires apiKey authentication");
+  const protocol = value.protocol as ProviderProtocol;
+  const authModes: readonly string[] = PROVIDER_PROTOCOL_AUTH_MODES[protocol];
+  if (typeof value.authMode !== "string" || !authModes.includes(value.authMode)) {
+    fail("provider.authMode", `${protocol} supports authentication modes: ${authModes.join(", ")}`);
   }
   if (value.authMode === "none" && value.apiKeyRef !== undefined) {
     fail("provider.apiKeyRef", "must not be set when authMode is none");

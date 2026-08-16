@@ -111,7 +111,11 @@ const resolved: ResolvedCustomProviderDraft = {
   modelId: "model-a",
 };
 const capabilities: CustomProviderCapabilities = {
-  protocols: [{ id: "openai-responses", supportsCompatibility: true }],
+  protocols: [{
+    id: "openai-responses",
+    authModes: ["none", "apiKey"],
+    supportsCompatibility: true,
+  }],
   price: { currency: "USD", unit: "millionTokens" },
 };
 const usage: ProviderUsage = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 };
@@ -161,6 +165,28 @@ void [list, resolved, capabilities, success, failure, invalidDraft];
     const fixture = snapshot();
     assert.deepEqual(validateCustomProviderDefinition(fixture.providers[0]), fixture.providers[0]);
     assert.deepEqual(validateCustomProviderSnapshot(fixture), fixture);
+  });
+
+  it("advertises and enforces authentication modes for every protocol", async () => {
+    const { PROVIDER_PROTOCOL_AUTH_MODES } = await import("../src/model-provider/contracts.ts");
+    const keylessProtocols = PROVIDER_PROTOCOLS.filter((protocol) => protocol !== "google-generative-ai");
+
+    for (const protocol of keylessProtocols) {
+      assert.deepEqual(PROVIDER_PROTOCOL_AUTH_MODES[protocol], ["none", "apiKey"]);
+      const keyless = provider({ protocol, authMode: "none" });
+      delete keyless.apiKeyRef;
+      assert.doesNotThrow(() => validateCustomProviderDefinition(keyless));
+      assert.doesNotThrow(() => validateCustomProviderDefinition(provider({ protocol })));
+    }
+
+    assert.deepEqual(PROVIDER_PROTOCOL_AUTH_MODES["google-generative-ai"], ["apiKey"]);
+    const keylessGoogle = provider({ protocol: "google-generative-ai", authMode: "none" });
+    delete keylessGoogle.apiKeyRef;
+    assert.throws(
+      () => validateCustomProviderDefinition(keylessGoogle),
+      /provider\.authMode.*google-generative-ai.*apiKey/i,
+    );
+    assert.doesNotThrow(() => validateCustomProviderDefinition(provider({ protocol: "google-generative-ai" })));
   });
 
   it("rejects unknown fields at snapshot, provider, and model levels", () => {
@@ -240,13 +266,6 @@ void [list, resolved, capabilities, success, failure, invalidDraft];
     delete anonymous.apiKeyRef;
     assert.doesNotThrow(() => validateCustomProviderDefinition(anonymous));
 
-    const keylessGoogle = provider({ protocol: "google-generative-ai", authMode: "none" });
-    delete keylessGoogle.apiKeyRef;
-    assert.throws(
-      () => validateCustomProviderDefinition(keylessGoogle),
-      /provider\.authMode.*google-generative-ai.*apiKey/i,
-    );
-    assert.doesNotThrow(() => validateCustomProviderDefinition(provider({ protocol: "google-generative-ai" })));
   });
 
   it("validates safe header tokens, forbidden names, credential refs, and duplicates case-insensitively", () => {
