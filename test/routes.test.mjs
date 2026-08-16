@@ -7,7 +7,7 @@
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
@@ -1533,6 +1533,165 @@ describe("custom provider settings routes", () => {
       ["discover", providerDraft],
     ]);
     for (const [, , signal] of calls) assert.ok(signal instanceof AbortSignal);
+  });
+
+  it("keeps completed real HTTP test and discovery requests active after normal message close", async () => {
+    const calls = [];
+    const handlerRuns = [];
+    const listenerSnapshots = [];
+    const ctx = customContext({
+      customProviderService: service({
+        async testConnection(_draft, signal) {
+          calls.push(["test", signal]);
+          return {
+            ok: true,
+            providerId: "acme",
+            modelId: "model-a",
+            latencyMs: 1,
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+          };
+        },
+        async discoverModels(_draft, signal) {
+          calls.push(["discover", signal]);
+          return { ids: ["model-a"] };
+        },
+      }),
+    });
+    const server = createServer((req, res) => {
+      const before = {
+        reqAborted: req.listenerCount("aborted"),
+        reqClose: req.listenerCount("close"),
+        resClose: res.listenerCount("close"),
+      };
+      const run = handleSettings(req, res, ctx).finally(() => {
+        listenerSnapshots.push({
+          before,
+          after: {
+            reqAborted: req.listenerCount("aborted"),
+            reqClose: req.listenerCount("close"),
+            resClose: res.listenerCount("close"),
+          },
+        });
+      });
+      handlerRuns.push(run);
+    });
+    await new Promise((resolveListening) => server.listen(0, "127.0.0.1", resolveListening));
+    const address = server.address();
+    const origin = `http://127.0.0.1:${address.port}`;
+    try {
+      for (const path of ["/api/custom-providers/test", "/api/custom-providers/discover-models"]) {
+        const response = await fetch(`${origin}${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ provider: providerDraft }),
+        });
+        assert.equal(response.status, 200);
+        await response.json();
+      }
+      await Promise.all(handlerRuns);
+
+      assert.deepEqual(calls.map(([operation]) => operation), ["test", "discover"]);
+      for (const [, signal] of calls) {
+        assert.ok(signal instanceof AbortSignal);
+        assert.equal(signal.aborted, false);
+      }
+      for (const snapshot of listenerSnapshots) assert.deepEqual(snapshot.after, snapshot.before);
+    } finally {
+      await new Promise((resolveClose, rejectClose) => server.close((error) => (
+        error ? rejectClose(error) : resolveClose()
+      )));
+    }
+  });
+
+  it("aborts a real HTTP request disconnected while credential authorization is pending", async () => {
+    let signalAuthorization;
+    let releaseAuthorization;
+    const authorizationStarted = new Promise((resolveStarted) => { signalAuthorization = resolveStarted; });
+    const authorizationRelease = new Promise((resolveRelease) => { releaseAuthorization = resolveRelease; });
+    let signalNetworkClient;
+    const networkClientCalled = new Promise((resolveCalled) => { signalNetworkClient = resolveCalled; });
+    let receivedSignal;
+    let meaningfulNetworkCalls = 0;
+    const ctx = customContext({
+      permissionService: {
+        async authorizePath(root, target, operation) {
+          signalAuthorization();
+          await authorizationRelease;
+          return { root, path: resolve(root, target), relativePath: target, operation };
+        },
+      },
+    });
+    ctx.customProviderService = await networkService(ctx, {
+      async testConnection(_draft, signal) {
+        receivedSignal = signal;
+        if (!signal.aborted) meaningfulNetworkCalls += 1;
+        signalNetworkClient();
+        return {
+          ok: false,
+          providerId: "acme",
+          modelId: "model-a",
+          code: "aborted",
+          message: "Provider request was aborted",
+        };
+      },
+      discoverModels: async () => assert.fail("model discovery was not requested"),
+    });
+
+    let responseClosed;
+    let handlerDone;
+    let listenerSnapshot;
+    const server = createServer((req, res) => {
+      const before = {
+        reqAborted: req.listenerCount("aborted"),
+        reqClose: req.listenerCount("close"),
+        resClose: res.listenerCount("close"),
+      };
+      responseClosed = new Promise((resolveClosed) => res.once("close", resolveClosed));
+      handlerDone = handleSettings(req, res, ctx).finally(() => {
+        listenerSnapshot = {
+          before,
+          after: {
+            reqAborted: req.listenerCount("aborted"),
+            reqClose: req.listenerCount("close"),
+            resClose: res.listenerCount("close"),
+          },
+        };
+      });
+    });
+    await new Promise((resolveListening) => server.listen(0, "127.0.0.1", resolveListening));
+    const address = server.address();
+    const payload = JSON.stringify({ provider: { ...providerDraft, apiKey: undefined } });
+    const client = httpRequest({
+      hostname: "127.0.0.1",
+      port: address.port,
+      path: "/api/custom-providers/test",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(payload),
+      },
+    });
+    client.on("error", () => {});
+    client.end(payload);
+    try {
+      await authorizationStarted;
+      client.destroy();
+      await responseClosed;
+      releaseAuthorization();
+      await networkClientCalled;
+      await handlerDone;
+
+      assert.ok(receivedSignal instanceof AbortSignal);
+      assert.equal(receivedSignal.aborted, true);
+      assert.equal(meaningfulNetworkCalls, 0);
+      assert.deepEqual(listenerSnapshot.after, listenerSnapshot.before);
+    } finally {
+      releaseAuthorization();
+      client.destroy();
+      await new Promise((resolveClose, rejectClose) => server.close((error) => (
+        error ? rejectClose(error) : resolveClose()
+      )));
+    }
   });
 
   it("propagates request aborts that occur while stored-credential authorization is pending", async () => {

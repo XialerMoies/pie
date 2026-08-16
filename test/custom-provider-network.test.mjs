@@ -265,6 +265,26 @@ describe("ProviderNetworkClient model discovery", () => {
     }
   });
 
+  it("redacts a multibyte secret split inside a UTF-8 code point at the excerpt boundary", async () => {
+    const secret = "Aé-boundary-secret";
+    const server = await fixture((_req, res) => {
+      res.writeHead(500, { "content-type": "text/plain" });
+      res.end(Buffer.concat([Buffer.alloc(1_022, "x"), Buffer.from(secret, "utf8")]));
+    });
+    try {
+      const error = await captureError(() => new ProviderNetworkClient().discoverModels(
+        resolvedDraft(server.origin, { secrets: { apiKey: secret } }),
+      ));
+
+      assert.equal(error.code, "upstream");
+      assert.equal(error.excerpt.includes(secret), false);
+      assert.equal(error.excerpt.includes(secret.slice(0, 1)), false);
+      assert.ok(Buffer.byteLength(error.excerpt, "utf8") <= 1_024);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("maps caller cancellation to aborted", async () => {
     const controller = new AbortController();
     const server = await fixture(() => {});

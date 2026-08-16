@@ -161,7 +161,7 @@ function createRequestLifecycleScope(
   const controller = new AbortController();
   const abort = () => controller.abort();
   const abortOnIncompleteRequest = () => {
-    if (req.aborted || req.destroyed || !req.complete) abort();
+    if (req.aborted || !req.complete) abort();
   };
   const abortOnIncompleteResponse = () => {
     if (!res.writableEnded) abort();
@@ -169,7 +169,11 @@ function createRequestLifecycleScope(
   req.on("aborted", abort);
   req.on("close", abortOnIncompleteRequest);
   res.on("close", abortOnIncompleteResponse);
-  if (req.aborted || req.destroyed || res.destroyed || res.closed) abort();
+  if (
+    req.aborted
+    || (req.destroyed && !req.complete)
+    || (!res.writableEnded && (res.destroyed || res.closed))
+  ) abort();
   return {
     signal: controller.signal,
     dispose: () => {

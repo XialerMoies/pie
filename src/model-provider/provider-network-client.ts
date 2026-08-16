@@ -70,17 +70,34 @@ function redact(value: string, secrets: readonly string[]): string {
   return redacted;
 }
 
-function redactTruncatedExcerpt(value: string, secrets: readonly string[]): string {
-  let redacted = redact(value, secrets);
-  for (const secret of secrets) {
-    const maxPrefixLength = Math.min(secret.length - 1, redacted.length);
+function replaceBytes(value: Buffer, target: Buffer, replacement: Buffer): Buffer {
+  const chunks: Buffer[] = [];
+  let offset = 0;
+  let index = value.indexOf(target, offset);
+  while (index !== -1) {
+    chunks.push(value.subarray(offset, index), replacement);
+    offset = index + target.byteLength;
+    index = value.indexOf(target, offset);
+  }
+  if (offset === 0) return value;
+  chunks.push(value.subarray(offset));
+  return Buffer.concat(chunks);
+}
+
+function redactTruncatedExcerpt(value: Uint8Array, secrets: readonly string[]): string {
+  const replacement = Buffer.from(REDACTED, "utf8");
+  let redacted: Buffer<ArrayBufferLike> = Buffer.from(value);
+  const encodedSecrets = secrets.map((secret) => Buffer.from(secret, "utf8"));
+  for (const secret of encodedSecrets) redacted = replaceBytes(redacted, secret, replacement);
+  for (const secret of encodedSecrets) {
+    const maxPrefixLength = Math.min(secret.byteLength - 1, redacted.byteLength);
     for (let prefixLength = maxPrefixLength; prefixLength > 0; prefixLength -= 1) {
-      if (!redacted.endsWith(secret.slice(0, prefixLength))) continue;
-      redacted = `${redacted.slice(0, -prefixLength)}${REDACTED}`;
+      if (!redacted.subarray(-prefixLength).equals(secret.subarray(0, prefixLength))) continue;
+      redacted = Buffer.concat([redacted.subarray(0, -prefixLength), replacement]);
       break;
     }
   }
-  return truncateUtf8(redacted, MAX_ERROR_EXCERPT_BYTES);
+  return truncateUtf8(redacted.toString("utf8"), MAX_ERROR_EXCERPT_BYTES);
 }
 
 function statusCode(error: unknown): number | undefined {
@@ -218,8 +235,8 @@ async function readLimitedBody(response: Response, limit: number): Promise<strin
   }
 }
 
-async function readErrorExcerpt(response: Response, limit: number): Promise<string> {
-  if (response.body === null) return "";
+async function readErrorExcerpt(response: Response, limit: number): Promise<Buffer> {
+  if (response.body === null) return Buffer.alloc(0);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -235,16 +252,22 @@ async function readErrorExcerpt(response: Response, limit: number): Promise<stri
         break;
       }
     }
-    return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+    return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
   } finally {
     reader.releaseLock();
   }
 }
 
 function truncateUtf8(value: string, limit: number): string {
-  const bytes = Buffer.from(value, "utf8");
-  if (bytes.byteLength <= limit) return value;
-  return bytes.subarray(0, limit).toString("utf8");
+  let bytes = 0;
+  let truncated = "";
+  for (const codePoint of value) {
+    const codePointBytes = Buffer.byteLength(codePoint, "utf8");
+    if (bytes + codePointBytes > limit) break;
+    truncated += codePoint;
+    bytes += codePointBytes;
+  }
+  return truncated;
 }
 
 function parseModelIds(body: string, secrets: readonly string[]): string[] {
