@@ -62,7 +62,7 @@ Settings UI
         -> ModelRuntime registration APIs
 ```
 
-设置页、路由和数据文件只依赖项目契约。PI 类型和 `registerProvider()` / `registerNativeProvider()` 只允许出现在适配器及 SDK 合约测试中。
+设置页、路由和数据文件只依赖项目契约。PI 类型和 `registerNativeProvider()` 只允许出现在适配器及 SDK 合约测试中。
 
 ## 4. E0-a 最小契约
 
@@ -80,7 +80,7 @@ Settings UI
 - `name`：用户可见名称。
 - `protocol`：`ProviderProtocol`。
 - `baseUrl`：绝对 HTTP(S) URL。
-- `authMode`：`none` 或 `apiKey`；必须由用户明确选择。
+- `authMode`：`none` 或 `apiKey`；必须由用户明确选择。协议能力表是允许认证方式的单一事实来源：Google Generative AI 仅允许 `apiKey`，其余六种协议允许两种方式。
 - `headers`：只保存 Header 名称和凭据引用，不保存值。
 - `modelDiscovery`：可选同源模型列表 URL。
 - `models`：一个或多个 `ModelDescriptor`。
@@ -145,7 +145,9 @@ Settings UI
 - 把七种项目协议映射到 PI API 名称。
 - 把 `ModelDescriptor` 转为 PI 模型结构。
 - 从凭据引用解析 API Key 和 Header，仅在运行时内存中组装。
-- `authMode: apiKey` 使用 PI `registerProvider()`；`authMode: none` 使用 `registerNativeProvider()` 构造项目自有 Provider，其 `apiKey.check()` 报告本地配置可用，`apiKey.resolve()` 返回空 `ModelAuth`。请求不携带 API Key 或 Authorization，也不创建、保存或发送占位凭据。
+- 两种认证方式都使用 `registerNativeProvider()`。API Key 和 Header 值只由私有认证解析闭包按字面值返回，不进入 PI 会解析 `!command`、`$NAME` 或 `${NAME}` 的配置表达式通道。
+- `authMode: none` 适用于除 Google Generative AI 外的六种协议，表示不使用专用 API Key 字段；用户显式配置的秘密 Header（包括 `Authorization` 或 `X-API-Key`）仍按原值发送。适配器可在单次请求内使用唯一兼容值通过 PI SDK 的前置检查，但必须在实际 transport 前删除由该兼容值生成的 Header/查询参数，并从事件、结果和错误中脱敏；兼容值不持久化、不记录日志、不发送到网络，也不修改全局 `fetch`。
+- Google Generative AI 的 PI 0.84 transport 不支持安全的逐请求 keyless 注入，因此能力表和契约校验只允许它使用 `apiKey`；设置页必须据此限制选项。
 - 将 PI 的 usage 和错误转换为项目契约。
 - 在每次创建主会话或子 Agent session 时注册同一份自定义厂商快照。
 
@@ -239,7 +241,7 @@ Settings UI
 - `maxTokens` 不得大于 `contextWindow`；Token 数必须为正整数；价格必须非负。
 - 高级 JSON 只接受对象并限制大小，不允许函数、命令或环境变量展开。
 - API Key、Header 值和 Authorization 内容必须从日志、异常、审计详情和测试快照中脱敏。
-- `authMode: none` 必须显式选择，空 Key 不自动改变认证模式。
+- `authMode: none` 必须显式选择，空 Key 不自动改变认证模式；Google Generative AI 不提供该选项。
 
 ## 11. 连接测试与模型发现
 
@@ -273,7 +275,8 @@ Settings UI
 - 配置与凭据脱敏。
 - 跨进程锁、并发更新和失败回滚。
 - 七种协议到 PI 的映射。
-- 无认证、API Key、自定义 Header 和 usage 转换。
+- 六种协议的无专用 Key transport、七种协议的 API Key、自定义 Header 和 usage 转换。
+- Google Generative AI 的 `none` 组合在契约层被拒绝，能力目录只暴露 `apiKey`。
 
 ### 路由测试
 
@@ -293,7 +296,7 @@ Settings UI
 
 ### 集成测试
 
-- 本地假 provider 覆盖七种协议的配置映射。
+- 本地假 provider 覆盖七种协议的 API Key 映射，以及除 Google Generative AI 外六种协议的 keyless 映射。
 - 至少验证流式文本、工具调用、真实 usage 和中止。
 - 两个独立 server 共享配置，并在下一请求前同步 revision。
 - 主会话和子 Agent 使用相同自定义模型快照。

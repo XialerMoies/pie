@@ -16,7 +16,7 @@
 
 - `src/model-provider/contracts.ts`: 项目自有协议、模型、凭据引用、快照、草稿和 usage 契约；不导入 PI。
 - `src/model-provider/custom-provider-store.ts`: 双文件事务、全局 revision、不可变秘密引用、脱敏读取和孤立秘密清理。
-- `src/model-provider/pi-custom-provider-adapter.ts`: 七种协议到 PI 的唯一适配边界，包括无认证 provider 和 usage 转换。
+- `src/model-provider/pi-custom-provider-adapter.ts`: 七种协议到 PI 的唯一适配边界，包括六协议 keyless transport、字面量认证解析和 usage 转换。
 - `src/model-provider/runtime-coordinator.ts`: 每个 `ModelRuntime` 的 loaded revision、并发合并、替换和失败回滚。
 - `src/model-provider/provider-reference-checker.ts`: 当前模型、默认模型、自定义 Agent 三类引用检查。
 - `src/model-provider/provider-network-client.ts`: 15 秒隔离连接测试、同源模型发现、重定向和错误脱敏。
@@ -200,7 +200,7 @@ export interface ResolvedCustomProviderDraft {
 }
 
 export interface CustomProviderCapabilities {
-  protocols: Array<{ id: ProviderProtocol; supportsCompatibility: boolean }>
+  protocols: Array<{ id: ProviderProtocol; supportsCompatibility: boolean; authModes: ProviderAuthMode[] }>
   price: { currency: "USD"; unit: "millionTokens" }
 }
 
@@ -348,10 +348,12 @@ for (const protocol of PROVIDER_PROTOCOLS) {
 
 Also assert:
 
-- `apiKey` mode calls `registerProvider(id, config)` with the real key, extra headers, `authHeader: true`, and no secret in returned diagnostics;
-- `none` mode calls only `registerNativeProvider(provider)`;
+- both modes construct native providers and call only `registerNativeProvider(provider)`;
+- resolved API Key and Header values remain literal when they contain `!command`, `$NAME` or `${NAME}` and are absent from diagnostics/serialization;
+- six protocols support `none` through request-local wrapped streams; SDK-generated auth Header/query values never reach transport, while explicitly configured Header values remain unchanged;
+- Google Generative AI advertises and accepts only `apiKey` mode;
 - keyless `provider.auth.apiKey.check()` returns `{ type: "api_key", source: "custom-provider" }`;
-- keyless `resolve()` returns `{ auth: {}, source: "custom-provider" }` without an Authorization header;
+- keyless `resolve()` returns the explicitly configured Headers without a dedicated API Key;
 - model costs remain USD per million tokens;
 - PI usage maps to project `ProviderUsage` and does not double-count reasoning.
 
@@ -398,17 +400,19 @@ function toPiModel(provider: CustomProviderDefinition, model: ModelDescriptor): 
 }
 ```
 
-For `none`, create a native provider with:
+Create a native provider for both auth modes. Resolve literal secrets from a private closure rather than PI configuration expressions:
 
 ```ts
 auth: {
   apiKey: {
-    name: "No authentication",
+    name: provider.name,
     check: async () => ({ type: "api_key", source: "custom-provider" }),
-    resolve: async () => ({ auth: {}, source: "custom-provider" }),
+    resolve: async () => ({ auth: { apiKey, headers }, source: "custom-provider" }),
   },
 }
 ```
+
+For `none`, omit `apiKey` from the resolved auth and wrap `stream`/`streamSimple` for the six supported protocols with a request-local keyless transport. Use a unique in-memory compatibility value only to pass SDK prechecks, remove only sentinel-derived authentication before the actual fetch, preserve explicit custom Header values, and redact the sentinel from events/results/errors. Do not mutate `globalThis.fetch`. Reject Google Generative AI `none` through the project-owned per-protocol auth capability table.
 
 Expose `prepare()`, `replaceRuntimeProviders()`, and `toProviderUsage()`. `prepare()` must finish all validation and provider construction before mutating a runtime. `replaceRuntimeProviders()` unregisters only IDs previously owned by this adapter, registers the complete prepared set, and restores the previous prepared set if a synchronous registration unexpectedly throws.
 
@@ -988,10 +992,10 @@ assert.doesNotMatch(serverSource, /setInterval\(|fs\.watch\(/)
 
 - [ ] **Step 4: Add deterministic seven-protocol fake-provider coverage**
 
-Implement `startFakeModelProvider(protocol)` as a local random-port fixture that records method/path/headers/body, emits protocol-valid streaming text, one tool call, terminal usage, and supports abort. Extend adapter tests with a table over all seven protocols and assert for each:
+Implement `startFakeModelProvider(protocol)` as a local random-port fixture that records method/path/headers/body, emits protocol-valid streaming text, one tool call, terminal usage, and supports abort. Extend adapter tests with an API-Key table over all seven protocols and a keyless table over the six protocols other than Google Generative AI. Assert:
 
 - configured Base URL and custom headers reach the fixture;
-- `none` sends no Authorization header;
+- keyless requests send no SDK-generated authentication, while explicitly configured auth Header values are preserved;
 - `apiKey` sends the configured key but test output/log capture does not contain it;
 - streamed text and tool call reach PI's normalized event stream;
 - terminal usage converts exactly to `ProviderUsage`;
@@ -1001,7 +1005,7 @@ Implement `startFakeModelProvider(protocol)` as a local random-port fixture that
 
 Run: `node scripts/tsx-test.mjs --test --test-concurrency=1 test/custom-provider-adapter.test.mjs test/custom-provider-multi-server.test.mjs`
 
-Expected: PASS for all seven protocols and both server runtimes.
+Expected: PASS for all seven API-Key mappings, all six keyless mappings, and both server runtimes.
 
 - [ ] **Step 6: Register final tests and update the task document**
 
@@ -1038,7 +1042,7 @@ Verify in order:
 5. Attempt to delete the active model/provider and confirm the current/default/custom-Agent occupancy list blocks it.
 6. Open a second project window, edit the provider in the first, then send from the second; it synchronizes before the request without restart.
 7. Restart the application and confirm provider/model/order return while API key and Header values remain masked.
-8. Add a `none` provider to a local endpoint and verify no Authorization header is sent.
+8. Add a non-Google `none` provider to a local endpoint and verify no SDK-generated authentication header is sent; then configure an explicit secret Header and verify its exact value is preserved.
 9. Enter a failing URL, verify the test error is redacted, then save successfully anyway.
 
 - [ ] **Step 9: Commit integration and documentation**
