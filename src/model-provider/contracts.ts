@@ -289,6 +289,9 @@ export function validateCustomProviderDefinition(value: unknown): CustomProvider
   if (value.authMode !== "none" && value.authMode !== "apiKey") {
     fail("provider.authMode", "must be none or apiKey");
   }
+  if (value.protocol === "google-generative-ai" && value.authMode === "none") {
+    fail("provider.authMode", "google-generative-ai requires apiKey authentication");
+  }
   if (value.authMode === "none" && value.apiKeyRef !== undefined) {
     fail("provider.apiKeyRef", "must not be set when authMode is none");
   }

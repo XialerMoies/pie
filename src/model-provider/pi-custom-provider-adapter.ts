@@ -1,8 +1,13 @@
 import {
   createProvider,
+  createAssistantMessageEventStream,
+  type AssistantMessageEvent,
+  type AssistantMessageEventStream,
+  type FetchFunction,
   type Model,
   type Provider,
   type ProviderStreams,
+  type StreamOptions,
   type Usage,
 } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
@@ -41,6 +46,82 @@ const API_FACTORIES = {
   "azure-openai-responses": azureOpenAIResponsesApi,
   "pi-messages": piMessagesApi,
 } satisfies Record<ProviderProtocol, () => ProviderStreams>;
+
+const KEYLESS_COMPATIBILITY_SENTINEL = "my-code-agent-keyless-compatibility";
+const AUTH_HEADER_NAMES = [
+  "authorization",
+  "api-key",
+  "x-api-key",
+  "x-goog-api-key",
+  "cf-aig-authorization",
+] as const;
+const AUTH_QUERY_NAMES = new Set(["key", "api_key", "api-key", "apikey", "access_token"]);
+
+function keylessFetch(fetchImplementation: FetchFunction): FetchFunction {
+  return async (input, init) => {
+    const request = new Request(input, init);
+    const headers = new Headers(request.headers);
+    for (const name of AUTH_HEADER_NAMES) headers.delete(name);
+
+    const url = new URL(request.url);
+    for (const name of [...url.searchParams.keys()]) {
+      if (AUTH_QUERY_NAMES.has(name.toLowerCase())) url.searchParams.delete(name);
+    }
+
+    const sanitized = new Request(request, { headers });
+    if (url.toString() === request.url) return fetchImplementation(sanitized);
+    return fetchImplementation(new Request(url, sanitized as unknown as RequestInit));
+  };
+}
+
+function keylessOptions<T extends StreamOptions>(options: T | undefined): T & StreamOptions {
+  const fetchImplementation = options?.fetch ?? globalThis.fetch;
+  return {
+    ...options,
+    apiKey: KEYLESS_COMPATIBILITY_SENTINEL,
+    fetch: keylessFetch(fetchImplementation),
+  } as T & StreamOptions;
+}
+
+function redactCompatibilityValue<T>(value: T): T {
+  if (typeof value === "string") {
+    return value.replaceAll(KEYLESS_COMPATIBILITY_SENTINEL, "[redacted]") as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactCompatibilityValue(item)) as T;
+  }
+  if (value === null || typeof value !== "object") return value;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+  const copy = Object.create(prototype) as Record<string, unknown>;
+  for (const [key, nested] of Object.entries(value)) {
+    copy[key] = redactCompatibilityValue(nested);
+  }
+  return copy as T;
+}
+
+function redactKeylessStream(source: AssistantMessageEventStream): AssistantMessageEventStream {
+  const target = createAssistantMessageEventStream();
+  void (async () => {
+    const result = source.result();
+    for await (const event of source) {
+      target.push(redactCompatibilityValue<AssistantMessageEvent>(event));
+    }
+    target.end(redactCompatibilityValue(await result));
+  })();
+  return target;
+}
+
+function keylessStreams(streams: ProviderStreams): ProviderStreams {
+  return {
+    stream: (model, context, options) => redactKeylessStream(
+      streams.stream(model, context, keylessOptions(options)),
+    ),
+    streamSimple: (model, context, options) => redactKeylessStream(
+      streams.streamSimple(model, context, keylessOptions(options)),
+    ),
+  };
+}
 
 function cloneHeaders(
   definition: CustomProviderDefinition,
@@ -122,6 +203,7 @@ export class PiCustomProviderAdapter {
     }
     const apiKey = usesApiKey ? secrets.apiKey : undefined;
 
+    const streams = API_FACTORIES[validated.protocol]();
     const provider = createProvider<ProviderProtocol>({
       id: validated.id,
       name: validated.name,
@@ -140,7 +222,7 @@ export class PiCustomProviderAdapter {
         },
       },
       models,
-      api: API_FACTORIES[validated.protocol](),
+      api: usesApiKey ? streams : keylessStreams(streams),
     });
     this.#registrations.set(prepared, {
       providerId: validated.id,

@@ -239,6 +239,14 @@ void [list, resolved, capabilities, success, failure, invalidDraft];
     const anonymous = provider({ authMode: "none" });
     delete anonymous.apiKeyRef;
     assert.doesNotThrow(() => validateCustomProviderDefinition(anonymous));
+
+    const keylessGoogle = provider({ protocol: "google-generative-ai", authMode: "none" });
+    delete keylessGoogle.apiKeyRef;
+    assert.throws(
+      () => validateCustomProviderDefinition(keylessGoogle),
+      /provider\.authMode.*google-generative-ai.*apiKey/i,
+    );
+    assert.doesNotThrow(() => validateCustomProviderDefinition(provider({ protocol: "google-generative-ai" })));
   });
 
   it("validates safe header tokens, forbidden names, credential refs, and duplicates case-insensitively", () => {

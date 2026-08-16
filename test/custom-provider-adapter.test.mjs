@@ -18,6 +18,8 @@ const PROTOCOLS = [
   "azure-openai-responses",
   "pi-messages",
 ]
+const KEYLESS_PROTOCOLS = PROTOCOLS.filter((protocol) => protocol !== "google-generative-ai")
+const KEYLESS_COMPATIBILITY_SENTINEL = "my-code-agent-keyless-compatibility"
 
 function model(overrides = {}) {
   return {
@@ -132,6 +134,26 @@ async function realRuntime() {
   })
 }
 
+function captureTransport(captures) {
+  return async (input, init) => {
+    const request = new Request(input, init)
+    captures.push({
+      url: new URL(request.url),
+      headers: request.headers,
+    })
+    throw new Error("captured keyless custom provider transport")
+  }
+}
+
+function assertKeylessRequest({ url, headers }, label) {
+  for (const name of ["authorization", "api-key", "x-api-key", "x-goog-api-key", "cf-aig-authorization"]) {
+    assert.equal(headers.has(name), false, `${label} sent ${name}`)
+  }
+  for (const name of ["key", "api_key", "api-key", "apikey", "access_token"]) {
+    assert.equal(url.searchParams.has(name), false, `${label} sent ${name} query auth`)
+  }
+}
+
 function expectedModel(input, provider) {
   return {
     id: input.id,
@@ -153,8 +175,8 @@ describe("PiCustomProviderAdapter", () => {
   it("maps all seven protocols to exact PI models and native lazy providers", () => {
     for (const protocol of PROTOCOLS) {
       const adapter = new PiCustomProviderAdapter()
-      const input = noAuthDefinition({ id: `custom-${protocol}`, protocol })
-      const inputSecrets = { apiKey: "must-not-be-used", headers: { "X-Tenant": "tenant-value" } }
+      const input = definition({ id: `custom-${protocol}`, protocol })
+      const inputSecrets = { apiKey: "mapping-api-key", headers: { "X-Tenant": "tenant-value" } }
       const beforeDefinition = structuredClone(input)
       const beforeSecrets = structuredClone(inputSecrets)
       const prepared = adapter.prepare(input, inputSecrets)
@@ -383,6 +405,74 @@ describe("PiCustomProviderAdapter", () => {
     for (const value of Object.values(literalHeaders)) {
       assert.equal(JSON.stringify(provider).includes(value), false)
     }
+  })
+
+  for (const method of ["stream", "streamSimple"]) {
+    it(`dispatches keyless ${method} requests for all six keyless protocols without auth material`, async () => {
+      const originalFetch = globalThis.fetch
+      const cases = await Promise.all(KEYLESS_PROTOCOLS.map(async (protocol, index) => {
+        const adapter = new PiCustomProviderAdapter()
+        const runtime = await realRuntime()
+        const input = noAuthDefinition({
+          id: `keyless-${method.toLowerCase()}-${index}`,
+          protocol,
+          ...(protocol === "pi-messages"
+            ? { baseUrl: "https://api.example.test/v1?api_key=must-not-reach-transport" }
+            : {}),
+          headers: [{ name: "X-Tenant", credentialRef: `credential:keyless-tenant-${index}` }],
+          models: [model({ reasoning: false, input: ["text"] })],
+        })
+        const prepared = adapter.prepare(input, { headers: { "X-Tenant": `tenant-${index}` } })
+        adapter.replaceRuntimeProviders(runtime, [prepared])
+        const captures = []
+        const stream = runtime[method](prepared.models[0], {
+          messages: [{ role: "user", content: "ping", timestamp: 1 }],
+        }, {
+          fetch: captureTransport(captures),
+          maxRetries: 0,
+        })
+        const result = await stream.result()
+        return { protocol, captures, result }
+      }))
+
+      assert.equal(globalThis.fetch, originalFetch)
+      const failures = []
+      for (const { protocol, captures, result } of cases) {
+        if (captures.length !== 1) {
+          failures.push(`${protocol}: ${result.errorMessage}`)
+        } else {
+          assertKeylessRequest(captures[0], `${protocol} ${method}`)
+          assert.equal(captures[0].headers.get("x-tenant"), `tenant-${KEYLESS_PROTOCOLS.indexOf(protocol)}`)
+        }
+        assert.equal(JSON.stringify(result).includes(KEYLESS_COMPATIBILITY_SENTINEL), false)
+      }
+      assert.deepEqual(failures, [], `${method} failed before request-local transport`)
+    })
+  }
+
+  it("redacts the private keyless compatibility value from lower-layer stream errors", async () => {
+    const adapter = new PiCustomProviderAdapter()
+    const runtime = await realRuntime()
+    const input = noAuthDefinition({
+      id: "keyless-error-redaction",
+      protocol: "pi-messages",
+      headers: [],
+      models: [model({ reasoning: false, input: ["text"] })],
+    })
+    const prepared = adapter.prepare(input, { headers: {} })
+    adapter.replaceRuntimeProviders(runtime, [prepared])
+
+    const result = await runtime.stream(prepared.models[0], {
+      messages: [{ role: "user", content: "ping", timestamp: 1 }],
+    }, {
+      fetch: async () => {
+        throw new Error(KEYLESS_COMPATIBILITY_SENTINEL)
+      },
+      maxRetries: 0,
+    }).result()
+
+    assert.equal(JSON.stringify(result).includes(KEYLESS_COMPATIBILITY_SENTINEL), false)
+    assert.match(result.errorMessage, /redacted/i)
   })
 
   it("keeps credentials and credential references out of prepared serialization", () => {
