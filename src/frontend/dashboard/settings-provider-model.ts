@@ -5,15 +5,41 @@ interface SettingsProviderModelDependencies {
   chatState: AppChatState;
   refreshDashboard: () => void;
   notify: typeof toast;
+  listAddAction: typeof ListAddAction;
+  customEditorType: SettingsCustomProviderEditorConstructor;
+}
+
+interface OfficialProviderListItem {
+  id: string;
+  name: string;
+  configured: boolean;
+}
+
+function providerElement<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
 }
 
 class SettingsProviderModelController implements SettingsProviderModelApi {
   private selectedProvider: string | null = null;
   private providerKeys: Record<string, ProviderKeyInfo> = {};
+  private officialProviders: OfficialProviderListItem[] = [];
+  private customProviders: RedactedCustomProvider[] = [];
+  private revision = 0;
   private revealRequestId = 0;
   private dragIndex = -1;
+  customEditor: SettingsCustomProviderEditor;
 
-  constructor(private readonly dependencies: SettingsProviderModelDependencies) {}
+  constructor(private readonly dependencies: SettingsProviderModelDependencies) {
+    this.customEditor = new dependencies.customEditorType({
+      notify: dependencies.notify,
+      listAddAction: dependencies.listAddAction,
+      onSaved: (snapshot, selectedId) => this.applyCustomSnapshot(snapshot, selectedId),
+      onDeleted: snapshot => this.applyCustomSnapshot(snapshot, null),
+    });
+  }
 
   renderTab(container: HTMLElement): void {
     container.innerHTML = `
@@ -21,80 +47,77 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
         <div class="ms-left">
           <div class="msl-title">厂商</div>
           <div class="msl-list" id="msl-list"><div class="sp" style="margin:20px auto"></div></div>
+          <div class="list-add-action-mount" id="msl-add-action"></div>
         </div>
         <div class="ms-right">
           <div id="ms-right-content"><div class="sp" style="margin:40px auto"></div></div>
         </div>
       </div>
     `;
-    fetch('/api/auth').then(r => r.json()).then((data: { providers: Array<{ provider: string; hasKey: boolean; canReveal?: boolean; keyPreview: string }> }) => {
-      const list = $('msl-list');
-      if (!list) return;
-      const configuredKeys: Record<string, ProviderKeyInfo> = {};
-      data.providers?.forEach(provider => {
-        configuredKeys[provider.provider] = {
+    const addMount = $('msl-add-action');
+    addMount?.append(this.dependencies.listAddAction.create({
+      label: '添加自定义厂商',
+      onActivate: () => {
+        this.selectedProvider = null;
+        this.markSelected(null);
+        const content = $('ms-right-content');
+        if (content) this.customEditor.startNew(content, this.revision);
+      },
+    }));
+
+    Promise.all([
+      fetch('/api/auth').then(response => response.json()),
+      fetch('/api/custom-providers').then(response => response.json()),
+      fetch('/api/custom-providers/capabilities').then(response => response.json()),
+    ]).then(([authData, providerData]) => {
+      const auth = authData as { providers?: Array<{ provider: string; hasKey: boolean; canReveal?: boolean; keyPreview: string }> };
+      const snapshot = providerData as CustomProviderListResponse;
+      this.providerKeys = {};
+      for (const provider of auth.providers ?? []) {
+        this.providerKeys[provider.provider] = {
           hasKey: provider.hasKey,
           canReveal: provider.canReveal ?? Boolean(provider.keyPreview),
           keyPreview: provider.keyPreview || '',
         };
-        this.providerKeys[provider.provider] = configuredKeys[provider.provider];
-      });
-      const allProviders = ['anthropic', 'deepseek', 'openai', 'openrouter', 'google'];
-      const configured = allProviders.filter(provider => configuredKeys[provider]?.hasKey);
-      const unconfigured = allProviders.filter(provider => !configured.includes(provider));
-      const savedOrder = this.dependencies.preferences.get('providers_order');
-      let order: string[] = configured.concat(unconfigured);
-      if (savedOrder) {
-        try {
-          const parsed = JSON.parse(savedOrder);
-          if (Array.isArray(parsed)) order = parsed.filter((provider): provider is string => typeof provider === 'string');
-        } catch {}
       }
-      allProviders.forEach(provider => { if (!order.includes(provider)) order.push(provider); });
-      window._provOrder = order;
-      list.innerHTML = this.renderProviderList(order);
-      if (order.length > 0) this.selectProvider(order[0]);
+      const officialById = new Map<string, OfficialProviderListItem>();
+      if (Array.isArray(snapshot.official)) {
+        for (const provider of snapshot.official) officialById.set(provider.id, provider);
+      } else {
+        for (const provider of auth.providers ?? []) {
+          officialById.set(provider.provider, { id: provider.provider, name: provider.provider, configured: provider.hasKey });
+        }
+      }
+      this.officialProviders = [...officialById.values()];
+      this.customProviders = Array.isArray(snapshot.custom) ? snapshot.custom : [];
+      this.revision = Number.isInteger(snapshot.revision) ? snapshot.revision : 0;
+      this.reconcileOrder();
+      this.renderProviderList();
+      const first = window._provOrder?.[0];
+      if (first) this.selectProvider(first);
+      else {
+        const content = $('ms-right-content');
+        if (content) this.customEditor.startNew(content, this.revision);
+      }
     }).catch(() => {
       const list = $('msl-list');
-      if (list) list.innerHTML = '<p style="color:var(--rs);font-size:.72rem">加载失败</p>';
+      if (list) list.replaceChildren(providerElement('p', 'msl-error', '加载失败'));
       this.dependencies.notify('加载厂商列表失败', 'error');
     });
   }
 
   selectProvider(provider: string): void {
+    const custom = this.customProviders.find(candidate => candidate.id === provider);
     this.selectedProvider = provider;
-    document.querySelectorAll('.msl-item').forEach(element => {
-      const item = element as HTMLElement;
-      item.classList.toggle('on', item.dataset.prov === provider);
-    });
+    this.markSelected(provider);
     const content = $('ms-right-content');
     if (!content) return;
-    const info = this.providerKeys[provider] || { hasKey: false, canReveal: false, keyPreview: '' };
-    const placeholder = info.canReveal
-      ? `已保存: ${info.keyPreview || '********'}，输入新 Key 覆盖`
-      : info.hasKey
-        ? '已通过其他方式认证，输入 API Key 覆盖'
-      : '输入 API Key...';
-    let html = `
-      <div class="rp-header">
-        <div class="rp-prov-name">${E(provider)}</div>
-        <span class="rp-status${info.hasKey ? ' on' : ''}">${info.hasKey ? '已配置' : '未配置'}</span>
-      </div>
-    `;
-    if (info.hasKey) html += `<div class="rp-models" id="rp-models" data-provider="${E(provider)}">加载中...</div>`;
-    html += `
-      <div class="rp-key-section">
-        <div class="rp-key-label">API Key</div>
-        <div class="rp-key-row">
-          <input class="rp-key-input" type="${info.canReveal ? 'text' : 'password'}" id="key-input" data-provider="${E(provider)}" placeholder="${E(placeholder)}" value="${E(info.keyPreview || '')}"/>
-          <button type="button" class="rp-key-toggle" data-settings-action="toggle-key" data-provider="${E(provider)}" aria-label="显示或隐藏 API Key">👁</button>
-          <button type="button" class="rp-save-btn" data-settings-action="save-key" data-provider="${E(provider)}">保存</button>
-        </div>
-      </div>
-    `;
-    content.innerHTML = html;
-    if (info.canReveal) void this.revealProviderKey(provider);
-    if (info.hasKey) this.loadProviderModels(provider);
+    if (custom) {
+      this.revealRequestId += 1;
+      this.customEditor.mount(content, custom, this.revision);
+      return;
+    }
+    this.renderOfficialProvider(content, provider);
   }
 
   toggleKeyVisibility(provider: string): void {
@@ -121,6 +144,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       this.dependencies.notify('已保存');
       this.providerKeys[provider] = { hasKey: true, canReveal: true, keyPreview: input.value.trim().slice(0, 8) + '...' };
       this.selectProvider(provider);
+      this.renderProviderList();
     }).catch(() => this.dependencies.notify('保存失败'));
   }
 
@@ -131,16 +155,21 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       if (this.selectedProvider !== provider || $('rp-models') !== container) return;
       const models = (data.models || []).filter(model => model.provider === provider);
       if (models.length === 0) {
-        container.innerHTML = '<p style="color:var(--tm);font-size:.72rem">无可用模型</p>';
+        container.replaceChildren(providerElement('p', 'rp-empty', '无可用模型'));
         return;
       }
       const dashboard = this.dependencies.chatState.getDashboard?.() || null;
-      container.innerHTML = '<div class="rp-models-title">可用模型</div>' + models.map(model => {
+      const title = providerElement('div', 'rp-models-title', '可用模型');
+      const rows = models.map(model => {
         const active = model.provider === dashboard?.modelProvider && model.id === dashboard?.modelId;
-        return `<div class="rp-model-item${active ? ' on' : ''}" data-model-provider="${E(model.provider)}" data-model-id="${E(model.id)}">${E(model.id)}</div>`;
-      }).join('');
+        const row = providerElement('div', `rp-model-item${active ? ' on' : ''}`, model.id);
+        row.dataset.modelProvider = model.provider;
+        row.dataset.modelId = model.id;
+        return row;
+      });
+      container.replaceChildren(title, ...rows);
     }).catch(() => {
-      container.innerHTML = '<p style="color:var(--rs);font-size:.72rem">加载失败</p>';
+      container.replaceChildren(providerElement('p', 'msl-error', '加载失败'));
       this.dependencies.notify('加载模型列表失败', 'error');
     });
   }
@@ -181,22 +210,117 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     if (this.dragIndex < 0 || this.dragIndex === index) return;
     const order = window._provOrder || [];
     const item = order.splice(this.dragIndex, 1)[0];
+    if (!item) return;
     order.splice(index, 0, item);
     window._provOrder = order;
     this.dependencies.preferences.setJson('providers_order', order);
-    const list = $('msl-list');
-    if (list) list.innerHTML = this.renderProviderList(order);
     this.dragIndex = -1;
+    this.renderProviderList();
   }
 
-  private renderProviderList(order: string[]): string {
-    return order.map((provider, index) => {
-      const selected = provider === this.selectedProvider || (!this.selectedProvider && index === 0) ? ' on' : '';
-      const configured = this.providerKeys[provider]?.hasKey;
-      return `<div class="msl-item${selected}" draggable="true" data-prov="${E(provider)}" data-index="${index}">
-        <span class="msl-name">${E(provider)}</span><span class="msl-drag">⠿</span><span class="msl-status${configured ? ' on' : ''}"></span>
-      </div>`;
-    }).join('');
+  private renderOfficialProvider(content: HTMLElement, provider: string): void {
+    const info = this.providerKeys[provider] || { hasKey: false, canReveal: false, keyPreview: '' };
+    const placeholder = info.canReveal
+      ? `已保存: ${info.keyPreview || '********'}，输入新 Key 覆盖`
+      : info.hasKey ? '已通过其他方式认证，输入 API Key 覆盖' : '输入 API Key...';
+    const root = providerElement('div', 'rp-official');
+    const header = providerElement('div', 'rp-header');
+    header.append(
+      providerElement('div', 'rp-prov-name', provider),
+      providerElement('span', `rp-status${info.hasKey ? ' on' : ''}`, info.hasKey ? '已配置' : '未配置'),
+    );
+    root.append(header);
+    if (info.hasKey) {
+      const models = providerElement('div', 'rp-models', '加载中...');
+      models.id = 'rp-models';
+      models.dataset.provider = provider;
+      root.append(models);
+    }
+    const section = providerElement('div', 'rp-key-section');
+    section.append(providerElement('div', 'rp-key-label', 'API Key'));
+    const row = providerElement('div', 'rp-key-row');
+    const input = providerElement('input', 'rp-key-input');
+    input.type = info.canReveal ? 'text' : 'password';
+    input.id = 'key-input';
+    input.dataset.provider = provider;
+    input.placeholder = placeholder;
+    input.value = info.keyPreview || '';
+    const toggle = providerElement('button', 'rp-key-toggle', '👁');
+    toggle.type = 'button';
+    toggle.dataset.settingsAction = 'toggle-key';
+    toggle.dataset.provider = provider;
+    toggle.setAttribute('aria-label', '显示或隐藏 API Key');
+    const save = providerElement('button', 'rp-save-btn', '保存');
+    save.type = 'button';
+    save.dataset.settingsAction = 'save-key';
+    save.dataset.provider = provider;
+    row.append(input, toggle, save);
+    section.append(row);
+    root.append(section);
+    content.replaceChildren(root);
+    if (info.canReveal) void this.revealProviderKey(provider);
+    if (info.hasKey) this.loadProviderModels(provider);
+  }
+
+  private reconcileOrder(): void {
+    const allProviderIds = [...this.officialProviders.map(provider => provider.id), ...this.customProviders.map(provider => provider.id)];
+    const uniqueIds = [...new Set(allProviderIds)];
+    const current = new Set(uniqueIds);
+    let saved: string[] = [];
+    const savedOrder = this.dependencies.preferences.get('providers_order');
+    if (savedOrder) {
+      try {
+        const parsed = JSON.parse(savedOrder);
+        if (Array.isArray(parsed)) saved = parsed.filter((id): id is string => typeof id === 'string' && current.has(id));
+      } catch {}
+    }
+    for (const id of uniqueIds) if (!saved.includes(id)) saved.push(id);
+    window._provOrder = saved;
+  }
+
+  private renderProviderList(): void {
+    const list = $('msl-list');
+    if (!list) return;
+    const customById = new Map(this.customProviders.map(provider => [provider.id, provider]));
+    const officialById = new Map(this.officialProviders.map(provider => [provider.id, provider]));
+    const items = (window._provOrder || []).flatMap((id, index) => {
+      const custom = customById.get(id);
+      const official = officialById.get(id);
+      if (!custom && !official) return [];
+      const selected = id === this.selectedProvider || (!this.selectedProvider && index === 0);
+      const item = providerElement('div', `msl-item${selected ? ' on' : ''}`);
+      item.draggable = true;
+      item.dataset.prov = id;
+      item.dataset.index = String(index);
+      item.append(providerElement('span', 'msl-drag', '⠿'));
+      item.append(providerElement('span', 'msl-name', custom?.name ?? id));
+      if (custom) item.append(providerElement('span', 'msl-kind', '自定义'));
+      const configured = custom ? custom.authMode === 'none' || custom.apiKeyConfigured : this.providerKeys[id]?.hasKey ?? official?.configured;
+      item.append(providerElement('span', `msl-status${configured ? ' on' : ''}`));
+      return [item];
+    });
+    list.replaceChildren(...items);
+  }
+
+  private markSelected(provider: string | null): void {
+    document.querySelectorAll('.msl-item').forEach(element => {
+      const item = element as HTMLElement;
+      item.classList.toggle('on', provider !== null && item.dataset.prov === provider);
+    });
+  }
+
+  private applyCustomSnapshot(snapshot: RedactedCustomProviderSnapshot, selectedId: string | null): void {
+    this.customProviders = snapshot.providers;
+    this.revision = snapshot.revision;
+    this.reconcileOrder();
+    this.renderProviderList();
+    const next = selectedId && this.customProviders.some(provider => provider.id === selectedId) ? selectedId : window._provOrder?.[0];
+    if (next) this.selectProvider(next);
+    else {
+      this.selectedProvider = null;
+      const content = $('ms-right-content');
+      if (content) this.customEditor.startNew(content, this.revision);
+    }
   }
 
   private async revealProviderKey(provider: string): Promise<void> {
@@ -223,6 +347,8 @@ const settingsProviderController = new SettingsProviderModelController({
   chatState: settingsProviderApp.ChatState,
   refreshDashboard: getD,
   notify: toast,
+  listAddAction: settingsProviderApp.Ui.ListAddAction,
+  customEditorType: settingsProviderApp.SettingsCustomProviderEditor,
 });
 settingsProviderApp.SettingsComponents = {
   ...(settingsProviderApp.SettingsComponents || {}),

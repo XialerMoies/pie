@@ -135,16 +135,23 @@ describe("frontend component tree boundaries", () => {
   it("keeps settings responsibilities in dedicated component owners", () => {
     const shell = source("src/frontend/dashboard/dashboard-settings.ts");
     const general = source("src/frontend/dashboard/settings-general.ts");
+    const customProviderEditor = source("src/frontend/dashboard/settings-custom-provider-editor.ts");
     const providers = source("src/frontend/dashboard/settings-provider-model.ts");
     const subagents = source("src/frontend/dashboard/settings-custom-subagents.ts");
     const storage = source("src/frontend/dashboard/settings-storage.ts");
 
     assertClass(general, "SettingsGeneralController");
+    assertClass(customProviderEditor, "SettingsCustomProviderEditor");
     assertClass(providers, "SettingsProviderModelController");
     assertClass(subagents, "SettingsCustomSubagentController");
     assertClass(storage, "SettingsStorageController");
 
-    for (const owner of [general, providers, subagents, storage]) {
+    assert.match(customProviderEditor, /interface\s+SettingsCustomProviderEditorDependencies\s*\{/);
+    for (const dependency of ["notify: typeof toast", "listAddAction: typeof ListAddAction", "onSaved(snapshot", "onDeleted(snapshot"]) {
+      assert.ok(customProviderEditor.includes(dependency), `custom provider editor must declare ${dependency}`);
+    }
+    assert.match(providers, /customEditor:\s*SettingsCustomProviderEditor/);
+    for (const owner of [general, customProviderEditor, providers, subagents, storage]) {
       assert.doesNotMatch(owner, /\bApp\./, "settings owners must localize App dependencies at their boundary");
     }
     assert.match(shell, /settingsComponents\.providers\.renderTab\(sc\)/);
@@ -152,7 +159,7 @@ describe("frontend component tree boundaries", () => {
     assert.match(shell, /settingsComponents\.general\.renderSubagentLimits\(sc\)/);
     assert.match(shell, /settingsComponents\.subagents\.mount\(sc\)/);
     assert.match(shell, /settingsComponents\.storage\.mount\(sc\)/);
-    assert.doesNotMatch(shell, /class\s+(?:SettingsGeneralController|SettingsProviderModelController|SettingsCustomSubagentController|SettingsStorageController)\b/);
+    assert.doesNotMatch(shell, /class\s+(?:SettingsGeneralController|SettingsCustomProviderEditor|SettingsProviderModelController|SettingsCustomSubagentController|SettingsStorageController)\b/);
     assert.doesNotMatch(shell, /\/api\/(?:auth|models|model\/switch|subagents|storage-location|storage-migration)/);
     assert.doesNotMatch(shell, /let\s+(?:_selectedProvider|_provKeys|_customSubagents|_storageMigrationPreviewId|_dragIdx)\b/);
     assert.ok(shell.split(/\r?\n/).length <= 400, "dashboard-settings.ts must remain a thin modal and event facade");
@@ -163,6 +170,7 @@ describe("frontend component tree boundaries", () => {
     const facadeIndex = compiler.indexOf('"gen/dashboard/dashboard-settings.js"');
     for (const entry of [
       "settings-general",
+      "settings-custom-provider-editor",
       "settings-provider-model",
       "settings-custom-subagents",
       "settings-storage",
@@ -171,6 +179,10 @@ describe("frontend component tree boundaries", () => {
       assert.ok(ownerIndex >= 0, `${entry} must be included in the dashboard bundle`);
       assert.ok(ownerIndex < facadeIndex, `${entry} must load before dashboard-settings`);
     }
+    const actionIndex = compiler.indexOf('"gen/ui/list-add-action.js"');
+    const editorIndex = compiler.indexOf('"gen/dashboard/settings-custom-provider-editor.js"');
+    const providerIndex = compiler.indexOf('"gen/dashboard/settings-provider-model.js"');
+    assert.ok(actionIndex < editorIndex && editorIndex < providerIndex, "custom provider editor must load after ListAddAction and before provider owner");
   });
 
   it("uses component views for git pane content", () => {

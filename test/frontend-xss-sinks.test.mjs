@@ -105,11 +105,7 @@ const APPROVED_SINKS = new Map([
   ["src/frontend/dashboard/settings-custom-subagents.ts|render|innerHTML|list", approved(1, "e587b641983f", REVIEW.escaped)],
   ["src/frontend/dashboard/settings-general.ts|renderGeneralTab|innerHTML|container", approved(1, "ddb6c319c780", REVIEW.static)],
   ["src/frontend/dashboard/settings-general.ts|renderSubagentLimits|innerHTML|container", approved(1, "106ecbc73847", REVIEW.static)],
-  ["src/frontend/dashboard/settings-provider-model.ts|drop|innerHTML|list", approved(1, "23224df83020", REVIEW.renderer)],
-  ["src/frontend/dashboard/settings-provider-model.ts|loadProviderModels|innerHTML|container", approved(3, "2cb3825b0811", REVIEW.escaped)],
-  ["src/frontend/dashboard/settings-provider-model.ts|renderTab|innerHTML|container", approved(1, "8180f79fef1b", REVIEW.static)],
-  ["src/frontend/dashboard/settings-provider-model.ts|renderTab|innerHTML|list", approved(2, "ca98aa041c5f", REVIEW.renderer)],
-  ["src/frontend/dashboard/settings-provider-model.ts|selectProvider|innerHTML|content", approved(1, "e5e239560bc1", REVIEW.escaped)],
+  ["src/frontend/dashboard/settings-provider-model.ts|renderTab|innerHTML|container", approved(1, "47d706d3044f", REVIEW.static)],
   ["src/frontend/dashboard/settings-storage.ts|mount|insertAdjacentHTML|container", approved(1, "7dbaa78485c6", REVIEW.static)],
   ["src/frontend/pane/chat/index.ts|chatPaneRender|innerHTML|container", approved(1, "772eb1f8e30d", REVIEW.static)],
   ["src/frontend/pane/chat/index.ts|chatPaneRender|innerHTML|list", approved(1, "2efb387f77d0", REVIEW.static)],
@@ -227,6 +223,14 @@ describe("frontend HTML sink boundary", () => {
 
     assert.match(source, /label\.textContent\s*=\s*options\.label/);
     assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML/);
+  });
+
+  it("keeps the custom provider editor on DOM APIs with no direct HTML sinks", () => {
+    const source = readFileSync(resolve(FRONTEND_ROOT, "dashboard/settings-custom-provider-editor.ts"), "utf8");
+
+    assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+    assert.match(source, /\.textContent\s*=/);
+    assert.match(source, /\.value\s*=/);
   });
 
   it("requires every direct HTML sink to remain in the reviewed structural baseline", () => {

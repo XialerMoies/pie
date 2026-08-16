@@ -11,6 +11,7 @@ const settingsSpies = {
   toastCalls: [],
 };
 let ListAddAction;
+let SettingsCustomProviderEditor;
 
 global.window = win;
 global.document = win.document;
@@ -63,6 +64,7 @@ before(async () => {
   await import(`../src/frontend/services/chat-runtime-store.ts?settings-ui=${Date.now()}`);
   await import(`../src/frontend/services/preferences.ts?settings-ui=${Date.now()}`);
   await import("../src/frontend/dashboard/settings-general.ts");
+  ({ SettingsCustomProviderEditor } = await import("../src/frontend/dashboard/settings-custom-provider-editor.ts"));
   await import("../src/frontend/dashboard/settings-provider-model.ts");
   await import("../src/frontend/dashboard/settings-custom-subagents.ts");
   await import("../src/frontend/dashboard/settings-storage.ts");
@@ -80,6 +82,20 @@ beforeEach(() => {
   win._provOrder = [];
   fetchImpl = async (url) => {
     if (String(url) === "/api/auth") return { ok: true, json: async () => ({ providers: [] }) };
+    if (String(url) === "/api/custom-providers") return { ok: true, json: async () => ({ revision: 0, official: [], custom: [] }) };
+    if (String(url) === "/api/custom-providers/capabilities") {
+      return { ok: true, json: async () => ({
+        protocols: [
+          "openai-completions",
+          "openai-responses",
+          "anthropic-messages",
+          "mistral-conversations",
+          "azure-openai-responses",
+          "pi-messages",
+        ].map((id) => ({ id, authModes: ["none", "apiKey"], supportsCompatibility: true })),
+        price: { currency: "USD", unit: "millionTokens" },
+      }) };
+    }
     if (String(url) === "/api/models") return { ok: true, json: async () => ({ models: [] }) };
     if (String(url) === "/api/subagents") return { ok: true, json: async () => ({ agents: [] }) };
     return { ok: true, json: async () => ({ ok: true }) };
@@ -90,6 +106,64 @@ async function flushAsyncWork() {
   await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await Promise.resolve();
+}
+
+function customProvider(overrides = {}) {
+  return {
+    id: "acme",
+    name: "Acme Gateway",
+    protocol: "openai-responses",
+    baseUrl: "https://api.example.test/v1",
+    authMode: "apiKey",
+    apiKeyConfigured: true,
+    headers: [{ name: "X-Tenant", configured: true }],
+    modelDiscovery: "/models",
+    models: [
+      {
+        id: "model-a",
+        name: "Model A",
+        contextWindow: 128000,
+        maxTokens: 8192,
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
+        samplingParams: { temperature: 0.2 },
+        compatibility: { supportsStore: false },
+      },
+      {
+        id: "model-b",
+        name: "Model B",
+        contextWindow: 64000,
+        maxTokens: 4096,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 3, output: 4, cacheRead: 0, cacheWrite: 0 },
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function response(body, status = 200) {
+  return { ok: status >= 200 && status < 300, status, json: async () => body };
+}
+
+function editorDependencies(overrides = {}) {
+  return {
+    notify: global.toast,
+    listAddAction: ListAddAction,
+    onSaved: () => {},
+    onDeleted: () => {},
+    ...overrides,
+  };
+}
+
+function setInput(selector, value) {
+  const input = document.querySelector(selector);
+  assert.ok(input, `${selector} should be rendered`);
+  input.value = value;
+  input.dispatchEvent(new win.Event("input", { bubbles: true }));
+  return input;
 }
 
 function activateButtonFromKeyboard(button, key) {
@@ -166,6 +240,274 @@ describe("settings DOM boundary", () => {
     assert.strictEqual(globalThis.__listAddInjected, undefined);
   });
 
+  it("renders official and custom providers in one ordered list with a shared add action", async () => {
+    storage.set("providers_order", JSON.stringify(["acme", "openai", "removed-provider"]));
+    fetchImpl = async (url) => {
+      if (String(url) === "/api/auth") return response({ providers: [{ provider: "openai", hasKey: false, keyPreview: "" }] });
+      if (String(url) === "/api/custom-providers") return response({
+        revision: 7,
+        official: [
+          { id: "openai", name: "OpenAI", configured: false },
+          { id: "anthropic", name: "Anthropic", configured: true },
+        ],
+        custom: [customProvider()],
+      });
+      if (String(url) === "/api/custom-providers/capabilities") return response({ protocols: [], price: { currency: "USD", unit: "millionTokens" } });
+      return response({ models: [] });
+    };
+
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+
+    const list = document.querySelector(".msl-list");
+    assert.ok(list);
+    const items = [...list.querySelectorAll(".msl-item")];
+    assert.deepStrictEqual(items.map((item) => item.dataset.prov), ["acme", "openai", "anthropic"]);
+    assert.deepStrictEqual(win._provOrder, ["acme", "openai", "anthropic"]);
+    assert.strictEqual(items[0].querySelector(".msl-kind")?.textContent, "自定义");
+    assert.strictEqual(items[1].querySelector(".msl-kind"), null);
+    const add = document.querySelector(".ms-left > .list-add-action-mount .list-add-action");
+    assert.ok(add);
+    assert.strictEqual(add.querySelector(".list-add-action-label")?.textContent, "添加自定义厂商");
+  });
+
+  it("requires an explicit auth choice for new drafts and exposes only six supported protocols", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    editor.startNew(host, 3);
+
+    const auth = [...host.querySelectorAll('input[name="cpe-auth-mode"]')];
+    assert.deepStrictEqual(auth.map((input) => input.value), ["none", "apiKey"]);
+    assert.strictEqual(auth.some((input) => input.checked), false);
+    const protocols = [...host.querySelectorAll("#cpe-protocol option")].map((option) => option.value).filter(Boolean);
+    assert.deepStrictEqual(protocols, [
+      "openai-completions",
+      "openai-responses",
+      "anthropic-messages",
+      "mistral-conversations",
+      "azure-openai-responses",
+      "pi-messages",
+    ]);
+    assert.strictEqual(protocols.includes("google-generative-ai"), false);
+    assert.strictEqual(host.querySelector("details.cpe-advanced")?.hasAttribute("open"), false);
+
+    await editor.save();
+    assert.match(host.querySelector('[data-field-error="authMode"]')?.textContent ?? "", /选择/);
+  });
+
+  it("keeps existing IDs readonly and treats configured Header values as write-only secrets", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    let revealRequests = 0;
+    fetchImpl = async (url) => {
+      if (String(url).includes("reveal")) revealRequests += 1;
+      return response({});
+    };
+    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    editor.mount(host, customProvider(), 4);
+
+    assert.strictEqual(host.querySelector("#cpe-id")?.readOnly, true);
+    assert.strictEqual(host.querySelector(".cpe-header-status")?.textContent, "已保存");
+    assert.strictEqual(host.querySelector(".cpe-header-value")?.value, "");
+    assert.match(host.querySelector(".cpe-header-value")?.placeholder ?? "", /留空保留/);
+    assert.strictEqual(revealRequests, 0);
+  });
+
+  it("adds and removes multiple model rows while advanced settings remain collapsed", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    editor.mount(host, customProvider(), 4);
+
+    assert.strictEqual(host.querySelectorAll(".cpe-model-row").length, 2);
+    host.querySelector('[data-cpe-action="add-model"]').click();
+    assert.strictEqual(host.querySelectorAll(".cpe-model-row").length, 3);
+    host.querySelector('.cpe-model-row [data-cpe-action="remove-model"]').click();
+    assert.strictEqual(host.querySelectorAll(".cpe-model-row").length, 2);
+    assert.strictEqual(host.querySelector("details.cpe-advanced")?.hasAttribute("open"), false);
+  });
+
+  it("creates providers with expectedRevision, then locks the ID and reports collisions inline", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const requests = [];
+    let savedSelection = null;
+    fetchImpl = async (url, init = {}) => {
+      if (String(url) === "/api/custom-providers" && init.method === "POST") {
+        requests.push(JSON.parse(init.body));
+        if (requests.length === 1) return response({ code: "provider_id_conflict", providerId: "openai" }, 409);
+        return response({ schemaVersion: 1, revision: 6, providers: [customProvider({ id: "fresh", name: "Fresh" })] }, 201);
+      }
+      return response({});
+    };
+    const editor = new SettingsCustomProviderEditor(editorDependencies({
+      onSaved: (_snapshot, selectedId) => { savedSelection = selectedId; },
+    }));
+    editor.startNew(host, 5);
+    setInput("#cpe-name", "Fresh");
+    setInput("#cpe-id", "openai");
+    setInput("#cpe-base-url", "https://fresh.example/v1");
+    host.querySelector("#cpe-protocol").value = "openai-responses";
+    host.querySelector('input[name="cpe-auth-mode"][value="none"]').click();
+
+    await editor.save();
+    assert.deepStrictEqual(requests[0].expectedRevision, 5);
+    assert.match(host.querySelector('[data-field-error="id"]')?.textContent ?? "", /占用/);
+
+    setInput("#cpe-id", "fresh");
+    await editor.save();
+    assert.strictEqual(savedSelection, "fresh");
+    assert.strictEqual(host.querySelector("#cpe-id")?.readOnly, true);
+  });
+
+  it("omits unchanged secrets and sends explicit API key/header clears", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const bodies = [];
+    fetchImpl = async (_url, init = {}) => {
+      bodies.push(JSON.parse(init.body));
+      return response({ schemaVersion: 1, revision: 9, providers: [customProvider()] });
+    };
+    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    editor.mount(host, customProvider(), 8);
+    await editor.save();
+    assert.strictEqual("apiKey" in bodies[0].provider, false);
+    assert.deepStrictEqual(bodies[0].provider.headers, [{ name: "X-Tenant" }]);
+
+    host.querySelector('[data-cpe-action="clear-api-key"]').click();
+    host.querySelector('[data-cpe-action="remove-header"]').click();
+    await editor.save();
+    assert.strictEqual(bodies[1].provider.apiKey, null);
+    assert.deepStrictEqual(bodies[1].provider.headers, [{ name: "X-Tenant", remove: true }]);
+  });
+
+  it("imports discovered model IDs only after explicit user confirmation", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const discoveryDrafts = [];
+    fetchImpl = async (url, init = {}) => {
+      if (!String(url).endsWith("discover-models")) return response({});
+      discoveryDrafts.push(JSON.parse(init.body).provider);
+      return response({ ids: ["model-a", "discovered-x"] });
+    };
+    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    editor.mount(host, customProvider({ models: [customProvider().models[0]] }), 2);
+    const originalConfirm = win.confirm;
+    win.confirm = () => false;
+    await editor.discoverModels();
+    assert.deepStrictEqual([...host.querySelectorAll(".cpe-model-id")].map((input) => input.value), ["model-a"]);
+    assert.strictEqual(discoveryDrafts[0].modelDiscovery, "/models");
+    win.confirm = () => true;
+    await editor.discoverModels();
+    assert.deepStrictEqual([...host.querySelectorAll(".cpe-model-id")].map((input) => input.value), ["model-a", "discovered-x"]);
+    win.confirm = originalConfirm;
+  });
+
+  it("redacts failed connection text without disabling Save", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const secret = "sk-super-secret";
+    fetchImpl = async () => response({ ok: false, code: "authentication", message: `bad ${secret} <img id=network-xss>` });
+    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    editor.mount(host, customProvider(), 2);
+    setInput("#cpe-api-key", secret);
+
+    await editor.test();
+    const result = host.querySelector(".cpe-result");
+    assert.ok(result);
+    assert.strictEqual(result.textContent.includes(secret), false);
+    assert.strictEqual(result.textContent.includes("[REDACTED]"), true);
+    assert.strictEqual(host.querySelector("#network-xss"), null);
+    assert.strictEqual(host.querySelector('[data-cpe-action="save"]').disabled, false);
+  });
+
+  it("reloads the latest revision after a stale write while preserving unsaved values", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    let calls = 0;
+    fetchImpl = async (url, init = {}) => {
+      calls += 1;
+      if (init.method === "PUT") return response({ code: "revision_conflict", currentRevision: 12 }, 409);
+      if (String(url) === "/api/custom-providers") return response({ revision: 12, official: [], custom: [customProvider({ name: "Server Name" })] });
+      return response({});
+    };
+    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    editor.mount(host, customProvider(), 10);
+    setInput("#cpe-name", "Unsaved Local Name");
+
+    await editor.save();
+    assert.ok(calls >= 2);
+    assert.strictEqual(host.querySelector("#cpe-name")?.value, "Unsaved Local Name");
+    assert.match(host.querySelector(".cpe-conflict-banner")?.textContent ?? "", /版本冲突/);
+    assert.match(host.querySelector(".cpe-conflict-banner")?.textContent ?? "", /12/);
+  });
+
+  it("renders provider/model reference conflicts as a structured occupancy list", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    fetchImpl = async () => response({
+      code: "provider_in_use",
+      references: [
+        { kind: "currentModel", providerId: "acme", modelId: "model-a" },
+        { kind: "customAgent", providerId: "acme", modelId: "model-b", agentId: "review", agentName: "Review Agent" },
+      ],
+    }, 409);
+    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    editor.mount(host, customProvider(), 4);
+
+    await editor.save();
+    const list = host.querySelector(".cpe-occupancy-list");
+    assert.ok(list);
+    assert.strictEqual(list.querySelectorAll("li").length, 2);
+    assert.match(list.textContent, /model-a/);
+    assert.match(list.textContent, /Review Agent/);
+  });
+
+  it("requires two delete clicks and writes the current revision", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const requests = [];
+    fetchImpl = async (url, init = {}) => {
+      requests.push([String(url), init.method, JSON.parse(init.body)]);
+      return response({ schemaVersion: 1, revision: 5, providers: [] });
+    };
+    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    editor.mount(host, customProvider(), 4);
+
+    await editor.delete();
+    assert.strictEqual(requests.length, 0);
+    assert.strictEqual(host.querySelector('[data-cpe-action="delete"]')?.classList.contains("armed"), true);
+    await editor.delete();
+    assert.deepStrictEqual(requests, [["/api/custom-providers/acme", "DELETE", { expectedRevision: 4 }]]);
+  });
+
+  it("renders hostile custom provider, model, and network error values as inert text", async () => {
+    const hostile = '<img id="custom-provider-xss" src=x>';
+    const provider = customProvider({
+      id: "hostile-id",
+      name: hostile,
+      models: [{ ...customProvider().models[0], id: hostile, name: hostile }],
+    });
+    fetchImpl = async (url) => {
+      if (String(url) === "/api/auth") return response({ providers: [] });
+      if (String(url) === "/api/custom-providers") return response({ revision: 1, official: [], custom: [provider] });
+      if (String(url) === "/api/custom-providers/capabilities") return response({ protocols: [], price: { currency: "USD", unit: "millionTokens" } });
+      return response({ error: hostile, code: "upstream" }, 502);
+    };
+
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+    const item = document.querySelector('.msl-item[data-prov="hostile-id"]');
+    assert.strictEqual(item?.querySelector(".msl-name")?.textContent, hostile);
+    item.click();
+    assert.strictEqual(document.querySelector("#cpe-name")?.value, hostile);
+    assert.strictEqual(document.querySelector(".cpe-model-id")?.value, hostile);
+    await win.App.SettingsComponents.providers.customEditor.test();
+    assert.strictEqual(document.querySelector(".cpe-result")?.textContent.includes(hostile), true);
+    assert.strictEqual(document.querySelector("#custom-provider-xss"), null);
+  });
+
   it("removes the standalone Permissions sidebar entry while keeping the mode badge", () => {
     const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard/dashboard-layout.ts"), "utf8");
 
@@ -187,6 +529,7 @@ describe("settings DOM boundary", () => {
     const files = [
       "dashboard-settings.ts",
       "settings-general.ts",
+      "settings-custom-provider-editor.ts",
       "settings-provider-model.ts",
       "settings-custom-subagents.ts",
       "settings-storage.ts",
@@ -290,6 +633,19 @@ describe("settings DOM boundary", () => {
   it("keeps hostile provider names as inert data and handles selection through DOM events", async () => {
     const hostileProvider = 'bad" onclick="globalThis.__settingsInjected=true';
     storage.set("providers_order", JSON.stringify([hostileProvider, "openai"]));
+    fetchImpl = async (url) => {
+      if (String(url) === "/api/auth") return response({ providers: [] });
+      if (String(url) === "/api/custom-providers") return response({
+        revision: 1,
+        official: [
+          { id: hostileProvider, name: hostileProvider, configured: false },
+          { id: "openai", name: "OpenAI", configured: false },
+        ],
+        custom: [],
+      });
+      if (String(url) === "/api/custom-providers/capabilities") return response({ protocols: [], price: { currency: "USD", unit: "millionTokens" } });
+      return response({ models: [] });
+    };
 
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();

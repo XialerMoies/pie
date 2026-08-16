@@ -143,6 +143,7 @@ const REQUIRED_BUNDLE_ENTRIES = [
   "gen/pane/permissions/permissions-views.js",
   "gen/pane/permissions/index.js",
   "gen/dashboard/settings-general.js",
+  "gen/dashboard/settings-custom-provider-editor.js",
   "gen/dashboard/settings-provider-model.js",
   "gen/dashboard/settings-custom-subagents.js",
   "gen/dashboard/settings-storage.js",
@@ -199,6 +200,7 @@ const bundleOrder = [
   "gen/pane/permissions/index.js",
   "gen/dashboard/dashboard-menus.js",
   "gen/dashboard/settings-general.js",
+  "gen/dashboard/settings-custom-provider-editor.js",
   "gen/dashboard/settings-provider-model.js",
   "gen/dashboard/settings-custom-subagents.js",
   "gen/dashboard/settings-storage.js",
@@ -213,15 +215,20 @@ const permissionViewsBundleIndex = bundleOrder.indexOf("gen/pane/permissions/per
 const permissionsBundleIndex = bundleOrder.indexOf("gen/pane/permissions/index.js");
 const settingsOwnerBundleIndexes = [
   "gen/dashboard/settings-general.js",
+  "gen/dashboard/settings-custom-provider-editor.js",
   "gen/dashboard/settings-provider-model.js",
   "gen/dashboard/settings-custom-subagents.js",
   "gen/dashboard/settings-storage.js",
 ].map(entry => bundleOrder.indexOf(entry));
 const settingsBundleIndex = bundleOrder.indexOf("gen/dashboard/dashboard-settings.js");
+const listAddActionBundleIndex = bundleOrder.indexOf("gen/ui/list-add-action.js");
+const customProviderEditorBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-custom-provider-editor.js");
+const providerSettingsBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-provider-model.js");
 if (
   permissionViewsBundleIndex === -1
   || permissionsBundleIndex <= permissionViewsBundleIndex
   || settingsOwnerBundleIndexes.some(index => index <= permissionsBundleIndex || index >= settingsBundleIndex)
+  || !(listAddActionBundleIndex < customProviderEditorBundleIndex && customProviderEditorBundleIndex < providerSettingsBundleIndex)
 ) {
   throw new Error("dashboard bundle 顺序错误: Permissions 和 Settings owners 必须位于 Settings facade 之前");
 }

@@ -160,12 +160,77 @@ interface AppUI {
   openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video', options?: { activate?: boolean }): void;
   saveCurrentFile(): Promise<void>;
 }
+
+type CustomProviderProtocol =
+  | 'openai-completions'
+  | 'openai-responses'
+  | 'anthropic-messages'
+  | 'mistral-conversations'
+  | 'azure-openai-responses'
+  | 'pi-messages';
+type CustomProviderAuthMode = 'none' | 'apiKey';
+interface CustomProviderModel {
+  id: string;
+  name: string;
+  contextWindow: number;
+  maxTokens: number;
+  reasoning: boolean;
+  input: Array<'text' | 'image'>;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  samplingParams?: Record<string, unknown>;
+  compatibility?: Record<string, unknown>;
+}
+interface RedactedCustomProvider {
+  id: string;
+  name: string;
+  protocol: CustomProviderProtocol;
+  baseUrl: string;
+  authMode: CustomProviderAuthMode;
+  apiKeyConfigured: boolean;
+  headers: Array<{ name: string; configured: boolean }>;
+  modelDiscovery?: string;
+  models: CustomProviderModel[];
+}
+interface CustomProviderDraft extends Omit<RedactedCustomProvider, 'apiKeyConfigured' | 'headers'> {
+  apiKey?: string | null;
+  headers: Array<{ name: string; value?: string; remove?: boolean }>;
+}
+interface RedactedCustomProviderSnapshot {
+  schemaVersion: 1;
+  revision: number;
+  providers: RedactedCustomProvider[];
+}
+interface CustomProviderListResponse {
+  revision: number;
+  official: Array<{ id: string; name: string; configured: boolean }>;
+  custom: RedactedCustomProvider[];
+}
+interface SettingsCustomProviderEditorDependencies {
+  notify: typeof toast;
+  listAddAction: typeof ListAddAction;
+  onSaved(snapshot: RedactedCustomProviderSnapshot, selectedId: string): void;
+  onDeleted(snapshot: RedactedCustomProviderSnapshot): void;
+}
+interface SettingsCustomProviderEditor {
+  mount(container: HTMLElement, provider: RedactedCustomProvider | null, revision: number): void;
+  startNew(container: HTMLElement, revision: number): void;
+  save(): Promise<void>;
+  test(): Promise<void>;
+  discoverModels(): Promise<void>;
+  delete(): Promise<void>;
+}
+interface SettingsCustomProviderEditorConstructor {
+  new(dependencies: SettingsCustomProviderEditorDependencies): SettingsCustomProviderEditor;
+}
 interface ListAddActionOptions {
   id?: string;
   label: string;
   disabled?: boolean;
   onActivate: () => void;
 }
+declare const ListAddAction: {
+  create(options: ListAddActionOptions): HTMLButtonElement;
+};
 interface AppUiComponents {
   ListAddAction: {
     create(options: ListAddActionOptions): HTMLButtonElement;
@@ -373,6 +438,7 @@ interface SettingsGeneralApi {
   changeSubagent(inputId: string, delta: number): void;
 }
 interface SettingsProviderModelApi {
+  customEditor: SettingsCustomProviderEditor;
   renderTab(container: HTMLElement): void;
   selectProvider(provider: string): void;
   toggleKeyVisibility(provider: string): void;
@@ -657,6 +723,7 @@ interface AppNamespace {
   Permissions: AppPermissions;
   Settings: AppSettings;
   SettingsComponents: AppSettingsComponents;
+  SettingsCustomProviderEditor: SettingsCustomProviderEditorConstructor;
   Git: AppGit;
   FileDiff: AppFileDiff;
   ChatViews: AppChatViews;

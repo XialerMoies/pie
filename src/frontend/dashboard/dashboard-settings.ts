@@ -42,7 +42,10 @@ function bindSettingsModalEvents(overlay: HTMLElement): void {
     const tab = target.closest<HTMLElement>('.ms-item[data-st]')?.dataset.st;
     if (tab) { switchSettingsModal(tab); return; }
     const provider = target.closest<HTMLElement>('.msl-item[data-prov]')?.dataset.prov;
-    if (provider) { selectProvider(provider); return; }
+    if (provider) {
+      selectProvider(provider);
+      return;
+    }
     const model = target.closest<HTMLElement>('.rp-model-item[data-model-id]');
     const modelProvider = model?.dataset.modelProvider;
     const modelId = model?.dataset.modelId;
