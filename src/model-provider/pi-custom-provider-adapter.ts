@@ -47,7 +47,7 @@ const API_FACTORIES = {
   "pi-messages": piMessagesApi,
 } satisfies Record<ProviderProtocol, () => ProviderStreams>;
 
-const KEYLESS_COMPATIBILITY_SENTINEL = "my-code-agent-keyless-compatibility";
+const KEYLESS_COMPATIBILITY_SENTINEL_PREFIX = "my-code-agent-keyless-compatibility:";
 const AUTH_HEADER_NAMES = [
   "authorization",
   "api-key",
@@ -55,18 +55,29 @@ const AUTH_HEADER_NAMES = [
   "x-goog-api-key",
   "cf-aig-authorization",
 ] as const;
-const AUTH_QUERY_NAMES = new Set(["key", "api_key", "api-key", "apikey", "access_token"]);
 
-function keylessFetch(fetchImplementation: FetchFunction): FetchFunction {
+function keylessFetch(
+  fetchImplementation: FetchFunction,
+  sentinel: string,
+  explicitHeaders: StreamOptions["headers"],
+): FetchFunction {
   return async (input, init) => {
     const request = new Request(input, init);
     const headers = new Headers(request.headers);
-    for (const name of AUTH_HEADER_NAMES) headers.delete(name);
+    for (const name of AUTH_HEADER_NAMES) {
+      if (headers.get(name)?.includes(sentinel)) headers.delete(name);
+    }
+    for (const [name, value] of Object.entries(explicitHeaders ?? {})) {
+      if (value === null) headers.delete(name);
+      else headers.set(name, value);
+    }
 
     const url = new URL(request.url);
-    for (const name of [...url.searchParams.keys()]) {
-      if (AUTH_QUERY_NAMES.has(name.toLowerCase())) url.searchParams.delete(name);
+    const query = new URLSearchParams();
+    for (const [name, value] of url.searchParams) {
+      if (!value.includes(sentinel)) query.append(name, value);
     }
+    url.search = query.toString();
 
     const sanitized = new Request(request, { headers });
     if (url.toString() === request.url) return fetchImplementation(sanitized);
@@ -74,51 +85,60 @@ function keylessFetch(fetchImplementation: FetchFunction): FetchFunction {
   };
 }
 
-function keylessOptions<T extends StreamOptions>(options: T | undefined): T & StreamOptions {
+function keylessOptions<T extends StreamOptions>(
+  options: T | undefined,
+  sentinel: string,
+): T & StreamOptions {
   const fetchImplementation = options?.fetch ?? globalThis.fetch;
   return {
     ...options,
-    apiKey: KEYLESS_COMPATIBILITY_SENTINEL,
-    fetch: keylessFetch(fetchImplementation),
+    apiKey: sentinel,
+    fetch: keylessFetch(fetchImplementation, sentinel, options?.headers),
   } as T & StreamOptions;
 }
 
-function redactCompatibilityValue<T>(value: T): T {
+function redactCompatibilityValue<T>(value: T, sentinel: string): T {
   if (typeof value === "string") {
-    return value.replaceAll(KEYLESS_COMPATIBILITY_SENTINEL, "[redacted]") as T;
+    return value.replaceAll(sentinel, "[redacted]") as T;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => redactCompatibilityValue(item)) as T;
+    return value.map((item) => redactCompatibilityValue(item, sentinel)) as T;
   }
   if (value === null || typeof value !== "object") return value;
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return value;
   const copy = Object.create(prototype) as Record<string, unknown>;
   for (const [key, nested] of Object.entries(value)) {
-    copy[key] = redactCompatibilityValue(nested);
+    copy[key] = redactCompatibilityValue(nested, sentinel);
   }
   return copy as T;
 }
 
-function redactKeylessStream(source: AssistantMessageEventStream): AssistantMessageEventStream {
+function redactKeylessStream(
+  source: AssistantMessageEventStream,
+  sentinel: string,
+): AssistantMessageEventStream {
   const target = createAssistantMessageEventStream();
   void (async () => {
     const result = source.result();
     for await (const event of source) {
-      target.push(redactCompatibilityValue<AssistantMessageEvent>(event));
+      target.push(redactCompatibilityValue<AssistantMessageEvent>(event, sentinel));
     }
-    target.end(redactCompatibilityValue(await result));
+    target.end(redactCompatibilityValue(await result, sentinel));
   })();
   return target;
 }
 
 function keylessStreams(streams: ProviderStreams): ProviderStreams {
+  const sentinel = `${KEYLESS_COMPATIBILITY_SENTINEL_PREFIX}${globalThis.crypto.randomUUID()}`;
   return {
     stream: (model, context, options) => redactKeylessStream(
-      streams.stream(model, context, keylessOptions(options)),
+      streams.stream(model, context, keylessOptions(options, sentinel)),
+      sentinel,
     ),
     streamSimple: (model, context, options) => redactKeylessStream(
-      streams.streamSimple(model, context, keylessOptions(options)),
+      streams.streamSimple(model, context, keylessOptions(options, sentinel)),
+      sentinel,
     ),
   };
 }

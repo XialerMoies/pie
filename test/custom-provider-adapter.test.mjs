@@ -19,7 +19,8 @@ const PROTOCOLS = [
   "pi-messages",
 ]
 const KEYLESS_PROTOCOLS = PROTOCOLS.filter((protocol) => protocol !== "google-generative-ai")
-const KEYLESS_COMPATIBILITY_SENTINEL = "my-code-agent-keyless-compatibility"
+const FORMER_KEYLESS_COMPATIBILITY_SENTINEL = "my-code-agent-keyless-compatibility"
+const KEYLESS_SENTINEL_PREFIX = "my-code-agent-keyless-compatibility:"
 
 function model(overrides = {}) {
   return {
@@ -417,7 +418,7 @@ describe("PiCustomProviderAdapter", () => {
           id: `keyless-${method.toLowerCase()}-${index}`,
           protocol,
           ...(protocol === "pi-messages"
-            ? { baseUrl: "https://api.example.test/v1?api_key=must-not-reach-transport" }
+            ? { baseUrl: "https://api.example.test/v1?tenant=preserve-me" }
             : {}),
           headers: [{ name: "X-Tenant", credentialRef: `credential:keyless-tenant-${index}` }],
           models: [model({ reasoning: false, input: ["text"] })],
@@ -443,36 +444,114 @@ describe("PiCustomProviderAdapter", () => {
         } else {
           assertKeylessRequest(captures[0], `${protocol} ${method}`)
           assert.equal(captures[0].headers.get("x-tenant"), `tenant-${KEYLESS_PROTOCOLS.indexOf(protocol)}`)
+          if (protocol === "pi-messages") {
+            assert.equal(captures[0].url.searchParams.has("tenant"), true)
+          }
         }
-        assert.equal(JSON.stringify(result).includes(KEYLESS_COMPATIBILITY_SENTINEL), false)
+        assert.equal(JSON.stringify(result).includes(KEYLESS_SENTINEL_PREFIX), false)
+      }
+      assert.deepEqual(failures, [], `${method} failed before request-local transport`)
+    })
+
+    it(`preserves explicit keyless auth headers for ${method} across concurrent providers`, async () => {
+      const cases = await Promise.all(KEYLESS_PROTOCOLS.map(async (protocol, index) => {
+        const adapter = new PiCustomProviderAdapter()
+        const runtime = await realRuntime()
+        const authorization = index === 0
+          ? `Bearer ${FORMER_KEYLESS_COMPATIBILITY_SENTINEL}`
+          : `Bearer literal-authorization-${index}`
+        const apiKeyHeader = `literal-x-api-key-${index}`
+        const tenant = `literal-tenant-${index}`
+        const input = noAuthDefinition({
+          id: `keyless-explicit-${method.toLowerCase()}-${index}`,
+          protocol,
+          ...(protocol === "pi-messages"
+            ? { baseUrl: `https://api.example.test/v1?api_key=literal-query-${index}&trace=literal-trace` }
+            : {}),
+          headers: [
+            { name: "Authorization", credentialRef: `credential:authorization-${index}` },
+            { name: "X-API-Key", credentialRef: `credential:x-api-key-${index}` },
+            { name: "X-Tenant", credentialRef: `credential:tenant-${index}` },
+          ],
+          models: [model({ reasoning: false, input: ["text"] })],
+        })
+        const prepared = adapter.prepare(input, {
+          headers: { Authorization: authorization, "X-API-Key": apiKeyHeader, "X-Tenant": tenant },
+        })
+        adapter.replaceRuntimeProviders(runtime, [prepared])
+        const captures = []
+        const result = await runtime[method](prepared.models[0], {
+          messages: [{ role: "user", content: "ping", timestamp: 1 }],
+        }, {
+          fetch: captureTransport(captures),
+          maxRetries: 0,
+        }).result()
+        return { protocol, captures, result, authorization, apiKeyHeader, tenant }
+      }))
+
+      const failures = []
+      for (const { protocol, captures, result, authorization, apiKeyHeader, tenant } of cases) {
+        if (captures.length !== 1) {
+          failures.push(`${protocol}: ${result.errorMessage}`)
+          continue
+        }
+        const [{ url, headers }] = captures
+        assert.equal(headers.get("authorization"), authorization, `${protocol} replaced Authorization`)
+        assert.equal(headers.get("x-api-key"), apiKeyHeader, `${protocol} replaced X-API-Key`)
+        assert.equal(headers.get("x-tenant"), tenant, `${protocol} replaced X-Tenant`)
+        assert.equal(JSON.stringify(result).includes(KEYLESS_SENTINEL_PREFIX), false)
+        if (protocol === "pi-messages") {
+          assert.match(url.searchParams.get("api_key") ?? "", /^literal-query-/)
+          assert.equal(url.searchParams.get("trace"), "literal-trace/messages")
+        }
       }
       assert.deepEqual(failures, [], `${method} failed before request-local transport`)
     })
   }
 
-  it("redacts the private keyless compatibility value from lower-layer stream errors", async () => {
-    const adapter = new PiCustomProviderAdapter()
-    const runtime = await realRuntime()
-    const input = noAuthDefinition({
-      id: "keyless-error-redaction",
-      protocol: "pi-messages",
-      headers: [],
-      models: [model({ reasoning: false, input: ["text"] })],
-    })
-    const prepared = adapter.prepare(input, { headers: {} })
-    adapter.replaceRuntimeProviders(runtime, [prepared])
+  it("isolates and redacts compatibility sentinels across concurrent providers", async () => {
+    const originalRandomUUID = globalThis.crypto.randomUUID
+    const randomValues = ["provider-one", "provider-two"]
+    const sentinels = randomValues.map((value) => `${KEYLESS_SENTINEL_PREFIX}${value}`)
+    globalThis.crypto.randomUUID = () => randomValues.shift()
+    let cases
+    try {
+      cases = await Promise.all(sentinels.map(async (sentinel, index) => {
+        const adapter = new PiCustomProviderAdapter()
+        const runtime = await realRuntime()
+        const input = noAuthDefinition({
+          id: `keyless-error-redaction-${index}`,
+          protocol: "pi-messages",
+          headers: [],
+          models: [model({ reasoning: false, input: ["text"] })],
+        })
+        const prepared = adapter.prepare(input, { headers: {} })
+        adapter.replaceRuntimeProviders(runtime, [prepared])
+        return { runtime, prepared, sentinel }
+      }))
+    } finally {
+      globalThis.crypto.randomUUID = originalRandomUUID
+    }
+    assert.deepEqual(randomValues, [])
 
-    const result = await runtime.stream(prepared.models[0], {
-      messages: [{ role: "user", content: "ping", timestamp: 1 }],
-    }, {
-      fetch: async () => {
-        throw new Error(KEYLESS_COMPATIBILITY_SENTINEL)
+    const results = await Promise.all(cases.map(({ runtime, prepared, sentinel }) => runtime.stream(
+      prepared.models[0],
+      { messages: [{ role: "user", content: "ping", timestamp: 1 }] },
+      {
+        fetch: async () => {
+          throw new Error(`lower-layer failure: ${sentinel}`)
+        },
+        maxRetries: 0,
       },
-      maxRetries: 0,
-    }).result()
+    ).result()))
 
-    assert.equal(JSON.stringify(result).includes(KEYLESS_COMPATIBILITY_SENTINEL), false)
-    assert.match(result.errorMessage, /redacted/i)
+    for (const result of results) {
+      const serialized = JSON.stringify(result)
+      assert.equal(serialized.includes(KEYLESS_SENTINEL_PREFIX), false)
+      assert.equal(serialized.includes("provider-one"), false)
+      assert.equal(serialized.includes("provider-two"), false)
+      assert.match(result.errorMessage, /redacted/i)
+    }
   })
 
   it("keeps credentials and credential references out of prepared serialization", () => {
