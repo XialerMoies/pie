@@ -1435,6 +1435,7 @@ describe("custom provider settings routes", () => {
     const fixture = await startFakeModelProvider("openai-responses", {
       modelId: "model-a",
       requireTools: false,
+      expectedUserContent: "ping",
     });
     const ctx = customContext();
     try {

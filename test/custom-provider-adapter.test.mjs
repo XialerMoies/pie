@@ -25,6 +25,7 @@ const KEYLESS_PROTOCOLS = PROTOCOLS
 const FORMER_KEYLESS_COMPATIBILITY_SENTINEL = "my-code-agent-keyless-compatibility"
 const KEYLESS_SENTINEL_PREFIX = "my-code-agent-keyless-compatibility:"
 const WIRE_TEXT = "fixture text"
+const WIRE_INPUT = "weather"
 const WIRE_TOOL_NAME = "lookup_weather"
 const WIRE_TOOL_ARGUMENTS = { city: "Shanghai" }
 const FULL_USAGE = { input: 7, output: 5, cacheRead: 3, cacheWrite: 2, reasoning: 1 }
@@ -215,16 +216,63 @@ function validFixtureBody(protocol) {
     return {
       model: FIXTURE_MODEL,
       context: {
-        messages: [{ role: "user", content: "weather", timestamp: 1 }],
+        messages: [{ role: "user", content: WIRE_INPUT, timestamp: 1 }],
         tools: [tool],
       },
       options: {},
     }
   }
   if (protocol === "openai-responses" || protocol === "azure-openai-responses") {
-    return { model: FIXTURE_MODEL, input: [{ role: "user", content: "weather" }], stream: true, tools: [tool] }
+    return {
+      model: FIXTURE_MODEL,
+      input: [{ role: "user", content: [{ type: "input_text", text: WIRE_INPUT }] }],
+      stream: true,
+      tools: [tool],
+    }
   }
-  return { model: FIXTURE_MODEL, messages: [{ role: "user", content: "weather" }], stream: true, tools: [tool] }
+  return {
+    model: FIXTURE_MODEL,
+    messages: [{ role: "user", content: WIRE_INPUT }],
+    stream: true,
+    ...(protocol === "openai-completions" ? { stream_options: { include_usage: true } } : {}),
+    tools: [tool],
+  }
+}
+
+function fixtureInput(protocol, body) {
+  if (protocol === "openai-responses" || protocol === "azure-openai-responses") return body.input
+  if (protocol === "pi-messages") return body.context?.messages
+  return body.messages
+}
+
+function deleteFixtureInput(protocol, body) {
+  if (protocol === "openai-responses" || protocol === "azure-openai-responses") delete body.input
+  else if (protocol === "pi-messages") delete body.context.messages
+  else delete body.messages
+  return body
+}
+
+function replaceFixtureInput(protocol, body, value) {
+  if (protocol === "openai-responses" || protocol === "azure-openai-responses") body.input = value
+  else if (protocol === "pi-messages") body.context.messages = value
+  else body.messages = value
+  return body
+}
+
+function wrongFixtureInput(protocol, body) {
+  const messages = fixtureInput(protocol, body)
+  if (protocol === "openai-responses" || protocol === "azure-openai-responses") {
+    messages[0].content[0].text = "unexpected input"
+  } else {
+    messages[0].content = "unexpected input"
+  }
+  return body
+}
+
+function inputText(content) {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+  return content.map((part) => part?.text ?? "").join("")
 }
 
 function fixtureEndpoint(fixture, protocol) {
@@ -260,10 +308,18 @@ function assertFixtureWireContract(protocol, request) {
     assert.match(request.headers.accept ?? "", /text\/event-stream/)
   }
   assert.equal(request.body.model, FIXTURE_MODEL, `${protocol} body model`)
+  const input = fixtureInput(protocol, request.body)
+  assert.equal(Array.isArray(input) && input.length > 0, true, `${protocol} non-empty input`)
+  const user = input.find((message) => message?.role === "user")
+  assert.ok(user, `${protocol} user input`)
+  assert.equal(inputText(user.content), WIRE_INPUT, `${protocol} user content`)
   if (protocol === "pi-messages") {
     assert.equal(Object.hasOwn(request.body, "stream"), false, "pi-messages streaming is implicit")
   } else {
     assert.equal(request.body.stream, true, `${protocol} body stream`)
+  }
+  if (protocol === "openai-completions") {
+    assert.deepEqual(request.body.stream_options, { include_usage: true }, `${protocol} stream options`)
   }
   const tools = protocol === "pi-messages" ? request.body.context?.tools : request.body.tools
   assert.equal(Array.isArray(tools), true, `${protocol} tools array`)
@@ -305,6 +361,281 @@ function collectProtocolEvents(stream, protocol) {
     for await (const event of stream) events.push(event)
     return events
   })(), protocol, "stream events")
+}
+
+function parseRawSseFrames(raw) {
+  return raw
+    .split(/\r?\n\r?\n/u)
+    .filter((frame) => frame.trim().length > 0)
+    .map((frame) => {
+      const lines = frame.split(/\r?\n/u)
+      const eventName = lines.find((line) => line.startsWith("event:"))?.slice(6).trim()
+      const dataText = lines
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n")
+      assert.notEqual(dataText, "", "SSE frame omitted data")
+      return {
+        event: eventName,
+        data: dataText === "[DONE]" ? dataText : JSON.parse(dataText),
+      }
+    })
+}
+
+function assertOwnProperties(value, properties, label) {
+  assert.equal(value !== null && typeof value === "object", true, `${label} object`)
+  for (const property of properties) {
+    assert.equal(Object.hasOwn(value, property), true, `${label}.${property}`)
+  }
+}
+
+function assertOpenAIResponse(response, expectedStatus, expectUsage) {
+  assertOwnProperties(response, [
+    "id",
+    "created_at",
+    "output_text",
+    "error",
+    "incomplete_details",
+    "instructions",
+    "metadata",
+    "model",
+    "object",
+    "output",
+    "parallel_tool_calls",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_p",
+    "status",
+  ], `OpenAI ${expectedStatus} response`)
+  assert.equal(response.object, "response")
+  assert.equal(response.status, expectedStatus)
+  assert.equal(response.error, null)
+  assert.equal(response.incomplete_details, null)
+  assert.equal(Array.isArray(response.output), true)
+  if (expectUsage) {
+    assertOwnProperties(response.usage, [
+      "input_tokens",
+      "input_tokens_details",
+      "output_tokens",
+      "output_tokens_details",
+      "total_tokens",
+    ], "OpenAI response usage")
+    assertOwnProperties(response.usage.input_tokens_details, ["cached_tokens"], "OpenAI input usage details")
+    assertOwnProperties(response.usage.output_tokens_details, ["reasoning_tokens"], "OpenAI output usage details")
+  }
+}
+
+function assertResponsesRawFrames(protocol, frames) {
+  const events = frames.map((frame) => frame.data)
+  const expectedTypes = [
+    "response.created",
+    "response.output_item.added",
+    "response.content_part.added",
+    "response.output_text.delta",
+    "response.output_text.done",
+    "response.content_part.done",
+    "response.output_item.done",
+    "response.output_item.added",
+    "response.function_call_arguments.delta",
+    "response.function_call_arguments.done",
+    "response.output_item.done",
+    "response.completed",
+  ]
+  assert.deepEqual(events.map((value) => value.type), expectedTypes, `${protocol} event order`)
+  assert.deepEqual(events.map((value) => value.sequence_number), events.map((_, index) => index), `${protocol} sequence`)
+  for (const [index, frame] of frames.entries()) {
+    assert.equal(frame.event, frame.data.type, `${protocol} frame ${index} event name`)
+    assert.equal(Number.isSafeInteger(frame.data.sequence_number), true, `${protocol} frame ${index} sequence`)
+  }
+
+  assertOpenAIResponse(events[0].response, "in_progress", false)
+  assertOpenAIResponse(events.at(-1).response, "completed", true)
+
+  for (const event of events.filter((value) => value.type === "response.output_item.added"
+    || value.type === "response.output_item.done")) {
+    assertOwnProperties(event, ["type", "output_index", "item", "sequence_number"], `${protocol} ${event.type}`)
+    assert.equal(Number.isSafeInteger(event.output_index), true, `${protocol} ${event.type} output_index`)
+    if (event.item.type === "message") {
+      assertOwnProperties(event.item, ["id", "content", "role", "status", "type"], `${protocol} message item`)
+      assert.equal(event.item.role, "assistant")
+      assert.equal(Array.isArray(event.item.content), true)
+    } else {
+      assert.equal(event.item.type, "function_call", `${protocol} function item type`)
+      assertOwnProperties(event.item, [
+        "arguments",
+        "call_id",
+        "id",
+        "name",
+        "status",
+        "type",
+      ], `${protocol} function item`)
+      assert.equal(event.item.call_id, "call12345")
+      assert.equal(event.item.name, WIRE_TOOL_NAME)
+    }
+  }
+  for (const event of events.filter((value) => value.type === "response.content_part.added"
+    || value.type === "response.content_part.done")) {
+    assertOwnProperties(event, [
+      "type",
+      "content_index",
+      "item_id",
+      "output_index",
+      "part",
+      "sequence_number",
+    ], `${protocol} ${event.type}`)
+    assert.equal(Number.isSafeInteger(event.content_index), true, `${protocol} ${event.type} content_index`)
+    assert.equal(Number.isSafeInteger(event.output_index), true, `${protocol} ${event.type} output_index`)
+    assert.equal(event.item_id, "msg_fixture")
+    assertOwnProperties(event.part, ["annotations", "text", "type"], `${protocol} ${event.type} part`)
+    assert.equal(event.part.type, "output_text")
+  }
+
+  const textDelta = events.find((value) => value.type === "response.output_text.delta")
+  assertOwnProperties(textDelta, [
+    "content_index",
+    "delta",
+    "item_id",
+    "logprobs",
+    "output_index",
+    "sequence_number",
+  ], `${protocol} text delta`)
+  assert.deepEqual(textDelta.logprobs, [])
+  assert.equal(textDelta.item_id, "msg_fixture")
+  assert.equal(textDelta.delta, WIRE_TEXT)
+
+  const textDone = events.find((value) => value.type === "response.output_text.done")
+  assertOwnProperties(textDone, [
+    "content_index",
+    "item_id",
+    "logprobs",
+    "output_index",
+    "sequence_number",
+    "text",
+  ], `${protocol} text done`)
+  assert.equal(textDone.text, WIRE_TEXT)
+  assert.deepEqual(textDone.logprobs, [])
+
+  const argumentDelta = events.find((value) => value.type === "response.function_call_arguments.delta")
+  assertOwnProperties(argumentDelta, [
+    "delta",
+    "item_id",
+    "output_index",
+    "sequence_number",
+  ], `${protocol} argument delta`)
+  assert.equal(argumentDelta.item_id, "fc_fixture")
+  assert.equal(argumentDelta.delta, JSON.stringify(WIRE_TOOL_ARGUMENTS))
+  const argumentDone = events.find((value) => value.type === "response.function_call_arguments.done")
+  assertOwnProperties(argumentDone, [
+    "arguments",
+    "item_id",
+    "name",
+    "output_index",
+    "sequence_number",
+  ], `${protocol} argument done`)
+  assert.equal(argumentDone.name, WIRE_TOOL_NAME)
+  assert.equal(argumentDone.arguments, JSON.stringify(WIRE_TOOL_ARGUMENTS))
+
+  const completedOutput = events.at(-1).response.output
+  assert.equal(completedOutput.length, 2)
+  assert.deepEqual(completedOutput.map((item) => item.status), ["completed", "completed"])
+}
+
+function assertCompletionRawFrames(frames) {
+  assert.equal(frames.at(-1).data, "[DONE]")
+  const chunks = frames.slice(0, -1).map((frame) => frame.data)
+  for (const chunk of chunks) {
+    assertOwnProperties(chunk, ["id", "choices", "created", "model", "object", "usage"], "chat completion chunk")
+    assert.equal(chunk.object, "chat.completion.chunk")
+  }
+  for (const chunk of chunks.slice(0, -1)) assert.equal(chunk.usage, null)
+  const finishChunk = chunks.at(-2)
+  assert.equal(finishChunk.choices.length, 1)
+  assert.equal(finishChunk.choices[0].finish_reason, "tool_calls")
+  assert.equal(finishChunk.usage, null)
+
+  const usageChunk = chunks.at(-1)
+  assert.deepEqual(usageChunk.choices, [])
+  assertOwnProperties(usageChunk.usage, ["prompt_tokens", "completion_tokens", "total_tokens"], "chat usage")
+  assertOwnProperties(usageChunk.usage.prompt_tokens_details, ["cached_tokens"], "chat prompt usage details")
+  assertOwnProperties(usageChunk.usage.completion_tokens_details, ["reasoning_tokens"], "chat completion usage details")
+  assert.deepEqual({
+    prompt_tokens: usageChunk.usage.prompt_tokens,
+    completion_tokens: usageChunk.usage.completion_tokens,
+    total_tokens: usageChunk.usage.total_tokens,
+  }, { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 })
+  assert.equal(usageChunk.usage.prompt_tokens_details.cached_tokens, 3)
+  assert.equal(usageChunk.usage.completion_tokens_details.reasoning_tokens, 1)
+}
+
+function assertAnthropicRawFrames(frames) {
+  const events = frames.map((frame) => frame.data)
+  for (const [index, frame] of frames.entries()) {
+    assert.equal(frame.event, frame.data.type, `Anthropic frame ${index} event name`)
+  }
+  const start = events.find((value) => value.type === "message_start")
+  assertOwnProperties(start.message, [
+    "id",
+    "container",
+    "content",
+    "model",
+    "role",
+    "stop_details",
+    "stop_reason",
+    "stop_sequence",
+    "type",
+    "usage",
+  ], "Anthropic message")
+  assertOwnProperties(start.message.usage, [
+    "cache_creation",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+    "inference_geo",
+    "input_tokens",
+    "output_tokens",
+    "server_tool_use",
+    "service_tier",
+  ], "Anthropic start usage")
+
+  const textStart = events.find((value) => value.type === "content_block_start" && value.index === 0)
+  assertOwnProperties(textStart.content_block, ["citations", "text", "type"], "Anthropic text block")
+  const toolStart = events.find((value) => value.type === "content_block_start" && value.index === 1)
+  assertOwnProperties(toolStart.content_block, ["caller", "id", "input", "name", "type"], "Anthropic tool block")
+
+  const terminal = events.find((value) => value.type === "message_delta")
+  assertOwnProperties(terminal.delta, ["container", "stop_details", "stop_reason", "stop_sequence"], "Anthropic delta")
+  assertOwnProperties(terminal.usage, [
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+    "input_tokens",
+    "output_tokens",
+    "server_tool_use",
+  ], "Anthropic terminal usage")
+  assert.equal(events.at(-1).type, "message_stop")
+}
+
+function assertMistralRawFrames(frames) {
+  assert.equal(frames.at(-1).data, "[DONE]")
+  const terminal = frames.at(-2).data
+  assertOwnProperties(terminal, ["id", "choices", "usage"], "Mistral terminal chunk")
+  assertOwnProperties(terminal.usage, ["prompt_tokens", "completion_tokens", "total_tokens"], "Mistral terminal usage")
+  assert.equal(terminal.choices[0].finish_reason, "tool_calls")
+}
+
+function assertPiRawFrames(frames) {
+  const terminal = frames.at(-1).data
+  assert.equal(terminal.type, "done")
+  assertOwnProperties(terminal, ["reason", "responseId", "usage"], "pi terminal event")
+  assertOwnProperties(terminal.usage, [
+    "input",
+    "output",
+    "cacheRead",
+    "cacheWrite",
+    "reasoning",
+    "totalTokens",
+    "cost",
+  ], "pi terminal usage")
+  assertOwnProperties(terminal.usage.cost, ["input", "output", "cacheRead", "cacheWrite", "total"], "pi usage cost")
 }
 
 async function streamAgainstFixture(protocol, fixture, options = {}) {
@@ -428,7 +759,7 @@ describe("PiCustomProviderAdapter", () => {
     }
   })
 
-  it("rejects wrong fixture endpoints and malformed request bodies with stable 4xx errors", { timeout: 15_000 }, async () => {
+  it("rejects wrong fixture endpoints and malformed request bodies with stable 4xx errors", { timeout: 30_000 }, async () => {
     for (const protocol of PROTOCOLS) {
       const fixture = await startFakeModelProvider(protocol)
       try {
@@ -449,6 +780,23 @@ describe("PiCustomProviderAdapter", () => {
             ...validFixtureBody(protocol),
             stream: false,
           }, "POST"],
+          ["missing input", "invalid input", fixtureEndpoint(fixture, protocol),
+            deleteFixtureInput(protocol, validFixtureBody(protocol)), "POST"],
+          ["empty input", "invalid input", fixtureEndpoint(fixture, protocol),
+            replaceFixtureInput(protocol, validFixtureBody(protocol), []), "POST"],
+          ["wrong input content", "invalid input", fixtureEndpoint(fixture, protocol),
+            wrongFixtureInput(protocol, validFixtureBody(protocol)), "POST"],
+          ...(protocol === "openai-completions" ? [[
+            "missing stream options",
+            "invalid stream options",
+            fixtureEndpoint(fixture, protocol),
+            (() => {
+              const body = validFixtureBody(protocol)
+              delete body.stream_options
+              return body
+            })(),
+            "POST",
+          ]] : []),
         ]
         for (const [caseName, stage, url, body, method] of cases) {
           const response = await fetch(url, {
@@ -463,6 +811,32 @@ describe("PiCustomProviderAdapter", () => {
           assert.equal(error.protocol, protocol)
           assert.equal(error.stage, stage)
         }
+      } finally {
+        await fixture.close()
+      }
+    }
+  })
+
+  it("emits raw protocol frames with typed event fields and terminal usage", { timeout: 30_000 }, async () => {
+    for (const protocol of PROTOCOLS) {
+      const fixture = await startFakeModelProvider(protocol)
+      try {
+        const response = await waitForProtocol(fetch(fixtureEndpoint(fixture, protocol), {
+          method: "POST",
+          headers: fixtureRequestHeaders(protocol),
+          body: JSON.stringify(validFixtureBody(protocol)),
+        }), protocol, "raw frame response")
+        assert.equal(response.ok, true, protocol)
+        const raw = await waitForProtocol(response.text(), protocol, "raw frame body")
+        const frames = parseRawSseFrames(raw)
+        assert.equal(frames.length > 0, true, `${protocol} frames`)
+
+        if (protocol === "openai-completions") assertCompletionRawFrames(frames)
+        else if (protocol === "openai-responses" || protocol === "azure-openai-responses") {
+          assertResponsesRawFrames(protocol, frames)
+        } else if (protocol === "anthropic-messages") assertAnthropicRawFrames(frames)
+        else if (protocol === "mistral-conversations") assertMistralRawFrames(frames)
+        else assertPiRawFrames(frames)
       } finally {
         await fixture.close()
       }
@@ -943,9 +1317,9 @@ describe("PiCustomProviderAdapter", () => {
           ? apiKey
           : `Bearer ${apiKey}`)
         assert.equal(request.headers["x-tenant"], `tenant-${protocol}`)
-        assert.equal(events.some((event) => event.type === "text_delta"), true)
-        assert.equal(events.some((event) => event.type === "toolcall_end"), true)
-        assert.equal(events.at(-1).type, "done")
+        assert.equal(events.some((event) => event.type === "text_delta"), true, `${protocol}: ${result.errorMessage ?? "no text"}`)
+        assert.equal(events.some((event) => event.type === "toolcall_end"), true, `${protocol}: ${result.errorMessage ?? "no tool"}`)
+        assert.equal(events.at(-1).type, "done", `${protocol}: ${result.errorMessage ?? "not done"}`)
         assert.equal(result.stopReason, "toolUse")
         assert.equal(result.content.find((block) => block.type === "text")?.text, WIRE_TEXT)
         assert.equal(result.content.find((block) => block.type === "toolCall")?.name, WIRE_TOOL_NAME)
@@ -964,7 +1338,7 @@ describe("PiCustomProviderAdapter", () => {
       try {
         const plain = await streamAgainstFixture(protocol, fixture, { authMode: "none" })
         const plainResult = await waitForProtocol(plain.stream.result(), protocol, "plain keyless stream result")
-        assert.notEqual(plainResult.stopReason, "error", protocol)
+        assert.notEqual(plainResult.stopReason, "error", `${protocol}: ${plainResult.errorMessage ?? "error"}`)
         assertKeylessRequest({
           url: new URL(fixture.requests[0].url),
           headers: new Headers(fixture.requests[0].headers),

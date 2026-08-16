@@ -15,6 +15,7 @@ const TOOL_ID = "call12345"
 const TOOL_ITEM_ID = "fc_fixture"
 const TOOL_ARGUMENTS = '{"city":"Shanghai"}'
 const MODEL_ID = "reasoner-v1"
+const EXPECTED_USER_CONTENT = "weather"
 const DEFAULT_TIMEOUT_MS = 5_000
 const FETCH_BLOCKED_HIGH_PORTS = new Set([
   1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566,
@@ -77,7 +78,11 @@ function event(type, value) {
 function openAICompletionChunks(includeToolCall, modelId) {
   const base = { id: "chatcmpl_fixture", object: "chat.completion.chunk", created: 1, model: modelId }
   return [
-    data({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: TEXT }, finish_reason: null }] }),
+    data({
+      ...base,
+      choices: [{ index: 0, delta: { role: "assistant", content: TEXT }, finish_reason: null }],
+      usage: null,
+    }),
     ...(includeToolCall ? [data({
       ...base,
       choices: [{
@@ -92,10 +97,16 @@ function openAICompletionChunks(includeToolCall, modelId) {
         },
         finish_reason: null,
       }],
+      usage: null,
     })] : []),
     data({
       ...base,
       choices: [{ index: 0, delta: {}, finish_reason: includeToolCall ? "tool_calls" : "stop" }],
+      usage: null,
+    }),
+    data({
+      ...base,
+      choices: [],
       usage: {
         prompt_tokens: 12,
         completion_tokens: 5,
@@ -130,12 +141,25 @@ function responsesChunks(includeToolCall, modelId) {
     arguments: "",
   }
   const functionDone = { ...functionAdded, status: "completed", arguments: TOOL_ARGUMENTS }
-  const response = {
+  const responseBase = {
     id: "resp_fixture",
     object: "response",
     created_at: 1,
-    status: "completed",
+    output_text: TEXT,
+    error: null,
+    incomplete_details: null,
+    instructions: null,
+    metadata: null,
     model: modelId,
+    parallel_tool_calls: true,
+    temperature: null,
+    tool_choice: "auto",
+    tools: [],
+    top_p: null,
+  }
+  const response = {
+    ...responseBase,
+    status: "completed",
     output: includeToolCall ? [messageDone, functionDone] : [messageDone],
     usage: {
       input_tokens: 12,
@@ -146,9 +170,41 @@ function responsesChunks(includeToolCall, modelId) {
     },
   }
   const values = [
-    ["response.created", { type: "response.created", response: { ...response, status: "in_progress", output: [] } }],
+    ["response.created", {
+      type: "response.created",
+      response: { ...responseBase, output_text: "", status: "in_progress", output: [] },
+    }],
     ["response.output_item.added", { type: "response.output_item.added", output_index: 0, item: messageAdded }],
-    ["response.output_text.delta", { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: TEXT }],
+    ["response.content_part.added", {
+      type: "response.content_part.added",
+      output_index: 0,
+      content_index: 0,
+      item_id: messageAdded.id,
+      part: { type: "output_text", text: "", annotations: [], logprobs: [] },
+    }],
+    ["response.output_text.delta", {
+      type: "response.output_text.delta",
+      output_index: 0,
+      content_index: 0,
+      item_id: messageAdded.id,
+      delta: TEXT,
+      logprobs: [],
+    }],
+    ["response.output_text.done", {
+      type: "response.output_text.done",
+      output_index: 0,
+      content_index: 0,
+      item_id: messageAdded.id,
+      text: TEXT,
+      logprobs: [],
+    }],
+    ["response.content_part.done", {
+      type: "response.content_part.done",
+      output_index: 0,
+      content_index: 0,
+      item_id: messageAdded.id,
+      part: messageDone.content[0],
+    }],
     ["response.output_item.done", { type: "response.output_item.done", output_index: 0, item: messageDone }],
     ...(includeToolCall ? [
       ["response.output_item.added", { type: "response.output_item.added", output_index: 1, item: functionAdded }],
@@ -163,12 +219,16 @@ function responsesChunks(includeToolCall, modelId) {
       output_index: 1,
       item_id: TOOL_ITEM_ID,
       arguments: TOOL_ARGUMENTS,
+      name: TOOL_NAME,
       }],
       ["response.output_item.done", { type: "response.output_item.done", output_index: 1, item: functionDone }],
     ] : []),
     ["response.completed", { type: "response.completed", response }],
   ]
-  return values.map(([type, value]) => event(type, value))
+  return values.map(([type, value], sequenceNumber) => event(type, {
+    ...value,
+    sequence_number: sequenceNumber,
+  }))
 }
 
 function anthropicChunks(includeToolCall, modelId) {
@@ -180,28 +240,34 @@ function anthropicChunks(includeToolCall, modelId) {
         type: "message",
         role: "assistant",
         content: [],
+        container: null,
         model: modelId,
+        stop_details: null,
         stop_reason: null,
         stop_sequence: null,
         usage: {
+          cache_creation: null,
           input_tokens: 7,
           output_tokens: 0,
           cache_read_input_tokens: 3,
           cache_creation_input_tokens: 2,
+          inference_geo: null,
+          server_tool_use: null,
+          service_tier: null,
         },
       },
     }],
     ["content_block_start", {
       type: "content_block_start",
       index: 0,
-      content_block: { type: "text", text: "" },
+      content_block: { type: "text", text: "", citations: null },
     }],
     ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: TEXT } }],
     ["content_block_stop", { type: "content_block_stop", index: 0 }],
     ...(includeToolCall ? [["content_block_start", {
       type: "content_block_start",
       index: 1,
-      content_block: { type: "tool_use", id: TOOL_ID, name: TOOL_NAME, input: {} },
+      content_block: { type: "tool_use", id: TOOL_ID, name: TOOL_NAME, input: {}, caller: { type: "direct" } },
     }],
     ["content_block_delta", {
       type: "content_block_delta",
@@ -211,12 +277,18 @@ function anthropicChunks(includeToolCall, modelId) {
     ["content_block_stop", { type: "content_block_stop", index: 1 }]] : []),
     ["message_delta", {
       type: "message_delta",
-      delta: { stop_reason: includeToolCall ? "tool_use" : "end_turn", stop_sequence: null },
+      delta: {
+        container: null,
+        stop_details: null,
+        stop_reason: includeToolCall ? "tool_use" : "end_turn",
+        stop_sequence: null,
+      },
       usage: {
         input_tokens: 7,
         output_tokens: 5,
         cache_read_input_tokens: 3,
         cache_creation_input_tokens: 2,
+        server_tool_use: null,
         output_tokens_details: { thinking_tokens: 1 },
       },
     }],
@@ -225,14 +297,20 @@ function anthropicChunks(includeToolCall, modelId) {
   return values.map(([type, value]) => event(type, value))
 }
 
-function mistralChunks(includeToolCall) {
+function mistralChunks(includeToolCall, modelId) {
+  const base = {
+    id: "mistral_fixture",
+    object: "chat.completion.chunk",
+    created: 1,
+    model: modelId,
+  }
   return [
     data({
-      id: "mistral_fixture",
+      ...base,
       choices: [{ index: 0, delta: { role: "assistant", content: TEXT }, finish_reason: null }],
     }),
     ...(includeToolCall ? [data({
-      id: "mistral_fixture",
+      ...base,
       choices: [{
         index: 0,
         delta: {
@@ -247,7 +325,7 @@ function mistralChunks(includeToolCall) {
       }],
     })] : []),
     data({
-      id: "mistral_fixture",
+      ...base,
       choices: [{ index: 0, delta: {}, finish_reason: includeToolCall ? "tool_calls" : "stop" }],
       usage: {
         prompt_tokens: 10,
@@ -285,12 +363,42 @@ function chunksFor(protocol, includeToolCall, modelId) {
     return responsesChunks(includeToolCall, modelId)
   }
   if (protocol === "anthropic-messages") return anthropicChunks(includeToolCall, modelId)
-  if (protocol === "mistral-conversations") return mistralChunks(includeToolCall)
+  if (protocol === "mistral-conversations") return mistralChunks(includeToolCall, modelId)
   return piMessagesChunks(includeToolCall)
 }
 
 function requestTools(protocol, body) {
   return protocol === "pi-messages" ? body?.context?.tools : body?.tools
+}
+
+function requestInput(protocol, body) {
+  if (protocol === "openai-responses" || protocol === "azure-openai-responses") return body?.input
+  if (protocol === "pi-messages") return body?.context?.messages
+  return body?.messages
+}
+
+function inputContentText(content) {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+  return content.map((part) => part?.text ?? "").join("")
+}
+
+function inputErrors(protocol, body, expectedUserContent) {
+  const input = requestInput(protocol, body)
+  if (!Array.isArray(input) || input.length === 0) return ["input must contain at least one message"]
+  const user = input.find((message) => message?.role === "user")
+  if (!user) return ["input must contain a user message"]
+  if (protocol === "openai-responses" || protocol === "azure-openai-responses") {
+    if (!Array.isArray(user.content) || !user.content.some((part) => (
+      part?.type === "input_text" && part.text === expectedUserContent
+    ))) {
+      return [`user input must contain input_text=${expectedUserContent}`]
+    }
+    return []
+  }
+  return inputContentText(user.content) === expectedUserContent
+    ? []
+    : [`user content must equal ${expectedUserContent}`]
 }
 
 function toolShapeErrors(protocol, tools) {
@@ -320,7 +428,7 @@ function toolShapeErrors(protocol, tools) {
   return errors
 }
 
-function validateRequest(protocol, record, requireTools, modelId) {
+function validateRequest(protocol, record, requireTools, modelId, expectedUserContent) {
   const url = new URL(record.url)
   if (record.method !== "POST") {
     return { status: 405, stage: "wrong method", details: [`expected POST, received ${record.method}`] }
@@ -358,6 +466,17 @@ function validateRequest(protocol, record, requireTools, modelId) {
   }
   if (protocol === "pi-messages" && Object.hasOwn(record.body, "stream")) {
     return { status: 422, stage: "wrong model/stream", details: ["pi-messages streaming is implicit"] }
+  }
+  const invalidInput = inputErrors(protocol, record.body, expectedUserContent)
+  if (invalidInput.length > 0) {
+    return { status: 422, stage: "invalid input", details: invalidInput }
+  }
+  if (protocol === "openai-completions" && record.body.stream_options?.include_usage !== true) {
+    return {
+      status: 422,
+      stage: "invalid stream options",
+      details: ["stream_options.include_usage must be true"],
+    }
   }
   const tools = requestTools(protocol, record.body)
   if (!Array.isArray(tools) || tools.length === 0) {
@@ -426,6 +545,7 @@ export async function startFakeModelProvider(protocol, options = {}) {
   const abortPromise = new Promise((resolve) => { abortResolve = resolve })
 
   const modelId = options.modelId ?? MODEL_ID
+  const expectedUserContent = options.expectedUserContent ?? EXPECTED_USER_CONTENT
   const server = createServer(async (req, res) => {
     const record = {
       method: req.method,
@@ -443,7 +563,13 @@ export async function startFakeModelProvider(protocol, options = {}) {
       abortResolve(record)
     })
 
-    const invalid = validateRequest(protocol, record, options.requireTools !== false, modelId)
+    const invalid = validateRequest(
+      protocol,
+      record,
+      options.requireTools !== false,
+      modelId,
+      expectedUserContent,
+    )
     if (invalid) {
       writeInvalid(res, protocol, invalid)
       return
