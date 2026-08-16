@@ -7,6 +7,7 @@ import { describe, it } from "node:test"
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai"
 import { ModelRuntime } from "@xiamol/pi-coding-agent"
 
+import { CustomProviderValidationError } from "../src/model-provider/contracts.ts"
 import { PiCustomProviderAdapter } from "../src/model-provider/pi-custom-provider-adapter.ts"
 import { CustomProviderRuntimeCoordinator } from "../src/model-provider/runtime-coordinator.ts"
 
@@ -14,12 +15,11 @@ const PROTOCOLS = [
   "openai-completions",
   "openai-responses",
   "anthropic-messages",
-  "google-generative-ai",
   "mistral-conversations",
   "azure-openai-responses",
   "pi-messages",
 ]
-const KEYLESS_PROTOCOLS = PROTOCOLS.filter((protocol) => protocol !== "google-generative-ai")
+const KEYLESS_PROTOCOLS = PROTOCOLS
 const FORMER_KEYLESS_COMPATIBILITY_SENTINEL = "my-code-agent-keyless-compatibility"
 const KEYLESS_SENTINEL_PREFIX = "my-code-agent-keyless-compatibility:"
 
@@ -181,7 +181,7 @@ function expectedModel(input, provider) {
 }
 
 describe("PiCustomProviderAdapter", () => {
-  it("maps all seven protocols to exact PI models and native lazy providers", async () => {
+  it("maps all six custom protocols to exact PI models and native lazy providers", async () => {
     for (const protocol of PROTOCOLS) {
       const adapter = new PiCustomProviderAdapter()
       const input = definition({ id: `custom-${protocol}`, protocol })
@@ -206,6 +206,35 @@ describe("PiCustomProviderAdapter", () => {
       assert.equal(provider.baseUrl, input.baseUrl)
       assert.deepEqual(provider.getModels(), [expectedModel(input.models[0], input)])
     }
+  })
+
+  it("rejects Google as a typed unsupported custom protocol", () => {
+    const adapter = new PiCustomProviderAdapter()
+
+    assert.throws(
+      () => adapter.prepare(definition({ protocol: "google-generative-ai" }), secrets()),
+      (error) => error instanceof CustomProviderValidationError && error.fieldPath === "provider.protocol",
+    )
+  })
+
+  it("does not change the official Google provider when custom providers are replaced", async () => {
+    const runtime = await realRuntime()
+    const officialGoogle = runtime.getProvider("google")
+    const officialModel = runtime.getModel("google", "gemini-2.5-flash")
+    const officialModelIds = officialGoogle.getModels().map((entry) => entry.id)
+    const officialAuth = runtime.getProviderAuthStatus("google")
+    const adapter = new PiCustomProviderAdapter()
+
+    await adapter.replaceRuntimeProviders(runtime, [
+      adapter.prepare(definition({ id: "unrelated-custom" }), secrets()),
+    ])
+    await adapter.replaceRuntimeProviders(runtime, [])
+
+    assert.strictEqual(runtime.getProvider("google"), officialGoogle)
+    assert.strictEqual(runtime.getModel("google", "gemini-2.5-flash"), officialModel)
+    assert.deepEqual(runtime.getProvider("google").getModels().map((entry) => entry.id), officialModelIds)
+    assert.deepEqual(runtime.getProviderAuthStatus("google"), officialAuth)
+    assert.equal(officialModel.api, "google-generative-ai")
   })
 
   it("registers apiKey providers natively with secrets only in auth resolution", async () => {

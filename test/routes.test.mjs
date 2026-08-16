@@ -1296,7 +1296,6 @@ describe("custom provider settings routes", () => {
       capabilities: () => ({
         protocols: [
           { id: "openai-responses", authModes: ["none", "apiKey"], supportsCompatibility: true },
-          { id: "google-generative-ai", authModes: ["apiKey"], supportsCompatibility: true },
         ],
         price: { currency: "USD", unit: "millionTokens" },
       }),
@@ -1333,9 +1332,9 @@ describe("custom provider settings routes", () => {
     const capabilities = await callHandler(handleSettings, "GET", "/api/custom-providers/capabilities", undefined, ctx);
     assert.strictEqual(capabilities.status, 200);
     assert.deepStrictEqual(parseJSON(capabilities.body).price, { currency: "USD", unit: "millionTokens" });
-    assert.deepStrictEqual(
-      parseJSON(capabilities.body).protocols.find((entry) => entry.id === "google-generative-ai").authModes,
-      ["apiKey"],
+    assert.equal(
+      parseJSON(capabilities.body).protocols.some((entry) => entry.id === "google-generative-ai"),
+      false,
     );
 
     const listed = await callHandler(handleSettings, "GET", "/api/custom-providers", undefined, ctx);
@@ -1636,6 +1635,41 @@ describe("custom provider settings routes", () => {
     assert.equal(parseJSON(cleared.body).providers[0].apiKeyConfigured, false);
     assert.equal(JSON.stringify(JSON.parse(readFileSync(configFile, "utf8"))).includes("apiKeyRef"), false);
     assert.equal(readFileSync(secretsFile, "utf8").includes(apiSecret), false);
+  });
+
+  it("rejects Google custom drafts through the real route, service, and store", async () => {
+    const ctx = customContext();
+    const configFile = resolve(ctx.paths.PI_CONFIG_DIR, "custom-providers.json");
+    const secretsFile = resolve(ctx.paths.PI_CONFIG_DIR, "custom-provider-secrets.json");
+    const store = new CustomProviderStore({ configFile, secretsFile });
+    const modelRuntime = {
+      getProviders: () => [{ id: "google", name: "Google" }],
+      getProviderAuthStatus: () => ({ configured: false }),
+    };
+    ctx.runtime = mockRuntime({ modelRuntime, syncModelProviders: async () => 0 });
+    ctx.customProviderService = new CustomProviderService({
+      store,
+      coordinator: { sync: async () => (await store.readSnapshot()).revision },
+      referenceChecker: new ProviderReferenceChecker({
+        currentModel: () => undefined,
+        defaultModel: () => undefined,
+        customAgents: () => [],
+      }),
+      referenceLock: new FileProviderReferenceMutationLock(resolve(ctx.paths.PI_CONFIG_DIR, "provider-references.lock")),
+    });
+
+    const result = await callHandler(handleSettings, "POST", "/api/custom-providers", {
+      expectedRevision: 0,
+      provider: { ...providerDraft, protocol: "google-generative-ai" },
+    }, ctx);
+
+    assert.strictEqual(result.status, 400);
+    assert.deepStrictEqual(parseJSON(result.body), {
+      error: "Invalid custom provider request",
+      code: "invalid_request",
+      fieldPath: "provider.protocol",
+    });
+    assert.equal((await store.readSnapshot()).revision, 0);
   });
 });
 

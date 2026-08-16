@@ -168,7 +168,6 @@ void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, succe
       "openai-completions",
       "openai-responses",
       "anthropic-messages",
-      "google-generative-ai",
       "mistral-conversations",
       "azure-openai-responses",
       "pi-messages",
@@ -200,7 +199,7 @@ void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, succe
       [{ ...valid, apiKey: "   " }, "provider.apiKey"],
       [{ ...valid, headers: [{ name: "X-One", value: "" }] }, "provider.headers[0].value"],
       [{ ...valid, headers: [{ name: "X-One", value: "secret", remove: true }] }, "provider.headers[0]"],
-      [{ ...valid, protocol: "google-generative-ai", authMode: "none" }, "provider.authMode"],
+      [{ ...valid, protocol: "google-generative-ai" }, "provider.protocol"],
     ]) {
       assert.throws(
         () => validateCustomProviderDraft(candidate),
@@ -211,9 +210,8 @@ void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, succe
 
   it("advertises and enforces authentication modes for every protocol", async () => {
     const { PROVIDER_PROTOCOL_AUTH_MODES } = await import("../src/model-provider/contracts.ts");
-    const keylessProtocols = PROVIDER_PROTOCOLS.filter((protocol) => protocol !== "google-generative-ai");
 
-    for (const protocol of keylessProtocols) {
+    for (const protocol of PROVIDER_PROTOCOLS) {
       assert.deepEqual(PROVIDER_PROTOCOL_AUTH_MODES[protocol], ["none", "apiKey"]);
       const keyless = provider({ protocol, authMode: "none" });
       delete keyless.apiKeyRef;
@@ -221,14 +219,11 @@ void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, succe
       assert.doesNotThrow(() => validateCustomProviderDefinition(provider({ protocol })));
     }
 
-    assert.deepEqual(PROVIDER_PROTOCOL_AUTH_MODES["google-generative-ai"], ["apiKey"]);
-    const keylessGoogle = provider({ protocol: "google-generative-ai", authMode: "none" });
-    delete keylessGoogle.apiKeyRef;
+    assert.equal(Object.hasOwn(PROVIDER_PROTOCOL_AUTH_MODES, "google-generative-ai"), false);
     assert.throws(
-      () => validateCustomProviderDefinition(keylessGoogle),
-      /provider\.authMode.*google-generative-ai.*apiKey/i,
+      () => validateCustomProviderDefinition(provider({ protocol: "google-generative-ai" })),
+      (error) => error instanceof CustomProviderValidationError && error.fieldPath === "provider.protocol",
     );
-    assert.doesNotThrow(() => validateCustomProviderDefinition(provider({ protocol: "google-generative-ai" })));
   });
 
   it("rejects unknown fields at snapshot, provider, and model levels", () => {

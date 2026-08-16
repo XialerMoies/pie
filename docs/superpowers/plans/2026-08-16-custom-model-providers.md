@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在现有模型设置页中加入用户级自定义模型厂商，使主会话和子 Agent 能安全使用七种 PI 协议的第三方中转 API，并支持跨窗口热同步。
+**Goal:** 在现有模型设置页中加入用户级自定义模型厂商，使主会话和子 Agent 能安全使用六种 PI 协议的第三方中转 API，并支持跨窗口热同步；`google-generative-ai` 仅保留在不受影响的官方 Google provider 路径中。
 
 **Architecture:** 以项目自有的 `CustomProviderDefinition`、`ModelDescriptor` 和 `ProviderUsage` 作为稳定边界，非敏感配置与秘密通过带全局 revision 的双文件事务保存。服务层负责引用检查、脱敏和网络操作，`PiCustomProviderAdapter` 是唯一依赖 PI provider API 的模块；每个 server 通过 revision coordinator 在模型列表、切换模型、主聊天和子 Agent 创建前同步共享快照。
 
@@ -16,7 +16,7 @@
 
 - `src/model-provider/contracts.ts`: 项目自有协议、模型、凭据引用、快照、草稿和 usage 契约；不导入 PI。
 - `src/model-provider/custom-provider-store.ts`: 双文件事务、全局 revision、不可变秘密引用、脱敏读取和孤立秘密清理。
-- `src/model-provider/pi-custom-provider-adapter.ts`: 七种协议到 PI 的唯一适配边界，包括六协议 keyless transport、字面量认证解析和 usage 转换。
+- `src/model-provider/pi-custom-provider-adapter.ts`: 六种协议到 PI 的唯一适配边界，包括 keyless transport、字面量认证解析和 usage 转换。
 - `src/model-provider/runtime-coordinator.ts`: 每个 `ModelRuntime` 的 loaded revision、并发合并、替换和失败回滚。
 - `src/model-provider/provider-reference-checker.ts`: 当前模型、默认模型、自定义 Agent 三类引用检查。
 - `src/model-provider/provider-network-client.ts`: 15 秒隔离连接测试、同源模型发现、重定向和错误脱敏。
@@ -58,7 +58,7 @@
 
 - [ ] **Step 1: Write failing contract and data-layout tests**
 
-Test the seven allowed protocols, provider/model ID rules, URL validation, forbidden headers, duplicate model IDs, positive token limits, `maxTokens <= contextWindow`, non-negative USD-per-million prices, and 16 KiB limits for sampling/compatibility objects. Add these layout assertions:
+Test the six allowed custom protocols, rejection of `google-generative-ai` with `provider.protocol`, provider/model ID rules, URL validation, forbidden headers, duplicate model IDs, positive token limits, `maxTokens <= contextWindow`, non-negative USD-per-million prices, and 16 KiB limits for sampling/compatibility objects. Add these layout assertions:
 
 ```js
 assert.strictEqual(layout.customProvidersFile, resolve(layout.userRoot, "custom-providers.json"))
@@ -104,7 +104,6 @@ export const PROVIDER_PROTOCOLS = [
   "openai-completions",
   "openai-responses",
   "anthropic-messages",
-  "google-generative-ai",
   "mistral-conversations",
   "azure-openai-responses",
   "pi-messages",
@@ -346,7 +345,7 @@ Expected: `package.json` contains `"@earendil-works/pi-ai": "0.84.2"`; `package-
 
 - [ ] **Step 2: Write failing SDK-boundary and adapter tests**
 
-Extend `pi-sdk-contract.test.mjs` to assert `createProvider` and `lazyApi` are exported by the direct dependency and `ModelRuntime.prototype.registerNativeProvider` exists. In the adapter test, table-drive all seven protocols:
+Extend `pi-sdk-contract.test.mjs` to assert `createProvider` and `lazyApi` are exported by the direct dependency, `ModelRuntime.prototype.registerNativeProvider` exists, and the official Google provider remains unchanged. In the adapter test, table-drive all six custom protocols:
 
 ```js
 for (const protocol of PROVIDER_PROTOCOLS) {
@@ -360,8 +359,8 @@ Also assert:
 
 - both modes construct native providers and call only `registerNativeProvider(provider)`;
 - resolved API Key and Header values remain literal when they contain `!command`, `$NAME` or `${NAME}` and are absent from diagnostics/serialization;
-- six protocols support `none` through request-local wrapped streams; SDK-generated auth Header/query values never reach transport, while explicitly configured Header values remain unchanged;
-- Google Generative AI advertises and accepts only `apiKey` mode;
+- all six custom protocols support `none` through request-local wrapped streams; SDK-generated auth Header/query values never reach transport, while explicitly configured Header values remain unchanged;
+- Google Generative AI is absent from custom capabilities and fails draft validation at `provider.protocol`; the official Google provider keeps its existing auth, models, and sessions;
 - keyless `provider.auth.apiKey.check()` returns `{ type: "api_key", source: "custom-provider" }`;
 - keyless `resolve()` returns the explicitly configured Headers without a dedicated API Key;
 - model costs remain USD per million tokens;
@@ -382,7 +381,6 @@ const API_STREAMS: Record<ProviderProtocol, ProviderStreams> = {
   "openai-completions": lazyApi(() => import("@earendil-works/pi-ai/api/openai-completions")),
   "openai-responses": lazyApi(() => import("@earendil-works/pi-ai/api/openai-responses"), { fetchDeferred: true, cancelDeferred: true }),
   "anthropic-messages": lazyApi(() => import("@earendil-works/pi-ai/api/anthropic-messages")),
-  "google-generative-ai": lazyApi(() => import("@earendil-works/pi-ai/api/google-generative-ai")),
   "mistral-conversations": lazyApi(() => import("@earendil-works/pi-ai/api/mistral-conversations")),
   "azure-openai-responses": lazyApi(() => import("@earendil-works/pi-ai/api/azure-openai-responses"), { fetchDeferred: true, cancelDeferred: true }),
   "pi-messages": lazyApi(() => import("@earendil-works/pi-ai/api/pi-messages")),
@@ -422,7 +420,7 @@ auth: {
 }
 ```
 
-For `none`, omit `apiKey` from the resolved auth and wrap `stream`/`streamSimple` for the six supported protocols with a request-local keyless transport. Use a unique in-memory compatibility value only to pass SDK prechecks, remove only sentinel-derived authentication before the actual fetch, preserve explicit custom Header values, and redact the sentinel from events/results/errors. Do not mutate `globalThis.fetch`. Reject Google Generative AI `none` through the project-owned per-protocol auth capability table.
+For `none`, omit `apiKey` from the resolved auth and wrap `stream`/`streamSimple` for all six custom protocols with a request-local keyless transport. Use a unique in-memory compatibility value only to pass SDK prechecks, remove only sentinel-derived authentication before the actual fetch, preserve explicit custom Header values, and redact the sentinel from events/results/errors. Do not mutate `globalThis.fetch`. Reject every protocol outside the project-owned six-protocol set, including Google Generative AI, with a typed validation error before adapter construction.
 
 Expose `prepare()`, async `replaceRuntimeProviders()`, and `toProviderUsage()`. `prepare()` must finish all validation and provider construction before mutating a runtime. `replaceRuntimeProviders()` unregisters only exact provider objects previously owned by this adapter, registers the complete prepared set, and awaits a targeted non-network `ModelRuntime.refresh()` before succeeding. Registration or refresh failure restores and refreshes the previous set; incomplete rollback reports a distinct aggregate failure while retaining truthful ownership of every exact adapter-installed object still present.
 
@@ -661,7 +659,7 @@ Expected: PASS.
 
 Add route tests for:
 
-- `GET /api/custom-providers/capabilities` returns the seven protocols and USD-per-million price metadata;
+- `GET /api/custom-providers/capabilities` returns the six custom protocols and USD-per-million price metadata;
 - `GET /api/custom-providers` returns official summaries plus redacted custom definitions;
 - `POST`, `PUT`, `DELETE` pass revision and return the new snapshot;
 - official collision is 409;
@@ -1011,9 +1009,9 @@ const serverSource = await readFile(resolve("src/server/server.ts"), "utf8")
 assert.doesNotMatch(serverSource, /setInterval\(|fs\.watch\(/)
 ```
 
-- [ ] **Step 4: Add deterministic seven-protocol fake-provider coverage**
+- [ ] **Step 4: Add deterministic six-protocol fake-provider coverage**
 
-Implement `startFakeModelProvider(protocol)` as a local random-port fixture that records method/path/headers/body, emits protocol-valid streaming text, one tool call, terminal usage, and supports abort. Extend adapter tests with an API-Key table over all seven protocols and a keyless table over the six protocols other than Google Generative AI. Assert:
+Implement `startFakeModelProvider(protocol)` as a local random-port fixture that records method/path/headers/body, emits protocol-valid streaming text, one tool call, terminal usage, and supports abort. Extend adapter tests with API-Key and keyless tables over all six custom protocols. Assert:
 
 - configured Base URL and custom headers reach the fixture;
 - keyless requests send no SDK-generated authentication, while explicitly configured auth Header values are preserved;
@@ -1026,7 +1024,7 @@ Implement `startFakeModelProvider(protocol)` as a local random-port fixture that
 
 Run: `node scripts/tsx-test.mjs --test --test-concurrency=1 test/custom-provider-adapter.test.mjs test/custom-provider-multi-server.test.mjs`
 
-Expected: PASS for all seven API-Key mappings, all six keyless mappings, and both server runtimes.
+Expected: PASS for all six API-Key mappings, all six keyless mappings, and both server runtimes.
 
 - [ ] **Step 6: Register final tests and update the task document**
 
@@ -1063,7 +1061,7 @@ Verify in order:
 5. Attempt to delete the active model/provider and confirm the current/default/custom-Agent occupancy list blocks it.
 6. Open a second project window, edit the provider in the first, then send from the second; it synchronizes before the request without restart.
 7. Restart the application and confirm provider/model/order return while API key and Header values remain masked.
-8. Add a non-Google `none` provider to a local endpoint and verify no SDK-generated authentication header is sent; then configure an explicit secret Header and verify its exact value is preserved.
+8. Add a supported custom `none` provider to a local endpoint and verify no SDK-generated authentication header is sent; then configure an explicit secret Header and verify its exact value is preserved.
 9. Enter a failing URL, verify the test error is redacted, then save successfully anyway.
 
 - [ ] **Step 9: Commit integration and documentation**
@@ -1075,7 +1073,7 @@ git commit -m "test: verify custom providers end to end"
 
 ## Self-Review Checklist
 
-- [x] Every design requirement maps to Tasks 1-8: seven protocols, explicit auth mode, secret Headers, optional discovery, isolated testing, deletion references, global storage, revision sync, usage conversion, unified list, shared add action, and manual acceptance.
+- [x] Every design requirement maps to Tasks 1-8: six custom protocols excluding Google Generative AI, unchanged official Google behavior, explicit auth mode, secret Headers, optional discovery, isolated testing, deletion references, global storage, revision sync, usage conversion, unified list, shared add action, and manual acceptance.
 - [x] Confirm the plan contains no placeholder markers, deferred implementation promises, or vague error-handling instructions.
 - [x] Confirm names stay consistent: `CustomProviderDefinition`, `CustomProviderSnapshot`, `ModelDescriptor`, `ProviderUsage`, `CustomProviderStore`, `PiCustomProviderAdapter`, `CustomProviderRuntimeCoordinator`, `CustomProviderService`, and `SettingsCustomProviderEditor`.
 - [x] Confirm no module outside `pi-custom-provider-adapter.ts` and `pi-sdk-contract.test.mjs` imports PI provider-construction types.

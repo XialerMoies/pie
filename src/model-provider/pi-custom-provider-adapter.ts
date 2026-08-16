@@ -12,7 +12,6 @@ import {
 } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { azureOpenAIResponsesApi } from "@earendil-works/pi-ai/api/azure-openai-responses.lazy";
-import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generative-ai.lazy";
 import { mistralConversationsApi } from "@earendil-works/pi-ai/api/mistral-conversations.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
@@ -63,7 +62,6 @@ const API_FACTORIES = {
   "openai-completions": openAICompletionsApi,
   "openai-responses": openAIResponsesApi,
   "anthropic-messages": anthropicMessagesApi,
-  "google-generative-ai": googleGenerativeAIApi,
   "mistral-conversations": mistralConversationsApi,
   "azure-openai-responses": azureOpenAIResponsesApi,
   "pi-messages": piMessagesApi,

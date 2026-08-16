@@ -141,10 +141,7 @@ describe("custom provider service", () => {
         assert.equal(entry.supportsCompatibility, true);
       }
       assert.deepEqual(capabilities.price, { currency: "USD", unit: "millionTokens" });
-      assert.deepEqual(
-        capabilities.protocols.find((entry) => entry.id === "google-generative-ai").authModes,
-        ["apiKey"],
-      );
+      assert.equal(capabilities.protocols.some((entry) => entry.id === "google-generative-ai"), false);
     } finally {
       await env.cleanup();
     }
@@ -266,30 +263,46 @@ describe("custom provider service", () => {
     }
   });
 
-  it("keeps a cleared Google provider redacted and unconfigured until a key is restored", async () => {
+  it("keeps a cleared API-key provider redacted and unconfigured until a key is restored", async () => {
     const env = await fixture();
     try {
-      const google = draft({
-        id: "google-custom",
-        name: "Google Custom",
-        protocol: "google-generative-ai",
+      const apiKeyProvider = draft({
+        id: "api-key-custom",
+        name: "API Key Custom",
         headers: [],
-        models: [model("gemini-custom", "Gemini Custom")],
+        models: [model("keyed-model", "Keyed Model")],
       });
-      await env.service.create({ expectedRevision: 0, provider: google }, runtime());
-      const cleared = await env.service.update("google-custom", {
+      await env.service.create({ expectedRevision: 0, provider: apiKeyProvider }, runtime());
+      const cleared = await env.service.update("api-key-custom", {
         expectedRevision: 1,
-        provider: { ...google, apiKey: null },
+        provider: { ...apiKeyProvider, apiKey: null },
       }, runtime());
       assert.equal(cleared.providers[0].apiKeyConfigured, false);
       assert.equal((await env.service.list(runtime())).custom[0].apiKeyConfigured, false);
 
-      const restored = await env.service.update("google-custom", {
+      const restored = await env.service.update("api-key-custom", {
         expectedRevision: 2,
-        provider: { ...google, apiKey: "restored-google-key" },
+        provider: { ...apiKeyProvider, apiKey: "restored-api-key" },
       }, runtime());
       assert.equal(restored.providers[0].apiKeyConfigured, true);
-      assert.equal(await env.service.revealApiKey("google-custom"), "restored-google-key");
+      assert.equal(await env.service.revealApiKey("api-key-custom"), "restored-api-key");
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("rejects Google custom drafts with a typed protocol error before persistence", async () => {
+    const env = await fixture();
+    try {
+      await assert.rejects(
+        () => env.service.create({
+          expectedRevision: 0,
+          provider: draft({ protocol: "google-generative-ai" }),
+        }, runtime()),
+        (error) => error instanceof CustomProviderValidationError
+          && error.fieldPath === "provider.protocol",
+      );
+      assert.equal((await env.store.readSnapshot()).revision, 0);
     } finally {
       await env.cleanup();
     }

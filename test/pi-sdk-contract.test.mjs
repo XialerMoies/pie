@@ -4,6 +4,7 @@ import { resolve } from "node:path"
 import { test } from "node:test"
 
 import * as piAI from "@earendil-works/pi-ai"
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai"
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy"
 import { azureOpenAIResponsesApi } from "@earendil-works/pi-ai/api/azure-openai-responses.lazy"
 import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generative-ai.lazy"
@@ -53,6 +54,23 @@ test("exposes ModelRuntime provider replacement methods", () => {
   for (const name of ["registerNativeProvider", "registerProvider", "unregisterProvider"]) {
     assert.equal(typeof pi.ModelRuntime.prototype[name], "function", `${name} must exist`)
   }
+})
+
+test("keeps the official Google provider and Gemini model contract", async () => {
+  const runtime = await pi.ModelRuntime.create({
+    credentials: new InMemoryCredentialStore(),
+    modelsPath: null,
+    refreshOnCreate: false,
+  })
+  const google = runtime.getProvider("google")
+  const model = runtime.getModel("google", "gemini-2.5-flash")
+
+  assert.equal(google.name, "Google")
+  assert.deepEqual(Object.keys(google.auth), ["apiKey"])
+  assert.ok(google.getModels().some((entry) => entry.id === "gemini-2.5-flash"))
+  assert.deepEqual(runtime.getProviderAuthStatus("google"), { configured: false })
+  assert.equal(model.provider, "google")
+  assert.equal(model.api, "google-generative-ai")
 })
 
 test("type-checks model provider production modules from the root config", async () => {

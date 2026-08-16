@@ -27,10 +27,11 @@
 - `openai-completions`
 - `openai-responses`
 - `anthropic-messages`
-- `google-generative-ai`
 - `mistral-conversations`
 - `azure-openai-responses`
 - `pi-messages`
+
+`google-generative-ai` 不属于自定义中转协议集合。PI 内置的官方 Google provider 继续使用现有认证、模型列表和会话路径，不受自定义厂商功能影响。
 
 以下协议继续由官方厂商能力负责，不进入自定义中转首版：
 
@@ -70,7 +71,7 @@ Settings UI
 
 ### `ProviderProtocol`
 
-上述七种协议的判别联合。服务端通过能力目录返回可用协议和表单能力，前端不维护另一份协议真相。
+上述六种协议的判别联合。服务端通过能力目录返回可用协议和表单能力，前端不维护另一份协议真相。
 
 ### `CustomProviderDefinition`
 
@@ -80,7 +81,7 @@ Settings UI
 - `name`：用户可见名称。
 - `protocol`：`ProviderProtocol`。
 - `baseUrl`：绝对 HTTP(S) URL。
-- `authMode`：`none` 或 `apiKey`；必须由用户明确选择。协议能力表是允许认证方式的单一事实来源：Google Generative AI 仅允许 `apiKey`，其余六种协议允许两种方式。
+- `authMode`：`none` 或 `apiKey`；必须由用户明确选择。协议能力表是允许认证方式的单一事实来源，六种自定义协议均允许两种方式。
 - `headers`：只保存 Header 名称和凭据引用，不保存值。
 - `modelDiscovery`：可选同源模型列表 URL。
 - `models`：一个或多个 `ModelDescriptor`。
@@ -142,12 +143,12 @@ Settings UI
 
 `PiCustomProviderAdapter` 负责：
 
-- 把七种项目协议映射到 PI API 名称。
+- 把六种项目协议映射到 PI API 名称。
 - 把 `ModelDescriptor` 转为 PI 模型结构。
 - 从凭据引用解析 API Key 和 Header，仅在运行时内存中组装。
 - 两种认证方式都使用 `registerNativeProvider()`。API Key 和 Header 值只由私有认证解析闭包按字面值返回，不进入 PI 会解析 `!command`、`$NAME` 或 `${NAME}` 的配置表达式通道。
-- `authMode: none` 适用于除 Google Generative AI 外的六种协议，表示不使用专用 API Key 字段；用户显式配置的秘密 Header（包括 `Authorization` 或 `X-API-Key`）仍按原值发送。适配器可在单次请求内使用唯一兼容值通过 PI SDK 的前置检查，但必须在实际 transport 前删除由该兼容值生成的 Header/查询参数，并从事件、结果和错误中脱敏；兼容值不持久化、不记录日志、不发送到网络，也不修改全局 `fetch`。
-- Google Generative AI 的 PI 0.84 transport 不支持安全的逐请求 keyless 注入，因此能力表和契约校验只允许它使用 `apiKey`；设置页必须据此限制选项。
+- `authMode: none` 适用于全部六种自定义协议，表示不使用专用 API Key 字段；用户显式配置的秘密 Header（包括 `Authorization` 或 `X-API-Key`）仍按原值发送。适配器可在单次请求内使用唯一兼容值通过 PI SDK 的前置检查，但必须在实际 transport 前删除由该兼容值生成的 Header/查询参数，并从事件、结果和错误中脱敏；兼容值不持久化、不记录日志、不发送到网络，也不修改全局 `fetch`。
+- 自定义厂商适配器不导入或映射 Google Generative AI API；官方 Google provider 仍完全由 PI 内置路径负责。
 - 完整厂商集注册后执行限定厂商 ID 且 `allowNetwork: false` 的 PI refresh；同步调用只有在 `ModelRegistry.getAvailable()` 已可立即读取新模型后才成功。注册或 refresh 失败时事务性恢复旧集合并再次 refresh；若回滚不完整，则只记录运行时中仍以精确对象身份存在的适配器对象，并要求 revision coordinator 在下次边界完整重试。
 - 将 PI 的 usage 和错误转换为项目契约。
 - 在每次创建主会话或子 Agent session 时注册同一份自定义厂商快照。
@@ -250,7 +251,7 @@ Settings UI
 - 高级 JSON 只接受对象并限制大小，不允许函数、命令或环境变量展开。
 - API Key、Header 值和 Authorization 内容必须从日志、异常、审计详情和测试快照中脱敏。
 - 未知字段和损坏 JSON 的错误只返回稳定的父级字段路径或通用消息，不回显调用方提供的字段名、凭据引用或 Secret 内容。
-- `authMode: none` 必须显式选择，空 Key 不自动改变认证模式；Google Generative AI 不提供该选项。
+- `authMode: none` 必须显式选择，空 Key 不自动改变认证模式；不在六协议集合中的值统一返回带稳定字段路径的 typed validation error。
 - `apiKey: null` 表示显式清除。`apiKey` 模式的定义可以保持未配置状态，但不会注册到 runtime；空字符串和纯空白字符串无效。重新保存非空 Key 后，下一次同步重新注册。
 - 官方厂商 ID 由每个 runtime 的初始官方基线维护，并结合进程生命周期内见过的自定义 ID 分类；磁盘删除后尚未完成同步的旧自定义 runtime 条目不得被重新分类为官方厂商。
 
@@ -285,9 +286,9 @@ Settings UI
 - 契约和字段校验。
 - 配置与凭据脱敏。
 - 跨进程锁、并发更新和失败回滚。
-- 七种协议到 PI 的映射。
-- 六种协议的无专用 Key transport、七种协议的 API Key、自定义 Header 和 usage 转换。
-- Google Generative AI 的 `none` 组合在契约层被拒绝，能力目录只暴露 `apiKey`。
+- 六种协议到 PI 的映射。
+- 六种协议的无专用 Key transport、API Key、自定义 Header 和 usage 转换。
+- Google Generative AI 不出现在自定义能力目录中，提交对应草稿在契约层以 `provider.protocol` 拒绝；官方 Google provider 回归行为保持不变。
 
 ### 路由测试
 
@@ -307,7 +308,7 @@ Settings UI
 
 ### 集成测试
 
-- 本地假 provider 覆盖七种协议的 API Key 映射，以及除 Google Generative AI 外六种协议的 keyless 映射。
+- 本地假 provider 覆盖全部六种自定义协议的 API Key 和 keyless 映射。
 - 至少验证流式文本、工具调用、真实 usage 和中止。
 - 两个独立 server 共享配置，并在下一请求前同步 revision。
 - 主会话和子 Agent 使用相同自定义模型快照。

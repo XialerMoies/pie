@@ -82,8 +82,7 @@ function createHarness(snapshots = [snapshot(0)]) {
 
 describe("CustomProviderRuntimeCoordinator", () => {
   it("skips unconfigured API-key providers and restores them after reconfiguration", async () => {
-    const configured = runtimeProvider("google-custom")
-    configured.protocol = "google-generative-ai"
+    const configured = runtimeProvider("api-key-custom")
     const unconfigured = structuredClone(configured)
     delete unconfigured.apiKeyRef
     let current = { schemaVersion: 1, revision: 1, providers: [unconfigured] }
@@ -92,7 +91,7 @@ describe("CustomProviderRuntimeCoordinator", () => {
       store: {
         async readSnapshot() { return current },
         async resolveSecrets(provider) {
-          return { apiKey: provider.apiKeyRef ? "google-secret" : undefined, headers: {} }
+          return { apiKey: provider.apiKeyRef ? "provider-secret" : undefined, headers: {} }
         },
       },
       adapter: {
@@ -110,7 +109,7 @@ describe("CustomProviderRuntimeCoordinator", () => {
     current = { schemaVersion: 1, revision: 3, providers: [unconfigured] }
     assert.equal(await coordinator.sync(runtime), 3)
 
-    assert.deepEqual(applications, [[], ["google-custom"], []])
+    assert.deepEqual(applications, [[], ["api-key-custom"], []])
   })
 
   it("loads revision zero once and skips an unchanged revision", async () => {
