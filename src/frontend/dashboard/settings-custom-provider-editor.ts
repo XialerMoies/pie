@@ -17,6 +17,8 @@ interface CustomProviderErrorResponse {
 
 type DraftModel = CustomProviderDraft['models'][number];
 type CustomProviderEditorAction = 'save' | 'test' | 'discover' | 'delete' | 'reveal';
+type CustomProviderMutationAction = 'save' | 'delete';
+type CustomProviderQueryAction = Exclude<CustomProviderEditorAction, CustomProviderMutationAction>;
 
 interface CustomProviderEditorOperation {
   action: CustomProviderEditorAction;
@@ -48,6 +50,8 @@ const CUSTOM_FORBIDDEN_HEADERS = new Set([
   'trailer',
   'upgrade',
 ]);
+const CUSTOM_ADVANCED_JSON_MAX_BYTES = 16 * 1024;
+const CUSTOM_NETWORK_ACTIONS = ['save', 'delete', 'test', 'discover', 'reveal-api-key'] as const;
 
 function cpeElement<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -93,12 +97,47 @@ function emptyModel(id = ''): DraftModel {
   };
 }
 
+function isFiniteJsonValue(value: unknown): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isFiniteJsonValue);
+  if (typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  return Object.values(value as Record<string, unknown>).every(isFiniteJsonValue);
+}
+
 function readJsonObject(input: HTMLTextAreaElement | null, field: string): Record<string, unknown> | undefined {
   const value = input?.value.trim() ?? '';
   if (!value) return undefined;
   const parsed = JSON.parse(value) as unknown;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${field} 必须是 JSON 对象`);
+  if (!isFiniteJsonValue(parsed)) throw new Error(`${field} 必须只包含有限 JSON 值`);
+  if (new TextEncoder().encode(JSON.stringify(parsed)).byteLength > CUSTOM_ADVANCED_JSON_MAX_BYTES) {
+    throw new Error(`${field} 不能超过 16 KiB`);
+  }
   return parsed as Record<string, unknown>;
+}
+
+function percentEncodedSecretPattern(secret: string): RegExp | null {
+  try {
+    const encoded = encodeURIComponent(secret);
+    let pattern = '';
+    for (let index = 0; index < encoded.length; index += 1) {
+      if (encoded[index] === '%' && /^[0-9A-F]{2}$/.test(encoded.slice(index + 1, index + 3))) {
+        const byte = encoded.slice(index + 1, index + 3);
+        if (byte === '20') pattern += '(?:%20|\\+)';
+        else {
+          pattern += '%';
+          for (const nibble of byte) {
+            pattern += /[A-F]/.test(nibble) ? `[${nibble}${nibble.toLowerCase()}]` : nibble;
+          }
+        }
+        index += 2;
+      } else pattern += encoded[index].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+    return new RegExp(pattern, 'g');
+  } catch {
+    return null;
+  }
 }
 
 function safeArray(value: unknown): unknown[] {
@@ -115,7 +154,8 @@ export class SettingsCustomProviderEditor {
   private deleteArmed = false;
   private protocols: CustomProviderProtocol[] = [];
   private generation = 0;
-  private activeOperation: CustomProviderEditorOperation | null = null;
+  private mutationOperation: CustomProviderEditorOperation | null = null;
+  private queryOperation: CustomProviderEditorOperation | null = null;
 
   constructor(private readonly dependencies: SettingsCustomProviderEditorDependencies) {}
 
@@ -128,7 +168,7 @@ export class SettingsCustomProviderEditor {
       this.startNew(container, revision);
       return;
     }
-    this.invalidateOperation();
+    this.invalidateQuery();
     this.container = container;
     this.provider = provider;
     this.revision = revision;
@@ -139,7 +179,7 @@ export class SettingsCustomProviderEditor {
   }
 
   startNew(container: HTMLElement, revision: number): void {
-    this.invalidateOperation();
+    this.invalidateQuery();
     this.container = container;
     this.provider = null;
     this.revision = revision;
@@ -150,7 +190,7 @@ export class SettingsCustomProviderEditor {
   }
 
   unmount(): void {
-    this.invalidateOperation();
+    this.invalidateQuery();
     this.container = null;
     this.root = null;
     this.provider = null;
@@ -158,120 +198,132 @@ export class SettingsCustomProviderEditor {
   }
 
   async save(): Promise<void> {
-    if (this.activeOperation?.action === 'save') return;
+    if (this.mutationOperation) return;
     this.clearFeedback();
     const draft = this.readDraft(true);
     if (!draft) return;
-    const operation = this.beginOperation('save', draft);
+    const operation = this.beginMutation('save', draft);
     if (!operation) return;
-    const url = operation.newProvider
-      ? '/api/custom-providers'
-      : `/api/custom-providers/${encodeURIComponent(operation.providerId || draft.id)}`;
-    const response = await this.request(operation, url, {
-      method: operation.newProvider ? 'POST' : 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedRevision: operation.revision, provider: draft }),
-    });
-    if (!this.isActive(operation) || response.aborted) return this.finishOperation(operation);
-    if (!response.ok) {
-      await this.handleMutationError(operation, response.body);
-      this.finishOperation(operation);
-      return;
+    try {
+      const url = operation.newProvider
+        ? '/api/custom-providers'
+        : `/api/custom-providers/${encodeURIComponent(operation.providerId || draft.id)}`;
+      const response = await this.request(operation, url, {
+        method: operation.newProvider ? 'POST' : 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedRevision: operation.revision, provider: draft }),
+      });
+      if (response.aborted) return;
+      if (!response.ok) {
+        if (this.isCurrentMount(operation)) await this.handleMutationError(operation, response.body);
+        return;
+      }
+      const snapshot = response.body as RedactedCustomProviderSnapshot;
+      const saved = safeArray(snapshot.providers).find((candidate) => (
+        candidate && typeof candidate === 'object' && (candidate as RedactedCustomProvider).id === draft.id
+      )) as RedactedCustomProvider | undefined;
+      if (!saved || typeof snapshot.revision !== 'number') {
+        if (this.isCurrentMount(operation)) this.showResult('保存响应无效', true, operation.root, operation.secrets);
+        return;
+      }
+      this.consumeSnapshot(snapshot);
+      if (this.isCurrentMount(operation)) {
+        this.provider = saved;
+        this.newProvider = false;
+        this.apiKeyCleared = false;
+        this.render(saved);
+      }
+      this.dependencies.onSaved(snapshot, saved.id);
+      this.dependencies.notify('已保存', 'success');
+    } finally {
+      this.finishMutation(operation);
     }
-    const snapshot = response.body as RedactedCustomProviderSnapshot;
-    const saved = safeArray(snapshot.providers).find((candidate) => (
-      candidate && typeof candidate === 'object' && (candidate as RedactedCustomProvider).id === draft.id
-    )) as RedactedCustomProvider | undefined;
-    if (!saved || typeof snapshot.revision !== 'number') {
-      this.finishOperation(operation);
-      this.showResult('保存响应无效', true, operation.root, operation.secrets);
-      return;
-    }
-    this.finishOperation(operation);
-    this.revision = snapshot.revision;
-    this.provider = saved;
-    this.newProvider = false;
-    this.apiKeyCleared = false;
-    this.render(saved);
-    this.dependencies.onSaved(snapshot, saved.id);
-    this.dependencies.notify('已保存', 'success');
   }
 
   async test(): Promise<void> {
-    if (this.activeOperation?.action === 'test') return;
+    if (this.mutationOperation || this.queryOperation?.action === 'test') return;
     this.clearFeedback();
     const draft = this.readDraft(false);
     if (!draft) return;
-    const operation = this.beginOperation('test', draft);
+    const operation = this.beginQuery('test', draft);
     if (!operation) return;
-    const response = await this.request(operation, '/api/custom-providers/test', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: draft }),
-    });
-    if (!this.isActive(operation) || response.aborted) return this.finishOperation(operation);
-    const body = response.body as Record<string, unknown>;
-    if (!response.ok || body.ok === false) {
-      const code = typeof body.code === 'string' ? body.code : 'failed';
-      const message = typeof body.message === 'string'
-        ? body.message
-        : typeof body.error === 'string' ? body.error : '连接测试失败';
-      this.finishOperation(operation);
-      this.showResult(`${code}: ${message}`, true, operation.root, operation.secrets);
-      return;
+    try {
+      const response = await this.request(operation, '/api/custom-providers/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: draft }),
+      });
+      if (!this.isCurrentQuery(operation) || response.aborted) return;
+      const body = response.body as Record<string, unknown>;
+      if (!response.ok || body.ok === false) {
+        const code = typeof body.code === 'string' ? body.code : 'failed';
+        const message = typeof body.message === 'string'
+          ? body.message
+          : typeof body.error === 'string' ? body.error : '连接测试失败';
+        this.showResult(`${code}: ${message}`, true, operation.root, operation.secrets);
+        return;
+      }
+      const modelId = typeof body.modelId === 'string' ? body.modelId : '';
+      const latency = typeof body.latencyMs === 'number' ? ` · ${body.latencyMs} ms` : '';
+      this.showResult(`连接成功${modelId ? ` · ${modelId}` : ''}${latency}`, false, operation.root, operation.secrets);
+    } finally {
+      this.finishQuery(operation);
     }
-    const modelId = typeof body.modelId === 'string' ? body.modelId : '';
-    const latency = typeof body.latencyMs === 'number' ? ` · ${body.latencyMs} ms` : '';
-    this.finishOperation(operation);
-    this.showResult(`连接成功${modelId ? ` · ${modelId}` : ''}${latency}`, false, operation.root, operation.secrets);
   }
 
   async discoverModels(): Promise<void> {
-    if (this.activeOperation?.action === 'discover') return;
+    if (this.mutationOperation || this.queryOperation?.action === 'discover') return;
     this.clearFeedback();
     const draft = this.readDraft(false);
     if (!draft) return;
-    const operation = this.beginOperation('discover', draft);
+    const operation = this.beginQuery('discover', draft);
     if (!operation) return;
-    const response = await this.request(operation, '/api/custom-providers/discover-models', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: draft }),
-    });
-    if (!this.isActive(operation) || response.aborted) return this.finishOperation(operation);
-    if (!response.ok) {
-      this.finishOperation(operation);
-      this.showResult(this.errorText(response.body, '模型发现失败', operation.secrets), true, operation.root, operation.secrets);
-      return;
+    try {
+      const response = await this.request(operation, '/api/custom-providers/discover-models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: draft }),
+      });
+      if (!this.isCurrentQuery(operation) || response.aborted) return;
+      if (!response.ok) {
+        this.showResult(this.errorText(response.body, '模型发现失败', operation.secrets), true, operation.root, operation.secrets);
+        return;
+      }
+      const ids: string[] = [];
+      const seen = new Set<string>();
+      for (const value of safeArray((response.body as { ids?: unknown }).ids)) {
+        if (typeof value !== 'string') continue;
+        const id = value.trim();
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        ids.push(id);
+      }
+      const existing = new Set(
+        [...operation.root.querySelectorAll<HTMLInputElement>('.cpe-model-id')].map(input => input.value.trim()),
+      );
+      const imported = ids.filter(id => !existing.has(id));
+      if (imported.length === 0) {
+        this.showResult('未发现新的模型 ID', false, operation.root, operation.secrets);
+        return;
+      }
+      if (!window.confirm(`导入 ${imported.length} 个模型 ID？\n${imported.join('\n')}`)) {
+        if (this.isCurrentQuery(operation)) this.showResult('已取消导入', false, operation.root, operation.secrets);
+        return;
+      }
+      if (!this.isCurrentQuery(operation)) return;
+      const rows = operation.root.querySelector<HTMLElement>('.cpe-model-rows');
+      if (!rows) return;
+      for (const id of imported) rows.append(this.createModelRow(emptyModel(id)));
+      this.refreshDynamicMetadata(operation.root);
+      this.showResult(`已导入 ${imported.length} 个模型 ID，保存后生效`, false, operation.root, operation.secrets);
+    } finally {
+      this.finishQuery(operation);
     }
-    const ids = safeArray((response.body as { ids?: unknown }).ids)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0);
-    const existing = new Set(
-      [...operation.root.querySelectorAll<HTMLInputElement>('.cpe-model-id')].map(input => input.value),
-    );
-    const imported = ids.filter(id => !existing.has(id));
-    if (imported.length === 0) {
-      this.finishOperation(operation);
-      this.showResult('未发现新的模型 ID', false, operation.root, operation.secrets);
-      return;
-    }
-    if (!window.confirm(`导入 ${imported.length} 个模型 ID？\n${imported.join('\n')}`)) {
-      if (!this.isActive(operation)) return this.finishOperation(operation);
-      this.finishOperation(operation);
-      this.showResult('已取消导入', false, operation.root, operation.secrets);
-      return;
-    }
-    if (!this.isActive(operation)) return this.finishOperation(operation);
-    const rows = operation.root.querySelector<HTMLElement>('.cpe-model-rows');
-    if (!rows) return this.finishOperation(operation);
-    for (const id of imported) rows.append(this.createModelRow(emptyModel(id)));
-    this.refreshDynamicMetadata(operation.root);
-    this.finishOperation(operation);
-    this.showResult(`已导入 ${imported.length} 个模型 ID，保存后生效`, false, operation.root, operation.secrets);
   }
 
   async delete(): Promise<void> {
     if (!this.provider || this.newProvider) return;
+    if (this.mutationOperation) return;
     const button = this.root?.querySelector<HTMLButtonElement>('[data-cpe-action="delete"]');
     if (!this.deleteArmed) {
       this.deleteArmed = true;
@@ -281,30 +333,32 @@ export class SettingsCustomProviderEditor {
       }
       return;
     }
-    if (this.activeOperation?.action === 'delete') return;
     this.clearFeedback();
-    const operation = this.beginOperation('delete', null);
-    if (!operation || !operation.providerId) return;
-    const response = await this.request(operation, `/api/custom-providers/${encodeURIComponent(operation.providerId)}`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedRevision: operation.revision }),
-    });
-    if (!this.isActive(operation) || response.aborted) return this.finishOperation(operation);
-    if (!response.ok) {
-      await this.handleMutationError(operation, response.body);
-      this.finishOperation(operation);
-      return;
+    const operation = this.beginMutation('delete', null);
+    if (!operation) return;
+    try {
+      if (!operation.providerId) return;
+      const response = await this.request(operation, `/api/custom-providers/${encodeURIComponent(operation.providerId)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedRevision: operation.revision }),
+      });
+      if (response.aborted) return;
+      if (!response.ok) {
+        if (this.isCurrentMount(operation)) await this.handleMutationError(operation, response.body);
+        return;
+      }
+      const snapshot = response.body as RedactedCustomProviderSnapshot;
+      if (typeof snapshot.revision !== 'number' || !Array.isArray(snapshot.providers)) {
+        if (this.isCurrentMount(operation)) this.showResult('删除响应无效', true, operation.root, operation.secrets);
+        return;
+      }
+      this.consumeSnapshot(snapshot);
+      this.dependencies.onDeleted(snapshot);
+      this.dependencies.notify('已删除', 'success');
+    } finally {
+      this.finishMutation(operation);
     }
-    const snapshot = response.body as RedactedCustomProviderSnapshot;
-    if (typeof snapshot.revision !== 'number' || !Array.isArray(snapshot.providers)) {
-      this.finishOperation(operation);
-      this.showResult('删除响应无效', true, operation.root, operation.secrets);
-      return;
-    }
-    this.finishOperation(operation);
-    this.dependencies.onDeleted(snapshot);
-    this.dependencies.notify('已删除', 'success');
   }
 
   private render(provider: RedactedCustomProvider | null): void {
@@ -364,6 +418,7 @@ export class SettingsCustomProviderEditor {
     });
     this.refreshDynamicMetadata(root);
     this.container.replaceChildren(root);
+    if (this.mutationOperation) this.setMutationBusy(root, this.mutationOperation.action, true);
   }
 
   private field(labelText: string, control: HTMLElement, errorField?: string): HTMLElement {
@@ -482,7 +537,11 @@ export class SettingsCustomProviderEditor {
     remove.title = '删除 Header';
     remove.setAttribute('aria-label', '删除 Header');
     row.append(remove);
-    row.append(cpeElement('span', 'cpe-field-error cpe-header-error'));
+    const nameError = cpeElement('span', 'cpe-field-error cpe-header-error cpe-header-name-error');
+    const valueError = cpeElement('span', 'cpe-field-error cpe-header-error cpe-header-value-error');
+    nameError.hidden = true;
+    valueError.hidden = true;
+    row.append(nameError, valueError);
     return row;
   }
 
@@ -607,26 +666,21 @@ export class SettingsCustomProviderEditor {
     }
   }
 
-  private invalidateOperation(): void {
+  private invalidateQuery(): void {
     this.generation += 1;
-    const operation = this.activeOperation;
+    const operation = this.queryOperation;
     if (!operation) return;
     operation.controller.abort();
-    this.setBusy(operation, false);
-    this.activeOperation = null;
+    this.setQueryBusy(operation, false);
+    this.queryOperation = null;
   }
 
-  private beginOperation(
+  private createOperation(
     action: CustomProviderEditorAction,
     draft: CustomProviderDraft | null,
   ): CustomProviderEditorOperation | null {
     if (!this.root) return null;
-    if (this.activeOperation) {
-      this.activeOperation.controller.abort();
-      this.setBusy(this.activeOperation, false);
-      this.activeOperation = null;
-    }
-    const operation: CustomProviderEditorOperation = {
+    return {
       action,
       controller: new AbortController(),
       generation: this.generation,
@@ -637,25 +691,62 @@ export class SettingsCustomProviderEditor {
       draft,
       secrets: this.captureSecrets(this.root),
     };
-    this.activeOperation = operation;
-    this.setBusy(operation, true);
+  }
+
+  private beginQuery(action: CustomProviderQueryAction, draft: CustomProviderDraft | null): CustomProviderEditorOperation | null {
+    if (this.mutationOperation) return null;
+    if (this.queryOperation) {
+      this.queryOperation.controller.abort();
+      this.setQueryBusy(this.queryOperation, false);
+      this.queryOperation = null;
+    }
+    const operation = this.createOperation(action, draft);
+    if (!operation) return null;
+    this.queryOperation = operation;
+    this.setQueryBusy(operation, true);
     return operation;
   }
 
-  private isActive(operation: CustomProviderEditorOperation): boolean {
-    return this.activeOperation === operation
-      && operation.generation === this.generation
+  private beginMutation(action: CustomProviderMutationAction, draft: CustomProviderDraft | null): CustomProviderEditorOperation | null {
+    if (this.mutationOperation) return null;
+    if (this.queryOperation) {
+      this.queryOperation.controller.abort();
+      this.setQueryBusy(this.queryOperation, false);
+      this.queryOperation = null;
+    }
+    const operation = this.createOperation(action, draft);
+    if (!operation) return null;
+    this.mutationOperation = operation;
+    this.setMutationBusy(operation.root, action, true);
+    return operation;
+  }
+
+  private isCurrentMount(operation: CustomProviderEditorOperation): boolean {
+    return operation.generation === this.generation
       && operation.root === this.root
       && Boolean(this.container?.contains(operation.root));
   }
 
-  private finishOperation(operation: CustomProviderEditorOperation): void {
-    if (this.activeOperation !== operation) return;
-    this.setBusy(operation, false);
-    this.activeOperation = null;
+  private isCurrentQuery(operation: CustomProviderEditorOperation): boolean {
+    return this.queryOperation === operation && this.isCurrentMount(operation);
   }
 
-  private setBusy(operation: CustomProviderEditorOperation, busy: boolean): void {
+  private finishQuery(operation: CustomProviderEditorOperation): void {
+    if (this.queryOperation !== operation) return;
+    this.setQueryBusy(operation, false);
+    this.queryOperation = null;
+  }
+
+  private finishMutation(operation: CustomProviderEditorOperation): void {
+    if (this.mutationOperation !== operation) return;
+    this.setMutationBusy(operation.root, operation.action as CustomProviderMutationAction, false);
+    if (this.root !== operation.root && this.root) {
+      this.setMutationBusy(this.root, operation.action as CustomProviderMutationAction, false);
+    }
+    this.mutationOperation = null;
+  }
+
+  private setQueryBusy(operation: CustomProviderEditorOperation, busy: boolean): void {
     const action = operation.action === 'discover' ? 'discover'
       : operation.action === 'reveal' ? 'reveal-api-key'
         : operation.action;
@@ -666,6 +757,25 @@ export class SettingsCustomProviderEditor {
     else button.removeAttribute('aria-busy');
   }
 
+  private setMutationBusy(root: HTMLElement, action: CustomProviderMutationAction, busy: boolean): void {
+    for (const buttonAction of CUSTOM_NETWORK_ACTIONS) {
+      const button = root.querySelector<HTMLButtonElement>(`[data-cpe-action="${buttonAction}"]`);
+      if (button) button.disabled = busy;
+    }
+    const active = root.querySelector<HTMLButtonElement>(`[data-cpe-action="${action}"]`);
+    if (!active) return;
+    if (busy) active.setAttribute('aria-busy', 'true');
+    else active.removeAttribute('aria-busy');
+  }
+
+  private consumeSnapshot(snapshot: RedactedCustomProviderSnapshot): void {
+    this.revision = snapshot.revision;
+    const mountedId = this.provider?.id;
+    if (!mountedId) return;
+    const current = snapshot.providers.find(provider => provider.id === mountedId);
+    if (current) this.provider = current;
+  }
+
   private captureSecrets(root: HTMLElement): string[] {
     return [
       root.querySelector<HTMLInputElement>('#cpe-api-key')?.value,
@@ -674,32 +784,34 @@ export class SettingsCustomProviderEditor {
   }
 
   private async revealApiKey(): Promise<void> {
-    if (!this.provider?.apiKeyConfigured || this.activeOperation?.action === 'reveal') return;
+    if (!this.provider?.apiKeyConfigured || this.mutationOperation || this.queryOperation?.action === 'reveal') return;
     this.clearFeedback();
-    const operation = this.beginOperation('reveal', null);
-    if (!operation?.providerId) return;
-    const response = await this.request(operation, '/api/custom-providers/reveal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ providerId: operation.providerId }),
-    });
-    if (!this.isActive(operation) || response.aborted) return this.finishOperation(operation);
-    if (!response.ok) {
-      this.finishOperation(operation);
-      this.showResult(this.errorText(response.body, 'API Key 显示失败', operation.secrets), true, operation.root, operation.secrets);
-      return;
+    const operation = this.beginQuery('reveal', null);
+    if (!operation) return;
+    try {
+      if (!operation.providerId) return;
+      const response = await this.request(operation, '/api/custom-providers/reveal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId: operation.providerId }),
+      });
+      if (!this.isCurrentQuery(operation) || response.aborted) return;
+      if (!response.ok) {
+        this.showResult(this.errorText(response.body, 'API Key 显示失败', operation.secrets), true, operation.root, operation.secrets);
+        return;
+      }
+      const apiKey = response.body && typeof response.body === 'object'
+        ? (response.body as { apiKey?: unknown }).apiKey
+        : undefined;
+      if (typeof apiKey !== 'string') {
+        this.showResult('API Key 显示响应无效', true, operation.root, operation.secrets);
+        return;
+      }
+      const input = operation.root.querySelector<HTMLInputElement>('#cpe-api-key');
+      if (input) input.value = apiKey;
+    } finally {
+      this.finishQuery(operation);
     }
-    const apiKey = response.body && typeof response.body === 'object'
-      ? (response.body as { apiKey?: unknown }).apiKey
-      : undefined;
-    if (typeof apiKey !== 'string') {
-      this.finishOperation(operation);
-      this.showResult('API Key 显示响应无效', true, operation.root, operation.secrets);
-      return;
-    }
-    this.finishOperation(operation);
-    const input = operation.root.querySelector<HTMLInputElement>('#cpe-api-key');
-    if (input) input.value = apiKey;
   }
 
   private refreshDynamicMetadata(root: HTMLElement): void {
@@ -716,6 +828,10 @@ export class SettingsCustomProviderEditor {
         value.dataset.fieldPath = `headers[${index}].value`;
         value.setAttribute('aria-label', `Header ${number} 值`);
       }
+      const nameError = row.querySelector<HTMLElement>('.cpe-header-name-error');
+      if (nameError) nameError.dataset.fieldError = `headers[${index}].name`;
+      const valueError = row.querySelector<HTMLElement>('.cpe-header-value-error');
+      if (valueError) valueError.dataset.fieldError = `headers[${index}].value`;
       const remove = row.querySelector<HTMLButtonElement>('[data-cpe-action="remove-header"]');
       if (remove) {
         remove.title = `删除 Header ${number}`;
@@ -760,6 +876,7 @@ export class SettingsCustomProviderEditor {
     const id = value('#cpe-id');
     const name = value('#cpe-name');
     const baseUrl = value('#cpe-base-url');
+    const modelDiscovery = value('#cpe-model-discovery');
     const protocol = this.root.querySelector<HTMLSelectElement>('#cpe-protocol')?.value ?? '';
     const authMode = this.root.querySelector<HTMLInputElement>('input[name="cpe-auth-mode"]:checked')?.value ?? '';
     let valid = true;
@@ -786,11 +903,29 @@ export class SettingsCustomProviderEditor {
         if (showErrors) this.setFieldError('baseUrl', '请输入有效的 HTTP(S) URL');
       }
     }
+    if (baseUrl && modelDiscovery) {
+      try {
+        const base = new URL(baseUrl);
+        const parsed = new URL(modelDiscovery, base);
+        if (
+          !['http:', 'https:'].includes(parsed.protocol)
+          || !parsed.hostname
+          || parsed.username
+          || parsed.password
+          || parsed.origin !== base.origin
+        ) throw new Error();
+      } catch {
+        valid = false;
+        if (showErrors) this.setFieldError('modelDiscovery', '请输入同源 HTTP(S) URL 或安全相对路径');
+      }
+    }
     if (!valid) return null;
 
     const headers: CustomProviderDraft['headers'] = [];
     const headerNames = new Set<string>();
-    for (const row of this.root.querySelectorAll<HTMLElement>('.cpe-header-row')) {
+    const headerRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-header-row')];
+    for (let index = 0; index < headerRows.length; index += 1) {
+      const row = headerRows[index];
       const originalName = row.dataset.originalName ?? '';
       if (row.dataset.removed === 'true') {
         if (originalName) headers.push({ name: originalName, remove: true });
@@ -800,7 +935,6 @@ export class SettingsCustomProviderEditor {
       const headerName = configured
         ? originalName
         : row.querySelector<HTMLInputElement>('.cpe-header-name')?.value.trim() ?? '';
-      const error = row.querySelector<HTMLElement>('.cpe-header-error');
       const normalizedName = headerName.toLowerCase();
       let message = '';
       if (!headerName) message = '请输入 Header name';
@@ -809,17 +943,17 @@ export class SettingsCustomProviderEditor {
       } else if (headerNames.has(normalizedName)) message = 'Header name 重复';
       if (message) {
         valid = false;
-        if (showErrors && error) error.textContent = message;
-        continue;
-      }
-      headerNames.add(normalizedName);
+        if (showErrors) this.setFieldError(`headers[${index}].name`, message);
+      } else headerNames.add(normalizedName);
       const headerValue = row.querySelector<HTMLInputElement>('.cpe-header-value')?.value ?? '';
-      if (!configured && !headerValue) {
+      const hasHeaderValue = headerValue.trim().length > 0;
+      if (!configured && !hasHeaderValue) {
         valid = false;
-        if (showErrors) this.setFieldError(`headers[${headers.length}].value`, '请输入 Header value');
-        continue;
+        if (showErrors) this.setFieldError(`headers[${index}].value`, '请输入 Header value');
       }
-      headers.push({ name: headerName, ...(headerValue ? { value: headerValue } : {}) });
+      if (!message && (configured || hasHeaderValue)) {
+        headers.push({ name: headerName, ...(hasHeaderValue ? { value: headerValue } : {}) });
+      }
     }
     if (!valid) return null;
 
@@ -881,8 +1015,8 @@ export class SettingsCustomProviderEditor {
           const parsed = readJsonObject(row.querySelector(selector), label);
           if (advancedField === 'samplingParams') samplingParams = parsed;
           else compatibility = parsed;
-        } catch {
-          failModel(field(advancedField), `${label} 必须是 JSON 对象`);
+        } catch (error) {
+          failModel(field(advancedField), error instanceof Error ? error.message : `${label} 必须是 JSON 对象`);
         }
       }
       models.push({
@@ -904,7 +1038,6 @@ export class SettingsCustomProviderEditor {
       if (showErrors) this.setFieldError('apiKey', '请输入 API Key');
       return null;
     }
-    const modelDiscovery = value('#cpe-model-discovery');
     return {
       id,
       name,
@@ -941,7 +1074,7 @@ export class SettingsCustomProviderEditor {
   }
 
   private async handleMutationError(operation: CustomProviderEditorOperation, value: unknown): Promise<void> {
-    if (!this.isActive(operation)) return;
+    if (!this.isCurrentMount(operation)) return;
     const body = value && typeof value === 'object' ? value as CustomProviderErrorResponse : {};
     if (body.code === 'provider_id_conflict' || body.code === 'immutable_provider_id') {
       this.setFieldError('id', body.code === 'provider_id_conflict' ? 'Provider ID 已被占用' : 'Provider ID 创建后不可修改');
@@ -950,7 +1083,7 @@ export class SettingsCustomProviderEditor {
     if (body.code === 'revision_conflict') {
       let latestRevision = typeof body.currentRevision === 'number' ? body.currentRevision : operation.revision;
       const latest = await this.request(operation, '/api/custom-providers', { method: 'GET' });
-      if (!this.isActive(operation) || latest.aborted) return;
+      if (!this.isCurrentMount(operation) || latest.aborted) return;
       if (latest.ok && latest.body && typeof latest.body === 'object') {
         const received = (latest.body as { revision?: unknown }).revision;
         if (typeof received === 'number') latestRevision = received;
@@ -996,7 +1129,10 @@ export class SettingsCustomProviderEditor {
   }
 
   private clearFeedback(): void {
-    this.root?.querySelectorAll<HTMLElement>('.cpe-field-error').forEach(error => { error.textContent = ''; });
+    this.root?.querySelectorAll<HTMLElement>('.cpe-field-error').forEach(error => {
+      error.textContent = '';
+      if (error.classList.contains('cpe-header-error')) error.hidden = true;
+    });
     this.root?.querySelectorAll<HTMLElement>('[aria-invalid="true"]').forEach(control => control.removeAttribute('aria-invalid'));
     const result = this.root?.querySelector<HTMLElement>('.cpe-result');
     if (result) {
@@ -1014,21 +1150,27 @@ export class SettingsCustomProviderEditor {
 
   private setFieldError(field: string, message: string): void {
     const normalized = field.replace(/^provider\./, '');
-    const control = this.root?.querySelector<HTMLElement>(`[data-field-path="${normalized}"]`);
+    const controls = [...(this.root?.querySelectorAll<HTMLElement>('[data-field-path]') ?? [])];
+    const control = controls.find(candidate => candidate.dataset.fieldPath === normalized);
     if (control) {
       control.setAttribute('aria-invalid', 'true');
-      const row = control.closest<HTMLElement>('.cpe-header-row, .cpe-model-row');
-      const rowError = row?.querySelector<HTMLElement>('.cpe-header-error, .cpe-model-error');
-      if (rowError) {
-        rowError.dataset.fieldError = normalized;
-        rowError.textContent = message;
-        return;
-      }
     }
     const target = [...(this.root?.querySelectorAll<HTMLElement>('[data-field-error]') ?? [])]
       .find(candidate => candidate.dataset.fieldError === normalized);
-    if (target) target.textContent = message;
-    else this.showResult(message, true);
+    if (target) {
+      target.hidden = false;
+      target.textContent = message;
+      return;
+    }
+    const row = control?.closest<HTMLElement>('.cpe-header-row, .cpe-model-row');
+    const rowError = row?.querySelector<HTMLElement>('.cpe-header-error, .cpe-model-error');
+    if (rowError) {
+      rowError.dataset.fieldError = normalized;
+      rowError.hidden = false;
+      rowError.textContent = message;
+      return;
+    }
+    this.showResult(message, true);
   }
 
   private showResult(
@@ -1056,23 +1198,20 @@ export class SettingsCustomProviderEditor {
   private redact(message: string, capturedSecrets?: readonly string[]): string {
     const secrets = capturedSecrets ?? (this.root ? this.captureSecrets(this.root) : []);
     const variants = new Set<string>();
+    const encodedPatterns: RegExp[] = [];
     for (const secret of secrets) {
       if (!secret) continue;
       variants.add(secret);
       const json = JSON.stringify(secret);
       if (json.length >= 2) variants.add(json.slice(1, -1));
-      try {
-        const encoded = encodeURIComponent(secret);
-        variants.add(encoded);
-        variants.add(encoded.replace(/%[0-9A-F]{2}/g, part => part.toLowerCase()));
-        variants.add(encoded.replace(/%[0-9a-f]{2}/g, part => part.toUpperCase()));
-        variants.add(encoded.replace(/%20/gi, '+'));
-      } catch {}
+      const encodedPattern = percentEncodedSecretPattern(secret);
+      if (encodedPattern) encodedPatterns.push(encodedPattern);
     }
     let redacted = message;
     for (const secret of [...variants].sort((left, right) => right.length - left.length)) {
       redacted = redacted.split(secret).join('[REDACTED]');
     }
+    for (const pattern of encodedPatterns) redacted = redacted.replace(pattern, '[REDACTED]');
     return redacted
       .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
       .replace(/\bsk-[A-Za-z0-9_-]{6,}\b/g, '[REDACTED]');

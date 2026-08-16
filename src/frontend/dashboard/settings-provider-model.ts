@@ -485,11 +485,20 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   }
 
   private applyCustomSnapshot(snapshot: RedactedCustomProviderSnapshot, selectedId: string | null): void {
+    const selectedBeforeMutation = this.selectedProvider;
     this.customSnapshotState = 'ready';
     this.customProviders = snapshot.providers;
     this.revision = snapshot.revision;
     this.reconcileOrder();
     this.renderProviderList();
+    const available = new Set([
+      ...this.officialProviders.map(provider => provider.id),
+      ...this.customProviders.map(provider => provider.id),
+    ]);
+    if (selectedBeforeMutation && available.has(selectedBeforeMutation)) {
+      this.markSelected(selectedBeforeMutation);
+      return;
+    }
     const next = selectedId && this.customProviders.some(provider => provider.id === selectedId) ? selectedId : window._provOrder?.[0];
     if (next) this.selectProvider(next);
     else {

@@ -722,13 +722,11 @@ describe("settings DOM boundary", () => {
     assert.strictEqual(document.querySelector("#custom-provider-xss"), null);
   });
 
-  it("invalidates every pending custom provider action when another provider is mounted", async () => {
+  it("invalidates pending custom provider queries when another provider is mounted", async () => {
     const beta = customProvider({ id: "beta", name: "Beta Gateway" });
     const outcomes = {
-      save: response({ schemaVersion: 1, revision: 5, providers: [customProvider()] }),
       test: response({ ok: false, code: "late", message: "late test error" }, 502),
       discover: response({ ids: ["late-model"] }),
-      delete: response({ schemaVersion: 1, revision: 5, providers: [] }),
     };
 
     for (const action of Object.keys(outcomes)) {
@@ -737,8 +735,6 @@ describe("settings DOM boundary", () => {
       settingsSpies.toastCalls.length = 0;
       const pending = deferred();
       const requests = [];
-      let saved = 0;
-      let deleted = 0;
       let confirmations = 0;
       const originalConfirm = win.confirm;
       win.confirm = () => { confirmations += 1; return true; };
@@ -746,19 +742,10 @@ describe("settings DOM boundary", () => {
         requests.push({ url: String(url), signal: init.signal });
         return pending.promise;
       };
-      const editor = createCustomProviderEditor({
-        onSaved: () => { saved += 1; },
-        onDeleted: () => { deleted += 1; },
-      });
+      const editor = createCustomProviderEditor();
       editor.mount(host, customProvider(), 4);
 
-      let operation;
-      if (action === "delete") {
-        await editor.delete();
-        operation = editor.delete();
-      } else {
-        operation = editor[action === "discover" ? "discoverModels" : action]();
-      }
+      const operation = editor[action === "discover" ? "discoverModels" : action]();
       await Promise.resolve();
       assert.strictEqual(requests.length, 1, `${action}: request should start`);
 
@@ -770,11 +757,125 @@ describe("settings DOM boundary", () => {
       assert.strictEqual(host.querySelector("#cpe-id")?.value, "beta", `${action}: late result must not replace provider B`);
       assert.strictEqual(host.querySelector(".cpe-result")?.hidden, true, `${action}: late result must not update provider B status`);
       assert.deepStrictEqual([...host.querySelectorAll(".cpe-model-id")].map((input) => input.value), ["model-a", "model-b"]);
-      assert.strictEqual(saved, 0, `${action}: stale save must not invoke onSaved`);
-      assert.strictEqual(deleted, 0, `${action}: stale delete must not invoke onDeleted`);
       assert.strictEqual(confirmations, 0, `${action}: stale discovery must not prompt`);
       assert.deepStrictEqual(settingsSpies.toastCalls, []);
       win.confirm = originalConfirm;
+    }
+  });
+
+  it("keeps save and delete authoritative while blocking query actions across mounts", async () => {
+    const beta = customProvider({ id: "beta", name: "Beta Gateway" });
+    for (const action of ["save", "delete"]) {
+      const host = document.createElement("div");
+      document.body.replaceChildren(host);
+      const pending = deferred();
+      const requests = [];
+      const savedSnapshots = [];
+      const deletedSnapshots = [];
+      fetchImpl = async (url, init = {}) => {
+        requests.push({ url: String(url), signal: init.signal });
+        return pending.promise;
+      };
+      const editor = createCustomProviderEditor({
+        onSaved: (snapshot) => savedSnapshots.push(snapshot),
+        onDeleted: (snapshot) => deletedSnapshots.push(snapshot),
+      });
+      editor.mount(host, customProvider(), 4);
+
+      let operation;
+      if (action === "delete") {
+        await editor.delete();
+        operation = editor.delete();
+      } else operation = editor.save();
+      await Promise.resolve();
+      const mutationRequest = requests[0];
+      assert.ok(mutationRequest);
+      for (const selector of ["save", "delete", "test", "discover", "reveal-api-key"]) {
+        assert.strictEqual(host.querySelector(`[data-cpe-action="${selector}"]`)?.disabled, true, `${action}: ${selector} must be disabled`);
+      }
+
+      await editor.test();
+      await editor.discoverModels();
+      host.querySelector('[data-cpe-action="reveal-api-key"]')?.click();
+      assert.strictEqual(requests.length, 1, `${action}: queries cannot supersede a mutation`);
+      assert.strictEqual(mutationRequest.signal?.aborted, false);
+
+      editor.mount(host, beta, 4);
+      setInput("#cpe-name", "Unsaved Beta Name");
+      assert.strictEqual(mutationRequest.signal?.aborted, false, `${action}: mount must not abort mutation`);
+      assert.strictEqual(host.querySelector('[data-cpe-action="test"]')?.disabled, true);
+      await editor.test();
+      await editor.discoverModels();
+      host.querySelector('[data-cpe-action="reveal-api-key"]')?.click();
+      assert.strictEqual(requests.length, 1);
+
+      const snapshot = {
+        schemaVersion: 1,
+        revision: 5,
+        providers: action === "save"
+          ? [customProvider({ name: "Saved Acme" }), beta]
+          : [beta],
+      };
+      pending.resolve(response(snapshot));
+      await operation;
+
+      assert.strictEqual(host.querySelector("#cpe-id")?.value, "beta");
+      assert.strictEqual(host.querySelector("#cpe-name")?.value, "Unsaved Beta Name");
+      assert.strictEqual(host.querySelector('[data-cpe-action="test"]')?.disabled, false);
+      assert.strictEqual(host.querySelector('[aria-busy="true"]'), null);
+      assert.deepStrictEqual(savedSnapshots, action === "save" ? [snapshot] : []);
+      assert.deepStrictEqual(deletedSnapshots, action === "delete" ? [snapshot] : []);
+    }
+  });
+
+  it("applies late mutation snapshots in the owner without replacing the newly selected draft", async () => {
+    const beta = customProvider({ id: "beta", name: "Beta Gateway" });
+    for (const action of ["save", "delete"]) {
+      document.body.innerHTML = "";
+      win._provOrder = [];
+      const pending = deferred();
+      let mutationSignal;
+      fetchImpl = async (url, init = {}) => {
+        if (String(url) === "/api/auth") return response({ providers: [] });
+        if (String(url) === "/api/custom-providers") {
+          return response({ revision: 4, official: [], custom: [customProvider(), beta] });
+        }
+        if (String(url) === "/api/custom-providers/capabilities") return response(capabilities());
+        if (init.method === "PUT" || init.method === "DELETE") {
+          mutationSignal = init.signal;
+          return pending.promise;
+        }
+        return response({});
+      };
+      win.App.Settings.openSettingsModal();
+      await flushAsyncWork();
+      const editor = win.App.SettingsComponents.providers.customEditor;
+      let operation;
+      if (action === "delete") {
+        await editor.delete();
+        operation = editor.delete();
+      } else operation = editor.save();
+      await Promise.resolve();
+
+      document.querySelector('.msl-item[data-prov="beta"]').click();
+      setInput("#cpe-name", "Unsaved Beta Name");
+      const snapshot = {
+        schemaVersion: 1,
+        revision: 5,
+        providers: action === "save"
+          ? [customProvider({ name: "Saved Acme" }), beta]
+          : [beta],
+      };
+      pending.resolve(response(snapshot));
+      await operation;
+
+      assert.strictEqual(mutationSignal?.aborted, false);
+      assert.strictEqual(document.querySelector('.msl-item[data-prov="beta"]')?.classList.contains("on"), true);
+      assert.strictEqual(document.querySelector("#cpe-id")?.value, "beta");
+      assert.strictEqual(document.querySelector("#cpe-name")?.value, "Unsaved Beta Name");
+      if (action === "save") assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"] .msl-name')?.textContent, "Saved Acme");
+      else assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"]'), null);
+      win.App.Settings.closeSettingsModal();
     }
   });
 
@@ -963,6 +1064,107 @@ describe("settings DOM boundary", () => {
     assert.notStrictEqual(host.querySelector('[data-field-error="models[1].maxTokens"]')?.textContent, "");
   });
 
+  it("treats hostile backend field paths as inert data and always clears mutation busy state", async () => {
+    const paths = ['provider.models[0].x"]', `provider.${"x[".repeat(4096)}`];
+    for (const fieldPath of paths) {
+      const host = document.createElement("div");
+      document.body.replaceChildren(host);
+      fetchImpl = async () => response({ code: "invalid_request", fieldPath }, 400);
+      const editor = createCustomProviderEditor();
+      editor.mount(host, customProvider(), 4);
+
+      await assert.doesNotReject(() => editor.save());
+
+      const save = host.querySelector('[data-cpe-action="save"]');
+      assert.strictEqual(save?.disabled, false);
+      assert.strictEqual(save?.hasAttribute("aria-busy"), false);
+      assert.strictEqual(host.querySelector('[aria-busy="true"]'), null);
+      assert.strictEqual(host.querySelector(".cpe-result")?.getAttribute("role"), "alert");
+      assert.strictEqual(host.querySelector("script, img"), null);
+    }
+  });
+
+  it("keeps Header validation errors on their real DOM row indexes", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    let requests = 0;
+    fetchImpl = async () => { requests += 1; return response({}); };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider({ headers: [] }), 4);
+    host.querySelector('[data-cpe-action="add-header"]').click();
+    host.querySelector('[data-cpe-action="add-header"]').click();
+    const rows = host.querySelectorAll(".cpe-header-row");
+    setInput(".cpe-header-row:nth-child(1) .cpe-header-value", "first-value");
+    setInput(".cpe-header-row:nth-child(2) .cpe-header-name", "X-Second");
+
+    await editor.save();
+
+    assert.strictEqual(requests, 0);
+    assert.notStrictEqual(rows[0].querySelector('[data-field-error="headers[0].name"]')?.textContent, "");
+    assert.strictEqual(rows[0].querySelector(".cpe-header-name")?.getAttribute("aria-invalid"), "true");
+    assert.notStrictEqual(rows[1].querySelector('[data-field-error="headers[1].value"]')?.textContent, "");
+    assert.strictEqual(rows[1].querySelector(".cpe-header-value")?.getAttribute("aria-invalid"), "true");
+  });
+
+  it("mirrors advanced JSON, Header secret, and discovery URL contract validation", async () => {
+    const invalidCases = [
+      { path: "headers[1].value", mutate: (host) => { host.querySelector('[data-cpe-action="add-header"]').click(); setInput('.cpe-header-row:nth-child(2) .cpe-header-name', "X-Blank"); setInput('.cpe-header-row:nth-child(2) .cpe-header-value', "   "); } },
+      { path: "models[0].samplingParams", mutate: () => setInput(".cpe-model-sampling", '{"nested":{"value":1e400}}') },
+      { path: "models[0].compatibility", mutate: () => setInput(".cpe-model-compatibility", JSON.stringify({ text: "汉".repeat(5460) })) },
+      ...["javascript:alert(1)", "data:text/plain,models", "ftp://example.test/models", "https://user:password@api.example.test/models", "https://other.example.test/models"].map((modelDiscovery) => ({
+        path: "modelDiscovery",
+        mutate: () => setInput("#cpe-model-discovery", modelDiscovery),
+      })),
+    ];
+    let requests = 0;
+    fetchImpl = async () => { requests += 1; return response({}); };
+    for (const testCase of invalidCases) {
+      const host = document.createElement("div");
+      document.body.replaceChildren(host);
+      const editor = createCustomProviderEditor();
+      editor.mount(host, customProvider(), 4);
+      testCase.mutate(host);
+      await editor.save();
+      assert.notStrictEqual(host.querySelector(`[data-field-error="${testCase.path}"]`)?.textContent, "", testCase.path);
+    }
+    assert.strictEqual(requests, 0);
+
+    const host = document.createElement("div");
+    document.body.replaceChildren(host);
+    let body;
+    fetchImpl = async (_url, init = {}) => {
+      body = JSON.parse(init.body);
+      return response({ schemaVersion: 1, revision: 5, providers: [customProvider()] });
+    };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 4);
+    setInput(".cpe-model-sampling", JSON.stringify({ x: "a".repeat(16376) }));
+    setInput("#cpe-model-discovery", "../models");
+    await editor.save();
+    assert.ok(body, "exactly 16 KiB advanced JSON and a safe relative URL should be accepted");
+    assert.strictEqual(Buffer.byteLength(JSON.stringify(body.provider.models[0].samplingParams), "utf8"), 16 * 1024);
+    assert.strictEqual(body.provider.modelDiscovery, "../models");
+  });
+
+  it("stable-deduplicates normalized discovery IDs before confirmation and import", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    fetchImpl = async () => response({ ids: [" model-a ", "new-b", "", "   ", "new-b", "new-c", " new-c "] });
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider({ models: [customProvider().models[0]] }), 4);
+    const originalConfirm = win.confirm;
+    let prompt = "";
+    win.confirm = (message) => { prompt = message; return true; };
+
+    await editor.discoverModels();
+
+    assert.match(prompt, /导入 2 个模型 ID/);
+    assert.strictEqual((prompt.match(/new-b/g) ?? []).length, 1);
+    assert.strictEqual((prompt.match(/new-c/g) ?? []).length, 1);
+    assert.deepStrictEqual([...host.querySelectorAll(".cpe-model-id")].map((input) => input.value), ["model-a", "new-b", "new-c"]);
+    win.confirm = originalConfirm;
+  });
+
   it("provides keyboard-operable provider items and accessible dynamic editor controls", async () => {
     fetchImpl = async (url) => {
       if (String(url) === "/api/auth") return response({ providers: [{ provider: "openai", hasKey: false }] });
@@ -1036,6 +1238,32 @@ describe("settings DOM boundary", () => {
       assert.strictEqual(observable.includes(variant), false, `must redact ${JSON.stringify(variant)} from ${observable}`);
     }
     assert.strictEqual(host.querySelector("#encoded-secret-xss"), null);
+  });
+
+  it("redacts every representative mixed-case percent encoding without decoding ordinary text", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const secret = 'a/"\\z';
+    const encodedVariants = ["a%2f%22%5Cz", "a%2F%22%5cz", "a%2f%22%5cz", "a%2F%22%5Cz"];
+    const jsonEscaped = JSON.stringify(secret).slice(1, -1);
+    const ordinary = "%3Cimg%20id%3Dordinary-text%3E";
+    fetchImpl = async () => response({
+      ok: false,
+      code: "mixed_percent",
+      message: `${secret} | ${jsonEscaped} | ${encodedVariants.join(" | ")} | ${ordinary}`,
+    }, 502);
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 4);
+    setInput("#cpe-api-key", secret);
+
+    await editor.test();
+
+    const text = host.querySelector(".cpe-result")?.textContent ?? "";
+    assert.strictEqual(text.includes(secret), false);
+    assert.strictEqual(text.includes(jsonEscaped), false);
+    for (const encoded of encodedVariants) assert.strictEqual(text.includes(encoded), false, encoded);
+    assert.strictEqual(text.includes(ordinary), true, "unrelated percent text must stay encoded and inert");
+    assert.strictEqual(host.querySelector("#ordinary-text"), null);
   });
 
   it("removes the standalone Permissions sidebar entry while keeping the mode badge", () => {
