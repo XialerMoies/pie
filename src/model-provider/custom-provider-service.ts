@@ -4,7 +4,9 @@ import {
   PROVIDER_PROTOCOLS,
   PROVIDER_PROTOCOL_AUTH_MODES,
   CustomProviderInvalidRequestError,
+  CustomProviderValidationError,
   validateCustomProviderDraft,
+  type ConnectionTestResult,
   type CustomProviderCapabilities,
   type CustomProviderDeleteInput,
   type CustomProviderDraft,
@@ -12,6 +14,8 @@ import {
   type CustomProviderMutationInput,
   type CustomProviderSnapshot,
   type RedactedCustomProviderSnapshot,
+  type ResolvedCustomProviderDraft,
+  type ResolvedProviderSecrets,
 } from "./contracts.js";
 import {
   CustomProviderRevisionConflict,
@@ -20,6 +24,7 @@ import {
 } from "./custom-provider-store.js";
 import type { ProviderReferenceChecker } from "./provider-reference-checker.js";
 import type { ProviderReferenceMutationLock } from "./provider-reference-lock.js";
+import { ProviderNetworkClient } from "./provider-network-client.js";
 import type { CustomProviderRuntimeCoordinator } from "./runtime-coordinator.js";
 
 export class CustomProviderIdConflict extends Error {
@@ -57,10 +62,14 @@ export class CustomProviderNotFoundError extends Error {
 }
 
 export interface CustomProviderServiceOptions {
-  store: Pick<CustomProviderStore, "commit" | "readSnapshot" | "readRedacted" | "revealApiKey">;
+  store: Pick<
+    CustomProviderStore,
+    "commit" | "readSnapshot" | "readRedacted" | "revealApiKey" | "resolveSecrets"
+  >;
   coordinator: Pick<CustomProviderRuntimeCoordinator, "sync">;
   referenceChecker: ProviderReferenceChecker;
   referenceLock: ProviderReferenceMutationLock;
+  networkClient?: Pick<ProviderNetworkClient, "testConnection" | "discoverModels">;
 }
 
 function assertRevision(expectedRevision: number, currentRevision: number): void {
@@ -102,6 +111,7 @@ export class CustomProviderService {
   readonly #coordinator: CustomProviderServiceOptions["coordinator"];
   readonly #referenceChecker: ProviderReferenceChecker;
   readonly #referenceLock: ProviderReferenceMutationLock;
+  readonly #networkClient: NonNullable<CustomProviderServiceOptions["networkClient"]>;
   readonly #knownCustomIds = new Set<string>();
   readonly #officialIds = new WeakMap<ModelRuntime, Set<string>>();
 
@@ -110,6 +120,7 @@ export class CustomProviderService {
     this.#coordinator = options.coordinator;
     this.#referenceChecker = options.referenceChecker;
     this.#referenceLock = options.referenceLock;
+    this.#networkClient = options.networkClient ?? new ProviderNetworkClient();
   }
 
   capabilities(): CustomProviderCapabilities {
@@ -228,6 +239,66 @@ export class CustomProviderService {
     const apiKey = await this.#store.revealApiKey(providerId);
     if (apiKey === undefined) throw new CustomProviderApiKeyUnavailable(providerId);
     return apiKey;
+  }
+
+  async #resolveNetworkDraft(draft: CustomProviderDraft): Promise<ResolvedCustomProviderDraft> {
+    const validated = validateCustomProviderDraft(draft);
+    const snapshot = await this.#store.readSnapshot();
+    const saved = snapshot.providers.find((provider) => provider.id === validated.id);
+    const activeHeaders = validated.headers.flatMap((header, index) => (
+      header.remove === true ? [] : [{ header, index }]
+    ));
+    const needsSavedApiKey = validated.authMode === "apiKey" && validated.apiKey === undefined;
+    const needsSavedHeaders = activeHeaders.some(({ header }) => header.value === undefined);
+    let savedSecrets: ResolvedProviderSecrets | undefined;
+    if (saved !== undefined && (needsSavedApiKey || needsSavedHeaders)) {
+      savedSecrets = await this.#store.resolveSecrets(saved);
+    }
+
+    let apiKey: string | undefined;
+    if (validated.authMode === "apiKey") {
+      apiKey = validated.apiKey === undefined ? savedSecrets?.apiKey : validated.apiKey ?? undefined;
+      if (apiKey === undefined) {
+        throw new CustomProviderValidationError("provider.apiKey", "must be provided for network operations");
+      }
+    }
+
+    const headers = Object.create(null) as Record<string, string>;
+    for (let index = 0; index < activeHeaders.length; index += 1) {
+      const { header, index: draftIndex } = activeHeaders[index];
+      const savedHeader = savedSecrets === undefined
+        ? undefined
+        : Object.entries(savedSecrets.headers).find(([name]) => name.toLowerCase() === header.name.toLowerCase())?.[1];
+      const value = header.value ?? savedHeader;
+      if (value === undefined) {
+        throw new CustomProviderValidationError(
+          `provider.headers[${draftIndex}].value`,
+          "must be provided for network operations",
+        );
+      }
+      headers[header.name] = value;
+    }
+
+    const { apiKey: _apiKey, headers: _headers, ...provider } = validated;
+    return {
+      provider: {
+        ...provider,
+        headers: activeHeaders.map(({ header }) => header.name),
+      },
+      secrets: {
+        ...(apiKey === undefined ? {} : { apiKey }),
+        headers,
+      },
+      modelId: validated.models[0]?.id,
+    };
+  }
+
+  async testConnection(draft: CustomProviderDraft, signal?: AbortSignal): Promise<ConnectionTestResult> {
+    return this.#networkClient.testConnection(await this.#resolveNetworkDraft(draft), signal);
+  }
+
+  async discoverModels(draft: CustomProviderDraft, signal?: AbortSignal): Promise<{ ids: string[] }> {
+    return this.#networkClient.discoverModels(await this.#resolveNetworkDraft(draft), signal);
   }
 
   async syncRuntime(runtime: ModelRuntime): Promise<number> {

@@ -1308,6 +1308,14 @@ describe("custom provider settings routes", () => {
       update: async () => redacted(2),
       delete: async () => ({ schemaVersion: 1, revision: 3, providers: [] }),
       revealApiKey: async () => apiSecret,
+      testConnection: async () => ({
+        ok: true,
+        providerId: "acme",
+        modelId: "model-a",
+        latencyMs: 12,
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+      }),
+      discoverModels: async () => ({ ids: ["model-a", "model-b"] }),
       ...overrides,
     };
   }
@@ -1400,6 +1408,182 @@ describe("custom provider settings routes", () => {
       assert.equal(result.body.includes(apiSecret), false);
       assert.equal(result.body.includes(headerSecret), false);
     }
+  });
+
+  it("tests and discovers from an in-memory draft with stable response shapes and a request signal", async () => {
+    const calls = [];
+    const connection = {
+      ok: true,
+      providerId: "acme",
+      modelId: "model-a",
+      latencyMs: 12,
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+    };
+    const ctx = customContext({
+      customProviderService: service({
+        async testConnection(draft, signal) {
+          calls.push(["test", draft, signal]);
+          return connection;
+        },
+        async discoverModels(draft, signal) {
+          calls.push(["discover", draft, signal]);
+          return { ids: ["model-a", "model-b"] };
+        },
+      }),
+    });
+
+    const tested = await callHandler(
+      handleSettings,
+      "POST",
+      "/api/custom-providers/test",
+      { provider: providerDraft },
+      ctx,
+    );
+    const discovered = await callHandler(
+      handleSettings,
+      "POST",
+      "/api/custom-providers/discover-models",
+      { provider: providerDraft },
+      ctx,
+    );
+
+    assert.equal(tested.status, 200);
+    assert.deepEqual(parseJSON(tested.body), connection);
+    assert.equal(discovered.status, 200);
+    assert.deepEqual(parseJSON(discovered.body), { ids: ["model-a", "model-b"] });
+    assert.deepEqual(calls.map(([operation, draft]) => [operation, draft]), [
+      ["test", providerDraft],
+      ["discover", providerDraft],
+    ]);
+    for (const [, , signal] of calls) assert.ok(signal instanceof AbortSignal);
+  });
+
+  it("does not persist network operations, reuses saved credentials in memory, and permits save after failure", async () => {
+    const ctx = customContext();
+    const configFile = resolve(ctx.paths.PI_CONFIG_DIR, "custom-providers.json");
+    const secretsFile = resolve(ctx.paths.PI_CONFIG_DIR, "custom-provider-secrets.json");
+    const realStore = new CustomProviderStore({ configFile, secretsFile });
+    let commits = 0;
+    const store = {
+      readSnapshot: (...args) => realStore.readSnapshot(...args),
+      readRedacted: (...args) => realStore.readRedacted(...args),
+      revealApiKey: (...args) => realStore.revealApiKey(...args),
+      resolveSecrets: (...args) => realStore.resolveSecrets(...args),
+      commit: (...args) => {
+        commits += 1;
+        return realStore.commit(...args);
+      },
+    };
+    const networkInputs = [];
+    const networkClient = {
+      async testConnection(input) {
+        networkInputs.push(["test", input]);
+        return {
+          ok: false,
+          providerId: input.provider.id,
+          modelId: input.modelId,
+          code: "authentication",
+          message: "Provider authentication failed",
+        };
+      },
+      async discoverModels(input) {
+        networkInputs.push(["discover", input]);
+        return { ids: ["discovered-a"] };
+      },
+    };
+    const modelRuntime = {
+      getProviders: () => [{ id: "openai", name: "OpenAI" }],
+      getProviderAuthStatus: () => ({ configured: true }),
+      setModel() { assert.fail("current runtime must not be changed by a connection test"); },
+    };
+    ctx.runtime = mockRuntime({ modelRuntime, syncModelProviders: async () => 0 });
+    ctx.customProviderService = new CustomProviderService({
+      store,
+      networkClient,
+      coordinator: { sync: async () => (await store.readSnapshot()).revision },
+      referenceChecker: new ProviderReferenceChecker({
+        currentModel: () => undefined,
+        defaultModel: () => undefined,
+        customAgents: () => [],
+      }),
+      referenceLock: new FileProviderReferenceMutationLock(resolve(ctx.paths.PI_CONFIG_DIR, "provider-references.lock")),
+    });
+
+    const failedTest = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
+      provider: providerDraft,
+    }, ctx);
+    assert.equal(failedTest.status, 200);
+    assert.equal(parseJSON(failedTest.body).ok, false);
+    assert.equal((await store.readSnapshot()).revision, 0);
+    assert.equal(commits, 0);
+
+    const saved = await callHandler(handleSettings, "POST", "/api/custom-providers", {
+      expectedRevision: 0,
+      provider: providerDraft,
+    }, ctx);
+    assert.equal(saved.status, 201);
+    assert.equal((await store.readSnapshot()).revision, 1);
+    assert.equal(commits, 1);
+
+    const draftWithoutSecrets = {
+      ...providerDraft,
+      apiKey: undefined,
+      headers: [{ name: "X-Tenant" }],
+      modelDiscovery: "https://api.example.test/models",
+    };
+    const testedSaved = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
+      provider: draftWithoutSecrets,
+    }, ctx);
+    const discoveredSaved = await callHandler(handleSettings, "POST", "/api/custom-providers/discover-models", {
+      provider: draftWithoutSecrets,
+    }, ctx);
+    assert.equal(testedSaved.status, 200);
+    assert.equal(discoveredSaved.status, 200);
+    assert.deepEqual(parseJSON(discoveredSaved.body), { ids: ["discovered-a"] });
+    assert.equal((await store.readSnapshot()).revision, 1);
+    assert.equal(commits, 1);
+    for (const [, input] of networkInputs.slice(-2)) {
+      assert.equal(input.secrets.apiKey, apiSecret);
+      assert.equal(input.secrets.headers["X-Tenant"], headerSecret);
+      assert.equal(input.modelId, "model-a");
+    }
+
+    const missingCredentials = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
+      provider: { ...draftWithoutSecrets, id: "unsaved", name: "Unsaved" },
+    }, ctx);
+    assert.equal(missingCredentials.status, 400);
+    assert.deepEqual(parseJSON(missingCredentials.body), {
+      error: "Invalid custom provider request",
+      code: "invalid_request",
+      fieldPath: "provider.apiKey",
+    });
+    assert.equal(networkInputs.length, 3);
+
+    const explicitlyCleared = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
+      provider: { ...draftWithoutSecrets, apiKey: null },
+    }, ctx);
+    assert.equal(explicitlyCleared.status, 400);
+    assert.equal(parseJSON(explicitlyCleared.body).fieldPath, "provider.apiKey");
+    assert.equal(networkInputs.length, 3);
+
+    const missingSecondHeader = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
+      provider: {
+        ...providerDraft,
+        id: "header-index",
+        name: "Header Index",
+        authMode: "none",
+        apiKey: undefined,
+        headers: [
+          { name: "X-Removed", remove: true },
+          { name: "X-Missing" },
+        ],
+      },
+    }, ctx);
+    assert.equal(missingSecondHeader.status, 400);
+    assert.equal(parseJSON(missingSecondHeader.body).fieldPath, "provider.headers[1].value");
+    assert.equal(networkInputs.length, 3);
+    assert.equal((await store.readSnapshot()).revision, 1);
+    assert.equal(commits, 1);
   });
 
   it("maps official collisions, stale revisions, and references to stable 409 responses", async () => {
@@ -1507,12 +1691,16 @@ describe("custom provider settings routes", () => {
     });
 
     assert.strictEqual((await callHandler(handleSettings, "POST", "/api/custom-providers/reveal", { providerId: "acme" }, ctx)).status, 200);
+    assert.strictEqual((await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
+      provider: { ...providerDraft, apiKey: undefined },
+    }, ctx)).status, 200);
     assert.strictEqual((await callHandler(handleSettings, "POST", "/api/custom-providers", {
       expectedRevision: 0,
       provider: providerDraft,
     }, ctx)).status, 201);
     assert.deepStrictEqual(authorizations, [
       { target: "custom-provider-secrets.json", operation: "read", source: "settings.custom-providers.reveal" },
+      { target: "custom-provider-secrets.json", operation: "read", source: "settings.custom-providers.network" },
       { target: "custom-providers.json", operation: "write", source: "settings.custom-providers.config" },
       { target: "custom-provider-secrets.json", operation: "write", source: "settings.custom-providers.secrets" },
     ]);
@@ -1526,11 +1714,13 @@ describe("custom provider settings routes", () => {
       },
       customProviderService: service({
         revealApiKey: async () => { called = true; return apiSecret; },
+        testConnection: async () => { called = true; return { ok: false }; },
         create: async () => { called = true; return redacted(1); },
       }),
     });
     for (const [method, url, body] of [
       ["POST", "/api/custom-providers/reveal", { providerId: "acme" }],
+      ["POST", "/api/custom-providers/test", { provider: { ...providerDraft, apiKey: undefined } }],
       ["POST", "/api/custom-providers", { expectedRevision: 0, provider: providerDraft }],
     ]) {
       const result = await callHandler(handleSettings, method, url, body, ctx);
@@ -1649,6 +1839,10 @@ describe("custom provider settings routes", () => {
     ctx.runtime = mockRuntime({ modelRuntime, syncModelProviders: async () => 0 });
     ctx.customProviderService = new CustomProviderService({
       store,
+      networkClient: {
+        testConnection: async () => assert.fail("Google draft must not reach connection testing"),
+        discoverModels: async () => assert.fail("Google draft must not reach model discovery"),
+      },
       coordinator: { sync: async () => (await store.readSnapshot()).revision },
       referenceChecker: new ProviderReferenceChecker({
         currentModel: () => undefined,
@@ -1669,6 +1863,15 @@ describe("custom provider settings routes", () => {
       code: "invalid_request",
       fieldPath: "provider.protocol",
     });
+    assert.equal((await store.readSnapshot()).revision, 0);
+
+    for (const url of ["/api/custom-providers/test", "/api/custom-providers/discover-models"]) {
+      const networkResult = await callHandler(handleSettings, "POST", url, {
+        provider: { ...providerDraft, protocol: "google-generative-ai" },
+      }, ctx);
+      assert.equal(networkResult.status, 400);
+      assert.equal(parseJSON(networkResult.body).fieldPath, "provider.protocol");
+    }
     assert.equal((await store.readSnapshot()).revision, 0);
   });
 });

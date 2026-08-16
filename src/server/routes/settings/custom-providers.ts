@@ -15,6 +15,7 @@ import {
   CustomProviderImmutableIdError,
   CustomProviderNotFoundError,
 } from "../../../model-provider/custom-provider-service.js";
+import { ProviderNetworkError } from "../../../model-provider/provider-network-client.js";
 import { CustomProviderReferenceConflict } from "../../../model-provider/provider-reference-checker.js";
 import { authorizeRoutePath, writeServerPermissionError } from "../../permission-service.js";
 import { BodyTooLargeError, InvalidJsonBodyError, parseBody } from "../parse-body.js";
@@ -26,7 +27,7 @@ const JSON_HEADERS = { "Content-Type": "application/json", ...cors };
 const ITEM_ROUTE = /^\/api\/custom-providers\/([^/]+)$/;
 
 type CustomProviderRoute =
-  | { kind: "capabilities" | "list" | "reveal"; allow: readonly string[] }
+  | { kind: "capabilities" | "list" | "reveal" | "test" | "discover"; allow: readonly string[] }
   | { kind: "item"; allow: readonly string[]; encodedProviderId: string };
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
@@ -59,6 +60,13 @@ function deleteInput(value: unknown): CustomProviderDeleteInput {
     throw new CustomProviderInvalidRequestError("expectedRevision");
   }
   return { expectedRevision: value.expectedRevision as number };
+}
+
+function networkDraftInput(value: unknown) {
+  if (!isRecord(value)) throw new CustomProviderInvalidRequestError();
+  const unknown = Object.keys(value).find((key) => key !== "provider");
+  if (unknown) throw new CustomProviderInvalidRequestError("request");
+  return validateCustomProviderDraft(value.provider);
 }
 
 function writeError(res: ServerResponse, error: unknown): void {
@@ -122,6 +130,10 @@ function writeError(res: ServerResponse, error: unknown): void {
     });
     return;
   }
+  if (error instanceof ProviderNetworkError) {
+    writeJson(res, 502, { error: error.message, code: error.code });
+    return;
+  }
   writeJson(res, 500, { error: "Custom provider request failed", code: "internal_error" });
 }
 
@@ -135,9 +147,33 @@ function routeFor(url: string): CustomProviderRoute | undefined {
   const pathname = new URL(url, "http://localhost").pathname;
   if (pathname === "/api/custom-providers/capabilities") return { kind: "capabilities", allow: ["GET"] };
   if (pathname === "/api/custom-providers/reveal") return { kind: "reveal", allow: ["POST"] };
+  if (pathname === "/api/custom-providers/test") return { kind: "test", allow: ["POST"] };
+  if (pathname === "/api/custom-providers/discover-models") return { kind: "discover", allow: ["POST"] };
   if (pathname === "/api/custom-providers") return { kind: "list", allow: ["GET", "POST"] };
   const match = ITEM_ROUTE.exec(pathname);
   return match ? { kind: "item", allow: ["PUT", "DELETE"], encodedProviderId: match[1] } : undefined;
+}
+
+async function runNetworkOperation<T>(
+  req: Parameters<RouteHandler>[0],
+  res: Parameters<RouteHandler>[1],
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const abortOnIncompleteRequest = () => {
+    if (req.aborted || !req.complete) abort();
+  };
+  req.on("aborted", abort);
+  req.on("close", abortOnIncompleteRequest);
+  res.on("close", abort);
+  try {
+    return await operation(controller.signal);
+  } finally {
+    req.off?.("aborted", abort);
+    req.off?.("close", abortOnIncompleteRequest);
+    res.off?.("close", abort);
+  }
 }
 
 async function authorizeMutationFiles(ctx: ServerContext): Promise<void> {
@@ -154,6 +190,24 @@ async function authorizeMutationFiles(ctx: ServerContext): Promise<void> {
     "custom-provider-secrets.json",
     "write",
     "settings.custom-providers.secrets",
+  );
+}
+
+async function authorizeStoredCredentialsIfNeeded(
+  ctx: ServerContext,
+  draft: ReturnType<typeof validateCustomProviderDraft>,
+): Promise<void> {
+  const needsStoredCredentials = (
+    (draft.authMode === "apiKey" && draft.apiKey === undefined)
+    || draft.headers.some((header) => header.remove !== true && header.value === undefined)
+  );
+  if (!needsStoredCredentials) return;
+  await authorizeRoutePath(
+    ctx,
+    ctx.paths.PI_CONFIG_DIR,
+    "custom-provider-secrets.json",
+    "read",
+    "settings.custom-providers.network",
   );
 }
 
@@ -201,6 +255,15 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
         "settings.custom-providers.reveal",
       );
       writeJson(res, 200, { apiKey: await service.revealApiKey(providerId) });
+      return true;
+    }
+    if (route.kind === "test" || route.kind === "discover") {
+      const draft = networkDraftInput(await parseBody(req));
+      await authorizeStoredCredentialsIfNeeded(ctx, draft);
+      const result = route.kind === "test"
+        ? await runNetworkOperation(req, res, (signal) => service.testConnection(draft, signal))
+        : await runNetworkOperation(req, res, (signal) => service.discoverModels(draft, signal));
+      writeJson(res, 200, result);
       return true;
     }
     if (route.kind === "list" && req.method === "POST") {
