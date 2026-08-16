@@ -1431,8 +1431,11 @@ describe("custom provider settings routes", () => {
     assert.equal(JSON.stringify(parseJSON(listed.body)).includes("credential:"), false);
   });
 
-  it("tests a custom provider through the real route, PI adapter, and native provider", async () => {
-    const fixture = await startFakeModelProvider("openai-responses");
+  it("tests a custom provider through the real route, PI adapter, and native provider", { timeout: 15_000 }, async () => {
+    const fixture = await startFakeModelProvider("openai-responses", {
+      modelId: "model-a",
+      requireTools: false,
+    });
     const ctx = customContext();
     try {
       ctx.customProviderService = await networkService(ctx);
@@ -1452,6 +1455,7 @@ describe("custom provider settings routes", () => {
         usage: { input: 7, output: 5, cacheRead: 3, cacheWrite: 2, reasoning: 1 },
       });
       assert.equal(fixture.requests.length, 1);
+      assert.equal(fixture.requests[0].body.tools, undefined);
       assert.equal(fixture.requests[0].headers.authorization, `Bearer ${apiSecret}`);
       assert.equal(fixture.requests[0].headers["x-tenant"], headerSecret);
       assert.equal(result.body.includes(apiSecret), false);

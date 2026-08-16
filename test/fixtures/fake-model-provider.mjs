@@ -14,6 +14,20 @@ const TOOL_NAME = "lookup_weather"
 const TOOL_ID = "call12345"
 const TOOL_ITEM_ID = "fc_fixture"
 const TOOL_ARGUMENTS = '{"city":"Shanghai"}'
+const MODEL_ID = "reasoner-v1"
+const DEFAULT_TIMEOUT_MS = 5_000
+const FETCH_BLOCKED_HIGH_PORTS = new Set([
+  1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566,
+  6665, 6666, 6667, 6668, 6669, 6697, 10080,
+])
+const PATHS = {
+  "openai-completions": "/wire/openai-completions/v1/chat/completions",
+  "openai-responses": "/wire/openai-responses/v1/responses",
+  "anthropic-messages": "/wire/anthropic-messages/v1/messages",
+  "mistral-conversations": "/wire/mistral-conversations/v1/chat/completions",
+  "azure-openai-responses": "/wire/azure-openai-responses/v1/responses",
+  "pi-messages": "/wire/pi-messages/v1/messages",
+}
 const FULL_USAGE = {
   input: 7,
   output: 5,
@@ -60,11 +74,11 @@ function event(type, value) {
   return `event: ${type}\ndata: ${JSON.stringify(value)}\n\n`
 }
 
-function openAICompletionChunks() {
-  const base = { id: "chatcmpl_fixture", object: "chat.completion.chunk", created: 1, model: "reasoner-v1" }
+function openAICompletionChunks(includeToolCall, modelId) {
+  const base = { id: "chatcmpl_fixture", object: "chat.completion.chunk", created: 1, model: modelId }
   return [
     data({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: TEXT }, finish_reason: null }] }),
-    data({
+    ...(includeToolCall ? [data({
       ...base,
       choices: [{
         index: 0,
@@ -78,10 +92,10 @@ function openAICompletionChunks() {
         },
         finish_reason: null,
       }],
-    }),
+    })] : []),
     data({
       ...base,
-      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      choices: [{ index: 0, delta: {}, finish_reason: includeToolCall ? "tool_calls" : "stop" }],
       usage: {
         prompt_tokens: 12,
         completion_tokens: 5,
@@ -94,7 +108,7 @@ function openAICompletionChunks() {
   ]
 }
 
-function responsesChunks() {
+function responsesChunks(includeToolCall, modelId) {
   const messageAdded = {
     id: "msg_fixture",
     type: "message",
@@ -121,8 +135,8 @@ function responsesChunks() {
     object: "response",
     created_at: 1,
     status: "completed",
-    model: "reasoner-v1",
-    output: [messageDone, functionDone],
+    model: modelId,
+    output: includeToolCall ? [messageDone, functionDone] : [messageDone],
     usage: {
       input_tokens: 12,
       output_tokens: 5,
@@ -136,26 +150,28 @@ function responsesChunks() {
     ["response.output_item.added", { type: "response.output_item.added", output_index: 0, item: messageAdded }],
     ["response.output_text.delta", { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: TEXT }],
     ["response.output_item.done", { type: "response.output_item.done", output_index: 0, item: messageDone }],
-    ["response.output_item.added", { type: "response.output_item.added", output_index: 1, item: functionAdded }],
-    ["response.function_call_arguments.delta", {
+    ...(includeToolCall ? [
+      ["response.output_item.added", { type: "response.output_item.added", output_index: 1, item: functionAdded }],
+      ["response.function_call_arguments.delta", {
       type: "response.function_call_arguments.delta",
       output_index: 1,
       item_id: TOOL_ITEM_ID,
       delta: TOOL_ARGUMENTS,
-    }],
-    ["response.function_call_arguments.done", {
+      }],
+      ["response.function_call_arguments.done", {
       type: "response.function_call_arguments.done",
       output_index: 1,
       item_id: TOOL_ITEM_ID,
       arguments: TOOL_ARGUMENTS,
-    }],
-    ["response.output_item.done", { type: "response.output_item.done", output_index: 1, item: functionDone }],
+      }],
+      ["response.output_item.done", { type: "response.output_item.done", output_index: 1, item: functionDone }],
+    ] : []),
     ["response.completed", { type: "response.completed", response }],
   ]
   return values.map(([type, value]) => event(type, value))
 }
 
-function anthropicChunks() {
+function anthropicChunks(includeToolCall, modelId) {
   const values = [
     ["message_start", {
       type: "message_start",
@@ -164,7 +180,7 @@ function anthropicChunks() {
         type: "message",
         role: "assistant",
         content: [],
-        model: "reasoner-v1",
+        model: modelId,
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -182,7 +198,7 @@ function anthropicChunks() {
     }],
     ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: TEXT } }],
     ["content_block_stop", { type: "content_block_stop", index: 0 }],
-    ["content_block_start", {
+    ...(includeToolCall ? [["content_block_start", {
       type: "content_block_start",
       index: 1,
       content_block: { type: "tool_use", id: TOOL_ID, name: TOOL_NAME, input: {} },
@@ -192,10 +208,10 @@ function anthropicChunks() {
       index: 1,
       delta: { type: "input_json_delta", partial_json: TOOL_ARGUMENTS },
     }],
-    ["content_block_stop", { type: "content_block_stop", index: 1 }],
+    ["content_block_stop", { type: "content_block_stop", index: 1 }]] : []),
     ["message_delta", {
       type: "message_delta",
-      delta: { stop_reason: "tool_use", stop_sequence: null },
+      delta: { stop_reason: includeToolCall ? "tool_use" : "end_turn", stop_sequence: null },
       usage: {
         input_tokens: 7,
         output_tokens: 5,
@@ -209,13 +225,13 @@ function anthropicChunks() {
   return values.map(([type, value]) => event(type, value))
 }
 
-function mistralChunks() {
+function mistralChunks(includeToolCall) {
   return [
     data({
       id: "mistral_fixture",
       choices: [{ index: 0, delta: { role: "assistant", content: TEXT }, finish_reason: null }],
     }),
-    data({
+    ...(includeToolCall ? [data({
       id: "mistral_fixture",
       choices: [{
         index: 0,
@@ -229,10 +245,10 @@ function mistralChunks() {
         },
         finish_reason: null,
       }],
-    }),
+    })] : []),
     data({
       id: "mistral_fixture",
-      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      choices: [{ index: 0, delta: {}, finish_reason: includeToolCall ? "tool_calls" : "stop" }],
       usage: {
         prompt_tokens: 10,
         completion_tokens: 5,
@@ -244,29 +260,159 @@ function mistralChunks() {
   ]
 }
 
-function piMessagesChunks() {
+function piMessagesChunks(includeToolCall) {
   return [
     data({ type: "start" }),
     data({ type: "text_start", contentIndex: 0 }),
     data({ type: "text_delta", contentIndex: 0, delta: TEXT }),
     data({ type: "text_end", contentIndex: 0, content: TEXT }),
-    data({ type: "toolcall_start", contentIndex: 1, id: TOOL_ID, toolName: TOOL_NAME }),
-    data({ type: "toolcall_delta", contentIndex: 1, delta: TOOL_ARGUMENTS }),
-    data({
+    ...(includeToolCall ? [
+      data({ type: "toolcall_start", contentIndex: 1, id: TOOL_ID, toolName: TOOL_NAME }),
+      data({ type: "toolcall_delta", contentIndex: 1, delta: TOOL_ARGUMENTS }),
+      data({
       type: "toolcall_end",
       contentIndex: 1,
       toolCall: { type: "toolCall", id: TOOL_ID, name: TOOL_NAME, arguments: JSON.parse(TOOL_ARGUMENTS) },
-    }),
-    data({ type: "done", reason: "toolUse", usage: FULL_USAGE, responseId: "pi_fixture" }),
+      }),
+    ] : []),
+    data({ type: "done", reason: includeToolCall ? "toolUse" : "stop", usage: FULL_USAGE, responseId: "pi_fixture" }),
   ]
 }
 
-function chunksFor(protocol) {
-  if (protocol === "openai-completions") return openAICompletionChunks()
-  if (protocol === "openai-responses" || protocol === "azure-openai-responses") return responsesChunks()
-  if (protocol === "anthropic-messages") return anthropicChunks()
-  if (protocol === "mistral-conversations") return mistralChunks()
-  return piMessagesChunks()
+function chunksFor(protocol, includeToolCall, modelId) {
+  if (protocol === "openai-completions") return openAICompletionChunks(includeToolCall, modelId)
+  if (protocol === "openai-responses" || protocol === "azure-openai-responses") {
+    return responsesChunks(includeToolCall, modelId)
+  }
+  if (protocol === "anthropic-messages") return anthropicChunks(includeToolCall, modelId)
+  if (protocol === "mistral-conversations") return mistralChunks(includeToolCall)
+  return piMessagesChunks(includeToolCall)
+}
+
+function requestTools(protocol, body) {
+  return protocol === "pi-messages" ? body?.context?.tools : body?.tools
+}
+
+function toolShapeErrors(protocol, tools) {
+  if (!Array.isArray(tools) || tools.length === 0) return ["tools must contain at least one definition"]
+  const tool = tools.find((entry) => {
+    if (protocol === "openai-completions" || protocol === "mistral-conversations") {
+      return entry?.type === "function" && entry.function?.name === TOOL_NAME
+    }
+    return entry?.name === TOOL_NAME && (protocol !== "openai-responses" && protocol !== "azure-openai-responses"
+      ? true
+      : entry?.type === "function")
+  })
+  if (!tool) return [`missing ${TOOL_NAME} tool definition`]
+  const definition = protocol === "openai-completions" || protocol === "mistral-conversations"
+    ? tool.function
+    : tool
+  const schema = protocol === "anthropic-messages" ? definition.input_schema : definition.parameters
+  const errors = []
+  if (typeof definition.description !== "string" || definition.description.length === 0) {
+    errors.push("tool description must be a non-empty string")
+  }
+  if (schema?.type !== "object") errors.push("tool schema type must be object")
+  if (schema?.properties?.city?.type !== "string") errors.push("tool schema must define city as string")
+  if (!Array.isArray(schema?.required) || !schema.required.includes("city")) {
+    errors.push("tool schema must require city")
+  }
+  return errors
+}
+
+function validateRequest(protocol, record, requireTools, modelId) {
+  const url = new URL(record.url)
+  if (record.method !== "POST") {
+    return { status: 405, stage: "wrong method", details: [`expected POST, received ${record.method}`] }
+  }
+  if (record.path !== PATHS[protocol]) {
+    return { status: 404, stage: "wrong endpoint", details: [`expected ${PATHS[protocol]}, received ${record.path}`] }
+  }
+  if (protocol === "azure-openai-responses") {
+    const versions = url.searchParams.getAll("api-version")
+    if (versions.length !== 1 || versions[0] !== "v1" || [...url.searchParams.keys()].length !== 1) {
+      return { status: 422, stage: "invalid query", details: ["expected only api-version=v1"] }
+    }
+  } else if (url.search.length > 0) {
+    return { status: 422, stage: "invalid query", details: ["unexpected query parameters"] }
+  }
+  if (record.headers["content-type"]?.split(";", 1)[0] !== "application/json") {
+    return { status: 415, stage: "invalid headers", details: ["content-type must be application/json"] }
+  }
+  if (protocol === "anthropic-messages" && record.headers["anthropic-version"] !== "2023-06-01") {
+    return { status: 400, stage: "invalid headers", details: ["anthropic-version must be 2023-06-01"] }
+  }
+  if ((protocol === "mistral-conversations" || protocol === "pi-messages")
+    && !record.headers.accept?.includes("text/event-stream")) {
+    return { status: 400, stage: "invalid headers", details: ["accept must include text/event-stream"] }
+  }
+  if (record.body === null || typeof record.body !== "object" || Array.isArray(record.body)) {
+    return { status: 400, stage: "invalid body", details: ["body must be a JSON object"] }
+  }
+  if (record.body.model !== modelId || (protocol !== "pi-messages" && record.body.stream !== true)) {
+    return {
+      status: 422,
+      stage: "wrong model/stream",
+      details: [`expected model=${modelId}${protocol === "pi-messages" ? "" : " and stream=true"}`],
+    }
+  }
+  if (protocol === "pi-messages" && Object.hasOwn(record.body, "stream")) {
+    return { status: 422, stage: "wrong model/stream", details: ["pi-messages streaming is implicit"] }
+  }
+  const tools = requestTools(protocol, record.body)
+  if (!Array.isArray(tools) || tools.length === 0) {
+    return requireTools
+      ? { status: 422, stage: "missing tools", details: ["request must include tools"] }
+      : undefined
+  }
+  const errors = toolShapeErrors(protocol, tools)
+  return errors.length === 0 ? undefined : { status: 422, stage: "invalid tools", details: errors }
+}
+
+function writeInvalid(res, protocol, invalid) {
+  const body = JSON.stringify({
+    error: "fixture_request_invalid",
+    protocol,
+    stage: invalid.stage,
+    details: invalid.details,
+  })
+  res.writeHead(invalid.status, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body),
+  })
+  res.end(body)
+}
+
+function boundedWait(promise, protocol, stage, timeoutMs) {
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Timed out waiting for ${stage} for ${protocol} after ${timeoutMs}ms`))
+    }, timeoutMs)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+async function listenOnFetchSafePort(server) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise((resolve, reject) => {
+      const onError = (error) => {
+        server.off("listening", onListening)
+        reject(error)
+      }
+      const onListening = () => {
+        server.off("error", onError)
+        resolve()
+      }
+      server.once("error", onError)
+      server.once("listening", onListening)
+      server.listen(0, "127.0.0.1")
+    })
+    const { port } = server.address()
+    if (port >= 1024 && !FETCH_BLOCKED_HIGH_PORTS.has(port)) return port
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  }
+  throw new Error("Unable to allocate a Fetch-safe fixture port after 20 attempts")
 }
 
 export async function startFakeModelProvider(protocol, options = {}) {
@@ -279,6 +425,7 @@ export async function startFakeModelProvider(protocol, options = {}) {
   const requestPromise = new Promise((resolve) => { requestResolve = resolve })
   const abortPromise = new Promise((resolve) => { abortResolve = resolve })
 
+  const modelId = options.modelId ?? MODEL_ID
   const server = createServer(async (req, res) => {
     const record = {
       method: req.method,
@@ -296,35 +443,43 @@ export async function startFakeModelProvider(protocol, options = {}) {
       abortResolve(record)
     })
 
+    const invalid = validateRequest(protocol, record, options.requireTools !== false, modelId)
+    if (invalid) {
+      writeInvalid(res, protocol, invalid)
+      return
+    }
+
     if (options.holdOpen === true) {
       res.writeHead(200, { "content-type": "text/event-stream", connection: "keep-alive" })
       res.flushHeaders()
       return
     }
-    writeSse(res, chunksFor(protocol))
+    writeSse(res, chunksFor(protocol, requestTools(protocol, record.body)?.length > 0, modelId))
   })
   server.on("connection", (socket) => {
     sockets.add(socket)
     socket.on("close", () => sockets.delete(socket))
   })
-  await new Promise((resolve, reject) => {
-    server.once("error", reject)
-    server.listen(0, "127.0.0.1", resolve)
-  })
-  const address = server.address()
-  origin = `http://127.0.0.1:${address.port}`
-  const basePath = protocol === "mistral-conversations"
+  const port = await listenOnFetchSafePort(server)
+  origin = `http://127.0.0.1:${port}`
+  const basePath = protocol === "mistral-conversations" || protocol === "anthropic-messages"
     ? `/wire/${protocol}`
     : `/wire/${protocol}/v1`
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
   return {
     origin,
     baseUrl: `${origin}${basePath}`,
     requests,
-    waitForRequest: () => requests.length > 0 ? Promise.resolve(requests[0]) : requestPromise,
+    waitForRequest: () => boundedWait(
+      requests.length > 0 ? Promise.resolve(requests[0]) : requestPromise,
+      protocol,
+      "request",
+      timeoutMs,
+    ),
     waitForAbort: () => requests.some((request) => request.aborted)
       ? Promise.resolve(requests.find((request) => request.aborted))
-      : abortPromise,
+      : boundedWait(abortPromise, protocol, "abort", timeoutMs),
     async close() {
       for (const socket of sockets) socket.destroy()
       if (!server.listening) return

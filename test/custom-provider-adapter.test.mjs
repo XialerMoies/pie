@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { resolve } from "node:path"
 import { describe, it } from "node:test"
+import { formatWithOptions } from "node:util"
 
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai"
 import { ModelRuntime } from "@xiamol/pi-coding-agent"
@@ -28,6 +29,15 @@ const WIRE_TOOL_NAME = "lookup_weather"
 const WIRE_TOOL_ARGUMENTS = { city: "Shanghai" }
 const FULL_USAGE = { input: 7, output: 5, cacheRead: 3, cacheWrite: 2, reasoning: 1 }
 const CONSOLE_CHANNELS = ["debug", "info", "log", "warn", "error"]
+const FIXTURE_MODEL = "reasoner-v1"
+const FIXTURE_PATHS = {
+  "openai-completions": "/wire/openai-completions/v1/chat/completions",
+  "openai-responses": "/wire/openai-responses/v1/responses",
+  "anthropic-messages": "/wire/anthropic-messages/v1/messages",
+  "mistral-conversations": "/wire/mistral-conversations/v1/chat/completions",
+  "azure-openai-responses": "/wire/azure-openai-responses/v1/responses",
+  "pi-messages": "/wire/pi-messages/v1/messages",
+}
 const EXPECTED_WIRE_USAGE = Object.fromEntries(PROTOCOLS.map((protocol) => [
   protocol,
   protocol === "mistral-conversations"
@@ -181,6 +191,122 @@ function authHeaderName(protocol) {
   return "authorization"
 }
 
+function fixtureTool(protocol) {
+  const schema = {
+    type: "object",
+    properties: { city: { type: "string" } },
+    required: ["city"],
+  }
+  if (protocol === "openai-completions" || protocol === "mistral-conversations") {
+    return { type: "function", function: { name: WIRE_TOOL_NAME, description: "Look up weather", parameters: schema } }
+  }
+  if (protocol === "openai-responses" || protocol === "azure-openai-responses") {
+    return { type: "function", name: WIRE_TOOL_NAME, description: "Look up weather", parameters: schema }
+  }
+  if (protocol === "anthropic-messages") {
+    return { name: WIRE_TOOL_NAME, description: "Look up weather", input_schema: schema }
+  }
+  return { name: WIRE_TOOL_NAME, description: "Look up weather", parameters: schema }
+}
+
+function validFixtureBody(protocol) {
+  const tool = fixtureTool(protocol)
+  if (protocol === "pi-messages") {
+    return {
+      model: FIXTURE_MODEL,
+      context: {
+        messages: [{ role: "user", content: "weather", timestamp: 1 }],
+        tools: [tool],
+      },
+      options: {},
+    }
+  }
+  if (protocol === "openai-responses" || protocol === "azure-openai-responses") {
+    return { model: FIXTURE_MODEL, input: [{ role: "user", content: "weather" }], stream: true, tools: [tool] }
+  }
+  return { model: FIXTURE_MODEL, messages: [{ role: "user", content: "weather" }], stream: true, tools: [tool] }
+}
+
+function fixtureEndpoint(fixture, protocol) {
+  const url = new URL(FIXTURE_PATHS[protocol], fixture.origin)
+  if (protocol === "azure-openai-responses") url.searchParams.set("api-version", "v1")
+  return url
+}
+
+function fixtureRequestHeaders(protocol) {
+  return {
+    "content-type": "application/json",
+    ...(protocol === "anthropic-messages" ? { "anthropic-version": "2023-06-01" } : {}),
+    ...(protocol === "mistral-conversations" || protocol === "pi-messages"
+      ? { accept: "text/event-stream" }
+      : {}),
+  }
+}
+
+function assertFixtureWireContract(protocol, request) {
+  const url = new URL(request.url)
+  assert.equal(request.method, "POST", `${protocol} method`)
+  assert.equal(request.path, FIXTURE_PATHS[protocol], `${protocol} pathname`)
+  if (protocol === "azure-openai-responses") {
+    assert.deepEqual([...url.searchParams], [["api-version", "v1"]], `${protocol} query`)
+  } else {
+    assert.equal(url.search, "", `${protocol} query`)
+  }
+  assert.equal(request.headers["content-type"]?.split(";", 1)[0], "application/json", `${protocol} content-type`)
+  if (protocol === "anthropic-messages") {
+    assert.equal(request.headers["anthropic-version"], "2023-06-01")
+  }
+  if (protocol === "mistral-conversations" || protocol === "pi-messages") {
+    assert.match(request.headers.accept ?? "", /text\/event-stream/)
+  }
+  assert.equal(request.body.model, FIXTURE_MODEL, `${protocol} body model`)
+  if (protocol === "pi-messages") {
+    assert.equal(Object.hasOwn(request.body, "stream"), false, "pi-messages streaming is implicit")
+  } else {
+    assert.equal(request.body.stream, true, `${protocol} body stream`)
+  }
+  const tools = protocol === "pi-messages" ? request.body.context?.tools : request.body.tools
+  assert.equal(Array.isArray(tools), true, `${protocol} tools array`)
+  const expected = fixtureTool(protocol)
+  const actual = tools.find((tool) => {
+    if (protocol === "openai-completions" || protocol === "mistral-conversations") {
+      return tool?.function?.name === WIRE_TOOL_NAME
+    }
+    return tool?.name === WIRE_TOOL_NAME
+  })
+  assert.ok(actual, `${protocol} tool definition`)
+  if (protocol === "openai-completions" || protocol === "mistral-conversations") {
+    assert.equal(actual.type, "function")
+    assert.equal(actual.function.description, expected.function.description)
+    assert.deepEqual(actual.function.parameters, expected.function.parameters)
+  } else if (protocol === "anthropic-messages") {
+    assert.equal(actual.description, expected.description)
+    assert.deepEqual(actual.input_schema, expected.input_schema)
+  } else {
+    if (protocol !== "pi-messages") assert.equal(actual.type, "function")
+    assert.equal(actual.description, expected.description)
+    assert.deepEqual(actual.parameters, expected.parameters)
+  }
+}
+
+function waitForProtocol(promise, protocol, stage, timeoutMs = 5_000) {
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Timed out waiting for ${stage} for ${protocol} after ${timeoutMs}ms`))
+    }, timeoutMs)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+function collectProtocolEvents(stream, protocol) {
+  return waitForProtocol((async () => {
+    const events = []
+    for await (const event of stream) events.push(event)
+    return events
+  })(), protocol, "stream events")
+}
+
 async function streamAgainstFixture(protocol, fixture, options = {}) {
   const authMode = options.authMode ?? "apiKey"
   const providerId = `wire-${protocol}`
@@ -237,7 +363,12 @@ async function captureConsole(operation) {
   const originals = new Map()
   for (const name of CONSOLE_CHANNELS) {
     originals.set(name, console[name])
-    console[name] = (...args) => output.push(args.map(String).join(" "))
+    console[name] = (...args) => output.push(formatWithOptions({
+      depth: null,
+      maxArrayLength: null,
+      maxStringLength: null,
+      breakLength: Infinity,
+    }, ...args))
   }
   try {
     return { value: await operation(), output }
@@ -265,9 +396,18 @@ function expectedModel(input, provider) {
 
 describe("PiCustomProviderAdapter", () => {
   it("captures every console channel and restores originals after success or failure", async () => {
+    const secret = "structured-console-secret"
+    const cycle = { Authorization: secret, nested: [{ token: secret }] }
+    cycle.self = cycle
+    const caused = new Error("outer console probe", {
+      cause: { headers: { Authorization: secret }, nested: [cycle] },
+    })
     const originals = Object.fromEntries(CONSOLE_CHANNELS.map((name) => [name, console[name]]))
     const captured = await captureConsole(async () => {
       for (const name of CONSOLE_CHANNELS) console[name](`console-probe-${name}`)
+      console.error({ Authorization: secret })
+      console.warn({ nested: [cycle] })
+      console.debug(caused)
       return "captured"
     })
 
@@ -276,12 +416,99 @@ describe("PiCustomProviderAdapter", () => {
       assert.equal(captured.output.includes(`console-probe-${name}`), true, `${name} was not captured`)
       assert.equal(console[name], originals[name], `${name} was not restored after success`)
     }
+    assert.equal(captured.output.filter((line) => line.includes(secret)).length, 3)
+    assert.match(captured.output.join("\n"), /\[Circular/)
+    assert.match(captured.output.join("\n"), /outer console probe/)
 
     await assert.rejects(captureConsole(async () => {
       throw new Error("console capture failure probe")
     }), /console capture failure probe/)
     for (const name of CONSOLE_CHANNELS) {
       assert.equal(console[name], originals[name], `${name} was not restored after failure`)
+    }
+  })
+
+  it("rejects wrong fixture endpoints and malformed request bodies with stable 4xx errors", { timeout: 15_000 }, async () => {
+    for (const protocol of PROTOCOLS) {
+      const fixture = await startFakeModelProvider(protocol)
+      try {
+        const cases = [
+          ["wrong endpoint", "wrong endpoint", new URL("/definitely-wrong", fixture.origin), validFixtureBody(protocol), "POST"],
+          ["wrong method", "wrong method", fixtureEndpoint(fixture, protocol), validFixtureBody(protocol), "PUT"],
+          ["missing tools", "missing tools", fixtureEndpoint(fixture, protocol), (() => {
+            const body = validFixtureBody(protocol)
+            if (protocol === "pi-messages") delete body.context.tools
+            else delete body.tools
+            return body
+          })(), "POST"],
+          ["wrong model", "wrong model/stream", fixtureEndpoint(fixture, protocol), {
+            ...validFixtureBody(protocol),
+            model: "wrong-model",
+          }, "POST"],
+          ["wrong stream", "wrong model/stream", fixtureEndpoint(fixture, protocol), {
+            ...validFixtureBody(protocol),
+            stream: false,
+          }, "POST"],
+        ]
+        for (const [caseName, stage, url, body, method] of cases) {
+          const response = await fetch(url, {
+            method,
+            headers: fixtureRequestHeaders(protocol),
+            body: JSON.stringify(body),
+          })
+          assert.equal(response.ok, false, `${protocol} ${caseName} unexpectedly succeeded`)
+          assert.equal(response.status >= 400 && response.status < 500, true, `${protocol} ${caseName} status`)
+          const error = await response.json()
+          assert.equal(error.error, "fixture_request_invalid")
+          assert.equal(error.protocol, protocol)
+          assert.equal(error.stage, stage)
+        }
+      } finally {
+        await fixture.close()
+      }
+    }
+  })
+
+  it("bounds fixture and stream waits with stage and protocol errors", { timeout: 2_000 }, async () => {
+    const fixture = await startFakeModelProvider("openai-responses", { timeoutMs: 25 })
+    try {
+      for (const [stage, startWait] of [
+        ["request", () => fixture.waitForRequest()],
+        ["abort", () => fixture.waitForAbort()],
+        ["stream result", () => waitForProtocol(new Promise(() => {}), "openai-responses", "stream result", 25)],
+      ]) {
+        await assert.rejects(
+          Promise.race([
+            startWait(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error(`RED guard: ${stage} wait remained unbounded`)), 250)),
+          ]),
+          new RegExp(`Timed out waiting for ${stage}.*openai-responses`, "i"),
+        )
+      }
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("emits no tool call for an explicit text-only fixture request", { timeout: 15_000 }, async () => {
+    for (const protocol of PROTOCOLS) {
+      const fixture = await startFakeModelProvider(protocol, { requireTools: false })
+      try {
+        const body = validFixtureBody(protocol)
+        if (protocol === "pi-messages") delete body.context.tools
+        else delete body.tools
+        const response = await waitForProtocol(fetch(fixtureEndpoint(fixture, protocol), {
+          method: "POST",
+          headers: fixtureRequestHeaders(protocol),
+          body: JSON.stringify(body),
+        }), protocol, "text-only response")
+        assert.equal(response.ok, true, protocol)
+        const wire = await waitForProtocol(response.text(), protocol, "text-only response body")
+        assert.equal(wire.includes(WIRE_TOOL_NAME), false, `${protocol} emitted an unsolicited tool call`)
+        assert.equal(wire.includes(WIRE_TEXT), true, `${protocol} omitted text output`)
+      } finally {
+        await fixture.close()
+      }
     }
   })
 
@@ -695,21 +922,21 @@ describe("PiCustomProviderAdapter", () => {
     }
   })
 
-  it("streams normalized text, tool calls, and exact usage through all six apiKey protocols", async () => {
+  it("streams normalized text, tool calls, and exact usage through all six apiKey protocols", { timeout: 45_000 }, async () => {
     for (const protocol of PROTOCOLS) {
       const fixture = await startFakeModelProvider(protocol)
       try {
         const captured = await captureConsole(async () => {
           const connection = await streamAgainstFixture(protocol, fixture)
-          const events = []
-          for await (const event of connection.stream) events.push(event)
-          return { ...connection, events, result: await connection.stream.result() }
+          const events = await collectProtocolEvents(connection.stream, protocol)
+          const result = await waitForProtocol(connection.stream.result(), protocol, "stream result")
+          return { ...connection, events, result }
         })
         const { adapter, apiKey, originalFetch, result, events } = captured.value
         const request = fixture.requests[0]
 
         assert.equal(globalThis.fetch, originalFetch, `${protocol} replaced global fetch`)
-        assert.equal(request.method, "POST")
+        assertFixtureWireContract(protocol, request)
         assert.equal(request.url.startsWith(`${fixture.baseUrl}/`), true, `${protocol} ignored Base URL`)
         assert.equal(request.headers[authHeaderName(protocol)], protocol === "anthropic-messages"
           || protocol === "azure-openai-responses"
@@ -731,12 +958,12 @@ describe("PiCustomProviderAdapter", () => {
     }
   })
 
-  it("keeps all six keyless protocols free of SDK auth while preserving explicit auth headers", async () => {
+  it("keeps all six keyless protocols free of SDK auth while preserving explicit auth headers", { timeout: 45_000 }, async () => {
     for (const protocol of PROTOCOLS) {
       const fixture = await startFakeModelProvider(protocol)
       try {
         const plain = await streamAgainstFixture(protocol, fixture, { authMode: "none" })
-        const plainResult = await plain.stream.result()
+        const plainResult = await waitForProtocol(plain.stream.result(), protocol, "plain keyless stream result")
         assert.notEqual(plainResult.stopReason, "error", protocol)
         assertKeylessRequest({
           url: new URL(fixture.requests[0].url),
@@ -754,7 +981,7 @@ describe("PiCustomProviderAdapter", () => {
             "X-Tenant": `explicit-tenant-${protocol}`,
           },
         })
-        const explicitResult = await explicit.stream.result()
+        const explicitResult = await waitForProtocol(explicit.stream.result(), protocol, "explicit keyless stream result")
         assert.notEqual(explicitResult.stopReason, "error", protocol)
         const explicitRequest = fixture.requests[1]
         assert.equal(explicitRequest.url.startsWith(`${fixture.baseUrl}/`), true, `${protocol} explicit request ignored Base URL`)
@@ -768,7 +995,7 @@ describe("PiCustomProviderAdapter", () => {
     }
   })
 
-  it("produces an aborted terminal state and closes each protocol request", async () => {
+  it("produces an aborted terminal state and closes each protocol request", { timeout: 45_000 }, async () => {
     for (const protocol of PROTOCOLS) {
       const fixture = await startFakeModelProvider(protocol, { holdOpen: true })
       try {
@@ -778,7 +1005,7 @@ describe("PiCustomProviderAdapter", () => {
         })
         await fixture.waitForRequest()
         controller.abort(new DOMException("test abort", "AbortError"))
-        const result = await stream.result()
+        const result = await waitForProtocol(stream.result(), protocol, "aborted stream result")
 
         assert.equal(result.stopReason, "aborted", protocol)
         await fixture.waitForAbort()
