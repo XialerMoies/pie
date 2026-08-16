@@ -949,6 +949,102 @@ describe("settings DOM boundary", () => {
     win.App.Settings.closeSettingsModal();
   });
 
+  it("keeps mutation authority ready when the pending list load later rejects", async () => {
+    const pendingMutation = deferred();
+    const pendingList = deferred();
+    const pendingCapabilities = deferred();
+    let customLoads = 0;
+    let capabilityLoads = 0;
+    fetchImpl = async (url, init = {}) => {
+      if (String(url) === "/api/auth") return response({ providers: [] });
+      if (String(url) === "/api/custom-providers" && !init.method) {
+        customLoads += 1;
+        return customLoads === 1
+          ? response({ revision: 4, official: [], custom: [customProvider()] })
+          : pendingList.promise;
+      }
+      if (String(url) === "/api/custom-providers/capabilities") {
+        capabilityLoads += 1;
+        return capabilityLoads === 1 ? response(capabilities()) : pendingCapabilities.promise;
+      }
+      if (init.method === "PUT") return pendingMutation.promise;
+      return response({});
+    };
+
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+    const editor = win.App.SettingsComponents.providers.customEditor;
+    const oldSave = editor.save();
+    await Promise.resolve();
+    win.App.Settings.closeSettingsModal();
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+
+    pendingMutation.resolve(response({
+      schemaVersion: 1,
+      revision: 5,
+      providers: [customProvider({ name: "Mutation Authority" })],
+    }));
+    await oldSave;
+    pendingCapabilities.resolve(response(capabilities()));
+    await flushAsyncWork();
+    const add = document.querySelector("#msl-add-action .list-add-action");
+    assert.strictEqual(add?.disabled, false);
+    add.click();
+    setInput("#cpe-name", "Unsaved After Authority");
+    setInput("#cpe-id", "unsaved-authority");
+
+    pendingList.reject(new Error("late list failure"));
+    await flushAsyncWork();
+
+    assert.strictEqual(add.disabled, false);
+    assert.strictEqual(document.querySelector(".msl-custom-status")?.hidden, true);
+    assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"] .msl-name')?.textContent, "Mutation Authority");
+    assert.strictEqual(document.querySelector("#cpe-name")?.value, "Unsaved After Authority");
+    assert.strictEqual(document.querySelector("#cpe-id")?.value, "unsaved-authority");
+    win.App.Settings.closeSettingsModal();
+  });
+
+  it("converges availability when a pending list load equals mutation authority", async () => {
+    const pendingMutation = deferred();
+    const pendingList = deferred();
+    let customLoads = 0;
+    fetchImpl = async (url, init = {}) => {
+      if (String(url) === "/api/auth") return response({ providers: [] });
+      if (String(url) === "/api/custom-providers" && !init.method) {
+        customLoads += 1;
+        return customLoads === 1
+          ? response({ revision: 4, official: [], custom: [customProvider()] })
+          : pendingList.promise;
+      }
+      if (String(url) === "/api/custom-providers/capabilities") return response(capabilities());
+      if (init.method === "PUT") return pendingMutation.promise;
+      return response({});
+    };
+
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+    const editor = win.App.SettingsComponents.providers.customEditor;
+    const oldSave = editor.save();
+    await Promise.resolve();
+    win.App.Settings.closeSettingsModal();
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+
+    const authority = customProvider({ name: "Mutation Authority" });
+    pendingMutation.resolve(response({ schemaVersion: 1, revision: 5, providers: [authority] }));
+    await oldSave;
+
+    pendingList.resolve(response({ revision: 5, official: [], custom: [customProvider({ name: "Equal GET" })] }));
+    await flushAsyncWork();
+
+    assert.strictEqual(document.querySelector("#msl-add-action .list-add-action")?.disabled, false);
+    assert.strictEqual(document.querySelector(".msl-custom-status")?.hidden, true);
+    assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"] .msl-name')?.textContent, "Mutation Authority");
+    assert.strictEqual(document.querySelector("#cpe-name")?.value, "Mutation Authority");
+    win.App.Settings.closeSettingsModal();
+  });
+
   it("does not roll expectedRevision back from stale conflict metadata", async () => {
     const host = document.createElement("div");
     document.body.replaceChildren(host);
@@ -1019,8 +1115,8 @@ describe("settings DOM boundary", () => {
     }
   });
 
-  it("rejects non-integer custom provider snapshot revisions", async () => {
-    for (const revision of [-1, 4.5, "5"]) {
+  it("accepts only non-negative safe-integer custom provider snapshot revisions", async () => {
+    for (const revision of [-1, 4.5, "5", Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
       const host = document.createElement("div");
       document.body.replaceChildren(host);
       let saved = 0;
@@ -1032,6 +1128,74 @@ describe("settings DOM boundary", () => {
 
       assert.strictEqual(saved, 0, String(revision));
       assert.match(host.querySelector(".cpe-result")?.textContent ?? "", /响应无效/);
+    }
+
+    const host = document.createElement("div");
+    document.body.replaceChildren(host);
+    let requestBody;
+    let saved = 0;
+    fetchImpl = async (_url, init = {}) => {
+      requestBody = JSON.parse(init.body);
+      return response({
+        schemaVersion: 1,
+        revision: Number.MAX_SAFE_INTEGER,
+        providers: [customProvider()],
+      });
+    };
+    const editor = createCustomProviderEditor({ onSaved: () => { saved += 1; } });
+    editor.mount(host, customProvider(), Number.MAX_SAFE_INTEGER - 1);
+
+    await editor.save();
+
+    assert.strictEqual(requestBody.expectedRevision, Number.MAX_SAFE_INTEGER - 1);
+    assert.strictEqual(saved, 1);
+    assert.strictEqual(host.querySelector(".cpe-revision")?.textContent, `Revision ${Number.MAX_SAFE_INTEGER}`);
+  });
+
+  it("rejects unsafe owner and conflict revisions without changing authority", async () => {
+    fetchImpl = async (url) => {
+      if (String(url) === "/api/auth") return response({ providers: [] });
+      if (String(url) === "/api/custom-providers") {
+        return response({
+          revision: Number.MAX_SAFE_INTEGER + 1,
+          official: [],
+          custom: [customProvider({ name: "Unsafe Owner" })],
+        });
+      }
+      if (String(url) === "/api/custom-providers/capabilities") return response(capabilities());
+      return response({});
+    };
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+    assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"]'), null);
+    assert.strictEqual(document.querySelector("#msl-add-action .list-add-action")?.disabled, true);
+    win.App.Settings.closeSettingsModal();
+
+    for (const { currentRevision, reloadRevision, expectedRevision } of [
+      { currentRevision: Number.MAX_SAFE_INTEGER, reloadRevision: Number.MAX_SAFE_INTEGER + 1, expectedRevision: Number.MAX_SAFE_INTEGER },
+      { currentRevision: Number.MAX_SAFE_INTEGER + 1, reloadRevision: Number.MAX_SAFE_INTEGER, expectedRevision: Number.MAX_SAFE_INTEGER },
+      { currentRevision: Number.MAX_SAFE_INTEGER + 1, reloadRevision: Number.NaN, expectedRevision: 6 },
+    ]) {
+      const host = document.createElement("div");
+      document.body.replaceChildren(host);
+      let writes = 0;
+      let retryBody;
+      fetchImpl = async (_url, init = {}) => {
+        if (init.method === "PUT") {
+          writes += 1;
+          if (writes === 1) return response({ code: "revision_conflict", currentRevision }, 409);
+          retryBody = JSON.parse(init.body);
+          return response({ schemaVersion: 1, revision: expectedRevision, providers: [customProvider()] });
+        }
+        return response({ revision: reloadRevision, official: [], custom: [customProvider()] });
+      };
+      const editor = createCustomProviderEditor();
+      editor.mount(host, customProvider(), 6);
+
+      await editor.save();
+      await editor.save();
+
+      assert.strictEqual(retryBody?.expectedRevision, expectedRevision, `${currentRevision}/${reloadRevision}`);
     }
   });
 

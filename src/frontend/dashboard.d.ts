@@ -735,6 +735,7 @@ interface AppNamespace {
   Settings: AppSettings;
   SettingsComponents: AppSettingsComponents;
   SettingsCustomProviderEditor: SettingsCustomProviderEditorConstructor;
+  isCustomProviderRevision(value: unknown): value is number;
   Git: AppGit;
   FileDiff: AppFileDiff;
   ChatViews: AppChatViews;

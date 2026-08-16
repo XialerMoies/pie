@@ -7,6 +7,7 @@ interface SettingsProviderModelDependencies {
   notify: typeof toast;
   listAddAction: typeof ListAddAction;
   customEditorType: SettingsCustomProviderEditorConstructor;
+  isValidRevision: (value: unknown) => value is number;
 }
 
 interface OfficialProviderListItem {
@@ -350,30 +351,28 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       if (generation !== this.renderGeneration) return;
       if (
         !providerRecord(value)
-        || !Number.isInteger(value.revision)
-        || (value.revision as number) < 0
+        || !this.dependencies.isValidRevision(value.revision)
         || !Array.isArray(value.official)
         || !Array.isArray(value.custom)
       ) throw new Error('Invalid custom provider response');
       const snapshot = value as unknown as CustomProviderListResponse;
-      if (this.hasCustomAuthority && snapshot.revision <= this.revision) return;
-      this.hasCustomAuthority = true;
-      this.customSnapshotState = 'ready';
-      this.officialProviders = snapshot.official;
-      this.customProviders = snapshot.custom;
-      this.revision = snapshot.revision;
-      this.refreshProviderListAndSelection();
-      this.updateCustomAvailability();
+      if (!this.hasCustomAuthority || snapshot.revision > this.revision) {
+        this.hasCustomAuthority = true;
+        this.officialProviders = snapshot.official;
+        this.customProviders = snapshot.custom;
+        this.revision = snapshot.revision;
+        this.refreshProviderListAndSelection();
+      }
+      this.convergeCustomAvailability(false);
     } catch {
       if (generation !== this.renderGeneration) return;
-      this.customSnapshotState = 'error';
-      this.officialProviders = this.authOfficialProviders;
       if (!this.hasCustomAuthority) {
+        this.officialProviders = this.authOfficialProviders;
         this.customProviders = [];
         this.revision = 0;
+        this.refreshProviderListAndSelection();
       }
-      this.refreshProviderListAndSelection();
-      this.updateCustomAvailability();
+      this.convergeCustomAvailability(true);
     }
   }
 
@@ -399,6 +398,11 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       && this.customProtocols.length > 0;
   }
 
+  private convergeCustomAvailability(loadFailed: boolean): void {
+    this.customSnapshotState = this.hasCustomAuthority ? 'ready' : loadFailed ? 'error' : 'loading';
+    this.updateCustomAvailability();
+  }
+
   private updateCustomAvailability(): void {
     const available = this.customEditingAvailable();
     if (this.addCustomButton) this.addCustomButton.disabled = !available;
@@ -422,7 +426,9 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       return;
     }
     if (selectedCustom && content) {
-      if (available) this.customEditor.mount(content, selectedCustom, this.revision);
+      if (available) {
+        if (!content.querySelector('.cpe-editor')) this.customEditor.mount(content, selectedCustom, this.revision);
+      }
       else this.renderCustomUnavailable(content);
     } else if (!this.selectedProvider && (window._provOrder?.length ?? 0) === 0 && content) {
       if (available) {
@@ -512,16 +518,19 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     selectedId: string | null,
     activateSaved = false,
   ): void {
-    if (!Number.isInteger(snapshot.revision) || snapshot.revision < 0 || !Array.isArray(snapshot.providers)) return;
-    if (this.hasCustomAuthority && snapshot.revision <= this.revision) return;
+    if (!this.dependencies.isValidRevision(snapshot.revision) || !Array.isArray(snapshot.providers)) return;
+    if (this.hasCustomAuthority && snapshot.revision <= this.revision) {
+      this.convergeCustomAvailability(false);
+      return;
+    }
     const selectedBeforeMutation = this.selectedProvider;
     const newDraftBeforeMutation = this.newDraftActive;
     this.hasCustomAuthority = true;
-    this.customSnapshotState = 'ready';
     this.customProviders = snapshot.providers;
     this.revision = snapshot.revision;
     this.reconcileOrder();
     this.renderProviderList();
+    this.convergeCustomAvailability(false);
     if (newDraftBeforeMutation && !activateSaved) {
       this.markSelected(null);
       return;
@@ -571,6 +580,7 @@ const settingsProviderController = new SettingsProviderModelController({
   notify: toast,
   listAddAction: settingsProviderApp.Ui.ListAddAction,
   customEditorType: settingsProviderApp.SettingsCustomProviderEditor,
+  isValidRevision: settingsProviderApp.isCustomProviderRevision,
 });
 settingsProviderApp.SettingsComponents = {
   ...(settingsProviderApp.SettingsComponents || {}),

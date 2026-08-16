@@ -144,11 +144,14 @@ function safeArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+export function isCustomProviderRevision(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
 function isCustomProviderSnapshot(value: unknown): value is RedactedCustomProviderSnapshot {
   if (!value || typeof value !== 'object') return false;
   const snapshot = value as { revision?: unknown; providers?: unknown };
-  return Number.isInteger(snapshot.revision)
-    && (snapshot.revision as number) >= 0
+  return isCustomProviderRevision(snapshot.revision)
     && Array.isArray(snapshot.providers);
 }
 
@@ -1108,15 +1111,15 @@ export class SettingsCustomProviderEditor {
     }
     if (body.code === 'revision_conflict') {
       let latestRevision = this.revision;
-      if (Number.isInteger(body.currentRevision) && (body.currentRevision as number) >= 0) {
-        latestRevision = Math.max(latestRevision, body.currentRevision as number);
+      if (isCustomProviderRevision(body.currentRevision)) {
+        latestRevision = Math.max(latestRevision, body.currentRevision);
       }
       const latest = await this.request(operation, '/api/custom-providers', { method: 'GET' });
       if (!this.isCurrentMount(operation) || latest.aborted) return;
       if (latest.ok && latest.body && typeof latest.body === 'object') {
         const received = (latest.body as { revision?: unknown }).revision;
-        if (Number.isInteger(received) && (received as number) >= 0) {
-          latestRevision = Math.max(latestRevision, received as number);
+        if (isCustomProviderRevision(received)) {
+          latestRevision = Math.max(latestRevision, received);
         }
       }
       this.revision = latestRevision;
@@ -1251,3 +1254,4 @@ export class SettingsCustomProviderEditor {
 
 const settingsCustomProviderEditorApp = (window as any).App || ((window as any).App = {});
 settingsCustomProviderEditorApp.SettingsCustomProviderEditor = SettingsCustomProviderEditor;
+settingsCustomProviderEditorApp.isCustomProviderRevision = isCustomProviderRevision;
