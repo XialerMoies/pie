@@ -15,6 +15,39 @@ interface OfficialProviderListItem {
   configured: boolean;
 }
 
+type CustomProviderLoadState = 'loading' | 'ready' | 'error';
+
+const SETTINGS_CUSTOM_PROVIDER_PROTOCOLS = new Set<string>([
+  'openai-completions',
+  'openai-responses',
+  'anthropic-messages',
+  'mistral-conversations',
+  'azure-openai-responses',
+  'pi-messages',
+]);
+
+function providerRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+async function providerJson(url: string): Promise<unknown> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Request failed: ${url}`);
+  return response.json();
+}
+
+function capabilityProtocols(value: unknown): CustomProviderProtocol[] {
+  if (!providerRecord(value) || !Array.isArray(value.protocols)) throw new Error('Invalid capabilities response');
+  const protocols: CustomProviderProtocol[] = [];
+  for (const entry of value.protocols) {
+    if (!providerRecord(entry) || typeof entry.id !== 'string') continue;
+    if (!SETTINGS_CUSTOM_PROVIDER_PROTOCOLS.has(entry.id) || protocols.includes(entry.id as CustomProviderProtocol)) continue;
+    protocols.push(entry.id as CustomProviderProtocol);
+  }
+  if (protocols.length === 0) throw new Error('No supported custom provider protocols');
+  return protocols;
+}
+
 function providerElement<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const element = document.createElement(tag);
   if (className) element.className = className;
@@ -26,10 +59,17 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   private selectedProvider: string | null = null;
   private providerKeys: Record<string, ProviderKeyInfo> = {};
   private officialProviders: OfficialProviderListItem[] = [];
+  private authOfficialProviders: OfficialProviderListItem[] = [];
   private customProviders: RedactedCustomProvider[] = [];
   private revision = 0;
   private revealRequestId = 0;
   private dragIndex = -1;
+  private renderGeneration = 0;
+  private customSnapshotState: CustomProviderLoadState = 'loading';
+  private capabilitiesState: CustomProviderLoadState = 'loading';
+  private customProtocols: CustomProviderProtocol[] = [];
+  private addCustomButton: HTMLButtonElement | null = null;
+  private customStatus: HTMLElement | null = null;
   customEditor: SettingsCustomProviderEditor;
 
   constructor(private readonly dependencies: SettingsProviderModelDependencies) {
@@ -42,6 +82,17 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   }
 
   renderTab(container: HTMLElement): void {
+    const generation = ++this.renderGeneration;
+    this.selectedProvider = null;
+    this.providerKeys = {};
+    this.officialProviders = [];
+    this.authOfficialProviders = [];
+    this.customProviders = [];
+    this.revision = 0;
+    this.customSnapshotState = 'loading';
+    this.capabilitiesState = 'loading';
+    this.customProtocols = [];
+    this.customEditor.setProtocols([]);
     container.innerHTML = `
       <div class="model-split">
         <div class="ms-left">
@@ -55,55 +106,23 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       </div>
     `;
     const addMount = $('msl-add-action');
-    addMount?.append(this.dependencies.listAddAction.create({
+    this.addCustomButton = this.dependencies.listAddAction.create({
       label: '添加自定义厂商',
+      disabled: true,
       onActivate: () => {
+        if (!this.customEditingAvailable()) return;
         this.selectedProvider = null;
         this.markSelected(null);
         const content = $('ms-right-content');
         if (content) this.customEditor.startNew(content, this.revision);
       },
-    }));
-
-    Promise.all([
-      fetch('/api/auth').then(response => response.json()),
-      fetch('/api/custom-providers').then(response => response.json()),
-      fetch('/api/custom-providers/capabilities').then(response => response.json()),
-    ]).then(([authData, providerData]) => {
-      const auth = authData as { providers?: Array<{ provider: string; hasKey: boolean; canReveal?: boolean; keyPreview: string }> };
-      const snapshot = providerData as CustomProviderListResponse;
-      this.providerKeys = {};
-      for (const provider of auth.providers ?? []) {
-        this.providerKeys[provider.provider] = {
-          hasKey: provider.hasKey,
-          canReveal: provider.canReveal ?? Boolean(provider.keyPreview),
-          keyPreview: provider.keyPreview || '',
-        };
-      }
-      const officialById = new Map<string, OfficialProviderListItem>();
-      if (Array.isArray(snapshot.official)) {
-        for (const provider of snapshot.official) officialById.set(provider.id, provider);
-      } else {
-        for (const provider of auth.providers ?? []) {
-          officialById.set(provider.provider, { id: provider.provider, name: provider.provider, configured: provider.hasKey });
-        }
-      }
-      this.officialProviders = [...officialById.values()];
-      this.customProviders = Array.isArray(snapshot.custom) ? snapshot.custom : [];
-      this.revision = Number.isInteger(snapshot.revision) ? snapshot.revision : 0;
-      this.reconcileOrder();
-      this.renderProviderList();
-      const first = window._provOrder?.[0];
-      if (first) this.selectProvider(first);
-      else {
-        const content = $('ms-right-content');
-        if (content) this.customEditor.startNew(content, this.revision);
-      }
-    }).catch(() => {
-      const list = $('msl-list');
-      if (list) list.replaceChildren(providerElement('p', 'msl-error', '加载失败'));
-      this.dependencies.notify('加载厂商列表失败', 'error');
     });
+    this.customStatus = providerElement('div', 'msl-custom-status', '正在加载自定义厂商...');
+    addMount?.append(this.addCustomButton, this.customStatus);
+
+    void this.loadOfficialAuth(generation);
+    void this.loadCustomSnapshot(generation);
+    void this.loadCapabilities(generation);
   }
 
   selectProvider(provider: string): void {
@@ -114,6 +133,10 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     if (!content) return;
     if (custom) {
       this.revealRequestId += 1;
+      if (!this.customEditingAvailable()) {
+        this.renderCustomUnavailable(content);
+        return;
+      }
       this.customEditor.mount(content, custom, this.revision);
       return;
     }
@@ -262,6 +285,145 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     if (info.hasKey) this.loadProviderModels(provider);
   }
 
+  private async loadOfficialAuth(generation: number): Promise<void> {
+    try {
+      const value = await providerJson('/api/auth');
+      if (generation !== this.renderGeneration) return;
+      if (!providerRecord(value) || !Array.isArray(value.providers)) throw new Error('Invalid auth response');
+      this.providerKeys = {};
+      const officialById = new Map<string, OfficialProviderListItem>();
+      for (const entry of value.providers) {
+        if (!providerRecord(entry) || typeof entry.provider !== 'string') continue;
+        const hasKey = entry.hasKey === true;
+        const keyPreview = typeof entry.keyPreview === 'string' ? entry.keyPreview : '';
+        this.providerKeys[entry.provider] = {
+          hasKey,
+          canReveal: typeof entry.canReveal === 'boolean' ? entry.canReveal : Boolean(keyPreview),
+          keyPreview,
+        };
+        officialById.set(entry.provider, { id: entry.provider, name: entry.provider, configured: hasKey });
+      }
+      this.authOfficialProviders = [...officialById.values()];
+      if (this.customSnapshotState !== 'ready') this.officialProviders = this.authOfficialProviders;
+      const selectedBeforeAuth = this.selectedProvider;
+      this.refreshProviderListAndSelection();
+      if (
+        selectedBeforeAuth
+        && this.selectedProvider === selectedBeforeAuth
+        && !this.customProviders.some(provider => provider.id === selectedBeforeAuth)
+      ) {
+        const content = $('ms-right-content');
+        if (content) this.renderOfficialProvider(content, selectedBeforeAuth);
+      }
+    } catch {
+      if (generation !== this.renderGeneration) return;
+      this.providerKeys = {};
+      this.authOfficialProviders = [];
+      if (this.customSnapshotState !== 'ready') this.officialProviders = [];
+      this.refreshProviderListAndSelection();
+      this.dependencies.notify('加载官方厂商认证失败', 'error');
+    }
+  }
+
+  private async loadCustomSnapshot(generation: number): Promise<void> {
+    try {
+      const value = await providerJson('/api/custom-providers');
+      if (generation !== this.renderGeneration) return;
+      if (
+        !providerRecord(value)
+        || !Number.isInteger(value.revision)
+        || !Array.isArray(value.official)
+        || !Array.isArray(value.custom)
+      ) throw new Error('Invalid custom provider response');
+      const snapshot = value as unknown as CustomProviderListResponse;
+      this.customSnapshotState = 'ready';
+      this.officialProviders = snapshot.official;
+      this.customProviders = snapshot.custom;
+      this.revision = snapshot.revision;
+      this.refreshProviderListAndSelection();
+      this.updateCustomAvailability();
+    } catch {
+      if (generation !== this.renderGeneration) return;
+      this.customSnapshotState = 'error';
+      this.officialProviders = this.authOfficialProviders;
+      this.customProviders = [];
+      this.revision = 0;
+      this.refreshProviderListAndSelection();
+      this.updateCustomAvailability();
+    }
+  }
+
+  private async loadCapabilities(generation: number): Promise<void> {
+    try {
+      const protocols = capabilityProtocols(await providerJson('/api/custom-providers/capabilities'));
+      if (generation !== this.renderGeneration) return;
+      this.capabilitiesState = 'ready';
+      this.customProtocols = protocols;
+      this.customEditor.setProtocols(protocols);
+    } catch {
+      if (generation !== this.renderGeneration) return;
+      this.capabilitiesState = 'error';
+      this.customProtocols = [];
+      this.customEditor.setProtocols([]);
+    }
+    this.updateCustomAvailability();
+  }
+
+  private customEditingAvailable(): boolean {
+    return this.customSnapshotState === 'ready'
+      && this.capabilitiesState === 'ready'
+      && this.customProtocols.length > 0;
+  }
+
+  private updateCustomAvailability(): void {
+    const available = this.customEditingAvailable();
+    if (this.addCustomButton) this.addCustomButton.disabled = !available;
+    if (this.customStatus) {
+      if (available) {
+        this.customStatus.hidden = true;
+        this.customStatus.textContent = '';
+      } else {
+        this.customStatus.hidden = false;
+        this.customStatus.textContent = this.customSnapshotState === 'error'
+          ? '自定义厂商不可用：配置列表加载失败'
+          : this.capabilitiesState === 'error'
+            ? '自定义厂商不可用：协议能力加载失败'
+            : '正在加载自定义厂商...';
+      }
+    }
+    const selectedCustom = this.customProviders.find(provider => provider.id === this.selectedProvider);
+    const content = $('ms-right-content');
+    if (selectedCustom && content) {
+      if (available) this.customEditor.mount(content, selectedCustom, this.revision);
+      else this.renderCustomUnavailable(content);
+    } else if (!this.selectedProvider && (window._provOrder?.length ?? 0) === 0 && content) {
+      if (available) this.customEditor.startNew(content, this.revision);
+      else this.renderCustomUnavailable(content);
+    }
+  }
+
+  private renderCustomUnavailable(content: HTMLElement): void {
+    const message = this.customSnapshotState === 'error'
+      ? '自定义厂商暂不可用，配置列表加载失败。'
+      : this.capabilitiesState === 'error'
+        ? '自定义厂商暂不可用，协议能力加载失败。'
+        : '正在加载自定义厂商配置...';
+    content.replaceChildren(providerElement('p', 'msl-error', message));
+  }
+
+  private refreshProviderListAndSelection(): void {
+    this.reconcileOrder();
+    this.renderProviderList();
+    const availableIds = new Set(window._provOrder ?? []);
+    if (this.selectedProvider && availableIds.has(this.selectedProvider)) {
+      this.markSelected(this.selectedProvider);
+      return;
+    }
+    this.selectedProvider = null;
+    const first = window._provOrder?.[0];
+    if (first) this.selectProvider(first);
+  }
+
   private reconcileOrder(): void {
     const allProviderIds = [...this.officialProviders.map(provider => provider.id), ...this.customProviders.map(provider => provider.id)];
     const uniqueIds = [...new Set(allProviderIds)];
@@ -287,7 +449,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       const custom = customById.get(id);
       const official = officialById.get(id);
       if (!custom && !official) return [];
-      const selected = id === this.selectedProvider || (!this.selectedProvider && index === 0);
+      const selected = id === this.selectedProvider;
       const item = providerElement('div', `msl-item${selected ? ' on' : ''}`);
       item.draggable = true;
       item.dataset.prov = id;
@@ -310,6 +472,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   }
 
   private applyCustomSnapshot(snapshot: RedactedCustomProviderSnapshot, selectedId: string | null): void {
+    this.customSnapshotState = 'ready';
     this.customProviders = snapshot.providers;
     this.revision = snapshot.revision;
     this.reconcileOrder();

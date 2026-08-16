@@ -205,6 +205,14 @@ interface CustomProviderListResponse {
   official: Array<{ id: string; name: string; configured: boolean }>;
   custom: RedactedCustomProvider[];
 }
+interface CustomProviderCapabilitiesResponse {
+  protocols: Array<{
+    id: string;
+    authModes: CustomProviderAuthMode[];
+    supportsCompatibility: boolean;
+  }>;
+  price: { currency: 'USD'; unit: 'millionTokens' };
+}
 interface SettingsCustomProviderEditorDependencies {
   notify: typeof toast;
   listAddAction: typeof ListAddAction;
@@ -212,6 +220,7 @@ interface SettingsCustomProviderEditorDependencies {
   onDeleted(snapshot: RedactedCustomProviderSnapshot): void;
 }
 interface SettingsCustomProviderEditor {
+  setProtocols(protocols: readonly CustomProviderProtocol[]): void;
   mount(container: HTMLElement, provider: RedactedCustomProvider | null, revision: number): void;
   startNew(container: HTMLElement, revision: number): void;
   save(): Promise<void>;

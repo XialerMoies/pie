@@ -1,14 +1,5 @@
 /// <reference path="../dashboard.d.ts" />
 
-const CUSTOM_PROVIDER_PROTOCOLS = [
-  'openai-completions',
-  'openai-responses',
-  'anthropic-messages',
-  'mistral-conversations',
-  'azure-openai-responses',
-  'pi-messages',
-] as const;
-
 interface SettingsCustomProviderEditorDependencies {
   notify: typeof toast;
   listAddAction: typeof ListAddAction;
@@ -25,6 +16,19 @@ interface CustomProviderErrorResponse {
 }
 
 type DraftModel = CustomProviderDraft['models'][number];
+
+const CUSTOM_HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const CUSTOM_FORBIDDEN_HEADERS = new Set([
+  'host',
+  'content-length',
+  'connection',
+  'transfer-encoding',
+  'proxy-authorization',
+  'proxy-authenticate',
+  'te',
+  'trailer',
+  'upgrade',
+]);
 
 function cpeElement<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -94,8 +98,13 @@ export class SettingsCustomProviderEditor {
   private newProvider = false;
   private apiKeyCleared = false;
   private deleteArmed = false;
+  private protocols: CustomProviderProtocol[] = [];
 
   constructor(private readonly dependencies: SettingsCustomProviderEditorDependencies) {}
+
+  setProtocols(protocols: readonly CustomProviderProtocol[]): void {
+    this.protocols = [...new Set(protocols)];
+  }
 
   mount(container: HTMLElement, provider: RedactedCustomProvider | null, revision: number): void {
     if (!provider) {
@@ -287,6 +296,12 @@ export class SettingsCustomProviderEditor {
     root.append(actions);
 
     root.addEventListener('click', event => this.handleClick(event));
+    root.addEventListener('input', event => {
+      const input = event.target as HTMLInputElement;
+      if (input.id !== 'cpe-api-key' || input.value.length === 0) return;
+      this.apiKeyCleared = false;
+      input.placeholder = this.provider?.apiKeyConfigured ? '留空保留已保存值' : '输入 API Key';
+    });
     this.container.replaceChildren(root);
   }
 
@@ -314,7 +329,7 @@ export class SettingsCustomProviderEditor {
     const prompt = cpeElement('option', undefined, '选择协议');
     prompt.value = '';
     select.append(prompt);
-    for (const protocol of CUSTOM_PROVIDER_PROTOCOLS) {
+    for (const protocol of this.protocols) {
       const option = cpeElement('option', undefined, protocol);
       option.value = protocol;
       option.selected = protocol === selected;
@@ -387,6 +402,7 @@ export class SettingsCustomProviderEditor {
     row.append(nameInput, valueInput);
     if (configured) row.append(cpeElement('span', 'cpe-header-status', '已保存'));
     row.append(cpeButton('remove-header', '删除', 'cpe-icon-button'));
+    row.append(cpeElement('span', 'cpe-field-error cpe-header-error'));
     return row;
   }
 
@@ -520,6 +536,7 @@ export class SettingsCustomProviderEditor {
     if (!valid) return null;
 
     const headers: CustomProviderDraft['headers'] = [];
+    const headerNames = new Set<string>();
     for (const row of this.root.querySelectorAll<HTMLElement>('.cpe-header-row')) {
       const headerName = row.querySelector<HTMLInputElement>('.cpe-header-name')?.value.trim() ?? '';
       const originalName = row.dataset.originalName ?? '';
@@ -527,10 +544,23 @@ export class SettingsCustomProviderEditor {
         if (originalName) headers.push({ name: originalName, remove: true });
         continue;
       }
-      if (!headerName) continue;
+      const error = row.querySelector<HTMLElement>('.cpe-header-error');
+      const normalizedName = headerName.toLowerCase();
+      let message = '';
+      if (!headerName) message = '请输入 Header name';
+      else if (!CUSTOM_HEADER_NAME_PATTERN.test(headerName) || CUSTOM_FORBIDDEN_HEADERS.has(normalizedName)) {
+        message = 'Header name 无效';
+      } else if (headerNames.has(normalizedName)) message = 'Header name 重复';
+      if (message) {
+        valid = false;
+        if (showErrors && error) error.textContent = message;
+        continue;
+      }
+      headerNames.add(normalizedName);
       const headerValue = row.querySelector<HTMLInputElement>('.cpe-header-value')?.value ?? '';
       headers.push({ name: headerName, ...(headerValue ? { value: headerValue } : {}) });
     }
+    if (!valid) return null;
     try {
       const models = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-row')].map(row => {
         const samplingParams = readJsonObject(row.querySelector('.cpe-model-sampling'), 'Sampling JSON');
@@ -631,12 +661,12 @@ export class SettingsCustomProviderEditor {
     for (const entry of safeArray(value)) {
       if (!entry || typeof entry !== 'object') continue;
       const reference = entry as Record<string, unknown>;
-      const model = typeof reference.modelId === 'string' ? reference.modelId : '未知模型';
+      const model = typeof reference.modelId === 'string' ? this.redact(reference.modelId) : '未知模型';
       const source = reference.kind === 'currentModel'
         ? '当前模型'
         : reference.kind === 'defaultModel'
           ? '默认模型'
-          : typeof reference.agentName === 'string' ? reference.agentName : '自定义 Agent';
+          : typeof reference.agentName === 'string' ? this.redact(reference.agentName) : '自定义 Agent';
       list.append(cpeElement('li', undefined, `${source}: ${model}`));
     }
     banner.append(list);
@@ -685,7 +715,9 @@ export class SettingsCustomProviderEditor {
     const secrets = [
       this.root?.querySelector<HTMLInputElement>('#cpe-api-key')?.value,
       ...[...(this.root?.querySelectorAll<HTMLInputElement>('.cpe-header-value') ?? [])].map(input => input.value),
-    ].filter((secret): secret is string => Boolean(secret && secret.length >= 4));
+    ]
+      .filter((secret): secret is string => typeof secret === 'string' && secret.length > 0)
+      .sort((left, right) => right.length - left.length);
     let redacted = message;
     for (const secret of secrets) redacted = redacted.split(secret).join('[REDACTED]');
     return redacted

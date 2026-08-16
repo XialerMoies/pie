@@ -148,6 +148,20 @@ function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
 }
 
+function capabilities(protocolIds = [
+  "openai-completions",
+  "openai-responses",
+  "anthropic-messages",
+  "mistral-conversations",
+  "azure-openai-responses",
+  "pi-messages",
+]) {
+  return {
+    protocols: protocolIds.map((id) => ({ id, authModes: ["none", "apiKey"], supportsCompatibility: true })),
+    price: { currency: "USD", unit: "millionTokens" },
+  };
+}
+
 function editorDependencies(overrides = {}) {
   return {
     notify: global.toast,
@@ -156,6 +170,12 @@ function editorDependencies(overrides = {}) {
     onDeleted: () => {},
     ...overrides,
   };
+}
+
+function createCustomProviderEditor(overrides = {}) {
+  const editor = new SettingsCustomProviderEditor(editorDependencies(overrides));
+  editor.setProtocols(capabilities().protocols.map((protocol) => protocol.id));
+  return editor;
 }
 
 function setInput(selector, value) {
@@ -252,7 +272,7 @@ describe("settings DOM boundary", () => {
         ],
         custom: [customProvider()],
       });
-      if (String(url) === "/api/custom-providers/capabilities") return response({ protocols: [], price: { currency: "USD", unit: "millionTokens" } });
+      if (String(url) === "/api/custom-providers/capabilities") return response(capabilities());
       return response({ models: [] });
     };
 
@@ -274,7 +294,7 @@ describe("settings DOM boundary", () => {
   it("requires an explicit auth choice for new drafts and exposes only six supported protocols", async () => {
     const host = document.createElement("div");
     document.body.append(host);
-    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    const editor = createCustomProviderEditor();
     editor.startNew(host, 3);
 
     const auth = [...host.querySelectorAll('input[name="cpe-auth-mode"]')];
@@ -296,6 +316,32 @@ describe("settings DOM boundary", () => {
     assert.match(host.querySelector('[data-field-error="authMode"]')?.textContent ?? "", /选择/);
   });
 
+  it("uses capabilities as the protocol option source and excludes unsupported protocols", async () => {
+    fetchImpl = async (url) => {
+      if (String(url) === "/api/auth") return response({ providers: [] });
+      if (String(url) === "/api/custom-providers") return response({ revision: 3, official: [], custom: [] });
+      if (String(url) === "/api/custom-providers/capabilities") {
+        return response(capabilities([
+          "openai-responses",
+          "anthropic-messages",
+          "google-generative-ai",
+          "future-unsupported-protocol",
+        ]));
+      }
+      return response({});
+    };
+
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+    document.querySelector("#msl-add-action .list-add-action")?.click();
+
+    const protocols = [...document.querySelectorAll("#cpe-protocol option")]
+      .map((option) => option.value)
+      .filter(Boolean);
+    assert.deepStrictEqual(protocols, ["openai-responses", "anthropic-messages"]);
+    assert.strictEqual(protocols.includes("google-generative-ai"), false);
+  });
+
   it("keeps existing IDs readonly and treats configured Header values as write-only secrets", () => {
     const host = document.createElement("div");
     document.body.append(host);
@@ -304,7 +350,7 @@ describe("settings DOM boundary", () => {
       if (String(url).includes("reveal")) revealRequests += 1;
       return response({});
     };
-    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    const editor = createCustomProviderEditor();
     editor.mount(host, customProvider(), 4);
 
     assert.strictEqual(host.querySelector("#cpe-id")?.readOnly, true);
@@ -317,7 +363,7 @@ describe("settings DOM boundary", () => {
   it("adds and removes multiple model rows while advanced settings remain collapsed", () => {
     const host = document.createElement("div");
     document.body.append(host);
-    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    const editor = createCustomProviderEditor();
     editor.mount(host, customProvider(), 4);
 
     assert.strictEqual(host.querySelectorAll(".cpe-model-row").length, 2);
@@ -341,9 +387,9 @@ describe("settings DOM boundary", () => {
       }
       return response({});
     };
-    const editor = new SettingsCustomProviderEditor(editorDependencies({
+    const editor = createCustomProviderEditor({
       onSaved: (_snapshot, selectedId) => { savedSelection = selectedId; },
-    }));
+    });
     editor.startNew(host, 5);
     setInput("#cpe-name", "Fresh");
     setInput("#cpe-id", "openai");
@@ -369,7 +415,7 @@ describe("settings DOM boundary", () => {
       bodies.push(JSON.parse(init.body));
       return response({ schemaVersion: 1, revision: 9, providers: [customProvider()] });
     };
-    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    const editor = createCustomProviderEditor();
     editor.mount(host, customProvider(), 8);
     await editor.save();
     assert.strictEqual("apiKey" in bodies[0].provider, false);
@@ -382,6 +428,74 @@ describe("settings DOM boundary", () => {
     assert.deepStrictEqual(bodies[1].provider.headers, [{ name: "X-Tenant", remove: true }]);
   });
 
+  it("cancels API key clear intent when a replacement is entered", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const bodies = [];
+    fetchImpl = async (_url, init = {}) => {
+      bodies.push(JSON.parse(init.body));
+      return response({ schemaVersion: 1, revision: 9, providers: [customProvider()] });
+    };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 8);
+
+    host.querySelector('[data-cpe-action="clear-api-key"]').click();
+    setInput("#cpe-api-key", "abc");
+    await editor.save();
+    assert.strictEqual(bodies[0].provider.apiKey, "abc");
+
+    setInput("#cpe-api-key", "");
+    await editor.save();
+    assert.strictEqual("apiKey" in bodies[1].provider, false);
+  });
+
+  it("keeps configured Header references until an explicit remove action", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const bodies = [];
+    fetchImpl = async (_url, init = {}) => {
+      bodies.push(JSON.parse(init.body));
+      return response({ schemaVersion: 1, revision: 9, providers: [customProvider()] });
+    };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 8);
+
+    setInput(".cpe-header-name", "");
+    await editor.save();
+    assert.strictEqual(bodies.length, 0);
+    assert.strictEqual(host.querySelectorAll(".cpe-header-row").length, 1);
+    assert.strictEqual(host.querySelector(".cpe-header-row")?.dataset.originalName, "X-Tenant");
+    assert.match(host.querySelector(".cpe-header-error")?.textContent ?? "", /Header/);
+
+    host.querySelector('[data-cpe-action="remove-header"]').click();
+    await editor.save();
+    assert.deepStrictEqual(bodies[0].provider.headers, [{ name: "X-Tenant", remove: true }]);
+  });
+
+  it("blocks unconfigured Headers with an empty or invalid name without dropping the row", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    let requests = 0;
+    fetchImpl = async () => {
+      requests += 1;
+      return response({});
+    };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider({ headers: [] }), 8);
+    host.querySelector('[data-cpe-action="add-header"]').click();
+    setInput(".cpe-header-value", "xy");
+
+    await editor.save();
+    assert.strictEqual(requests, 0);
+    assert.strictEqual(host.querySelectorAll(".cpe-header-row").length, 1);
+    assert.match(host.querySelector(".cpe-header-error")?.textContent ?? "", /Header/);
+
+    setInput(".cpe-header-name", "bad header");
+    await editor.save();
+    assert.strictEqual(requests, 0);
+    assert.match(host.querySelector(".cpe-header-error")?.textContent ?? "", /Header/);
+  });
+
   it("imports discovered model IDs only after explicit user confirmation", async () => {
     const host = document.createElement("div");
     document.body.append(host);
@@ -391,7 +505,7 @@ describe("settings DOM boundary", () => {
       discoveryDrafts.push(JSON.parse(init.body).provider);
       return response({ ids: ["model-a", "discovered-x"] });
     };
-    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    const editor = createCustomProviderEditor();
     editor.mount(host, customProvider({ models: [customProvider().models[0]] }), 2);
     const originalConfirm = win.confirm;
     win.confirm = () => false;
@@ -404,22 +518,83 @@ describe("settings DOM boundary", () => {
     win.confirm = originalConfirm;
   });
 
-  it("redacts failed connection text without disabling Save", async () => {
+  it("redacts hostile short draft secrets from failed connection text and notifications", async () => {
     const host = document.createElement("div");
     document.body.append(host);
-    const secret = "sk-super-secret";
-    fetchImpl = async () => response({ ok: false, code: "authentication", message: `bad ${secret} <img id=network-xss>` });
-    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    const apiKey = "abc";
+    const headerSecret = "xy";
+    fetchImpl = async () => response({
+      ok: false,
+      code: "authentication",
+      message: `bad key=${apiKey} header=${headerSecret} <img id=network-xss>`,
+    });
+    const editor = createCustomProviderEditor();
     editor.mount(host, customProvider(), 2);
-    setInput("#cpe-api-key", secret);
+    setInput("#cpe-api-key", apiKey);
+    setInput(".cpe-header-value", headerSecret);
 
     await editor.test();
     const result = host.querySelector(".cpe-result");
     assert.ok(result);
-    assert.strictEqual(result.textContent.includes(secret), false);
+    assert.strictEqual(result.textContent.includes(apiKey), false);
+    assert.strictEqual(result.textContent.includes(headerSecret), false);
     assert.strictEqual(result.textContent.includes("[REDACTED]"), true);
     assert.strictEqual(host.querySelector("#network-xss"), null);
     assert.strictEqual(host.querySelector('[data-cpe-action="save"]').disabled, false);
+    assert.strictEqual(JSON.stringify(settingsSpies.toastCalls).includes(apiKey), false);
+    assert.strictEqual(JSON.stringify(settingsSpies.toastCalls).includes(headerSecret), false);
+  });
+
+  it("keeps official auth, reveal, and models usable when capabilities cannot be decoded", async () => {
+    const unhandled = [];
+    const onUnhandled = (error) => { unhandled.push(error); };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      for (const failure of ["reject", "invalid-json"]) {
+        document.body.innerHTML = '<div id="provider-host"></div>';
+        win._provOrder = [];
+        let revealRequests = 0;
+        let modelRequests = 0;
+        fetchImpl = async (url) => {
+          if (String(url) === "/api/auth") {
+            return response({ providers: [{ provider: "openai", hasKey: true, canReveal: true, keyPreview: "sk-preview" }] });
+          }
+          if (String(url) === "/api/auth/reveal") {
+            revealRequests += 1;
+            return response({ ok: true, apiKey: "sk-official-secret" });
+          }
+          if (String(url) === "/api/models") {
+            modelRequests += 1;
+            return response({ models: [{ provider: "openai", id: "official-model" }] });
+          }
+          if (String(url) === "/api/custom-providers") {
+            return response({ revision: 4, official: [{ id: "openai", name: "OpenAI", configured: true }], custom: [] });
+          }
+          if (String(url) === "/api/custom-providers/capabilities") {
+            if (failure === "reject") throw new Error("capabilities offline");
+            return { ok: true, json: async () => { throw new SyntaxError("invalid capabilities JSON"); } };
+          }
+          return response({});
+        };
+
+        win.App.SettingsComponents.providers.renderTab(document.querySelector("#provider-host"));
+        await flushAsyncWork();
+        await flushAsyncWork();
+
+        assert.ok(document.querySelector('.msl-item[data-prov="openai"]'), `${failure}: official provider should render`);
+        assert.strictEqual(document.querySelector(".rp-prov-name")?.textContent, "openai");
+        assert.strictEqual(document.querySelector("#key-input")?.value, "sk-official-secret");
+        assert.strictEqual(document.querySelector(".rp-model-item")?.textContent, "official-model");
+        assert.ok(revealRequests > 0, `${failure}: reveal should run`);
+        assert.ok(modelRequests > 0, `${failure}: models should run`);
+        assert.strictEqual(document.querySelector("#msl-add-action .list-add-action")?.disabled, true);
+        assert.match(document.querySelector(".msl-custom-status")?.textContent ?? "", /自定义厂商不可用/);
+      }
+      await flushAsyncWork();
+      assert.deepStrictEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 
   it("reloads the latest revision after a stale write while preserving unsaved values", async () => {
@@ -432,7 +607,7 @@ describe("settings DOM boundary", () => {
       if (String(url) === "/api/custom-providers") return response({ revision: 12, official: [], custom: [customProvider({ name: "Server Name" })] });
       return response({});
     };
-    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    const editor = createCustomProviderEditor();
     editor.mount(host, customProvider(), 10);
     setInput("#cpe-name", "Unsaved Local Name");
 
@@ -453,7 +628,7 @@ describe("settings DOM boundary", () => {
         { kind: "customAgent", providerId: "acme", modelId: "model-b", agentId: "review", agentName: "Review Agent" },
       ],
     }, 409);
-    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    const editor = createCustomProviderEditor();
     editor.mount(host, customProvider(), 4);
 
     await editor.save();
@@ -472,7 +647,7 @@ describe("settings DOM boundary", () => {
       requests.push([String(url), init.method, JSON.parse(init.body)]);
       return response({ schemaVersion: 1, revision: 5, providers: [] });
     };
-    const editor = new SettingsCustomProviderEditor(editorDependencies());
+    const editor = createCustomProviderEditor();
     editor.mount(host, customProvider(), 4);
 
     await editor.delete();
@@ -492,7 +667,7 @@ describe("settings DOM boundary", () => {
     fetchImpl = async (url) => {
       if (String(url) === "/api/auth") return response({ providers: [] });
       if (String(url) === "/api/custom-providers") return response({ revision: 1, official: [], custom: [provider] });
-      if (String(url) === "/api/custom-providers/capabilities") return response({ protocols: [], price: { currency: "USD", unit: "millionTokens" } });
+      if (String(url) === "/api/custom-providers/capabilities") return response(capabilities());
       return response({ error: hostile, code: "upstream" }, 502);
     };
 
