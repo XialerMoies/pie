@@ -254,7 +254,6 @@ function throwIfAborted(signal: AbortSignal): void {
 }
 
 function raceWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise<T>((resolve, reject) => {
     const settle = (callback: (value: T | PromiseLike<T>) => void, value: T | PromiseLike<T>) => {
       signal.removeEventListener("abort", onAbort);
@@ -265,8 +264,9 @@ function raceWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T
       reject(error);
     };
     const onAbort = () => fail(signal.reason);
-    signal.addEventListener("abort", onAbort, { once: true });
     operation.then((value) => settle(resolve, value), fail);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 

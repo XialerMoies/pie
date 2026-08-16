@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -61,6 +62,95 @@ async function captureError(operation) {
     return error;
   }
   assert.fail("expected operation to fail");
+}
+
+function runStrictAbortLifecycleProbe() {
+  const moduleUrl = new URL("../src/model-provider/provider-network-client.ts", import.meta.url).href;
+  const input = resolvedDraft("https://api.example.test/v1/");
+  const source = `
+    import assert from "node:assert/strict";
+    const { ProviderNetworkClient } = await import(${JSON.stringify(moduleUrl)});
+    const input = ${JSON.stringify(input)};
+    const abortSecret = "abort-reason-sensitive-fixture";
+    let unhandledRejections = 0;
+    process.on("unhandledRejection", () => { unhandledRejections += 1; });
+
+    function assertStable(value, code) {
+      const serialized = JSON.stringify(value);
+      assert.equal(value.code, code);
+      assert.equal(serialized.includes(abortSecret), false);
+      assert.equal(serialized.includes(input.secrets.apiKey), false);
+      assert.equal(serialized.includes(input.secrets.headers["X-Tenant"]), false);
+    }
+
+    {
+      const controller = new AbortController();
+      controller.abort(new Error(abortSecret));
+      let fetchCalls = 0;
+      const client = new ProviderNetworkClient({
+        fetch: async (_url, init) => {
+          fetchCalls += 1;
+          throw init.signal.reason;
+        },
+      });
+      let error;
+      try {
+        await client.discoverModels(input, controller.signal);
+      } catch (caught) {
+        error = caught;
+      }
+      assertStable(error, "aborted");
+      assert.equal(fetchCalls, 1);
+    }
+
+    for (const cancellation of ["caller", "timeout"]) {
+      let rejectRuntime;
+      const runtimePromise = new Promise((_resolve, reject) => { rejectRuntime = reject; });
+      const controller = new AbortController();
+      const client = new ProviderNetworkClient({
+        timeoutMs: cancellation === "timeout" ? 20 : 1_000,
+        runtimeFactory: () => runtimePromise,
+      });
+      const pending = client.testConnection(input, controller.signal);
+      if (cancellation === "caller") controller.abort(new Error(abortSecret));
+      let guard;
+      const result = await Promise.race([
+        pending,
+        new Promise((_resolve, reject) => {
+          guard = setTimeout(() => reject(new Error(cancellation + " did not settle")), 500);
+        }),
+      ]);
+      clearTimeout(guard);
+      assertStable(result, cancellation === "caller" ? "aborted" : "timeout");
+      rejectRuntime(new Error(abortSecret));
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    let runtimeCalls = 0;
+    const controller = new AbortController();
+    controller.abort(new Error(abortSecret));
+    const result = await new ProviderNetworkClient({
+      runtimeFactory: async () => {
+        runtimeCalls += 1;
+        throw new Error("runtime must not start");
+      },
+    }).testConnection(input, controller.signal);
+    assertStable(result, "aborted");
+    assert.equal(runtimeCalls, 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(unhandledRejections, 0);
+    console.log(JSON.stringify({ code: result.code, runtimeCalls, unhandledRejections }));
+  `;
+  return spawnSync(process.execPath, [
+    "--unhandled-rejections=strict",
+    "--import", "tsx",
+    "--input-type=module",
+    "--eval", source,
+  ], {
+    cwd: new URL("..", import.meta.url),
+    encoding: "utf8",
+    timeout: 10_000,
+  });
 }
 
 describe("ProviderNetworkClient model discovery", () => {
@@ -340,6 +430,17 @@ describe("ProviderNetworkClient model discovery", () => {
 });
 
 describe("ProviderNetworkClient isolated connection test", () => {
+  it("observes pre-cancelled and late-settling operations without unhandled rejections", () => {
+    const child = runStrictAbortLifecycleProbe();
+
+    assert.equal(child.status, 0, `${child.stdout}\n${child.stderr}`);
+    assert.deepEqual(JSON.parse(child.stdout.trim()), {
+      code: "aborted",
+      runtimeCalls: 0,
+      unhandledRejections: 0,
+    });
+  });
+
   it("rejects every redirect status without forwarding credentials to another origin", async () => {
     for (const status of [301, 302, 303, 307, 308]) {
       const forwarded = [];
