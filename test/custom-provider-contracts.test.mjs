@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { relative, resolve } from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -57,6 +61,93 @@ function clone(value) {
 }
 
 describe("custom provider contracts", () => {
+  it("type-checks the exact stable exported contract shapes", () => {
+    const repositoryRoot = resolve(import.meta.dirname, "..");
+    const root = mkdtempSync(resolve(tmpdir(), "custom-provider-contract-types-"));
+    const fixtureFile = resolve(root, "contract-fixture.ts");
+    const modulePath = relative(root, resolve(repositoryRoot, "src/model-provider/contracts.ts"))
+      .replaceAll("\\", "/");
+    const source = `
+import type {
+  ConnectionTestResult,
+  CustomProviderCapabilities,
+  CustomProviderDraft,
+  CustomProviderListResponse,
+  ModelCostRates,
+  ModelDescriptor,
+  ProviderUsage,
+  RedactedCustomProvider,
+  ResolvedCustomProviderDraft,
+} from ${JSON.stringify(modulePath)};
+
+const cost: ModelCostRates = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 };
+const model: ModelDescriptor = {
+  id: "model-a", name: "Model A", contextWindow: 100, maxTokens: 20,
+  reasoning: false, input: ["text"], cost,
+};
+const draft: CustomProviderDraft = {
+  id: "acme", name: "Acme", protocol: "openai-responses",
+  baseUrl: "https://example.test/v1", authMode: "apiKey", apiKey: null,
+  headers: [{ name: "X-One", value: "secret" }, { name: "X-Old", remove: true }],
+  models: [model],
+};
+const redacted: RedactedCustomProvider = {
+  id: "acme", name: "Acme", protocol: "openai-responses",
+  baseUrl: "https://example.test/v1", authMode: "apiKey",
+  apiKeyConfigured: true, headers: [{ name: "X-One", configured: true }], models: [model],
+};
+const list: CustomProviderListResponse = {
+  revision: 1,
+  official: [{ id: "openai", name: "OpenAI", configured: true }],
+  custom: [redacted],
+};
+const resolved: ResolvedCustomProviderDraft = {
+  provider: {
+    id: "acme", name: "Acme", protocol: "openai-responses",
+    baseUrl: "https://example.test/v1", authMode: "apiKey",
+    headers: ["X-One"], models: [model],
+  },
+  secrets: { apiKey: "secret", headers: { "X-One": "value" } },
+  modelId: "model-a",
+};
+const capabilities: CustomProviderCapabilities = {
+  protocols: [{ id: "openai-responses", supportsCompatibility: true }],
+  price: { currency: "USD", unit: "millionTokens" },
+};
+const usage: ProviderUsage = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 };
+const success: ConnectionTestResult = {
+  ok: true, providerId: "acme", modelId: "model-a", latencyMs: 5, usage,
+};
+const failure: ConnectionTestResult = {
+  ok: false, providerId: "acme", code: "authentication", message: "denied",
+};
+const invalidDraft: CustomProviderDraft = {
+  ...draft,
+  headers: [{ name: "X-One",
+    // @ts-expect-error Header values cannot be null.
+    value: null }],
+};
+void [list, resolved, capabilities, success, failure, invalidDraft];
+`;
+    writeFileSync(fixtureFile, source, "utf8");
+    try {
+      const result = spawnSync(process.execPath, [
+        resolve(repositoryRoot, "node_modules/typescript/bin/tsc"),
+        "--noEmit",
+        "--strict",
+        "--target", "ES2022",
+        "--module", "NodeNext",
+        "--moduleResolution", "NodeNext",
+        "--allowImportingTsExtensions",
+        "--skipLibCheck",
+        fixtureFile,
+      ], { cwd: repositoryRoot, encoding: "utf8" });
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("exports the exact supported protocol list and accepts a complete fixture", () => {
     assert.deepEqual(PROVIDER_PROTOCOLS, [
       "openai-completions",

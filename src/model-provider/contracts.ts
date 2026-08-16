@@ -12,7 +12,7 @@ export type ProviderProtocol = typeof PROVIDER_PROTOCOLS[number];
 export type ProviderAuthMode = "none" | "apiKey";
 export type CredentialRef = `credential:${string}`;
 
-export interface ModelCost {
+export interface ModelCostRates {
   input: number;
   output: number;
   cacheRead: number;
@@ -26,7 +26,7 @@ export interface ModelDescriptor {
   maxTokens: number;
   reasoning: boolean;
   input: Array<"text" | "image">;
-  cost: ModelCost;
+  cost: ModelCostRates;
   samplingParams?: Record<string, unknown>;
   compatibility?: Record<string, unknown>;
 }
@@ -69,52 +69,67 @@ export interface CustomProviderDraft {
   baseUrl: string;
   authMode: ProviderAuthMode;
   apiKey?: string | null;
-  headers: Array<{ name: string; value?: string | null }>;
+  headers: Array<{ name: string; value?: string; remove?: boolean }>;
   modelDiscovery?: string;
   models: ModelDescriptor[];
 }
 
 export interface RedactedCustomProviderHeader {
   name: string;
-  hasValue: boolean;
+  configured: boolean;
 }
 
-export type RedactedCustomProviderDefinition = Omit<
+export type RedactedCustomProvider = Omit<
   CustomProviderDefinition,
   "apiKeyRef" | "headers"
 > & {
-  hasApiKey: boolean;
+  apiKeyConfigured: boolean;
   headers: RedactedCustomProviderHeader[];
 };
 
 export interface RedactedCustomProviderSnapshot {
   schemaVersion: 1;
   revision: number;
-  providers: RedactedCustomProviderDefinition[];
+  providers: RedactedCustomProvider[];
 }
 
-export type CustomProviderListResponse = RedactedCustomProviderSnapshot;
+export interface CustomProviderListResponse {
+  revision: number;
+  official: Array<{ id: string; name: string; configured: boolean }>;
+  custom: RedactedCustomProvider[];
+}
 
 export interface ResolvedProviderSecrets {
   apiKey?: string;
   headers: Record<string, string>;
 }
 
-export type ResolvedCustomProviderDraft = Omit<CustomProviderDraft, "apiKey" | "headers"> & {
-  apiKey?: string;
-  headers: Array<{ name: string; value: string }>;
-};
+export interface ResolvedCustomProviderDraft {
+  provider: Omit<CustomProviderDefinition, "apiKeyRef" | "headers"> & { headers: string[] };
+  secrets: ResolvedProviderSecrets;
+  modelId?: string;
+}
 
 export interface CustomProviderCapabilities {
-  protocols: readonly ProviderProtocol[];
-  authModes: readonly ProviderAuthMode[];
-  supportsModelDiscovery: boolean;
-  supportsCustomHeaders: boolean;
+  protocols: Array<{ id: ProviderProtocol; supportsCompatibility: boolean }>;
+  price: { currency: "USD"; unit: "millionTokens" };
 }
 
 export type ConnectionTestResult =
-  | { ok: true; modelId: string; latencyMs: number }
-  | { ok: false; modelId?: string; category: string; message: string };
+  | {
+    ok: true;
+    providerId: string;
+    modelId: string;
+    latencyMs: number;
+    usage: ProviderUsage;
+  }
+  | {
+    ok: false;
+    providerId: string;
+    modelId?: string;
+    code: "dns" | "timeout" | "tls" | "authentication" | "rate_limit" | "upstream" | "aborted";
+    message: string;
+  };
 
 const PROTOCOL_SET = new Set<string>(PROVIDER_PROTOCOLS);
 const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;

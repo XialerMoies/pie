@@ -30,7 +30,7 @@ function providerMutation(overrides = {}) {
     protocol: "openai-responses",
     baseUrl: "https://api.example.test/v1",
     authMode: "apiKey",
-    headers: [{ name: "X-Tenant" }],
+    headers: ["X-Tenant"],
     models: [descriptor()],
     ...overrides,
   };
@@ -73,13 +73,22 @@ async function createProvider(store, overrides = {}) {
   });
 }
 
+function mutationFromStored(provider, overrides = {}) {
+  const { apiKeyRef: _apiKeyRef, headers, ...definition } = provider;
+  return {
+    ...definition,
+    headers: headers.map((header) => header.name),
+    ...overrides,
+  };
+}
+
 describe("custom provider store", () => {
   it("returns versioned empty defaults for missing files", async () => {
     const env = await fixture();
     try {
       assert.deepEqual(await env.store.readSnapshot(), { schemaVersion: 1, revision: 0, providers: [] });
       assert.deepEqual(await env.store.readRedacted(), { schemaVersion: 1, revision: 0, providers: [] });
-      assert.equal(await env.store.revealApiKey("missing"), null);
+      assert.equal(await env.store.revealApiKey("missing"), undefined);
     } finally {
       await env.cleanup();
     }
@@ -118,11 +127,10 @@ describe("custom provider store", () => {
       const original = first.providers[0];
       const preserved = await env.store.commit({
         expectedRevision: 1,
-        provider: {
-          ...original,
+        provider: mutationFromStored(original, {
           name: "Acme Renamed",
-          headers: [{ ...original.headers[0], name: "x-tenant" }],
-        },
+          headers: ["x-tenant"],
+        }),
         secretPatch: { headers: [] },
       });
       assert.equal(preserved.providers[0].apiKeyRef, original.apiKeyRef);
@@ -130,7 +138,7 @@ describe("custom provider store", () => {
 
       const changed = await env.store.commit({
         expectedRevision: 2,
-        provider: preserved.providers[0],
+        provider: mutationFromStored(preserved.providers[0]),
         secretPatch: {
           apiKey: "api-secret-v2",
           headers: [{ name: "X-Tenant", value: "tenant-secret-v2" }],
@@ -159,17 +167,14 @@ describe("custom provider store", () => {
       const first = await createProvider(env.store);
       const updated = await env.store.commit({
         expectedRevision: 1,
-        provider: first.providers[0],
+        provider: mutationFromStored(first.providers[0]),
         secretPatch: { headers: [{ name: "x-tenant", value: "changed" }] },
       });
       assert.equal((await env.store.resolveSecrets(updated.providers[0])).headers["X-Tenant"], "changed");
       await assert.rejects(
         () => env.store.commit({
           expectedRevision: 2,
-          provider: {
-            ...updated.providers[0],
-            headers: [updated.providers[0].headers[0], { name: "x-tenant" }],
-          },
+          provider: mutationFromStored(updated.providers[0], { headers: ["X-Tenant", "x-tenant"] }),
           secretPatch: { headers: [] },
         }),
         /duplicate header name/i,
@@ -185,14 +190,16 @@ describe("custom provider store", () => {
       const committed = await createProvider(env.store);
       const redacted = await env.store.readRedacted();
       assert.equal(redacted.revision, 1);
-      assert.equal(redacted.providers[0].hasApiKey, true);
-      assert.deepEqual(redacted.providers[0].headers, [{ name: "X-Tenant", hasValue: true }]);
+      assert.equal(redacted.providers[0].apiKeyConfigured, true);
+      assert.equal("hasApiKey" in redacted.providers[0], false);
+      assert.deepEqual(redacted.providers[0].headers, [{ name: "X-Tenant", configured: true }]);
+      assert.equal("hasValue" in redacted.providers[0].headers[0], false);
       const serialized = JSON.stringify(redacted);
       assert.equal(serialized.includes("credential:"), false);
       assert.equal(serialized.includes("api-secret-v1"), false);
       assert.equal(serialized.includes("tenant-secret-v1"), false);
       assert.equal(await env.store.revealApiKey("acme"), "api-secret-v1");
-      assert.equal(await env.store.revealApiKey("missing"), null);
+      assert.equal(await env.store.revealApiKey("missing"), undefined);
       assert.equal("revealHeader" in env.store, false);
       assert.deepEqual(await env.store.resolveSecrets(committed.providers[0]), {
         apiKey: "api-secret-v1",
@@ -279,7 +286,7 @@ describe("custom provider store", () => {
       await assert.rejects(
         () => failingStore.commit({
           expectedRevision: 1,
-          provider: first.providers[0],
+          provider: mutationFromStored(first.providers[0]),
           secretPatch: {
             apiKey: "uncommitted-api-key",
             headers: [{ name: "X-Tenant", value: "uncommitted-header" }],
@@ -315,7 +322,7 @@ describe("custom provider store", () => {
       });
       const committed = await cleanupFailingStore.commit({
         expectedRevision: 1,
-        provider: first.providers[0],
+        provider: mutationFromStored(first.providers[0]),
         secretPatch: { apiKey: "api-secret-v2", headers: [] },
       });
       assert.equal(committed.revision, 2);
@@ -354,6 +361,33 @@ describe("custom provider store", () => {
       assert.deepEqual(deleted, { schemaVersion: 1, revision: 2, providers: [] });
       assert.deepEqual(writes, [env.configFile, env.secretsFile]);
       assert.deepEqual(JSON.parse(await readFile(env.secretsFile, "utf8")), { schemaVersion: 1, values: {} });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("rejects caller-forged credential refs and cannot expose another provider secret", async () => {
+    const env = await fixture();
+    try {
+      const first = await createProvider(env.store);
+      const victim = first.providers[0];
+      const forgedProvider = {
+        ...providerMutation({ id: "attacker", name: "Attacker" }),
+        apiKeyRef: victim.apiKeyRef,
+        headers: [{ name: "X-Stolen", credentialRef: victim.headers[0].credentialRef }],
+      };
+
+      await assert.rejects(
+        () => env.store.commit({
+          expectedRevision: 1,
+          provider: forgedProvider,
+          secretPatch: { headers: [] },
+        }),
+        /apiKeyRef|headers\[0\]/,
+      );
+      assert.equal(await env.store.revealApiKey("attacker"), undefined);
+      assert.equal(await env.store.revealApiKey("acme"), "api-secret-v1");
+      assert.equal((await env.store.readSnapshot()).revision, 1);
     } finally {
       await env.cleanup();
     }

@@ -25,8 +25,7 @@ export interface SecretPatch {
 }
 
 export type StoredProviderMutation = Omit<CustomProviderDefinition, "apiKeyRef" | "headers"> & {
-  apiKeyRef?: CredentialRef;
-  headers: Array<{ name: string; credentialRef?: CredentialRef }>;
+  headers: string[];
 };
 
 export interface CustomProviderCommit {
@@ -172,23 +171,26 @@ function validateSecretPatch(patch: SecretPatch): Map<string, SecretPatch["heade
 
 function validateMutationHeaders(
   headers: StoredProviderMutation["headers"],
-): Map<string, StoredProviderMutation["headers"][number]> {
+): Map<string, string> {
   if (!Array.isArray(headers)) throw new Error("provider.headers: must be an array");
-  const entries = new Map<string, StoredProviderMutation["headers"][number]>();
+  const entries = new Map<string, string>();
   for (let index = 0; index < headers.length; index += 1) {
-    const header = headers[index];
+    const headerName = headers[index];
     const path = `provider.headers[${index}]`;
-    if (!isPlainObject(header)) throw new Error(`${path}: must be a plain object`);
-    rejectUnknownFields(header, ["name", "credentialRef"], path);
-    assertSafeHeaderName(header.name, `${path}.name`);
-    if (header.credentialRef !== undefined && !CREDENTIAL_REF_PATTERN.test(header.credentialRef)) {
-      throw new Error(`${path}.credentialRef: invalid credential reference`);
-    }
-    const normalized = header.name.toLowerCase();
-    if (entries.has(normalized)) throw new Error(`${path}.name: duplicate header name: ${header.name}`);
-    entries.set(normalized, header);
+    assertSafeHeaderName(headerName, path);
+    const normalized = headerName.toLowerCase();
+    if (entries.has(normalized)) throw new Error(`${path}: duplicate header name: ${headerName}`);
+    entries.set(normalized, headerName);
   }
   return entries;
+}
+
+function validateProviderMutation(value: unknown): asserts value is StoredProviderMutation {
+  if (!isPlainObject(value)) throw new Error("provider: must be a plain object");
+  rejectUnknownFields(value, [
+    "id", "name", "protocol", "baseUrl", "authMode", "headers", "modelDiscovery", "models",
+  ], "provider");
+  validateMutationHeaders(value.headers as StoredProviderMutation["headers"]);
 }
 
 interface StoreState {
@@ -236,18 +238,18 @@ export class CustomProviderStore {
         revision: snapshot.revision,
         providers: snapshot.providers.map(({ apiKeyRef, headers, ...provider }) => ({
           ...structuredClone(provider),
-          hasApiKey: apiKeyRef !== undefined,
-          headers: headers.map((header) => ({ name: header.name, hasValue: true })),
+          apiKeyConfigured: apiKeyRef !== undefined,
+          headers: headers.map((header) => ({ name: header.name, configured: true })),
         })),
       };
     });
   }
 
-  async revealApiKey(providerId: string): Promise<string | null> {
+  async revealApiKey(providerId: string): Promise<string | undefined> {
     return this.withLock(async () => {
       const { snapshot, secrets } = await this.readState();
       const provider = snapshot.providers.find((candidate) => candidate.id === providerId);
-      if (provider?.apiKeyRef === undefined) return null;
+      if (provider?.apiKeyRef === undefined) return undefined;
       return secrets.values[provider.apiKeyRef];
     });
   }
@@ -320,6 +322,7 @@ export class CustomProviderStore {
       }
 
       const providerMutation = mutation.provider!;
+      validateProviderMutation(providerMutation);
       const mutationHeaders = validateMutationHeaders(providerMutation.headers);
       const existingIndex = current.providers.findIndex((provider) => provider.id === providerMutation.id);
       const existing = existingIndex >= 0 ? current.providers[existingIndex] : undefined;
@@ -341,7 +344,7 @@ export class CustomProviderStore {
         } else if (mutation.secretPatch.apiKey === null) {
           apiKeyRef = undefined;
         } else {
-          const candidate = existing?.apiKeyRef ?? providerMutation.apiKeyRef;
+          const candidate = existing?.apiKeyRef;
           if (candidate !== undefined && Object.prototype.hasOwnProperty.call(mergedSecrets.values, candidate)) {
             apiKeyRef = candidate;
           }
@@ -351,7 +354,7 @@ export class CustomProviderStore {
       }
 
       const headers: CustomProviderDefinition["headers"] = [];
-      for (const [normalizedName, header] of mutationHeaders) {
+      for (const [normalizedName, headerName] of mutationHeaders) {
         const patch = patchEntries.get(normalizedName);
         if (patch?.remove === true) continue;
         let reference: CredentialRef | undefined;
@@ -360,13 +363,13 @@ export class CustomProviderStore {
           mergedSecrets.values[reference] = patch.value;
           wroteNewSecret = true;
         } else {
-          const candidate = existingHeaders.get(normalizedName)?.credentialRef ?? header.credentialRef;
+          const candidate = existingHeaders.get(normalizedName)?.credentialRef;
           if (candidate !== undefined && Object.prototype.hasOwnProperty.call(mergedSecrets.values, candidate)) {
             reference = candidate;
           }
         }
-        if (reference === undefined) throw new Error(`Missing secret for provider header: ${header.name}`);
-        headers.push({ name: header.name, credentialRef: reference });
+        if (reference === undefined) throw new Error(`Missing secret for provider header: ${headerName}`);
+        headers.push({ name: headerName, credentialRef: reference });
       }
       for (const [normalizedName, patch] of patchEntries) {
         if (patch.remove !== true && !mutationHeaders.has(normalizedName)) {
