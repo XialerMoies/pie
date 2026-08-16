@@ -1,6 +1,9 @@
 import type { ServerResponse } from "node:http";
 
-import type { CustomProviderDraft } from "../../../model-provider/contracts.js";
+import type {
+  CustomProviderDeleteInput,
+  CustomProviderMutationInput,
+} from "../../../model-provider/contracts.js";
 import { CustomProviderRevisionConflict } from "../../../model-provider/custom-provider-store.js";
 import {
   CustomProviderApiKeyUnavailable,
@@ -24,17 +27,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function mutationInput(value: unknown): { expectedRevision: number; provider: CustomProviderDraft } {
+function mutationInput(value: unknown): CustomProviderMutationInput {
   if (!isRecord(value) || !Number.isSafeInteger(value.expectedRevision) || !isRecord(value.provider)) {
     throw new InvalidCustomProviderRequest();
   }
   return {
     expectedRevision: value.expectedRevision as number,
-    provider: value.provider as unknown as CustomProviderDraft,
+    provider: value.provider as unknown as CustomProviderMutationInput["provider"],
   };
 }
 
-function deleteInput(value: unknown): { expectedRevision: number } {
+function deleteInput(value: unknown): CustomProviderDeleteInput {
   if (!isRecord(value) || !Number.isSafeInteger(value.expectedRevision)) {
     throw new InvalidCustomProviderRequest();
   }

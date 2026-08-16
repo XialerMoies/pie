@@ -4,8 +4,10 @@ import {
   PROVIDER_PROTOCOLS,
   PROVIDER_PROTOCOL_AUTH_MODES,
   type CustomProviderCapabilities,
+  type CustomProviderDeleteInput,
   type CustomProviderDraft,
   type CustomProviderListResponse,
+  type CustomProviderMutationInput,
   type CustomProviderSnapshot,
   type RedactedCustomProviderSnapshot,
 } from "./contracts.js";
@@ -16,15 +18,6 @@ import {
 } from "./custom-provider-store.js";
 import type { ProviderReferenceChecker } from "./provider-reference-checker.js";
 import type { CustomProviderRuntimeCoordinator } from "./runtime-coordinator.js";
-
-export interface CustomProviderMutationInput {
-  expectedRevision: number;
-  provider: CustomProviderDraft;
-}
-
-export interface CustomProviderDeleteInput {
-  expectedRevision: number;
-}
 
 export class CustomProviderIdConflict extends Error {
   constructor(

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -103,6 +104,27 @@ async function createAcme(env, modelRuntime = runtime()) {
 }
 
 describe("custom provider service", () => {
+  it("consumes project-owned mutation contracts without redeclaring them", () => {
+    const root = resolve(import.meta.dirname, "..");
+    const contracts = readFileSync(resolve(root, "src/model-provider/contracts.ts"), "utf8");
+    const serviceSource = readFileSync(resolve(root, "src/model-provider/custom-provider-service.ts"), "utf8");
+    const routeSource = readFileSync(resolve(root, "src/server/routes/settings/custom-providers.ts"), "utf8");
+
+    assert.match(contracts, /export interface CustomProviderMutationInput\s*\{/);
+    assert.match(contracts, /export interface CustomProviderDeleteInput\s*\{/);
+    assert.doesNotMatch(serviceSource, /export interface CustomProvider(?:Mutation|Delete)Input\s*\{/);
+    assert.match(serviceSource, /type CustomProviderMutationInput,/);
+    assert.match(serviceSource, /type CustomProviderDeleteInput,/);
+    const routeContractImport = routeSource.match(
+      /import type \{(?<imports>[\s\S]*?)\} from "\.\.\/\.\.\/\.\.\/model-provider\/contracts\.js";/,
+    );
+    assert.ok(routeContractImport);
+    assert.match(routeContractImport.groups.imports, /\bCustomProviderMutationInput\b/);
+    assert.match(routeContractImport.groups.imports, /\bCustomProviderDeleteInput\b/);
+    assert.match(routeSource, /function mutationInput\([^)]*\): CustomProviderMutationInput/);
+    assert.match(routeSource, /function deleteInput\([^)]*\): CustomProviderDeleteInput/);
+  });
+
   it("reports all project protocols, protocol auth modes, compatibility, and USD pricing units", async () => {
     const env = await fixture();
     try {

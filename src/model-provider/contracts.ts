@@ -84,6 +84,15 @@ export interface CustomProviderDraft {
   models: ModelDescriptor[];
 }
 
+export interface CustomProviderMutationInput {
+  expectedRevision: number;
+  provider: CustomProviderDraft;
+}
+
+export interface CustomProviderDeleteInput {
+  expectedRevision: number;
+}
+
 export interface RedactedCustomProviderHeader {
   name: string;
   configured: boolean;

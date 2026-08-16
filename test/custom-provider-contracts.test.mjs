@@ -71,8 +71,10 @@ describe("custom provider contracts", () => {
 import type {
   ConnectionTestResult,
   CustomProviderCapabilities,
+  CustomProviderDeleteInput,
   CustomProviderDraft,
   CustomProviderListResponse,
+  CustomProviderMutationInput,
   ModelCostRates,
   ModelDescriptor,
   ProviderUsage,
@@ -90,6 +92,13 @@ const draft: CustomProviderDraft = {
   baseUrl: "https://example.test/v1", authMode: "apiKey", apiKey: null,
   headers: [{ name: "X-One", value: "secret" }, { name: "X-Old", remove: true }],
   models: [model],
+};
+const mutation: CustomProviderMutationInput = { expectedRevision: 7, provider: draft };
+const deletion: CustomProviderDeleteInput = { expectedRevision: 7 };
+const revisionFreeDraft: CustomProviderDraft = {
+  ...draft,
+  // @ts-expect-error Optimistic concurrency metadata must stay outside the provider draft.
+  expectedRevision: 7,
 };
 const redacted: RedactedCustomProvider = {
   id: "acme", name: "Acme", protocol: "openai-responses",
@@ -131,7 +140,7 @@ const invalidDraft: CustomProviderDraft = {
     // @ts-expect-error Header values cannot be null.
     value: null }],
 };
-void [list, resolved, capabilities, success, failure, invalidDraft];
+void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, success, failure, invalidDraft];
 `;
     writeFileSync(fixtureFile, source, "utf8");
     try {
