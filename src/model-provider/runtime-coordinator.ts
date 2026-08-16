@@ -6,7 +6,7 @@ import type { PiCustomProviderAdapter } from "./pi-custom-provider-adapter.js";
 
 interface RuntimeSyncState {
   loadedRevision: number;
-  generation: number;
+  requestedGeneration: number;
   inFlight?: Promise<number>;
 }
 
@@ -31,14 +31,10 @@ export class CustomProviderRuntimeCoordinator {
 
   sync(runtime: ModelRuntime): Promise<number> {
     const state = this.#stateFor(runtime);
+    state.requestedGeneration += 1;
     if (state.inFlight) return state.inFlight;
 
-    const generation = ++state.generation;
-    const load = this.#loadAndApply(runtime, state, generation);
-    let pending: Promise<number>;
-    pending = load.finally(() => {
-      if (state.inFlight === pending) state.inFlight = undefined;
-    });
+    const pending = Promise.resolve().then(() => this.#drain(runtime, state));
     state.inFlight = pending;
     return pending;
   }
@@ -46,10 +42,26 @@ export class CustomProviderRuntimeCoordinator {
   #stateFor(runtime: ModelRuntime): RuntimeSyncState {
     let state = this.#states.get(runtime);
     if (state === undefined) {
-      state = { loadedRevision: -1, generation: 0 };
+      state = { loadedRevision: -1, requestedGeneration: 0 };
       this.#states.set(runtime, state);
     }
     return state;
+  }
+
+  async #drain(runtime: ModelRuntime, state: RuntimeSyncState): Promise<number> {
+    try {
+      while (true) {
+        const generation = state.requestedGeneration;
+        await this.#loadAndApply(runtime, state, generation);
+        if (generation === state.requestedGeneration) {
+          state.inFlight = undefined;
+          return state.loadedRevision;
+        }
+      }
+    } catch (error) {
+      state.inFlight = undefined;
+      throw error;
+    }
   }
 
   async #loadAndApply(
@@ -58,21 +70,21 @@ export class CustomProviderRuntimeCoordinator {
     generation: number,
   ): Promise<number> {
     const snapshot = await this.#store.readSnapshot();
-    if (generation !== state.generation || snapshot.revision <= state.loadedRevision) {
+    if (generation !== state.requestedGeneration || snapshot.revision <= state.loadedRevision) {
       return state.loadedRevision;
     }
 
     const prepared = await Promise.all(snapshot.providers.map(async (provider) => (
       this.#adapter.prepare(provider, await this.#store.resolveSecrets(provider))
     )));
-    if (generation !== state.generation || snapshot.revision <= state.loadedRevision) {
+    if (generation !== state.requestedGeneration || snapshot.revision <= state.loadedRevision) {
       return state.loadedRevision;
     }
 
     try {
       await this.#adapter.replaceRuntimeProviders(runtime, prepared);
     } catch (error) {
-      if (generation === state.generation && error instanceof IncompleteCustomProviderRollbackError) {
+      if (error instanceof IncompleteCustomProviderRollbackError) {
         state.loadedRevision = -1;
       }
       throw error;

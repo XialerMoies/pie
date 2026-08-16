@@ -161,7 +161,7 @@ Settings UI
 - 保存后，当前窗口空闲时立即重新注册厂商。
 - 当前窗口正在流式生成时，持久化可以完成，但运行时切换排队到本轮结束。
 - 其他窗口在读取模型列表、切换模型或发送下一条消息前读取配置文件头部的全局 revision；版本变化时，在继续操作前同步完整快照。
-- 每个 server 记录 `loadedRevision`。同一进程内并发同步合并为一个 Promise，且只允许较新的 revision 替换当前运行时快照。
+- 每个 server 记录 `loadedRevision` 和请求 generation。同一初始 microtask 窗口内的同步合并为一次读取；当前 generation 捕获后到达的新边界请求复用同一个 Promise，但该 Promise 必须完成一次尾随检查后才能结束，且只允许较新的 revision 替换当前运行时快照。
 - 主聊天和模型读取使用前台同步：流式中先等待当前 session 空闲，同步后在对象已变化时重绑当前模型。同步失败时主聊天必须向已连接 SSE 发送脱敏终止错误并关闭该轮流。
 - 嵌入式子 Agent 使用只同步共享 `ModelRuntime` 的专用边界，不等待也不重绑正在执行 `delegate_tasks` 的父 session；否则父工具返回与 `waitForIdle()` 会形成循环等待。
 - 模型切换与 session transition 串行化；授权完成后在稳定区间同步、从当前 registry 重新解析目标、更新同一个当前 session 后再持久化，持久化失败则恢复旧模型，目标消失时返回稳定错误。

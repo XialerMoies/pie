@@ -478,25 +478,21 @@ Use `WeakMap<ModelRuntime, RuntimeSyncState>` so workspace session rebuilds do n
 ```ts
 interface RuntimeSyncState {
   loadedRevision: number
-  generation: number
+  requestedGeneration: number
   inFlight?: Promise<number>
 }
 
-async sync(runtime: ModelRuntime): Promise<number> {
+sync(runtime: ModelRuntime): Promise<number> {
   const state = this.stateFor(runtime)
+  state.requestedGeneration++
   if (state.inFlight) return state.inFlight
-  const generation = ++state.generation
-  const pending = this.loadAndApply(runtime, state, generation)
+  const pending = Promise.resolve().then(() => this.drain(runtime, state))
   state.inFlight = pending
-  try {
-    return await pending
-  } finally {
-    if (state.inFlight === pending) state.inFlight = undefined
-  }
+  return pending
 }
 ```
 
-`loadAndApply` reads the validated snapshot, skips `revision <= loadedRevision`, resolves secrets only for that snapshot, prepares all providers, awaits one apply, then sets `loadedRevision`. Never advance revision before adapter success and provider availability refresh. A normal failed apply preserves the prior revision; an explicitly incomplete rollback poisons it to `-1` so the same disk revision fully reconciles on the next boundary.
+Start the first drain in a microtask so same-tick callers share one generation, Promise, read, and apply. Each later boundary increments `requestedGeneration`; if it arrives after the drain captured its current generation, the shared Promise performs another inspection before resolving, including when the trailing revision is unchanged. `loadAndApply` reads the validated snapshot, skips `revision <= loadedRevision`, resolves secrets only for that snapshot, prepares all providers, awaits one apply, then sets `loadedRevision`. Never advance revision before adapter success and provider availability refresh. A normal failed apply preserves the prior revision; an explicitly incomplete rollback poisons it to `-1` so the same disk revision fully reconciles on the next boundary. Any drain failure rejects all shared callers, clears `inFlight`, and remains retryable without polling.
 
 - [ ] **Step 4: Run coordinator tests**
 

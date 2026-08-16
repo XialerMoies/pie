@@ -18,6 +18,16 @@ function snapshot(revision, providerIds = []) {
   }
 }
 
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((onResolve, onReject) => {
+    resolve = onResolve
+    reject = onReject
+  })
+  return { promise, resolve, reject }
+}
+
 function runtimeProvider(id = "runtime-provider") {
   return {
     id,
@@ -128,6 +138,161 @@ describe("CustomProviderRuntimeCoordinator", () => {
     assert.deepEqual(applications, [["shared"]])
   })
 
+  it("drains a boundary request that arrives after the current generation was captured", async () => {
+    let currentSnapshot = snapshot(1, ["revision-one"])
+    const firstSecretsStarted = deferred()
+    const releaseFirstSecrets = deferred()
+    const trailingReadStarted = deferred()
+    const releaseTrailingRead = deferred()
+    const applications = []
+    let reads = 0
+    const coordinator = new CustomProviderRuntimeCoordinator({
+      store: {
+        async readSnapshot() {
+          reads += 1
+          if (reads === 1) return currentSnapshot
+          trailingReadStarted.resolve()
+          await releaseTrailingRead.promise
+          return currentSnapshot
+        },
+        async resolveSecrets(provider) {
+          if (provider.id === "revision-one") {
+            firstSecretsStarted.resolve()
+            await releaseFirstSecrets.promise
+          }
+          return { apiKey: `secret:${provider.id}`, headers: {} }
+        },
+      },
+      adapter: {
+        prepare(provider) { return { providerId: provider.id } },
+        replaceRuntimeProviders(runtime, prepared) {
+          applications.push(prepared.map((provider) => provider.providerId))
+          runtime.providers = prepared
+        },
+      },
+    })
+    const runtime = { providers: [] }
+
+    const first = coordinator.sync(runtime)
+    await firstSecretsStarted.promise
+    currentSnapshot = snapshot(2, ["revision-two"])
+    const second = coordinator.sync(runtime)
+    assert.strictEqual(second, first)
+    let resolved = false
+    first.then(() => { resolved = true })
+
+    releaseFirstSecrets.resolve()
+    assert.equal(await Promise.race([
+      trailingReadStarted.promise.then(() => "trailing-read"),
+      first.then(() => "resolved"),
+    ]), "trailing-read")
+    await Promise.resolve()
+    assert.equal(resolved, false)
+
+    releaseTrailingRead.resolve()
+    assert.deepEqual(await Promise.all([first, second]), [2, 2])
+    assert.equal(reads, 2)
+    assert.equal(coordinator.loadedRevision(runtime), 2)
+    assert.deepEqual(runtime.providers.map((provider) => provider.providerId), ["revision-two"])
+    assert.deepEqual(applications, [["revision-two"]])
+  })
+
+  it("performs a trailing inspection when the requested revision is unchanged", async () => {
+    let reads = 0
+    let blockRead = false
+    const capturedRead = deferred()
+    const releaseRead = deferred()
+    const applications = []
+    const coordinator = new CustomProviderRuntimeCoordinator({
+      store: {
+        async readSnapshot() {
+          reads += 1
+          if (blockRead && reads === 2) {
+            capturedRead.resolve()
+            await releaseRead.promise
+          }
+          return snapshot(1, ["stable"])
+        },
+        async resolveSecrets(provider) {
+          return { apiKey: `secret:${provider.id}`, headers: {} }
+        },
+      },
+      adapter: {
+        prepare(provider) { return { providerId: provider.id } },
+        replaceRuntimeProviders(_runtime, prepared) {
+          applications.push(prepared.map((provider) => provider.providerId))
+        },
+      },
+    })
+    const runtime = {}
+    assert.equal(await coordinator.sync(runtime), 1)
+
+    blockRead = true
+    const first = coordinator.sync(runtime)
+    await capturedRead.promise
+    const second = coordinator.sync(runtime)
+    assert.strictEqual(second, first)
+    releaseRead.resolve()
+
+    assert.deepEqual(await Promise.all([first, second]), [1, 1])
+    assert.equal(reads, 3)
+    assert.deepEqual(applications, [["stable"]])
+  })
+
+  it("cleans up after a trailing failure and retries the requested revision", async () => {
+    let currentSnapshot = snapshot(1, ["revision-one"])
+    const firstSecretsStarted = deferred()
+    const releaseFirstSecrets = deferred()
+    let failRevisionTwo = true
+    let reads = 0
+    const applications = []
+    const coordinator = new CustomProviderRuntimeCoordinator({
+      store: {
+        async readSnapshot() {
+          reads += 1
+          return currentSnapshot
+        },
+        async resolveSecrets(provider) {
+          if (provider.id === "revision-one") {
+            firstSecretsStarted.resolve()
+            await releaseFirstSecrets.promise
+          }
+          return { apiKey: `secret:${provider.id}`, headers: {} }
+        },
+      },
+      adapter: {
+        prepare(provider) { return { providerId: provider.id } },
+        replaceRuntimeProviders(runtime, prepared) {
+          const ids = prepared.map((provider) => provider.providerId)
+          applications.push(ids)
+          if (ids.includes("revision-two") && failRevisionTwo) {
+            failRevisionTwo = false
+            throw new Error("trailing apply failed")
+          }
+          runtime.providers = prepared
+        },
+      },
+    })
+    const runtime = { providers: [] }
+
+    const first = coordinator.sync(runtime)
+    await firstSecretsStarted.promise
+    currentSnapshot = snapshot(2, ["revision-two"])
+    const second = coordinator.sync(runtime)
+    assert.strictEqual(second, first)
+    releaseFirstSecrets.resolve()
+
+    await assert.rejects(first, /trailing apply failed/)
+    await assert.rejects(second, /trailing apply failed/)
+    assert.equal(coordinator.loadedRevision(runtime), -1)
+    assert.deepEqual(runtime.providers, [])
+
+    assert.equal(await coordinator.sync(runtime), 2)
+    assert.equal(reads, 3)
+    assert.equal(coordinator.loadedRevision(runtime), 2)
+    assert.deepEqual(runtime.providers.map((provider) => provider.providerId), ["revision-two"])
+  })
+
   it("does not let an older reentrant load overwrite a newer generation", async () => {
     let coordinator
     let runtime
@@ -161,10 +326,11 @@ describe("CustomProviderRuntimeCoordinator", () => {
     runtime = { providers: [] }
 
     const olderSync = coordinator.sync(runtime)
-    assert.equal(await nestedSync, 2)
+    await Promise.resolve()
+    assert.strictEqual(nestedSync, olderSync)
     releaseOlder(snapshot(1, ["older"]))
 
-    assert.equal(await olderSync, 2)
+    assert.deepEqual(await Promise.all([olderSync, nestedSync]), [2, 2])
     assert.equal(coordinator.loadedRevision(runtime), 2)
     assert.deepEqual(runtime.providers, ["newer"])
     assert.deepEqual(applications, [["newer"]])
