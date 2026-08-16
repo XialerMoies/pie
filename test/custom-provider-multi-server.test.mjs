@@ -106,15 +106,21 @@ test("independent servers synchronize shared custom providers only at safe bound
     assert.ok(runtimeB.getModel("acme-relay", "reasoner-v1"))
     assert.equal(serverB.coordinator.loadedRevision(runtimeB), 1)
 
+    const competingDrafts = [
+      providerDraft({
+        name: "Acme Relay A",
+        apiKey: undefined,
+        models: [descriptor("reasoner-v1", "Reasoner A1"), descriptor("reasoner-v2", "Reasoner A2")],
+      }),
+      providerDraft({
+        name: "Acme Relay B",
+        apiKey: undefined,
+        models: [descriptor("reasoner-v1", "Reasoner B1"), descriptor("reasoner-v2", "Reasoner B2")],
+      }),
+    ]
     const writes = await Promise.allSettled([
-      serverA.service.update("acme-relay", {
-        expectedRevision: 1,
-        provider: providerDraft({ name: "Acme Relay A", apiKey: undefined }),
-      }, runtimeA),
-      serverB.service.update("acme-relay", {
-        expectedRevision: 1,
-        provider: providerDraft({ name: "Acme Relay B", apiKey: undefined }),
-      }, runtimeB),
+      serverA.service.update("acme-relay", { expectedRevision: 1, provider: competingDrafts[0] }, runtimeA),
+      serverB.service.update("acme-relay", { expectedRevision: 1, provider: competingDrafts[1] }, runtimeB),
     ])
     const fulfilled = writes.filter((result) => result.status === "fulfilled")
     const rejected = writes.filter((result) => result.status === "rejected")
@@ -125,8 +131,41 @@ test("independent servers synchronize shared custom providers only at safe bound
     assert.equal(rejected[0].reason.expectedRevision, 1)
     assert.equal(rejected[0].reason.currentRevision, 2)
 
+    const winningIndex = writes.findIndex((result) => result.status === "fulfilled")
+    const losingIndex = writes.findIndex((result) => result.status === "rejected")
+    const persistedAfterRace = await serverA.store.readSnapshot()
+    const persistedProvider = persistedAfterRace.providers[0]
+    const { apiKeyRef, headers, ...persistedPublicProvider } = persistedProvider
+    assert.equal(persistedAfterRace.revision, fulfilled[0].value.revision)
+    assert.deepEqual({
+      ...persistedPublicProvider,
+      apiKeyConfigured: apiKeyRef !== undefined,
+      headers: headers.map((header) => ({ name: header.name, configured: true })),
+    }, fulfilled[0].value.providers[0])
+    assert.deepEqual(persistedProvider.models, competingDrafts[winningIndex].models)
+    assert.equal(persistedProvider.name, competingDrafts[winningIndex].name)
+    assert.notEqual(persistedProvider.name, competingDrafts[losingIndex].name)
+    assert.equal(
+      persistedProvider.models.some((model) => competingDrafts[losingIndex].models.some((loser) => loser.name === model.name)),
+      false,
+    )
+
+    assert.equal(await serverA.service.syncRuntime(runtimeA), 2)
     assert.equal(await serverB.service.syncRuntime(runtimeB), 2)
-    const usableBeforeRejectedDelete = runtimeB.getModel("acme-relay", "reasoner-v1")
+    const runtimeState = (modelRuntime) => ({
+      provider: modelRuntime.getProvider("acme-relay"),
+      reasonerV1: modelRuntime.getModel("acme-relay", "reasoner-v1"),
+      reasonerV2: modelRuntime.getModel("acme-relay", "reasoner-v2"),
+    })
+    const runtimeABeforeRejectedDelete = runtimeState(runtimeA)
+    const runtimeBBeforeRejectedDelete = runtimeState(runtimeB)
+    assert.ok(runtimeABeforeRejectedDelete.provider)
+    assert.ok(runtimeABeforeRejectedDelete.reasonerV1)
+    assert.ok(runtimeABeforeRejectedDelete.reasonerV2)
+    assert.ok(runtimeBBeforeRejectedDelete.provider)
+    assert.ok(runtimeBBeforeRejectedDelete.reasonerV1)
+    assert.ok(runtimeBBeforeRejectedDelete.reasonerV2)
+    const diskBeforeRejectedDelete = await serverB.store.readSnapshot()
     referencesB.current = { provider: "acme-relay", id: "reasoner-v1" }
     await assert.rejects(
       serverB.service.update("acme-relay", {
@@ -140,8 +179,13 @@ test("independent servers synchronize shared custom providers only at safe bound
       (error) => error instanceof CustomProviderReferenceConflict
         && error.references.some((reference) => reference.kind === "currentModel"),
     )
-    assert.equal((await serverB.store.readSnapshot()).revision, 2)
-    assert.equal(runtimeB.getModel("acme-relay", "reasoner-v1"), usableBeforeRejectedDelete)
+    assert.deepEqual(await serverB.store.readSnapshot(), diskBeforeRejectedDelete)
+    const runtimeAAfterRejectedDelete = runtimeState(runtimeA)
+    const runtimeBAfterRejectedDelete = runtimeState(runtimeB)
+    for (const key of ["provider", "reasonerV1", "reasonerV2"]) {
+      assert.equal(runtimeAAfterRejectedDelete[key], runtimeABeforeRejectedDelete[key], `runtime A changed ${key}`)
+      assert.equal(runtimeBAfterRejectedDelete[key], runtimeBBeforeRejectedDelete[key], `runtime B changed ${key}`)
+    }
     referencesB.current = undefined
 
     const revision3 = await serverA.service.update("acme-relay", {
@@ -157,7 +201,7 @@ test("independent servers synchronize shared custom providers only at safe bound
     await assert.rejects(serverB.service.syncRuntime(runtimeB), /injected runtime reload failure/)
     assert.equal((await serverB.store.readSnapshot()).revision, 3)
     assert.equal(serverB.coordinator.loadedRevision(runtimeB), 2)
-    assert.equal(runtimeB.getModel("acme-relay", "reasoner-v1"), usableBeforeRejectedDelete)
+    assert.equal(runtimeB.getModel("acme-relay", "reasoner-v1"), runtimeBBeforeRejectedDelete.reasonerV1)
     assert.equal(runtimeB.getModel("acme-relay", "reasoner-v3"), undefined)
 
     assert.equal(await serverB.coordinator.sync(runtimeB), 3)

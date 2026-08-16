@@ -27,6 +27,7 @@ const WIRE_TEXT = "fixture text"
 const WIRE_TOOL_NAME = "lookup_weather"
 const WIRE_TOOL_ARGUMENTS = { city: "Shanghai" }
 const FULL_USAGE = { input: 7, output: 5, cacheRead: 3, cacheWrite: 2, reasoning: 1 }
+const CONSOLE_CHANNELS = ["debug", "info", "log", "warn", "error"]
 const EXPECTED_WIRE_USAGE = Object.fromEntries(PROTOCOLS.map((protocol) => [
   protocol,
   protocol === "mistral-conversations"
@@ -234,7 +235,7 @@ async function streamAgainstFixture(protocol, fixture, options = {}) {
 async function captureConsole(operation) {
   const output = []
   const originals = new Map()
-  for (const name of ["log", "warn", "error"]) {
+  for (const name of CONSOLE_CHANNELS) {
     originals.set(name, console[name])
     console[name] = (...args) => output.push(args.map(String).join(" "))
   }
@@ -263,6 +264,27 @@ function expectedModel(input, provider) {
 }
 
 describe("PiCustomProviderAdapter", () => {
+  it("captures every console channel and restores originals after success or failure", async () => {
+    const originals = Object.fromEntries(CONSOLE_CHANNELS.map((name) => [name, console[name]]))
+    const captured = await captureConsole(async () => {
+      for (const name of CONSOLE_CHANNELS) console[name](`console-probe-${name}`)
+      return "captured"
+    })
+
+    assert.equal(captured.value, "captured")
+    for (const name of CONSOLE_CHANNELS) {
+      assert.equal(captured.output.includes(`console-probe-${name}`), true, `${name} was not captured`)
+      assert.equal(console[name], originals[name], `${name} was not restored after success`)
+    }
+
+    await assert.rejects(captureConsole(async () => {
+      throw new Error("console capture failure probe")
+    }), /console capture failure probe/)
+    for (const name of CONSOLE_CHANNELS) {
+      assert.equal(console[name], originals[name], `${name} was not restored after failure`)
+    }
+  })
+
   it("maps all six custom protocols to exact PI models and native lazy providers", async () => {
     for (const protocol of PROTOCOLS) {
       const adapter = new PiCustomProviderAdapter()
