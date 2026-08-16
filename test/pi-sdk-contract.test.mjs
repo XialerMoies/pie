@@ -55,6 +55,11 @@ test("exposes ModelRuntime provider replacement methods", () => {
   }
 })
 
+test("type-checks model provider production modules from the root config", async () => {
+  const tsconfig = JSON.parse(await readFile(resolve("tsconfig.json"), "utf8"))
+  assert.equal(tsconfig.include.includes("src/model-provider/**/*.ts"), true)
+})
+
 test("wires main and subagent sessions through ModelRuntime", async () => {
   const runtimeSource = await readFile(resolve("src/agent/runtime.ts"), "utf8")
   const subagentSource = await readFile(resolve("src/server/subagent-session.ts"), "utf8")

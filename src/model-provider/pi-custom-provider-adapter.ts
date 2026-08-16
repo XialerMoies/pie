@@ -2,6 +2,7 @@ import {
   createProvider,
   type Model,
   type Provider,
+  type ProviderStreams,
   type Usage,
 } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
@@ -19,26 +20,17 @@ import {
   type ProviderProtocol,
   type ProviderUsage,
   type ResolvedProviderSecrets,
-} from "./contracts.ts";
+} from "./contracts.js";
 
 export interface PreparedCustomProvider {
   readonly providerId: string;
   readonly models: readonly Model<ProviderProtocol>[];
 }
 
-type RuntimeProviderConfig = Parameters<ModelRuntime["registerProvider"]>[1];
-
-type PreparedRegistration =
-  | {
-      kind: "configured";
-      providerId: string;
-      config: RuntimeProviderConfig;
-    }
-  | {
-      kind: "native";
-      providerId: string;
-      provider: Provider<ProviderProtocol>;
-    };
+interface PreparedRegistration {
+  providerId: string;
+  provider: Provider<ProviderProtocol>;
+}
 
 const API_FACTORIES = {
   "openai-completions": openAICompletionsApi,
@@ -48,7 +40,7 @@ const API_FACTORIES = {
   "mistral-conversations": mistralConversationsApi,
   "azure-openai-responses": azureOpenAIResponsesApi,
   "pi-messages": piMessagesApi,
-} satisfies Record<ProviderProtocol, () => ReturnType<typeof openAICompletionsApi>>;
+} satisfies Record<ProviderProtocol, () => ProviderStreams>;
 
 function cloneHeaders(
   definition: CustomProviderDefinition,
@@ -75,6 +67,12 @@ function cloneHeaders(
   return headers;
 }
 
+function copyHeaders(headers: Readonly<Record<string, string>>): Record<string, string> {
+  const copy = Object.create(null) as Record<string, string>;
+  for (const [name, value] of Object.entries(headers)) copy[name] = value;
+  return copy;
+}
+
 function mapModels(definition: CustomProviderDefinition): readonly Model<ProviderProtocol>[] {
   return Object.freeze(definition.models.map((descriptor) => ({
     id: descriptor.id,
@@ -98,7 +96,10 @@ function mapModels(definition: CustomProviderDefinition): readonly Model<Provide
 
 export class PiCustomProviderAdapter {
   readonly #registrations = new WeakMap<PreparedCustomProvider, PreparedRegistration>();
-  readonly #ownedByRuntime = new WeakMap<ModelRuntime, ReadonlyMap<string, PreparedCustomProvider>>();
+  readonly #ownedByRuntime = new WeakMap<
+    ModelRuntime,
+    ReadonlyMap<string, Provider<ProviderProtocol>>
+  >();
 
   prepare(
     definition: CustomProviderDefinition,
@@ -112,43 +113,36 @@ export class PiCustomProviderAdapter {
       models,
     });
 
-    if (validated.authMode === "apiKey") {
-      if (typeof secrets.apiKey !== "string" || secrets.apiKey.length === 0) {
-        throw new Error(`Provider ${validated.id} requires a resolved API key`);
-      }
-      this.#registrations.set(prepared, {
-        kind: "configured",
-        providerId: validated.id,
-        config: {
-          name: validated.name,
-          baseUrl: validated.baseUrl,
-          api: validated.protocol,
-          apiKey: secrets.apiKey,
-          headers,
-          authHeader: true,
-          models: models as RuntimeProviderConfig["models"],
-        },
-      });
-      return prepared;
+    const usesApiKey = validated.authMode === "apiKey";
+    if (usesApiKey && validated.headers.some((header) => header.name.toLowerCase() === "authorization")) {
+      throw new Error(`Provider ${validated.id} cannot use an Authorization header with authMode apiKey`);
     }
+    if (usesApiKey && (typeof secrets.apiKey !== "string" || secrets.apiKey.length === 0)) {
+      throw new Error(`Provider ${validated.id} requires a resolved API key`);
+    }
+    const apiKey = usesApiKey ? secrets.apiKey : undefined;
 
     const provider = createProvider<ProviderProtocol>({
       id: validated.id,
       name: validated.name,
       baseUrl: validated.baseUrl,
-      headers,
       auth: {
         apiKey: {
           name: validated.name,
           check: async () => ({ type: "api_key", source: "custom-provider" }),
-          resolve: async () => ({ auth: {}, source: "custom-provider" }),
+          resolve: async () => ({
+            auth: {
+              ...(apiKey === undefined ? {} : { apiKey }),
+              headers: copyHeaders(headers),
+            },
+            source: "custom-provider",
+          }),
         },
       },
       models,
       api: API_FACTORIES[validated.protocol](),
     });
     this.#registrations.set(prepared, {
-      kind: "native",
       providerId: validated.id,
       provider,
     });
@@ -173,43 +167,84 @@ export class PiCustomProviderAdapter {
       registrations.push(registration);
     }
 
-    const prior = this.#ownedByRuntime.get(runtime) ?? new Map<string, PreparedCustomProvider>();
+    const recordedPrior = this.#ownedByRuntime.get(runtime) ?? new Map<string, Provider<ProviderProtocol>>();
+    const prior = new Map<string, Provider<ProviderProtocol>>();
+    for (const [providerId, provider] of recordedPrior) {
+      if (runtime.getRegisteredNativeProvider(providerId) === provider) prior.set(providerId, provider);
+    }
+    this.#ownedByRuntime.set(runtime, prior);
+
+    let collisionId: string | undefined;
     for (const registration of registrations) {
       if (runtime.getProvider(registration.providerId) !== undefined && !prior.has(registration.providerId)) {
-        throw new Error(`Provider ID collision: ${registration.providerId} is already registered`);
+        collisionId ??= registration.providerId;
       }
+    }
+    if (collisionId !== undefined) {
+      throw new Error(`Provider ID collision: ${collisionId} is already registered`);
     }
 
     const attempted: PreparedRegistration[] = [];
     try {
-      for (const providerId of prior.keys()) runtime.unregisterProvider(providerId);
+      for (const [providerId, provider] of prior) {
+        if (runtime.getRegisteredNativeProvider(providerId) === provider) {
+          runtime.unregisterProvider(providerId);
+        }
+      }
       for (const registration of registrations) {
         attempted.push(registration);
-        this.#register(runtime, registration);
-      }
-      this.#ownedByRuntime.set(runtime, next);
-    } catch (error) {
-      const rollbackIds = new Set([
-        ...attempted.map((registration) => registration.providerId),
-        ...prior.keys(),
-      ]);
-      for (const providerId of rollbackIds) {
-        try {
-          runtime.unregisterProvider(providerId);
-        } catch {
-          // Rollback is best-effort; retain the original replacement error.
+        runtime.registerNativeProvider(registration.provider);
+        if (runtime.getRegisteredNativeProvider(registration.providerId) !== registration.provider) {
+          throw new Error(`Native provider registration was not retained: ${registration.providerId}`);
         }
       }
-      for (const entry of prior.values()) {
-        const registration = this.#registrations.get(entry);
-        if (registration === undefined) continue;
+      this.#ownedByRuntime.set(runtime, new Map(
+        registrations.map((registration) => [registration.providerId, registration.provider]),
+      ));
+    } catch (primaryFailure) {
+      const rollbackFailures: unknown[] = [];
+      for (const registration of attempted) {
+        if (runtime.getRegisteredNativeProvider(registration.providerId) !== registration.provider) continue;
         try {
-          this.#register(runtime, registration);
-        } catch {
-          // Rollback is best-effort; ownership remains at the prior set.
+          runtime.unregisterProvider(registration.providerId);
+        } catch (error) {
+          rollbackFailures.push(error);
         }
       }
-      throw error;
+
+      const restored = new Map<string, Provider<ProviderProtocol>>();
+      for (const [providerId, provider] of prior) {
+        const currentNative = runtime.getRegisteredNativeProvider(providerId);
+        if (currentNative === provider) {
+          restored.set(providerId, provider);
+          continue;
+        }
+        if (currentNative !== undefined || runtime.getProvider(providerId) !== undefined) {
+          rollbackFailures.push(new Error(`Rollback could not restore provider replaced externally: ${providerId}`));
+          continue;
+        }
+        try {
+          runtime.registerNativeProvider(provider);
+          if (runtime.getRegisteredNativeProvider(providerId) !== provider) {
+            throw new Error(`Rollback did not retain restored provider: ${providerId}`);
+          }
+          restored.set(providerId, provider);
+        } catch (error) {
+          rollbackFailures.push(error);
+          if (runtime.getRegisteredNativeProvider(providerId) === provider) {
+            restored.set(providerId, provider);
+          }
+        }
+      }
+      this.#ownedByRuntime.set(runtime, restored);
+
+      if (rollbackFailures.length > 0) {
+        throw new AggregateError(
+          [primaryFailure, ...rollbackFailures],
+          "Custom provider replacement failed and rollback was incomplete",
+        );
+      }
+      throw primaryFailure;
     }
   }
 
@@ -221,13 +256,5 @@ export class PiCustomProviderAdapter {
       cacheWrite: usage.cacheWrite,
       ...(usage.reasoning === undefined ? {} : { reasoning: usage.reasoning }),
     };
-  }
-
-  #register(runtime: ModelRuntime, registration: PreparedRegistration): void {
-    if (registration.kind === "native") {
-      runtime.registerNativeProvider(registration.provider);
-      return;
-    }
-    runtime.registerProvider(registration.providerId, registration.config);
   }
 }

@@ -9,6 +9,6 @@
     "rootDir": "src",
     "skipLibCheck": true
   },
-  "include": ["src/server/main.ts", "src/server/server.ts", "src/agent/**/*.ts"],
+  "include": ["src/server/main.ts", "src/server/server.ts", "src/agent/**/*.ts", "src/model-provider/**/*.ts"],
   "exclude": ["example", "node_modules", "dist", "dist-electron"]
 }
