@@ -10,6 +10,7 @@ import { ModelRuntime } from "@xiamol/pi-coding-agent"
 import { CustomProviderValidationError } from "../src/model-provider/contracts.ts"
 import { PiCustomProviderAdapter } from "../src/model-provider/pi-custom-provider-adapter.ts"
 import { CustomProviderRuntimeCoordinator } from "../src/model-provider/runtime-coordinator.ts"
+import { startFakeModelProvider } from "./fixtures/fake-model-provider.mjs"
 
 const PROTOCOLS = [
   "openai-completions",
@@ -22,6 +23,16 @@ const PROTOCOLS = [
 const KEYLESS_PROTOCOLS = PROTOCOLS
 const FORMER_KEYLESS_COMPATIBILITY_SENTINEL = "my-code-agent-keyless-compatibility"
 const KEYLESS_SENTINEL_PREFIX = "my-code-agent-keyless-compatibility:"
+const WIRE_TEXT = "fixture text"
+const WIRE_TOOL_NAME = "lookup_weather"
+const WIRE_TOOL_ARGUMENTS = { city: "Shanghai" }
+const FULL_USAGE = { input: 7, output: 5, cacheRead: 3, cacheWrite: 2, reasoning: 1 }
+const EXPECTED_WIRE_USAGE = Object.fromEntries(PROTOCOLS.map((protocol) => [
+  protocol,
+  protocol === "mistral-conversations"
+    ? { input: 7, output: 5, cacheRead: 3, cacheWrite: 0 }
+    : FULL_USAGE,
+]))
 
 function model(overrides = {}) {
   return {
@@ -160,6 +171,77 @@ function assertKeylessRequest({ url, headers }, label) {
   }
   for (const name of ["key", "api_key", "api-key", "apikey", "access_token"]) {
     assert.equal(url.searchParams.has(name), false, `${label} sent ${name} query auth`)
+  }
+}
+
+function authHeaderName(protocol) {
+  if (protocol === "anthropic-messages") return "x-api-key"
+  if (protocol === "azure-openai-responses") return "api-key"
+  return "authorization"
+}
+
+async function streamAgainstFixture(protocol, fixture, options = {}) {
+  const authMode = options.authMode ?? "apiKey"
+  const providerId = `wire-${protocol}`
+  const apiKey = `api-secret-${protocol}`
+  const literalHeaders = options.headers ?? { "X-Tenant": `tenant-${protocol}` }
+  const headerDefinitions = Object.keys(literalHeaders).map((name, index) => ({
+    name,
+    credentialRef: `credential:wire-header-${index}`,
+  }))
+  const input = authMode === "apiKey"
+    ? definition({
+      id: providerId,
+      protocol,
+      baseUrl: fixture.baseUrl,
+      headers: headerDefinitions,
+      models: [model({ reasoning: false, input: ["text"] })],
+    })
+    : noAuthDefinition({
+      id: providerId,
+      protocol,
+      baseUrl: fixture.baseUrl,
+      headers: headerDefinitions,
+      models: [model({ reasoning: false, input: ["text"] })],
+    })
+  const adapter = new PiCustomProviderAdapter()
+  const runtime = await realRuntime()
+  const prepared = adapter.prepare(input, {
+    ...(authMode === "apiKey" ? { apiKey } : {}),
+    headers: literalHeaders,
+  })
+  await adapter.replaceRuntimeProviders(runtime, [prepared])
+  const originalFetch = globalThis.fetch
+  const stream = runtime.streamSimple(prepared.models[0], {
+    messages: [{ role: "user", content: "weather", timestamp: 1 }],
+    tools: [{
+      name: WIRE_TOOL_NAME,
+      description: "Look up weather",
+      parameters: {
+        type: "object",
+        properties: { city: { type: "string" } },
+        required: ["city"],
+      },
+    }],
+  }, {
+    fetch: originalFetch,
+    maxRetries: 0,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  })
+  return { adapter, apiKey, originalFetch, runtime, stream }
+}
+
+async function captureConsole(operation) {
+  const output = []
+  const originals = new Map()
+  for (const name of ["log", "warn", "error"]) {
+    originals.set(name, console[name])
+    console[name] = (...args) => output.push(args.map(String).join(" "))
+  }
+  try {
+    return { value: await operation(), output }
+  } finally {
+    for (const [name, original] of originals) console[name] = original
   }
 }
 
@@ -588,6 +670,101 @@ describe("PiCustomProviderAdapter", () => {
       assert.equal(serialized.includes("provider-one"), false)
       assert.equal(serialized.includes("provider-two"), false)
       assert.match(result.errorMessage, /redacted/i)
+    }
+  })
+
+  it("streams normalized text, tool calls, and exact usage through all six apiKey protocols", async () => {
+    for (const protocol of PROTOCOLS) {
+      const fixture = await startFakeModelProvider(protocol)
+      try {
+        const captured = await captureConsole(async () => {
+          const connection = await streamAgainstFixture(protocol, fixture)
+          const events = []
+          for await (const event of connection.stream) events.push(event)
+          return { ...connection, events, result: await connection.stream.result() }
+        })
+        const { adapter, apiKey, originalFetch, result, events } = captured.value
+        const request = fixture.requests[0]
+
+        assert.equal(globalThis.fetch, originalFetch, `${protocol} replaced global fetch`)
+        assert.equal(request.method, "POST")
+        assert.equal(request.url.startsWith(`${fixture.baseUrl}/`), true, `${protocol} ignored Base URL`)
+        assert.equal(request.headers[authHeaderName(protocol)], protocol === "anthropic-messages"
+          || protocol === "azure-openai-responses"
+          ? apiKey
+          : `Bearer ${apiKey}`)
+        assert.equal(request.headers["x-tenant"], `tenant-${protocol}`)
+        assert.equal(events.some((event) => event.type === "text_delta"), true)
+        assert.equal(events.some((event) => event.type === "toolcall_end"), true)
+        assert.equal(events.at(-1).type, "done")
+        assert.equal(result.stopReason, "toolUse")
+        assert.equal(result.content.find((block) => block.type === "text")?.text, WIRE_TEXT)
+        assert.equal(result.content.find((block) => block.type === "toolCall")?.name, WIRE_TOOL_NAME)
+        assert.deepEqual(result.content.find((block) => block.type === "toolCall")?.arguments, WIRE_TOOL_ARGUMENTS)
+        assert.deepEqual(adapter.toProviderUsage(result.usage), EXPECTED_WIRE_USAGE[protocol])
+        assert.equal(JSON.stringify({ events, result, logs: captured.output }).includes(apiKey), false)
+      } finally {
+        await fixture.close()
+      }
+    }
+  })
+
+  it("keeps all six keyless protocols free of SDK auth while preserving explicit auth headers", async () => {
+    for (const protocol of PROTOCOLS) {
+      const fixture = await startFakeModelProvider(protocol)
+      try {
+        const plain = await streamAgainstFixture(protocol, fixture, { authMode: "none" })
+        const plainResult = await plain.stream.result()
+        assert.notEqual(plainResult.stopReason, "error", protocol)
+        assertKeylessRequest({
+          url: new URL(fixture.requests[0].url),
+          headers: new Headers(fixture.requests[0].headers),
+        }, protocol)
+        assert.equal(fixture.requests[0].url.startsWith(`${fixture.baseUrl}/`), true, `${protocol} ignored Base URL`)
+
+        const authorization = `Bearer explicit-${protocol}`
+        const explicitApiKey = `explicit-key-${protocol}`
+        const explicit = await streamAgainstFixture(protocol, fixture, {
+          authMode: "none",
+          headers: {
+            Authorization: authorization,
+            "X-API-Key": explicitApiKey,
+            "X-Tenant": `explicit-tenant-${protocol}`,
+          },
+        })
+        const explicitResult = await explicit.stream.result()
+        assert.notEqual(explicitResult.stopReason, "error", protocol)
+        const explicitRequest = fixture.requests[1]
+        assert.equal(explicitRequest.url.startsWith(`${fixture.baseUrl}/`), true, `${protocol} explicit request ignored Base URL`)
+        assert.equal(explicitRequest.headers.authorization, authorization)
+        assert.equal(explicitRequest.headers["x-api-key"], explicitApiKey)
+        assert.equal(explicitRequest.headers["x-tenant"], `explicit-tenant-${protocol}`)
+        assert.equal(globalThis.fetch, explicit.originalFetch)
+      } finally {
+        await fixture.close()
+      }
+    }
+  })
+
+  it("produces an aborted terminal state and closes each protocol request", async () => {
+    for (const protocol of PROTOCOLS) {
+      const fixture = await startFakeModelProvider(protocol, { holdOpen: true })
+      try {
+        const controller = new AbortController()
+        const { stream, originalFetch } = await streamAgainstFixture(protocol, fixture, {
+          signal: controller.signal,
+        })
+        await fixture.waitForRequest()
+        controller.abort(new DOMException("test abort", "AbortError"))
+        const result = await stream.result()
+
+        assert.equal(result.stopReason, "aborted", protocol)
+        await fixture.waitForAbort()
+        assert.equal(fixture.requests[0].aborted, true)
+        assert.equal(globalThis.fetch, originalFetch)
+      } finally {
+        await fixture.close()
+      }
     }
   })
 

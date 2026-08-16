@@ -25,6 +25,7 @@ import {
 import { CustomProviderReferenceConflict, ProviderReferenceChecker } from "../src/model-provider/provider-reference-checker.ts";
 import { FileProviderReferenceMutationLock } from "../src/model-provider/provider-reference-lock.ts";
 import { ServerPermissionError } from "../src/server/permission-service.ts";
+import { startFakeModelProvider } from "./fixtures/fake-model-provider.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -1428,6 +1429,37 @@ describe("custom provider settings routes", () => {
     assert.equal(listed.body.includes(apiSecret), false);
     assert.equal(listed.body.includes(headerSecret), false);
     assert.equal(JSON.stringify(parseJSON(listed.body)).includes("credential:"), false);
+  });
+
+  it("tests a custom provider through the real route, PI adapter, and native provider", async () => {
+    const fixture = await startFakeModelProvider("openai-responses");
+    const ctx = customContext();
+    try {
+      ctx.customProviderService = await networkService(ctx);
+      const result = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
+        provider: {
+          ...providerDraft,
+          baseUrl: fixture.baseUrl,
+        },
+      }, ctx);
+
+      assert.equal(result.status, 200);
+      assert.deepEqual(parseJSON(result.body), {
+        ok: true,
+        providerId: "acme",
+        modelId: "model-a",
+        latencyMs: parseJSON(result.body).latencyMs,
+        usage: { input: 7, output: 5, cacheRead: 3, cacheWrite: 2, reasoning: 1 },
+      });
+      assert.equal(fixture.requests.length, 1);
+      assert.equal(fixture.requests[0].headers.authorization, `Bearer ${apiSecret}`);
+      assert.equal(fixture.requests[0].headers["x-tenant"], headerSecret);
+      assert.equal(result.body.includes(apiSecret), false);
+      assert.equal(result.body.includes(headerSecret), false);
+    } finally {
+      await fixture.close();
+      if (ctx.paths._tmpDir) rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("passes explicit revisions through create, update, and delete and returns new redacted snapshots", async () => {
