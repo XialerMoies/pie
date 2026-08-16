@@ -432,6 +432,85 @@ describe("custom provider store", () => {
     }
   });
 
+  it("recovers a config-only provider update when the config writer throws after rename", async () => {
+    const env = await fixture();
+    try {
+      const first = await createProvider(env.store);
+      const afterRenameStore = new CustomProviderStore({
+        configFile: env.configFile,
+        secretsFile: env.secretsFile,
+        atomicWrite: async (filePath, contents) => {
+          await atomicWrite(filePath, contents);
+          if (filePath === env.configFile) throw new Error("injected config-only error after rename");
+        },
+      });
+
+      const committed = await afterRenameStore.commit({
+        expectedRevision: 1,
+        provider: mutationFromStored(first.providers[0], { name: "Acme Updated" }),
+        secretPatch: { headers: [] },
+      });
+
+      assert.equal(committed.revision, 2);
+      assert.equal(committed.providers[0].name, "Acme Updated");
+      assert.equal(committed.providers[0].apiKeyRef, first.providers[0].apiKeyRef);
+      assert.equal(committed.providers[0].headers[0].credentialRef, first.providers[0].headers[0].credentialRef);
+      assert.deepEqual(await env.store.readSnapshot(), committed);
+      assert.deepEqual(await env.store.resolveSecrets(committed.providers[0]), {
+        apiKey: "api-secret-v1",
+        headers: headerDictionary({ "X-Tenant": "tenant-secret-v1" }),
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("recovers deletion after config rename and cleans only the deleted provider's secrets", async () => {
+    const env = await fixture();
+    try {
+      await createProvider(env.store);
+      const beforeDelete = await env.store.commit({
+        expectedRevision: 1,
+        provider: providerMutation({ id: "second", name: "Second" }),
+        secretPatch: {
+          apiKey: "second-api-secret",
+          headers: [{ name: "X-Tenant", value: "second-header-secret" }],
+        },
+      });
+      const deletedProvider = beforeDelete.providers.find((provider) => provider.id === "acme");
+      const liveProvider = beforeDelete.providers.find((provider) => provider.id === "second");
+      const afterRenameStore = new CustomProviderStore({
+        configFile: env.configFile,
+        secretsFile: env.secretsFile,
+        atomicWrite: async (filePath, contents) => {
+          await atomicWrite(filePath, contents);
+          if (filePath === env.configFile) throw new Error("injected deletion error after rename");
+        },
+      });
+
+      const committed = await afterRenameStore.commit({
+        expectedRevision: 2,
+        removeProviderId: "acme",
+        secretPatch: { headers: [] },
+      });
+
+      assert.deepEqual(committed, { schemaVersion: 1, revision: 3, providers: [liveProvider] });
+      assert.deepEqual(await env.store.readSnapshot(), committed);
+      assert.deepEqual(await env.store.resolveSecrets(liveProvider), {
+        apiKey: "second-api-secret",
+        headers: headerDictionary({ "X-Tenant": "second-header-secret" }),
+      });
+      const values = JSON.parse(await readFile(env.secretsFile, "utf8")).values;
+      assert.equal(Object.hasOwn(values, deletedProvider.apiKeyRef), false);
+      assert.equal(Object.hasOwn(values, deletedProvider.headers[0].credentialRef), false);
+      assert.equal(values[liveProvider.apiKeyRef], "second-api-secret");
+      assert.equal(values[liveProvider.headers[0].credentialRef], "second-header-secret");
+      assert.equal((await env.store.readRedacted()).providers.some((provider) => provider.id === "acme"), false);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
   it("keeps committed refs usable when best-effort orphan cleanup fails", async () => {
     const env = await fixture();
     try {

@@ -296,6 +296,39 @@ export class CustomProviderStore {
     }
   }
 
+  private async writeCommitPoint(
+    current: CustomProviderSnapshot,
+    committed: CustomProviderSnapshot,
+    originalSecrets: SecretDocument,
+    committedSecrets: SecretDocument,
+    secretsPrewritten: boolean,
+  ): Promise<CustomProviderSnapshot> {
+    try {
+      await this.atomicWrite(this.configFile, serialize(committed));
+    } catch (configError) {
+      let persisted: CustomProviderSnapshot;
+      try {
+        persisted = await this.readSnapshotUnlocked();
+      } catch {
+        throw configError;
+      }
+      if (isDeepStrictEqual(persisted, committed)) {
+        await this.cleanOrphans(committed, committedSecrets);
+        return cloneSnapshot(committed);
+      }
+      if (secretsPrewritten && isDeepStrictEqual(persisted, current)) {
+        try {
+          await this.atomicWrite(this.secretsFile, serialize(originalSecrets));
+        } catch {
+          // Keep the original config error; merged values are harmless orphans.
+        }
+      }
+      throw configError;
+    }
+    await this.cleanOrphans(committed, committedSecrets);
+    return cloneSnapshot(committed);
+  }
+
   async commit(mutation: CustomProviderCommit): Promise<CustomProviderSnapshot> {
     return this.withLock(async () => {
       const { snapshot: current, secrets } = await this.readStateUnlocked();
@@ -329,9 +362,7 @@ export class CustomProviderStore {
           revision: current.revision + 1,
           providers,
         });
-        await this.atomicWrite(this.configFile, serialize(committed));
-        await this.cleanOrphans(committed, secrets);
-        return cloneSnapshot(committed);
+        return this.writeCommitPoint(current, committed, secrets, secrets, false);
       }
 
       const providerMutation = mutation.provider!;
@@ -408,32 +439,7 @@ export class CustomProviderStore {
       requireReferencedSecrets(committed, mergedSecrets);
 
       if (wroteNewSecret) await this.atomicWrite(this.secretsFile, serialize(mergedSecrets));
-      try {
-        await this.atomicWrite(this.configFile, serialize(committed));
-      } catch (configError) {
-        if (!wroteNewSecret) throw configError;
-
-        let persisted: CustomProviderSnapshot;
-        try {
-          persisted = await this.readSnapshotUnlocked();
-        } catch {
-          throw configError;
-        }
-        if (isDeepStrictEqual(persisted, committed)) {
-          await this.cleanOrphans(committed, mergedSecrets);
-          return cloneSnapshot(committed);
-        }
-        if (isDeepStrictEqual(persisted, current)) {
-          try {
-            await this.atomicWrite(this.secretsFile, serialize(secrets));
-          } catch {
-            // Keep the original config error; merged values are harmless orphans.
-          }
-        }
-        throw configError;
-      }
-      await this.cleanOrphans(committed, mergedSecrets);
-      return cloneSnapshot(committed);
+      return this.writeCommitPoint(current, committed, secrets, mergedSecrets, wroteNewSecret);
     });
   }
 }
