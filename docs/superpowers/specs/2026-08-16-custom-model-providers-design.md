@@ -233,6 +233,8 @@ Settings UI
 
 所有写路由继续经过桌面 API token、共享路径授权和审计边界。
 
+创建和更新请求使用 `{ expectedRevision, provider: CustomProviderDraft }`，删除请求使用 `{ expectedRevision }`。修订号属于并发控制元数据，不进入 `CustomProviderDraft`；所有写操作都必须显式携带修订号。
+
 ## 10. 校验与安全
 
 - 厂商 ID 禁止与官方厂商或已有自定义厂商重名。

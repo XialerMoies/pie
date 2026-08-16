@@ -11,6 +11,7 @@ const SETTINGS_DIR = resolve(ROUTES, "settings");
 const expectedModules = [
   "common.ts",
   "auth.ts",
+  "custom-providers.ts",
   "models.ts",
   "preferences.ts",
   "storage.ts",
@@ -23,6 +24,7 @@ const expectedHandlers = [
   "handleSubagentSettings",
   "handleStorageSettings",
   "handlePreferenceSettings",
+  "handleCustomProviderSettings",
   "handleModelSettings",
   "handleAuthSettings",
   "handleThinkingSettings",

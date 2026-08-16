@@ -3,6 +3,7 @@
  */
 import type { RouteHandler } from "./types.js";
 import { handleAuthSettings } from "./settings/auth.js";
+import { handleCustomProviderSettings } from "./settings/custom-providers.js";
 import { handleLayoutSettings } from "./settings/layout.js";
 import { handleModelSettings } from "./settings/models.js";
 import { handlePreferenceSettings } from "./settings/preferences.js";
@@ -14,6 +15,7 @@ const handlers: RouteHandler[] = [
   handleSubagentSettings,
   handleStorageSettings,
   handlePreferenceSettings,
+  handleCustomProviderSettings,
   handleModelSettings,
   handleAuthSettings,
   handleThinkingSettings,

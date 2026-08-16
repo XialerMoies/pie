@@ -204,6 +204,16 @@ export interface CustomProviderCapabilities {
   price: { currency: "USD"; unit: "millionTokens" }
 }
 
+// Optimistic concurrency is transport/application metadata, not provider data.
+export interface CustomProviderMutationInput {
+  expectedRevision: number
+  provider: CustomProviderDraft
+}
+
+export interface CustomProviderDeleteInput {
+  expectedRevision: number
+}
+
 export type ConnectionTestResult =
   | { ok: true; providerId: string; modelId: string; latencyMs: number; usage: ProviderUsage }
   | { ok: false; providerId: string; modelId?: string; code: "dns" | "timeout" | "tls" | "authentication" | "rate_limit" | "upstream" | "aborted"; message: string }
@@ -620,15 +630,17 @@ Expose this service API:
 class CustomProviderService {
   capabilities(): CustomProviderCapabilities
   list(runtime: ModelRuntime): Promise<CustomProviderListResponse>
-  create(input: CustomProviderDraft, runtime: ModelRuntime): Promise<RedactedCustomProviderSnapshot>
-  update(id: string, input: CustomProviderDraft, runtime: ModelRuntime): Promise<RedactedCustomProviderSnapshot>
-  delete(id: string, expectedRevision: number, runtime: ModelRuntime): Promise<RedactedCustomProviderSnapshot>
+  create(input: CustomProviderMutationInput, runtime: ModelRuntime): Promise<RedactedCustomProviderSnapshot>
+  update(id: string, input: CustomProviderMutationInput, runtime: ModelRuntime): Promise<RedactedCustomProviderSnapshot>
+  delete(id: string, input: CustomProviderDeleteInput, runtime: ModelRuntime): Promise<RedactedCustomProviderSnapshot>
   revealApiKey(id: string): Promise<string>
   syncRuntime(runtime: ModelRuntime): Promise<number>
 }
 ```
 
 Derive reserved official IDs from `runtime.getProviders()` excluding IDs present in the current custom snapshot. Every mutation must require `expectedRevision`. On removed models/provider, throw `CustomProviderReferenceConflict` with `references`; on stale revision throw a stable conflict containing current revision. The service returns after persistence and does not own `AgentRuntime` lifecycle.
+
+HTTP write bodies use the same explicit envelopes: create/update receive `{ expectedRevision, provider }`, and delete receives `{ expectedRevision }`. `expectedRevision` must not be added to or inferred from `CustomProviderDraft`.
 
 - [ ] **Step 4: Run service tests**
 

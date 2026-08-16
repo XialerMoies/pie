@@ -44,7 +44,7 @@ import { WorkspaceFileWatcher } from "./workspace-file-watcher.js";
 import { getServersStatus, subscribeStatusChanges } from "../agent/mcp/MCPClientService.js";
 import { resolveStartupPaths, startupPathsSnapshot } from "./startup-paths.js";
 import { canonicalWorkspacePath } from "../data/data-layout.js";
-import { readUserPreferences, recordOpenedWorkspace } from "../data/user-settings.js";
+import { readUserPreferences, readUserSettings, recordOpenedWorkspace } from "../data/user-settings.js";
 import { readSubagentDefinitions } from "../data/subagent-config.js";
 import { WorkspaceLockCoordinator } from "./workspace-lock.js";
 import { workspaceDataPaths, writeWorkspaceMetadata } from "./routes/session-dir.js";
@@ -55,6 +55,11 @@ import {
   type SubagentDelegationHost,
 } from "./subagent-delegation.js";
 import { createSubagentEventSink } from "./subagent-events.js";
+import { CustomProviderStore } from "../model-provider/custom-provider-store.js";
+import { PiCustomProviderAdapter } from "../model-provider/pi-custom-provider-adapter.js";
+import { CustomProviderRuntimeCoordinator } from "../model-provider/runtime-coordinator.js";
+import { ProviderReferenceChecker } from "../model-provider/provider-reference-checker.js";
+import { CustomProviderService } from "../model-provider/custom-provider-service.js";
 
 import { attachSessionEvents, recordUserNoteBlock } from "./agent-event-router.js";
 export { attachSessionEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
@@ -200,6 +205,35 @@ async function main() {
     permissionService.recordPermissionModeChange(mode, "permissions.mode");
   });
 
+  const customProviderStore = new CustomProviderStore({
+    configFile: STARTUP.layout.customProvidersFile,
+    secretsFile: STARTUP.layout.customProviderSecretsFile,
+  });
+  const customProviderAdapter = new PiCustomProviderAdapter();
+  const customProviderCoordinator = new CustomProviderRuntimeCoordinator({
+    store: customProviderStore,
+    adapter: customProviderAdapter,
+  });
+  const providerReferenceChecker = new ProviderReferenceChecker({
+    currentModel: () => {
+      const model = runtime.session.model;
+      return model ? { provider: model.provider, id: model.id } : undefined;
+    },
+    defaultModel: () => {
+      const settings = readUserSettings(SETTINGS_FILE);
+      const preferences = readUserPreferences(SETTINGS_FILE);
+      const provider = settings.defaultProvider ?? preferences.defaultProvider;
+      const id = settings.defaultModel ?? preferences.defaultModel;
+      return provider && id ? { provider, id } : undefined;
+    },
+    customAgents: () => readSubagentDefinitions(SUBAGENTS_FILE),
+  });
+  const customProviderService = new CustomProviderService({
+    store: customProviderStore,
+    coordinator: customProviderCoordinator,
+    referenceChecker: providerReferenceChecker,
+  });
+
   runtime = await initAgent({
     agentDir: PI_CONFIG_DIR,
     cwd: STARTUP.workspace,
@@ -207,6 +241,7 @@ async function main() {
     sessionsDirForWorkspace: (workspace) => workspaceDataPaths(DATA_DIR, workspace).sessionsDir,
     authFile: STARTUP.layout.authFile,
     modelsFile: STARTUP.layout.modelsFile,
+    syncModelProviders: modelRuntime => customProviderService.syncRuntime(modelRuntime),
     getPermissionMode: () => permissionMode.get(),
     shellDialect: shellDialectFromEnv(),
     confirmCommand: createCommandConfirmCallback(chatStream),
@@ -273,6 +308,7 @@ async function main() {
     permissionService,
     permissionMode,
     workspaceLock,
+    customProviderService,
     rootRegistry,
     recordUserNote: (note) => recordUserNoteBlock(runtime, chatStream, note, {
       authorizeSessionWrite: (sessionFile, source) => {

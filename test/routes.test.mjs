@@ -15,6 +15,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync
 import { tmpdir } from "node:os";
 import { ModelRegistry, ModelRuntime } from "@xiamol/pi-coding-agent";
 import { workspaceDataPaths } from "../src/server/routes/session-dir.ts";
+import { CustomProviderRevisionConflict } from "../src/model-provider/custom-provider-store.ts";
+import { CustomProviderIdConflict } from "../src/model-provider/custom-provider-service.ts";
+import { CustomProviderReferenceConflict } from "../src/model-provider/provider-reference-checker.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -1236,6 +1239,239 @@ describe("settings routes", () => {
     } finally {
       if (ctx.paths._tmpDir) rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("custom provider settings routes", () => {
+  const apiSecret = "api-secret-route-fixture";
+  const headerSecret = "header-secret-route-fixture";
+  const redacted = (revision) => ({
+    schemaVersion: 1,
+    revision,
+    providers: [{
+      id: "acme",
+      name: "Acme",
+      protocol: "openai-responses",
+      baseUrl: "https://api.example.test/v1",
+      authMode: "apiKey",
+      apiKeyConfigured: true,
+      headers: [{ name: "X-Tenant", configured: true }],
+      models: [],
+    }],
+  });
+  const providerDraft = {
+    id: "acme",
+    name: "Acme",
+    protocol: "openai-responses",
+    baseUrl: "https://api.example.test/v1",
+    authMode: "apiKey",
+    apiKey: apiSecret,
+    headers: [{ name: "X-Tenant", value: headerSecret }],
+    models: [],
+  };
+
+  function service(overrides = {}) {
+    return {
+      capabilities: () => ({
+        protocols: [
+          { id: "openai-responses", authModes: ["none", "apiKey"], supportsCompatibility: true },
+          { id: "google-generative-ai", authModes: ["apiKey"], supportsCompatibility: true },
+        ],
+        price: { currency: "USD", unit: "millionTokens" },
+      }),
+      list: async () => ({
+        revision: 0,
+        official: [{ id: "openai", name: "OpenAI", configured: true }],
+        custom: [],
+      }),
+      create: async () => redacted(1),
+      update: async () => redacted(2),
+      delete: async () => ({ schemaVersion: 1, revision: 3, providers: [] }),
+      revealApiKey: async () => apiSecret,
+      ...overrides,
+    };
+  }
+
+  it("serves capabilities and redacted official/custom lists", async () => {
+    const modelRuntime = { marker: "model-runtime" };
+    let listedRuntime;
+    const ctx = mockContext({
+      runtime: mockRuntime({ modelRuntime }),
+      customProviderService: service({
+        list: async (received) => {
+          listedRuntime = received;
+          return {
+            revision: 4,
+            official: [{ id: "openai", name: "OpenAI", configured: true }],
+            custom: redacted(4).providers,
+          };
+        },
+      }),
+    });
+
+    const capabilities = await callHandler(handleSettings, "GET", "/api/custom-providers/capabilities", undefined, ctx);
+    assert.strictEqual(capabilities.status, 200);
+    assert.deepStrictEqual(parseJSON(capabilities.body).price, { currency: "USD", unit: "millionTokens" });
+    assert.deepStrictEqual(
+      parseJSON(capabilities.body).protocols.find((entry) => entry.id === "google-generative-ai").authModes,
+      ["apiKey"],
+    );
+
+    const listed = await callHandler(handleSettings, "GET", "/api/custom-providers", undefined, ctx);
+    assert.strictEqual(listed.status, 200);
+    assert.strictEqual(listedRuntime, modelRuntime);
+    assert.equal(listed.body.includes(apiSecret), false);
+    assert.equal(listed.body.includes(headerSecret), false);
+    assert.equal(JSON.stringify(parseJSON(listed.body)).includes("credential:"), false);
+  });
+
+  it("passes explicit revisions through create, update, and delete and returns new redacted snapshots", async () => {
+    const calls = [];
+    const syncCalls = [];
+    const modelRuntime = { marker: "model-runtime" };
+    const ctx = mockContext({
+      runtime: mockRuntime({
+        modelRuntime,
+        syncModelProviders() {
+          syncCalls.push("sync");
+          return new Promise(() => {});
+        },
+      }),
+      customProviderService: service({
+        async create(input, receivedRuntime) {
+          calls.push(["create", input, receivedRuntime]);
+          return redacted(1);
+        },
+        async update(id, input, receivedRuntime) {
+          calls.push(["update", id, input, receivedRuntime]);
+          return redacted(2);
+        },
+        async delete(id, input, receivedRuntime) {
+          calls.push(["delete", id, input, receivedRuntime]);
+          return { schemaVersion: 1, revision: 3, providers: [] };
+        },
+      }),
+    });
+
+    const created = await callHandler(handleSettings, "POST", "/api/custom-providers", {
+      expectedRevision: 0,
+      provider: providerDraft,
+    }, ctx);
+    const updated = await callHandler(handleSettings, "PUT", "/api/custom-providers/acme", {
+      expectedRevision: 1,
+      provider: { ...providerDraft, name: "Renamed" },
+    }, ctx);
+    const deleted = await callHandler(handleSettings, "DELETE", "/api/custom-providers/acme", {
+      expectedRevision: 2,
+    }, ctx);
+
+    assert.deepStrictEqual([created.status, updated.status, deleted.status], [201, 200, 200]);
+    assert.deepStrictEqual(
+      [parseJSON(created.body).revision, parseJSON(updated.body).revision, parseJSON(deleted.body).revision],
+      [1, 2, 3],
+    );
+    assert.deepStrictEqual(calls, [
+      ["create", { expectedRevision: 0, provider: providerDraft }, modelRuntime],
+      ["update", "acme", { expectedRevision: 1, provider: { ...providerDraft, name: "Renamed" } }, modelRuntime],
+      ["delete", "acme", { expectedRevision: 2 }, modelRuntime],
+    ]);
+    assert.deepStrictEqual(syncCalls, ["sync", "sync", "sync"]);
+    for (const result of [created, updated, deleted]) {
+      assert.equal(result.body.includes(apiSecret), false);
+      assert.equal(result.body.includes(headerSecret), false);
+    }
+  });
+
+  it("maps official collisions, stale revisions, and references to stable 409 responses", async () => {
+    const references = [
+      { kind: "currentModel", providerId: "acme", modelId: "model-a" },
+      {
+        kind: "customAgent",
+        providerId: "acme",
+        modelId: "model-b",
+        agentId: "reviewer",
+        agentName: "Reviewer",
+      },
+    ];
+    const cases = [
+      {
+        error: new CustomProviderIdConflict("openai", "official"),
+        expected: { error: "Provider ID is already in use", code: "provider_id_conflict", providerId: "openai" },
+      },
+      {
+        error: new CustomProviderRevisionConflict(2, 7),
+        expected: { error: "Custom provider revision conflict", code: "revision_conflict", currentRevision: 7 },
+      },
+      {
+        error: new CustomProviderReferenceConflict(references),
+        expected: { error: "Custom provider is still in use", code: "provider_in_use", references },
+      },
+    ];
+
+    for (const entry of cases) {
+      const ctx = mockContext({ customProviderService: service({ create: async () => { throw entry.error; } }) });
+      const result = await callHandler(handleSettings, "POST", "/api/custom-providers", {
+        expectedRevision: 0,
+        provider: providerDraft,
+      }, ctx);
+      assert.strictEqual(result.status, 409);
+      assert.deepStrictEqual(parseJSON(result.body), entry.expected);
+      assert.equal(result.body.includes(apiSecret), false);
+      assert.equal(result.body.includes(headerSecret), false);
+    }
+  });
+
+  it("fails closed when the service is absent and sanitizes unexpected service errors", async () => {
+    const missing = await callHandler(
+      handleSettings,
+      "GET",
+      "/api/custom-providers",
+      undefined,
+      mockContext({ customProviderService: undefined }),
+    );
+    assert.strictEqual(missing.status, 503);
+    assert.deepStrictEqual(parseJSON(missing.body), {
+      error: "Custom providers unavailable",
+      code: "service_unavailable",
+    });
+
+    const ctx = mockContext({
+      customProviderService: service({
+        create: async () => { throw new Error(`upstream included ${apiSecret} and ${headerSecret}`); },
+      }),
+    });
+    const failed = await callHandler(handleSettings, "POST", "/api/custom-providers", {
+      expectedRevision: 0,
+      provider: providerDraft,
+    }, ctx);
+    assert.strictEqual(failed.status, 500);
+    assert.deepStrictEqual(parseJSON(failed.body), {
+      error: "Custom provider request failed",
+      code: "internal_error",
+    });
+    assert.equal(failed.body.includes(apiSecret), false);
+    assert.equal(failed.body.includes(headerSecret), false);
+  });
+
+  it("reveals only the explicitly requested provider API key and never Header values", async () => {
+    const requested = [];
+    const ctx = mockContext({
+      customProviderService: service({
+        async revealApiKey(providerId) {
+          requested.push(providerId);
+          return apiSecret;
+        },
+      }),
+    });
+
+    const result = await callHandler(handleSettings, "POST", "/api/custom-providers/reveal", {
+      providerId: "acme",
+    }, ctx);
+    assert.strictEqual(result.status, 200);
+    assert.deepStrictEqual(parseJSON(result.body), { apiKey: apiSecret });
+    assert.deepStrictEqual(requested, ["acme"]);
+    assert.equal(result.body.includes(headerSecret), false);
+    assert.equal(Object.hasOwn(parseJSON(result.body), "headers"), false);
   });
 });
 

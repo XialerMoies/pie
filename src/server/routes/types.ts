@@ -11,6 +11,7 @@ import type { PermissionModeController } from "../permission-mode.js";
 import type { AppEventHub } from "../app-events.js";
 import type { StartupPathsSnapshot } from "../startup-paths.js";
 import type { WorkspaceLockCoordinator } from "../workspace-lock.js";
+import type { CustomProviderService } from "../../model-provider/custom-provider-service.js";
 
 // ─── Trace Event 类型 ────────────────────────────────────
 
@@ -79,6 +80,7 @@ export interface ServerContext {
   rootRegistry?: RootRegistry;
   permissionMode?: PermissionModeController;
   workspaceLock?: WorkspaceLockCoordinator;
+  customProviderService?: CustomProviderService;
   paths: {
     APP_ROOT: string;
     DATA_DIR: string;
