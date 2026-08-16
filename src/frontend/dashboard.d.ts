@@ -216,7 +216,7 @@ interface CustomProviderCapabilitiesResponse {
 interface SettingsCustomProviderEditorDependencies {
   notify: typeof toast;
   listAddAction: typeof ListAddAction;
-  onSaved(snapshot: RedactedCustomProviderSnapshot, selectedId: string): void;
+  onSaved(snapshot: RedactedCustomProviderSnapshot, selectedId: string, activateSaved: boolean): void;
   onDeleted(snapshot: RedactedCustomProviderSnapshot): void;
 }
 interface SettingsCustomProviderEditor {

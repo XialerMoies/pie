@@ -3,7 +3,7 @@
 interface SettingsCustomProviderEditorDependencies {
   notify: typeof toast;
   listAddAction: typeof ListAddAction;
-  onSaved(snapshot: RedactedCustomProviderSnapshot, selectedId: string): void;
+  onSaved(snapshot: RedactedCustomProviderSnapshot, selectedId: string, activateSaved: boolean): void;
   onDeleted(snapshot: RedactedCustomProviderSnapshot): void;
 }
 
@@ -144,6 +144,14 @@ function safeArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function isCustomProviderSnapshot(value: unknown): value is RedactedCustomProviderSnapshot {
+  if (!value || typeof value !== 'object') return false;
+  const snapshot = value as { revision?: unknown; providers?: unknown };
+  return Number.isInteger(snapshot.revision)
+    && (snapshot.revision as number) >= 0
+    && Array.isArray(snapshot.providers);
+}
+
 export class SettingsCustomProviderEditor {
   private container: HTMLElement | null = null;
   private root: HTMLElement | null = null;
@@ -169,6 +177,7 @@ export class SettingsCustomProviderEditor {
       return;
     }
     this.invalidateQuery();
+    this.detachMutation();
     this.container = container;
     this.provider = provider;
     this.revision = revision;
@@ -180,6 +189,7 @@ export class SettingsCustomProviderEditor {
 
   startNew(container: HTMLElement, revision: number): void {
     this.invalidateQuery();
+    this.detachMutation();
     this.container = container;
     this.provider = null;
     this.revision = revision;
@@ -191,6 +201,7 @@ export class SettingsCustomProviderEditor {
 
   unmount(): void {
     this.invalidateQuery();
+    this.detachMutation();
     this.container = null;
     this.root = null;
     this.provider = null;
@@ -218,23 +229,28 @@ export class SettingsCustomProviderEditor {
         if (this.isCurrentMount(operation)) await this.handleMutationError(operation, response.body);
         return;
       }
-      const snapshot = response.body as RedactedCustomProviderSnapshot;
-      const saved = safeArray(snapshot.providers).find((candidate) => (
-        candidate && typeof candidate === 'object' && (candidate as RedactedCustomProvider).id === draft.id
-      )) as RedactedCustomProvider | undefined;
-      if (!saved || typeof snapshot.revision !== 'number') {
+      if (!isCustomProviderSnapshot(response.body)) {
         if (this.isCurrentMount(operation)) this.showResult('保存响应无效', true, operation.root, operation.secrets);
         return;
       }
-      this.consumeSnapshot(snapshot);
-      if (this.isCurrentMount(operation)) {
+      const snapshot = response.body;
+      const saved = snapshot.providers.find((candidate) => (
+        candidate && typeof candidate === 'object' && (candidate as RedactedCustomProvider).id === draft.id
+      )) as RedactedCustomProvider | undefined;
+      if (!saved) {
+        if (this.isCurrentMount(operation)) this.showResult('保存响应无效', true, operation.root, operation.secrets);
+        return;
+      }
+      const currentMount = this.isCurrentMount(operation);
+      const accepted = this.consumeSnapshot(snapshot);
+      if (currentMount && accepted) {
         this.provider = saved;
         this.newProvider = false;
         this.apiKeyCleared = false;
         this.render(saved);
       }
-      this.dependencies.onSaved(snapshot, saved.id);
-      this.dependencies.notify('已保存', 'success');
+      this.dependencies.onSaved(snapshot, saved.id, currentMount && operation.newProvider && accepted);
+      if (currentMount && accepted) this.dependencies.notify('已保存', 'success');
     } finally {
       this.finishMutation(operation);
     }
@@ -348,14 +364,15 @@ export class SettingsCustomProviderEditor {
         if (this.isCurrentMount(operation)) await this.handleMutationError(operation, response.body);
         return;
       }
-      const snapshot = response.body as RedactedCustomProviderSnapshot;
-      if (typeof snapshot.revision !== 'number' || !Array.isArray(snapshot.providers)) {
+      if (!isCustomProviderSnapshot(response.body)) {
         if (this.isCurrentMount(operation)) this.showResult('删除响应无效', true, operation.root, operation.secrets);
         return;
       }
-      this.consumeSnapshot(snapshot);
+      const snapshot = response.body;
+      const currentMount = this.isCurrentMount(operation);
+      const accepted = this.consumeSnapshot(snapshot);
       this.dependencies.onDeleted(snapshot);
-      this.dependencies.notify('已删除', 'success');
+      if (currentMount && accepted) this.dependencies.notify('已删除', 'success');
     } finally {
       this.finishMutation(operation);
     }
@@ -746,6 +763,13 @@ export class SettingsCustomProviderEditor {
     this.mutationOperation = null;
   }
 
+  private detachMutation(): void {
+    const operation = this.mutationOperation;
+    if (!operation) return;
+    this.setMutationBusy(operation.root, operation.action as CustomProviderMutationAction, false);
+    this.mutationOperation = null;
+  }
+
   private setQueryBusy(operation: CustomProviderEditorOperation, busy: boolean): void {
     const action = operation.action === 'discover' ? 'discover'
       : operation.action === 'reveal' ? 'reveal-api-key'
@@ -768,12 +792,14 @@ export class SettingsCustomProviderEditor {
     else active.removeAttribute('aria-busy');
   }
 
-  private consumeSnapshot(snapshot: RedactedCustomProviderSnapshot): void {
+  private consumeSnapshot(snapshot: RedactedCustomProviderSnapshot): boolean {
+    if (snapshot.revision <= this.revision) return false;
     this.revision = snapshot.revision;
     const mountedId = this.provider?.id;
-    if (!mountedId) return;
+    if (!mountedId) return true;
     const current = snapshot.providers.find(provider => provider.id === mountedId);
     if (current) this.provider = current;
+    return true;
   }
 
   private captureSecrets(root: HTMLElement): string[] {
@@ -1081,12 +1107,17 @@ export class SettingsCustomProviderEditor {
       return;
     }
     if (body.code === 'revision_conflict') {
-      let latestRevision = typeof body.currentRevision === 'number' ? body.currentRevision : operation.revision;
+      let latestRevision = this.revision;
+      if (Number.isInteger(body.currentRevision) && (body.currentRevision as number) >= 0) {
+        latestRevision = Math.max(latestRevision, body.currentRevision as number);
+      }
       const latest = await this.request(operation, '/api/custom-providers', { method: 'GET' });
       if (!this.isCurrentMount(operation) || latest.aborted) return;
       if (latest.ok && latest.body && typeof latest.body === 'object') {
         const received = (latest.body as { revision?: unknown }).revision;
-        if (typeof received === 'number') latestRevision = received;
+        if (Number.isInteger(received) && (received as number) >= 0) {
+          latestRevision = Math.max(latestRevision, received as number);
+        }
       }
       this.revision = latestRevision;
       const banner = operation.root.querySelector<HTMLElement>('.cpe-conflict-banner');

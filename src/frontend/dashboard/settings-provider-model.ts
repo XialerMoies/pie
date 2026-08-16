@@ -62,6 +62,8 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   private authOfficialProviders: OfficialProviderListItem[] = [];
   private customProviders: RedactedCustomProvider[] = [];
   private revision = 0;
+  private hasCustomAuthority = false;
+  private newDraftActive = false;
   private revealRequestId = 0;
   private dragIndex = -1;
   private renderGeneration = 0;
@@ -76,7 +78,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     this.customEditor = new dependencies.customEditorType({
       notify: dependencies.notify,
       listAddAction: dependencies.listAddAction,
-      onSaved: (snapshot, selectedId) => this.applyCustomSnapshot(snapshot, selectedId),
+      onSaved: (snapshot, selectedId, activateSaved) => this.applyCustomSnapshot(snapshot, selectedId, activateSaved),
       onDeleted: snapshot => this.applyCustomSnapshot(snapshot, null),
     });
   }
@@ -85,6 +87,8 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     this.customEditor.unmount();
     const generation = ++this.renderGeneration;
     this.selectedProvider = null;
+    this.newDraftActive = false;
+    this.hasCustomAuthority = false;
     this.providerKeys = {};
     this.officialProviders = [];
     this.authOfficialProviders = [];
@@ -113,6 +117,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       onActivate: () => {
         if (!this.customEditingAvailable()) return;
         this.selectedProvider = null;
+        this.newDraftActive = true;
         this.markSelected(null);
         const content = $('ms-right-content');
         if (content) this.customEditor.startNew(content, this.revision);
@@ -132,6 +137,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     this.revealRequestId += 1;
     this.customEditor.unmount();
     this.selectedProvider = null;
+    this.newDraftActive = false;
     this.addCustomButton = null;
     this.customStatus = null;
   }
@@ -139,6 +145,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   selectProvider(provider: string): void {
     const custom = this.customProviders.find(candidate => candidate.id === provider);
     this.selectedProvider = provider;
+    this.newDraftActive = false;
     this.markSelected(provider);
     const content = $('ms-right-content');
     if (!content) return;
@@ -344,10 +351,13 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       if (
         !providerRecord(value)
         || !Number.isInteger(value.revision)
+        || (value.revision as number) < 0
         || !Array.isArray(value.official)
         || !Array.isArray(value.custom)
       ) throw new Error('Invalid custom provider response');
       const snapshot = value as unknown as CustomProviderListResponse;
+      if (this.hasCustomAuthority && snapshot.revision <= this.revision) return;
+      this.hasCustomAuthority = true;
       this.customSnapshotState = 'ready';
       this.officialProviders = snapshot.official;
       this.customProviders = snapshot.custom;
@@ -358,8 +368,10 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       if (generation !== this.renderGeneration) return;
       this.customSnapshotState = 'error';
       this.officialProviders = this.authOfficialProviders;
-      this.customProviders = [];
-      this.revision = 0;
+      if (!this.hasCustomAuthority) {
+        this.customProviders = [];
+        this.revision = 0;
+      }
       this.refreshProviderListAndSelection();
       this.updateCustomAvailability();
     }
@@ -405,11 +417,18 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     }
     const selectedCustom = this.customProviders.find(provider => provider.id === this.selectedProvider);
     const content = $('ms-right-content');
+    if (this.newDraftActive) {
+      this.markSelected(null);
+      return;
+    }
     if (selectedCustom && content) {
       if (available) this.customEditor.mount(content, selectedCustom, this.revision);
       else this.renderCustomUnavailable(content);
     } else if (!this.selectedProvider && (window._provOrder?.length ?? 0) === 0 && content) {
-      if (available) this.customEditor.startNew(content, this.revision);
+      if (available) {
+        this.newDraftActive = true;
+        this.customEditor.startNew(content, this.revision);
+      }
       else this.renderCustomUnavailable(content);
     }
   }
@@ -426,6 +445,10 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   private refreshProviderListAndSelection(): void {
     this.reconcileOrder();
     this.renderProviderList();
+    if (this.newDraftActive) {
+      this.markSelected(null);
+      return;
+    }
     const availableIds = new Set(window._provOrder ?? []);
     if (this.selectedProvider && availableIds.has(this.selectedProvider)) {
       this.markSelected(this.selectedProvider);
@@ -484,13 +507,26 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     });
   }
 
-  private applyCustomSnapshot(snapshot: RedactedCustomProviderSnapshot, selectedId: string | null): void {
+  private applyCustomSnapshot(
+    snapshot: RedactedCustomProviderSnapshot,
+    selectedId: string | null,
+    activateSaved = false,
+  ): void {
+    if (!Number.isInteger(snapshot.revision) || snapshot.revision < 0 || !Array.isArray(snapshot.providers)) return;
+    if (this.hasCustomAuthority && snapshot.revision <= this.revision) return;
     const selectedBeforeMutation = this.selectedProvider;
+    const newDraftBeforeMutation = this.newDraftActive;
+    this.hasCustomAuthority = true;
     this.customSnapshotState = 'ready';
     this.customProviders = snapshot.providers;
     this.revision = snapshot.revision;
     this.reconcileOrder();
     this.renderProviderList();
+    if (newDraftBeforeMutation && !activateSaved) {
+      this.markSelected(null);
+      return;
+    }
+    if (activateSaved) this.newDraftActive = false;
     const available = new Set([
       ...this.officialProviders.map(provider => provider.id),
       ...this.customProviders.map(provider => provider.id),
@@ -503,6 +539,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     if (next) this.selectProvider(next);
     else {
       this.selectedProvider = null;
+      this.newDraftActive = true;
       const content = $('ms-right-content');
       if (content) this.customEditor.startNew(content, this.revision);
     }

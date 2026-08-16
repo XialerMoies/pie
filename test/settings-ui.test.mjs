@@ -763,7 +763,7 @@ describe("settings DOM boundary", () => {
     }
   });
 
-  it("keeps save and delete authoritative while blocking query actions across mounts", async () => {
+  it("keeps save and delete authoritative while releasing their UI lock on a new mount", async () => {
     const beta = customProvider({ id: "beta", name: "Beta Gateway" });
     for (const action of ["save", "delete"]) {
       const host = document.createElement("div");
@@ -803,10 +803,9 @@ describe("settings DOM boundary", () => {
       editor.mount(host, beta, 4);
       setInput("#cpe-name", "Unsaved Beta Name");
       assert.strictEqual(mutationRequest.signal?.aborted, false, `${action}: mount must not abort mutation`);
-      assert.strictEqual(host.querySelector('[data-cpe-action="test"]')?.disabled, true);
-      await editor.test();
-      await editor.discoverModels();
-      host.querySelector('[data-cpe-action="reveal-api-key"]')?.click();
+      for (const selector of ["save", "delete", "test", "discover", "reveal-api-key"]) {
+        assert.strictEqual(host.querySelector(`[data-cpe-action="${selector}"]`)?.disabled, false, `${action}: ${selector} must be released`);
+      }
       assert.strictEqual(requests.length, 1);
 
       const snapshot = {
@@ -826,6 +825,234 @@ describe("settings DOM boundary", () => {
       assert.deepStrictEqual(savedSnapshots, action === "save" ? [snapshot] : []);
       assert.deepStrictEqual(deletedSnapshots, action === "delete" ? [snapshot] : []);
     }
+  });
+
+  it("preserves an active unsaved-new draft when an older provider mutation completes", async () => {
+    const beta = customProvider({ id: "beta", name: "Beta Gateway" });
+    for (const action of ["save", "delete"]) {
+      document.body.innerHTML = "";
+      win._provOrder = [];
+      const pending = deferred();
+      let newDraftRequest;
+      fetchImpl = async (url, init = {}) => {
+        if (String(url) === "/api/auth") return response({ providers: [] });
+        if (String(url) === "/api/custom-providers" && !init.method) {
+          return response({ revision: 4, official: [], custom: [customProvider(), beta] });
+        }
+        if (String(url) === "/api/custom-providers/capabilities") return response(capabilities());
+        if (init.method === "PUT" || init.method === "DELETE") return pending.promise;
+        if (init.method === "POST") {
+          newDraftRequest = JSON.parse(init.body);
+          return response({
+            schemaVersion: 1,
+            revision: 6,
+            providers: [beta, customProvider({ id: "fresh", name: "Unsaved Fresh" })],
+          }, 201);
+        }
+        return response({});
+      };
+      win.App.Settings.openSettingsModal();
+      await flushAsyncWork();
+      const editor = win.App.SettingsComponents.providers.customEditor;
+      let operation;
+      if (action === "delete") {
+        await editor.delete();
+        operation = editor.delete();
+      } else operation = editor.save();
+      await Promise.resolve();
+
+      document.querySelector("#msl-add-action .list-add-action")?.click();
+      setInput("#cpe-name", "Unsaved Fresh");
+      setInput("#cpe-id", "fresh");
+      setInput("#cpe-base-url", "https://fresh.example.test/v1");
+      setInput(".cpe-model-id", "fresh-model");
+      setInput(".cpe-model-name", "Fresh Model");
+      document.querySelector("#cpe-protocol").value = "openai-responses";
+      document.querySelector('input[name="cpe-auth-mode"][value="none"]').click();
+
+      const snapshot = {
+        schemaVersion: 1,
+        revision: 5,
+        providers: action === "save"
+          ? [customProvider({ name: "Saved Acme" }), beta]
+          : [beta],
+      };
+      pending.resolve(response(snapshot));
+      await operation;
+
+      assert.strictEqual(document.querySelector("#cpe-id")?.value, "fresh");
+      assert.strictEqual(document.querySelector("#cpe-name")?.value, "Unsaved Fresh");
+      assert.strictEqual(document.querySelector("#cpe-id")?.readOnly, false);
+      assert.strictEqual(document.querySelector(".msl-item.on"), null);
+      if (action === "save") assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"] .msl-name')?.textContent, "Saved Acme");
+      else assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"]'), null);
+
+      await editor.save();
+      assert.strictEqual(newDraftRequest?.expectedRevision, 5, `${action}: authority revision must advance without replacing the draft`);
+      win.App.Settings.closeSettingsModal();
+    }
+  });
+
+  it("keeps owner and editor revisions monotonic after a newer reload", async () => {
+    const beta = customProvider({ id: "beta", name: "Beta Gateway" });
+    const pending = deferred();
+    let customLoads = 0;
+    let puts = 0;
+    let latestWrite;
+    const revisionSixProviders = [
+      customProvider({ name: "Fresh Acme" }),
+      beta,
+      customProvider({ id: "gamma", name: "Gamma" }),
+    ];
+    fetchImpl = async (url, init = {}) => {
+      if (String(url) === "/api/auth") return response({ providers: [] });
+      if (String(url) === "/api/custom-providers" && !init.method) {
+        customLoads += 1;
+        return customLoads === 1
+          ? response({ revision: 4, official: [], custom: [customProvider(), beta] })
+          : response({ revision: 6, official: [], custom: revisionSixProviders });
+      }
+      if (String(url) === "/api/custom-providers/capabilities") return response(capabilities());
+      if (init.method === "PUT") {
+        puts += 1;
+        if (puts === 1) return pending.promise;
+        latestWrite = JSON.parse(init.body);
+        return response({ schemaVersion: 1, revision: 7, providers: revisionSixProviders });
+      }
+      return response({});
+    };
+
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+    const editor = win.App.SettingsComponents.providers.customEditor;
+    const oldSave = editor.save();
+    await Promise.resolve();
+    win.App.Settings.closeSettingsModal();
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+    document.querySelector('.msl-item[data-prov="beta"]').click();
+    setInput("#cpe-name", "Unsaved Beta Six");
+
+    pending.resolve(response({
+      schemaVersion: 1,
+      revision: 5,
+      providers: [customProvider({ name: "Stale Acme" }), beta],
+    }));
+    await oldSave;
+
+    assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"] .msl-name')?.textContent, "Fresh Acme");
+    assert.ok(document.querySelector('.msl-item[data-prov="gamma"]'));
+    assert.strictEqual(document.querySelector("#cpe-name")?.value, "Unsaved Beta Six");
+    assert.strictEqual(document.querySelector(".cpe-revision")?.textContent, "Revision 6");
+    await editor.save();
+    assert.strictEqual(latestWrite?.expectedRevision, 6);
+    win.App.Settings.closeSettingsModal();
+  });
+
+  it("does not roll expectedRevision back from stale conflict metadata", async () => {
+    const host = document.createElement("div");
+    document.body.replaceChildren(host);
+    let writes = 0;
+    let retryBody;
+    fetchImpl = async (url, init = {}) => {
+      if (init.method === "PUT") {
+        writes += 1;
+        if (writes === 1) return response({ code: "revision_conflict", currentRevision: 5 }, 409);
+        retryBody = JSON.parse(init.body);
+        return response({ schemaVersion: 1, revision: 7, providers: [customProvider()] });
+      }
+      if (String(url) === "/api/custom-providers") return response({ revision: 5, official: [], custom: [customProvider()] });
+      return response({});
+    };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 6);
+
+    await editor.save();
+    await editor.save();
+
+    assert.strictEqual(retryBody?.expectedRevision, 6);
+  });
+
+  it("detaches hanging mutations so a remount remains usable and observes late settle", async () => {
+    const beta = customProvider({ id: "beta", name: "Beta Gateway" });
+    for (const outcome of ["resolve", "reject"]) {
+      const host = document.createElement("div");
+      document.body.replaceChildren(host);
+      const pending = deferred();
+      const requests = [];
+      const snapshots = [];
+      const unhandled = [];
+      const onUnhandled = (error) => { unhandled.push(error); };
+      process.on("unhandledRejection", onUnhandled);
+      fetchImpl = async (url, init = {}) => {
+        requests.push({ url: String(url), signal: init.signal });
+        if (String(url) === "/api/custom-providers/test") return response({ ok: true, modelId: "beta-model" });
+        return pending.promise;
+      };
+      const editor = createCustomProviderEditor({ onSaved: (snapshot) => snapshots.push(snapshot) });
+      editor.mount(host, customProvider(), 4);
+      const oldSave = editor.save();
+      await Promise.resolve();
+
+      editor.unmount();
+      editor.mount(host, beta, 6);
+      setInput("#cpe-name", "Unsaved Beta Active");
+      for (const selector of ["save", "delete", "test", "discover", "reveal-api-key"]) {
+        assert.strictEqual(host.querySelector(`[data-cpe-action="${selector}"]`)?.disabled, false, `${outcome}: ${selector} must be usable`);
+      }
+      await editor.test();
+      assert.strictEqual(requests.length, 2);
+      assert.strictEqual(requests[0].signal?.aborted, false);
+
+      const lateSnapshot = { schemaVersion: 1, revision: 5, providers: [customProvider(), beta] };
+      if (outcome === "resolve") pending.resolve(response(lateSnapshot));
+      else pending.reject(new Error("late detached failure"));
+      await oldSave;
+      await flushAsyncWork();
+
+      assert.strictEqual(host.querySelector("#cpe-id")?.value, "beta");
+      assert.strictEqual(host.querySelector("#cpe-name")?.value, "Unsaved Beta Active");
+      assert.strictEqual(host.querySelector(".cpe-result")?.textContent.includes("late detached failure"), false);
+      assert.deepStrictEqual(snapshots, outcome === "resolve" ? [lateSnapshot] : []);
+      assert.deepStrictEqual(unhandled, []);
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("rejects non-integer custom provider snapshot revisions", async () => {
+    for (const revision of [-1, 4.5, "5"]) {
+      const host = document.createElement("div");
+      document.body.replaceChildren(host);
+      let saved = 0;
+      fetchImpl = async () => response({ schemaVersion: 1, revision, providers: [customProvider()] });
+      const editor = createCustomProviderEditor({ onSaved: () => { saved += 1; } });
+      editor.mount(host, customProvider(), 4);
+
+      await editor.save();
+
+      assert.strictEqual(saved, 0, String(revision));
+      assert.match(host.querySelector(".cpe-result")?.textContent ?? "", /响应无效/);
+    }
+  });
+
+  it("treats an equal-revision mutation snapshot as an idempotent authority no-op", async () => {
+    const host = document.createElement("div");
+    document.body.replaceChildren(host);
+    const snapshots = [];
+    fetchImpl = async () => response({
+      schemaVersion: 1,
+      revision: 4,
+      providers: [customProvider({ name: "Divergent Equal Name" })],
+    });
+    const editor = createCustomProviderEditor({ onSaved: (snapshot) => snapshots.push(snapshot) });
+    editor.mount(host, customProvider(), 4);
+
+    await editor.save();
+
+    assert.strictEqual(host.querySelector("#cpe-name")?.value, "Acme Gateway");
+    assert.strictEqual(host.querySelector(".cpe-revision")?.textContent, "Revision 4");
+    assert.strictEqual(settingsSpies.toastCalls.some(([message]) => message === "已保存"), false);
+    assert.strictEqual(snapshots.length, 1, "equal snapshots remain observed by the authority channel");
   });
 
   it("applies late mutation snapshots in the owner without replacing the newly selected draft", async () => {
