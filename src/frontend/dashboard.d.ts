@@ -223,6 +223,7 @@ interface SettingsCustomProviderEditor {
   setProtocols(protocols: readonly CustomProviderProtocol[]): void;
   mount(container: HTMLElement, provider: RedactedCustomProvider | null, revision: number): void;
   startNew(container: HTMLElement, revision: number): void;
+  unmount(): void;
   save(): Promise<void>;
   test(): Promise<void>;
   discoverModels(): Promise<void>;
@@ -449,6 +450,7 @@ interface SettingsGeneralApi {
 interface SettingsProviderModelApi {
   customEditor: SettingsCustomProviderEditor;
   renderTab(container: HTMLElement): void;
+  unmount(): void;
   selectProvider(provider: string): void;
   toggleKeyVisibility(provider: string): void;
   saveApiKey(provider: string): void;

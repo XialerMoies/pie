@@ -16,6 +16,25 @@ interface CustomProviderErrorResponse {
 }
 
 type DraftModel = CustomProviderDraft['models'][number];
+type CustomProviderEditorAction = 'save' | 'test' | 'discover' | 'delete' | 'reveal';
+
+interface CustomProviderEditorOperation {
+  action: CustomProviderEditorAction;
+  controller: AbortController;
+  generation: number;
+  root: HTMLElement;
+  providerId: string | null;
+  revision: number;
+  newProvider: boolean;
+  draft: CustomProviderDraft | null;
+  secrets: string[];
+}
+
+interface CustomProviderRequestResult {
+  ok: boolean;
+  body: unknown;
+  aborted: boolean;
+}
 
 const CUSTOM_HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const CUSTOM_FORBIDDEN_HEADERS = new Set([
@@ -37,6 +56,7 @@ function cpeElement<K extends keyof HTMLElementTagNameMap>(
 ): HTMLElementTagNameMap[K] {
   const element = document.createElement(tag);
   if (className) element.className = className;
+  if (className?.split(/\s+/).includes('cpe-field-error')) element.setAttribute('role', 'alert');
   if (text !== undefined) element.textContent = text;
   return element;
 }
@@ -73,11 +93,6 @@ function emptyModel(id = ''): DraftModel {
   };
 }
 
-function finiteNumber(input: HTMLInputElement | null, fallback = 0): number {
-  const parsed = Number(input?.value ?? fallback);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
 function readJsonObject(input: HTMLTextAreaElement | null, field: string): Record<string, unknown> | undefined {
   const value = input?.value.trim() ?? '';
   if (!value) return undefined;
@@ -99,6 +114,8 @@ export class SettingsCustomProviderEditor {
   private apiKeyCleared = false;
   private deleteArmed = false;
   private protocols: CustomProviderProtocol[] = [];
+  private generation = 0;
+  private activeOperation: CustomProviderEditorOperation | null = null;
 
   constructor(private readonly dependencies: SettingsCustomProviderEditorDependencies) {}
 
@@ -111,6 +128,7 @@ export class SettingsCustomProviderEditor {
       this.startNew(container, revision);
       return;
     }
+    this.invalidateOperation();
     this.container = container;
     this.provider = provider;
     this.revision = revision;
@@ -121,6 +139,7 @@ export class SettingsCustomProviderEditor {
   }
 
   startNew(container: HTMLElement, revision: number): void {
+    this.invalidateOperation();
     this.container = container;
     this.provider = null;
     this.revision = revision;
@@ -130,21 +149,33 @@ export class SettingsCustomProviderEditor {
     this.render(null);
   }
 
+  unmount(): void {
+    this.invalidateOperation();
+    this.container = null;
+    this.root = null;
+    this.provider = null;
+    this.deleteArmed = false;
+  }
+
   async save(): Promise<void> {
+    if (this.activeOperation?.action === 'save') return;
     this.clearFeedback();
     const draft = this.readDraft(true);
     if (!draft) return;
-    const currentId = this.provider?.id;
-    const url = this.newProvider
+    const operation = this.beginOperation('save', draft);
+    if (!operation) return;
+    const url = operation.newProvider
       ? '/api/custom-providers'
-      : `/api/custom-providers/${encodeURIComponent(currentId || draft.id)}`;
-    const response = await this.request(url, {
-      method: this.newProvider ? 'POST' : 'PUT',
+      : `/api/custom-providers/${encodeURIComponent(operation.providerId || draft.id)}`;
+    const response = await this.request(operation, url, {
+      method: operation.newProvider ? 'POST' : 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedRevision: this.revision, provider: draft }),
+      body: JSON.stringify({ expectedRevision: operation.revision, provider: draft }),
     });
+    if (!this.isActive(operation) || response.aborted) return this.finishOperation(operation);
     if (!response.ok) {
-      await this.handleMutationError(response.body);
+      await this.handleMutationError(operation, response.body);
+      this.finishOperation(operation);
       return;
     }
     const snapshot = response.body as RedactedCustomProviderSnapshot;
@@ -152,9 +183,11 @@ export class SettingsCustomProviderEditor {
       candidate && typeof candidate === 'object' && (candidate as RedactedCustomProvider).id === draft.id
     )) as RedactedCustomProvider | undefined;
     if (!saved || typeof snapshot.revision !== 'number') {
-      this.showResult('保存响应无效', true);
+      this.finishOperation(operation);
+      this.showResult('保存响应无效', true, operation.root, operation.secrets);
       return;
     }
+    this.finishOperation(operation);
     this.revision = snapshot.revision;
     this.provider = saved;
     this.newProvider = false;
@@ -165,59 +198,76 @@ export class SettingsCustomProviderEditor {
   }
 
   async test(): Promise<void> {
+    if (this.activeOperation?.action === 'test') return;
     this.clearFeedback();
     const draft = this.readDraft(false);
     if (!draft) return;
-    const response = await this.request('/api/custom-providers/test', {
+    const operation = this.beginOperation('test', draft);
+    if (!operation) return;
+    const response = await this.request(operation, '/api/custom-providers/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider: draft }),
     });
+    if (!this.isActive(operation) || response.aborted) return this.finishOperation(operation);
     const body = response.body as Record<string, unknown>;
     if (!response.ok || body.ok === false) {
       const code = typeof body.code === 'string' ? body.code : 'failed';
       const message = typeof body.message === 'string'
         ? body.message
         : typeof body.error === 'string' ? body.error : '连接测试失败';
-      this.showResult(`${code}: ${this.redact(message)}`, true);
+      this.finishOperation(operation);
+      this.showResult(`${code}: ${message}`, true, operation.root, operation.secrets);
       return;
     }
     const modelId = typeof body.modelId === 'string' ? body.modelId : '';
     const latency = typeof body.latencyMs === 'number' ? ` · ${body.latencyMs} ms` : '';
-    this.showResult(`连接成功${modelId ? ` · ${modelId}` : ''}${latency}`, false);
+    this.finishOperation(operation);
+    this.showResult(`连接成功${modelId ? ` · ${modelId}` : ''}${latency}`, false, operation.root, operation.secrets);
   }
 
   async discoverModels(): Promise<void> {
+    if (this.activeOperation?.action === 'discover') return;
     this.clearFeedback();
     const draft = this.readDraft(false);
     if (!draft) return;
-    const response = await this.request('/api/custom-providers/discover-models', {
+    const operation = this.beginOperation('discover', draft);
+    if (!operation) return;
+    const response = await this.request(operation, '/api/custom-providers/discover-models', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider: draft }),
     });
+    if (!this.isActive(operation) || response.aborted) return this.finishOperation(operation);
     if (!response.ok) {
-      this.showResult(this.errorText(response.body, '模型发现失败'), true);
+      this.finishOperation(operation);
+      this.showResult(this.errorText(response.body, '模型发现失败', operation.secrets), true, operation.root, operation.secrets);
       return;
     }
     const ids = safeArray((response.body as { ids?: unknown }).ids)
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
     const existing = new Set(
-      [...(this.root?.querySelectorAll<HTMLInputElement>('.cpe-model-id') ?? [])].map(input => input.value),
+      [...operation.root.querySelectorAll<HTMLInputElement>('.cpe-model-id')].map(input => input.value),
     );
     const imported = ids.filter(id => !existing.has(id));
     if (imported.length === 0) {
-      this.showResult('未发现新的模型 ID', false);
+      this.finishOperation(operation);
+      this.showResult('未发现新的模型 ID', false, operation.root, operation.secrets);
       return;
     }
     if (!window.confirm(`导入 ${imported.length} 个模型 ID？\n${imported.join('\n')}`)) {
-      this.showResult('已取消导入', false);
+      if (!this.isActive(operation)) return this.finishOperation(operation);
+      this.finishOperation(operation);
+      this.showResult('已取消导入', false, operation.root, operation.secrets);
       return;
     }
-    const rows = this.root?.querySelector<HTMLElement>('.cpe-model-rows');
-    if (!rows) return;
+    if (!this.isActive(operation)) return this.finishOperation(operation);
+    const rows = operation.root.querySelector<HTMLElement>('.cpe-model-rows');
+    if (!rows) return this.finishOperation(operation);
     for (const id of imported) rows.append(this.createModelRow(emptyModel(id)));
-    this.showResult(`已导入 ${imported.length} 个模型 ID，保存后生效`, false);
+    this.refreshDynamicMetadata(operation.root);
+    this.finishOperation(operation);
+    this.showResult(`已导入 ${imported.length} 个模型 ID，保存后生效`, false, operation.root, operation.secrets);
   }
 
   async delete(): Promise<void> {
@@ -231,21 +281,28 @@ export class SettingsCustomProviderEditor {
       }
       return;
     }
+    if (this.activeOperation?.action === 'delete') return;
     this.clearFeedback();
-    const response = await this.request(`/api/custom-providers/${encodeURIComponent(this.provider.id)}`, {
+    const operation = this.beginOperation('delete', null);
+    if (!operation || !operation.providerId) return;
+    const response = await this.request(operation, `/api/custom-providers/${encodeURIComponent(operation.providerId)}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedRevision: this.revision }),
+      body: JSON.stringify({ expectedRevision: operation.revision }),
     });
+    if (!this.isActive(operation) || response.aborted) return this.finishOperation(operation);
     if (!response.ok) {
-      await this.handleMutationError(response.body);
+      await this.handleMutationError(operation, response.body);
+      this.finishOperation(operation);
       return;
     }
     const snapshot = response.body as RedactedCustomProviderSnapshot;
     if (typeof snapshot.revision !== 'number' || !Array.isArray(snapshot.providers)) {
-      this.showResult('删除响应无效', true);
+      this.finishOperation(operation);
+      this.showResult('删除响应无效', true, operation.root, operation.secrets);
       return;
     }
+    this.finishOperation(operation);
     this.dependencies.onDeleted(snapshot);
     this.dependencies.notify('已删除', 'success');
   }
@@ -264,6 +321,7 @@ export class SettingsCustomProviderEditor {
 
     const conflict = cpeElement('div', 'cpe-conflict-banner');
     conflict.hidden = true;
+    conflict.setAttribute('role', 'alert');
     root.append(conflict);
 
     const form = cpeElement('div', 'cpe-form');
@@ -284,6 +342,8 @@ export class SettingsCustomProviderEditor {
 
     const result = cpeElement('div', 'cpe-result');
     result.hidden = true;
+    result.setAttribute('role', 'status');
+    result.setAttribute('aria-live', 'polite');
     root.append(result);
 
     const actions = cpeElement('div', 'cpe-actions');
@@ -302,6 +362,7 @@ export class SettingsCustomProviderEditor {
       this.apiKeyCleared = false;
       input.placeholder = this.provider?.apiKeyConfigured ? '留空保留已保存值' : '输入 API Key';
     });
+    this.refreshDynamicMetadata(root);
     this.container.replaceChildren(root);
   }
 
@@ -367,8 +428,16 @@ export class SettingsCustomProviderEditor {
     section.append(line);
     const row = cpeElement('div', 'cpe-inline-row');
     const input = cpeInput('cpe-api-key', 'cpe-input', '', 'password');
+    input.setAttribute('aria-label', 'API Key');
     input.placeholder = provider?.apiKeyConfigured ? '留空保留已保存值' : '输入 API Key';
-    row.append(input, cpeButton('clear-api-key', '清除', 'cpe-button subtle'));
+    row.append(input);
+    if (provider?.apiKeyConfigured) {
+      const reveal = cpeButton('reveal-api-key', '👁', 'rp-key-toggle');
+      reveal.title = '显示 API Key';
+      reveal.setAttribute('aria-label', '显示 API Key');
+      row.append(reveal);
+    }
+    row.append(cpeButton('clear-api-key', '清除', 'cpe-button subtle'));
     section.append(row);
     const error = cpeElement('span', 'cpe-field-error');
     error.dataset.fieldError = 'apiKey';
@@ -384,7 +453,10 @@ export class SettingsCustomProviderEditor {
     section.append(rows);
     const add = this.dependencies.listAddAction.create({
       label: '添加 Header',
-      onActivate: () => rows.append(this.createHeaderRow('', false)),
+      onActivate: () => {
+        rows.append(this.createHeaderRow('', false));
+        if (this.root) this.refreshDynamicMetadata(this.root);
+      },
     });
     add.dataset.cpeAction = 'add-header';
     section.append(add);
@@ -406,7 +478,10 @@ export class SettingsCustomProviderEditor {
     valueInput.placeholder = configured ? '留空保留已保存值' : 'Header value';
     row.append(nameInput, valueInput);
     if (configured) row.append(cpeElement('span', 'cpe-header-status', '已保存'));
-    row.append(cpeButton('remove-header', '删除', 'cpe-icon-button'));
+    const remove = cpeButton('remove-header', '删除', 'cpe-icon-button');
+    remove.title = '删除 Header';
+    remove.setAttribute('aria-label', '删除 Header');
+    row.append(remove);
     row.append(cpeElement('span', 'cpe-field-error cpe-header-error'));
     return row;
   }
@@ -417,9 +492,15 @@ export class SettingsCustomProviderEditor {
     const rows = cpeElement('div', 'cpe-model-rows');
     for (const model of models) rows.append(this.createModelRow(model));
     section.append(rows);
+    const error = cpeElement('span', 'cpe-field-error cpe-models-error');
+    error.dataset.fieldError = 'models';
+    section.append(error);
     const add = this.dependencies.listAddAction.create({
       label: '添加模型',
-      onActivate: () => rows.append(this.createModelRow(emptyModel())),
+      onActivate: () => {
+        rows.append(this.createModelRow(emptyModel()));
+        if (this.root) this.refreshDynamicMetadata(this.root);
+      },
     });
     add.dataset.cpeAction = 'add-model';
     section.append(add);
@@ -433,7 +514,10 @@ export class SettingsCustomProviderEditor {
     id.placeholder = 'Model ID';
     const name = cpeInput('', 'cpe-input cpe-model-name', model.name);
     name.placeholder = '显示名称';
-    main.append(id, name, cpeButton('remove-model', '删除', 'cpe-icon-button'));
+    const remove = cpeButton('remove-model', '删除', 'cpe-icon-button');
+    remove.title = '删除模型';
+    remove.setAttribute('aria-label', '删除模型');
+    main.append(id, name, remove);
     row.append(main);
 
     const limits = cpeElement('div', 'cpe-model-grid');
@@ -459,6 +543,7 @@ export class SettingsCustomProviderEditor {
     );
     details.append(advanced);
     row.append(details);
+    row.append(cpeElement('span', 'cpe-field-error cpe-model-error'));
     return row;
   }
 
@@ -500,6 +585,7 @@ export class SettingsCustomProviderEditor {
     else if (action === 'test') void this.test();
     else if (action === 'discover') void this.discoverModels();
     else if (action === 'delete') void this.delete();
+    else if (action === 'reveal-api-key') void this.revealApiKey();
     else if (action === 'clear-api-key') {
       this.apiKeyCleared = true;
       const input = this.root?.querySelector<HTMLInputElement>('#cpe-api-key');
@@ -514,13 +600,162 @@ export class SettingsCustomProviderEditor {
         row.dataset.removed = 'true';
         row.hidden = true;
       } else row.remove();
+      if (this.root) this.refreshDynamicMetadata(this.root);
     } else if (action === 'remove-model') {
       target.closest('.cpe-model-row')?.remove();
+      if (this.root) this.refreshDynamicMetadata(this.root);
     }
+  }
+
+  private invalidateOperation(): void {
+    this.generation += 1;
+    const operation = this.activeOperation;
+    if (!operation) return;
+    operation.controller.abort();
+    this.setBusy(operation, false);
+    this.activeOperation = null;
+  }
+
+  private beginOperation(
+    action: CustomProviderEditorAction,
+    draft: CustomProviderDraft | null,
+  ): CustomProviderEditorOperation | null {
+    if (!this.root) return null;
+    if (this.activeOperation) {
+      this.activeOperation.controller.abort();
+      this.setBusy(this.activeOperation, false);
+      this.activeOperation = null;
+    }
+    const operation: CustomProviderEditorOperation = {
+      action,
+      controller: new AbortController(),
+      generation: this.generation,
+      root: this.root,
+      providerId: this.provider?.id ?? null,
+      revision: this.revision,
+      newProvider: this.newProvider,
+      draft,
+      secrets: this.captureSecrets(this.root),
+    };
+    this.activeOperation = operation;
+    this.setBusy(operation, true);
+    return operation;
+  }
+
+  private isActive(operation: CustomProviderEditorOperation): boolean {
+    return this.activeOperation === operation
+      && operation.generation === this.generation
+      && operation.root === this.root
+      && Boolean(this.container?.contains(operation.root));
+  }
+
+  private finishOperation(operation: CustomProviderEditorOperation): void {
+    if (this.activeOperation !== operation) return;
+    this.setBusy(operation, false);
+    this.activeOperation = null;
+  }
+
+  private setBusy(operation: CustomProviderEditorOperation, busy: boolean): void {
+    const action = operation.action === 'discover' ? 'discover'
+      : operation.action === 'reveal' ? 'reveal-api-key'
+        : operation.action;
+    const button = operation.root.querySelector<HTMLButtonElement>(`[data-cpe-action="${action}"]`);
+    if (!button) return;
+    button.disabled = busy;
+    if (busy) button.setAttribute('aria-busy', 'true');
+    else button.removeAttribute('aria-busy');
+  }
+
+  private captureSecrets(root: HTMLElement): string[] {
+    return [
+      root.querySelector<HTMLInputElement>('#cpe-api-key')?.value,
+      ...[...root.querySelectorAll<HTMLInputElement>('.cpe-header-value')].map(input => input.value),
+    ].filter((secret): secret is string => typeof secret === 'string' && secret.length > 0);
+  }
+
+  private async revealApiKey(): Promise<void> {
+    if (!this.provider?.apiKeyConfigured || this.activeOperation?.action === 'reveal') return;
+    this.clearFeedback();
+    const operation = this.beginOperation('reveal', null);
+    if (!operation?.providerId) return;
+    const response = await this.request(operation, '/api/custom-providers/reveal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerId: operation.providerId }),
+    });
+    if (!this.isActive(operation) || response.aborted) return this.finishOperation(operation);
+    if (!response.ok) {
+      this.finishOperation(operation);
+      this.showResult(this.errorText(response.body, 'API Key 显示失败', operation.secrets), true, operation.root, operation.secrets);
+      return;
+    }
+    const apiKey = response.body && typeof response.body === 'object'
+      ? (response.body as { apiKey?: unknown }).apiKey
+      : undefined;
+    if (typeof apiKey !== 'string') {
+      this.finishOperation(operation);
+      this.showResult('API Key 显示响应无效', true, operation.root, operation.secrets);
+      return;
+    }
+    this.finishOperation(operation);
+    const input = operation.root.querySelector<HTMLInputElement>('#cpe-api-key');
+    if (input) input.value = apiKey;
+  }
+
+  private refreshDynamicMetadata(root: HTMLElement): void {
+    const headerRows = [...root.querySelectorAll<HTMLElement>('.cpe-header-row')];
+    headerRows.forEach((row, index) => {
+      const number = index + 1;
+      const name = row.querySelector<HTMLInputElement>('.cpe-header-name');
+      const value = row.querySelector<HTMLInputElement>('.cpe-header-value');
+      if (name) {
+        name.dataset.fieldPath = `headers[${index}].name`;
+        if (!name.getAttribute('aria-label')) name.setAttribute('aria-label', `Header ${number} 名称`);
+      }
+      if (value) {
+        value.dataset.fieldPath = `headers[${index}].value`;
+        value.setAttribute('aria-label', `Header ${number} 值`);
+      }
+      const remove = row.querySelector<HTMLButtonElement>('[data-cpe-action="remove-header"]');
+      if (remove) {
+        remove.title = `删除 Header ${number}`;
+        remove.setAttribute('aria-label', `删除 Header ${number}`);
+      }
+    });
+
+    const modelFields: Array<[string, string]> = [
+      ['.cpe-model-id', 'id'],
+      ['.cpe-model-name', 'name'],
+      ['.cpe-model-context', 'contextWindow'],
+      ['.cpe-model-max', 'maxTokens'],
+      ['.cpe-model-reasoning', 'reasoning'],
+      ['.cpe-model-image', 'input'],
+      ['.cpe-cost-input', 'cost.input'],
+      ['.cpe-cost-output', 'cost.output'],
+      ['.cpe-cost-cache-read', 'cost.cacheRead'],
+      ['.cpe-cost-cache-write', 'cost.cacheWrite'],
+      ['.cpe-model-sampling', 'samplingParams'],
+      ['.cpe-model-compatibility', 'compatibility'],
+    ];
+    [...root.querySelectorAll<HTMLElement>('.cpe-model-row')].forEach((row, index) => {
+      const number = index + 1;
+      for (const [selector, field] of modelFields) {
+        const control = row.querySelector<HTMLElement>(selector);
+        if (!control) continue;
+        control.dataset.fieldPath = `models[${index}].${field}`;
+        control.setAttribute('aria-label', `模型 ${number} ${field}`);
+      }
+      const remove = row.querySelector<HTMLButtonElement>('[data-cpe-action="remove-model"]');
+      if (remove) {
+        remove.title = `删除模型 ${number}`;
+        remove.setAttribute('aria-label', `删除模型 ${number}`);
+      }
+    });
   }
 
   private readDraft(showErrors: boolean): CustomProviderDraft | null {
     if (!this.root) return null;
+    this.refreshDynamicMetadata(this.root);
     const value = (selector: string) => this.root?.querySelector<HTMLInputElement>(selector)?.value.trim() ?? '';
     const id = value('#cpe-id');
     const name = value('#cpe-name');
@@ -538,6 +773,19 @@ export class SettingsCustomProviderEditor {
     requireField('protocol', protocol, '请选择协议');
     requireField('baseUrl', baseUrl, '请输入 Base URL');
     requireField('authMode', authMode, '请选择认证方式');
+    if (id && !/^[a-z0-9][a-z0-9-]*$/.test(id)) {
+      valid = false;
+      if (showErrors) this.setFieldError('id', 'Provider ID 只能使用小写字母、数字和连字符');
+    }
+    if (baseUrl) {
+      try {
+        const parsed = new URL(baseUrl);
+        if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) throw new Error();
+      } catch {
+        valid = false;
+        if (showErrors) this.setFieldError('baseUrl', '请输入有效的 HTTP(S) URL');
+      }
+    }
     if (!valid) return null;
 
     const headers: CustomProviderDraft['headers'] = [];
@@ -566,81 +814,149 @@ export class SettingsCustomProviderEditor {
       }
       headerNames.add(normalizedName);
       const headerValue = row.querySelector<HTMLInputElement>('.cpe-header-value')?.value ?? '';
+      if (!configured && !headerValue) {
+        valid = false;
+        if (showErrors) this.setFieldError(`headers[${headers.length}].value`, '请输入 Header value');
+        continue;
+      }
       headers.push({ name: headerName, ...(headerValue ? { value: headerValue } : {}) });
     }
     if (!valid) return null;
-    try {
-      const models = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-row')].map(row => {
-        const samplingParams = readJsonObject(row.querySelector('.cpe-model-sampling'), 'Sampling JSON');
-        const compatibility = readJsonObject(row.querySelector('.cpe-model-compatibility'), 'Compatibility JSON');
-        const modelId = row.querySelector<HTMLInputElement>('.cpe-model-id')?.value.trim() ?? '';
-        const modelName = row.querySelector<HTMLInputElement>('.cpe-model-name')?.value.trim() ?? '';
-        return {
-          id: modelId,
-          name: modelName || modelId,
-          contextWindow: finiteNumber(row.querySelector('.cpe-model-context')),
-          maxTokens: finiteNumber(row.querySelector('.cpe-model-max')),
-          reasoning: row.querySelector<HTMLInputElement>('.cpe-model-reasoning')?.checked ?? false,
-          input: row.querySelector<HTMLInputElement>('.cpe-model-image')?.checked ? ['text', 'image'] : ['text'],
-          cost: {
-            input: finiteNumber(row.querySelector('.cpe-cost-input')),
-            output: finiteNumber(row.querySelector('.cpe-cost-output')),
-            cacheRead: finiteNumber(row.querySelector('.cpe-cost-cache-read')),
-            cacheWrite: finiteNumber(row.querySelector('.cpe-cost-cache-write')),
-          },
-          ...(samplingParams ? { samplingParams } : {}),
-          ...(compatibility ? { compatibility } : {}),
-        } as DraftModel;
-      });
-      const apiKeyValue = value('#cpe-api-key');
-      if (authMode === 'apiKey' && !apiKeyValue && !this.apiKeyCleared && !this.provider?.apiKeyConfigured) {
-        if (showErrors) this.setFieldError('apiKey', '请输入 API Key');
-        return null;
-      }
-      const modelDiscovery = value('#cpe-model-discovery');
-      return {
-        id,
-        name,
-        protocol: protocol as CustomProviderDraft['protocol'],
-        baseUrl,
-        authMode: authMode as CustomProviderDraft['authMode'],
-        ...(this.apiKeyCleared ? { apiKey: null } : authMode === 'apiKey' && apiKeyValue ? { apiKey: apiKeyValue } : {}),
-        headers,
-        models,
-        ...(modelDiscovery ? { modelDiscovery } : {}),
-      };
-    } catch (error) {
-      this.showResult(error instanceof Error ? error.message : '高级设置格式无效', true);
+
+    const modelRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-row')];
+    if (modelRows.length === 0) {
+      if (showErrors) this.setFieldError('models', '至少添加一个模型');
       return null;
     }
+    const modelIds = new Set<string>();
+    const modelNames = new Set<string>();
+    const models: DraftModel[] = [];
+    for (let index = 0; index < modelRows.length; index += 1) {
+      const row = modelRows[index];
+      const field = (name: string) => `models[${index}].${name}`;
+      const modelId = row.querySelector<HTMLInputElement>('.cpe-model-id')?.value.trim() ?? '';
+      const modelName = row.querySelector<HTMLInputElement>('.cpe-model-name')?.value.trim() ?? '';
+      const contextWindow = Number(row.querySelector<HTMLInputElement>('.cpe-model-context')?.value ?? '');
+      const maxTokens = Number(row.querySelector<HTMLInputElement>('.cpe-model-max')?.value ?? '');
+      const failModel = (path: string, message: string) => {
+        valid = false;
+        if (showErrors) this.setFieldError(path, message);
+      };
+      if (!modelId) failModel(field('id'), '请输入 Model ID');
+      else if (modelIds.has(modelId)) failModel(field('id'), 'Model ID 重复');
+      else modelIds.add(modelId);
+      const normalizedName = modelName.toLowerCase();
+      if (!modelName) failModel(field('name'), '请输入模型名称');
+      else if (modelNames.has(normalizedName)) failModel(field('name'), '模型名称重复');
+      else modelNames.add(normalizedName);
+      if (!Number.isInteger(contextWindow) || contextWindow <= 0) {
+        failModel(field('contextWindow'), 'Context 必须是正整数');
+      }
+      if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
+        failModel(field('maxTokens'), 'Max tokens 必须是正整数');
+      } else if (Number.isInteger(contextWindow) && contextWindow > 0 && maxTokens > contextWindow) {
+        failModel(field('maxTokens'), 'Max tokens 不能超过 Context');
+      }
+
+      const costFields = [
+        ['input', '.cpe-cost-input'],
+        ['output', '.cpe-cost-output'],
+        ['cacheRead', '.cpe-cost-cache-read'],
+        ['cacheWrite', '.cpe-cost-cache-write'],
+      ] as const;
+      const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      for (const [costField, selector] of costFields) {
+        const amount = Number(row.querySelector<HTMLInputElement>(selector)?.value ?? '');
+        if (!Number.isFinite(amount) || amount < 0) failModel(field(`cost.${costField}`), '费用必须是非负数');
+        else cost[costField] = amount;
+      }
+
+      let samplingParams: Record<string, unknown> | undefined;
+      let compatibility: Record<string, unknown> | undefined;
+      for (const [advancedField, selector, label] of [
+        ['samplingParams', '.cpe-model-sampling', 'Sampling JSON'],
+        ['compatibility', '.cpe-model-compatibility', 'Compatibility JSON'],
+      ] as const) {
+        try {
+          const parsed = readJsonObject(row.querySelector(selector), label);
+          if (advancedField === 'samplingParams') samplingParams = parsed;
+          else compatibility = parsed;
+        } catch {
+          failModel(field(advancedField), `${label} 必须是 JSON 对象`);
+        }
+      }
+      models.push({
+        id: modelId,
+        name: modelName,
+        contextWindow,
+        maxTokens,
+        reasoning: row.querySelector<HTMLInputElement>('.cpe-model-reasoning')?.checked ?? false,
+        input: row.querySelector<HTMLInputElement>('.cpe-model-image')?.checked ? ['text', 'image'] : ['text'],
+        cost,
+        ...(samplingParams ? { samplingParams } : {}),
+        ...(compatibility ? { compatibility } : {}),
+      });
+    }
+    if (!valid) return null;
+
+    const apiKeyValue = value('#cpe-api-key');
+    if (authMode === 'apiKey' && !apiKeyValue && !this.apiKeyCleared && !this.provider?.apiKeyConfigured) {
+      if (showErrors) this.setFieldError('apiKey', '请输入 API Key');
+      return null;
+    }
+    const modelDiscovery = value('#cpe-model-discovery');
+    return {
+      id,
+      name,
+      protocol: protocol as CustomProviderDraft['protocol'],
+      baseUrl,
+      authMode: authMode as CustomProviderDraft['authMode'],
+      ...(this.apiKeyCleared ? { apiKey: null } : authMode === 'apiKey' && apiKeyValue ? { apiKey: apiKeyValue } : {}),
+      headers,
+      models,
+      ...(modelDiscovery ? { modelDiscovery } : {}),
+    };
   }
 
-  private async request(url: string, init: RequestInit): Promise<{ ok: boolean; body: unknown }> {
+  private async request(
+    operation: CustomProviderEditorOperation,
+    url: string,
+    init: RequestInit,
+  ): Promise<CustomProviderRequestResult> {
     try {
-      const response = await fetch(url, init);
+      const response = await fetch(url, { ...init, signal: operation.controller.signal });
       let body: unknown = {};
       try { body = await response.json(); } catch {}
-      return { ok: response.ok, body };
+      return { ok: response.ok, body, aborted: operation.controller.signal.aborted };
     } catch (error) {
-      return { ok: false, body: { error: error instanceof Error ? error.message : '网络请求失败', code: 'network_error' } };
+      if (operation.controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+        return { ok: false, body: {}, aborted: true };
+      }
+      return {
+        ok: false,
+        body: { error: error instanceof Error ? error.message : '网络请求失败', code: 'network_error' },
+        aborted: false,
+      };
     }
   }
 
-  private async handleMutationError(value: unknown): Promise<void> {
+  private async handleMutationError(operation: CustomProviderEditorOperation, value: unknown): Promise<void> {
+    if (!this.isActive(operation)) return;
     const body = value && typeof value === 'object' ? value as CustomProviderErrorResponse : {};
     if (body.code === 'provider_id_conflict' || body.code === 'immutable_provider_id') {
       this.setFieldError('id', body.code === 'provider_id_conflict' ? 'Provider ID 已被占用' : 'Provider ID 创建后不可修改');
       return;
     }
     if (body.code === 'revision_conflict') {
-      let latestRevision = typeof body.currentRevision === 'number' ? body.currentRevision : this.revision;
-      const latest = await this.request('/api/custom-providers', { method: 'GET' });
+      let latestRevision = typeof body.currentRevision === 'number' ? body.currentRevision : operation.revision;
+      const latest = await this.request(operation, '/api/custom-providers', { method: 'GET' });
+      if (!this.isActive(operation) || latest.aborted) return;
       if (latest.ok && latest.body && typeof latest.body === 'object') {
         const received = (latest.body as { revision?: unknown }).revision;
         if (typeof received === 'number') latestRevision = received;
       }
       this.revision = latestRevision;
-      const banner = this.root?.querySelector<HTMLElement>('.cpe-conflict-banner');
+      const banner = operation.root.querySelector<HTMLElement>('.cpe-conflict-banner');
       if (banner) {
         banner.hidden = false;
         banner.textContent = `版本冲突：已加载最新 revision ${latestRevision}。未保存的表单值已保留，请检查后再次保存。`;
@@ -648,33 +964,31 @@ export class SettingsCustomProviderEditor {
       return;
     }
     if (body.code === 'provider_in_use') {
-      this.showReferences(body.references);
+      this.showReferences(body.references, operation.root, operation.secrets);
       return;
     }
     if (body.code === 'invalid_request' && typeof body.fieldPath === 'string') {
-      const pathParts = body.fieldPath.split('.');
-      const field = pathParts[pathParts.length - 1]?.replace(/\[\d+\]$/, '') ?? '';
+      const field = body.fieldPath.replace(/^provider\./, '');
       this.setFieldError(field, '字段值无效');
       return;
     }
-    this.showResult(this.errorText(body, '保存失败'), true);
+    this.showResult(this.errorText(body, '保存失败', operation.secrets), true, operation.root, operation.secrets);
   }
 
-  private showReferences(value: unknown): void {
-    if (!this.root) return;
-    const banner = this.root.querySelector<HTMLElement>('.cpe-conflict-banner');
+  private showReferences(value: unknown, root: HTMLElement, secrets: readonly string[]): void {
+    const banner = root.querySelector<HTMLElement>('.cpe-conflict-banner');
     if (!banner) return;
     banner.replaceChildren(cpeElement('strong', undefined, '当前配置仍被占用'));
     const list = cpeElement('ul', 'cpe-occupancy-list');
     for (const entry of safeArray(value)) {
       if (!entry || typeof entry !== 'object') continue;
       const reference = entry as Record<string, unknown>;
-      const model = typeof reference.modelId === 'string' ? this.redact(reference.modelId) : '未知模型';
+      const model = typeof reference.modelId === 'string' ? this.redact(reference.modelId, secrets) : '未知模型';
       const source = reference.kind === 'currentModel'
         ? '当前模型'
         : reference.kind === 'defaultModel'
           ? '默认模型'
-          : typeof reference.agentName === 'string' ? this.redact(reference.agentName) : '自定义 Agent';
+          : typeof reference.agentName === 'string' ? this.redact(reference.agentName, secrets) : '自定义 Agent';
       list.append(cpeElement('li', undefined, `${source}: ${model}`));
     }
     banner.append(list);
@@ -683,11 +997,13 @@ export class SettingsCustomProviderEditor {
 
   private clearFeedback(): void {
     this.root?.querySelectorAll<HTMLElement>('.cpe-field-error').forEach(error => { error.textContent = ''; });
+    this.root?.querySelectorAll<HTMLElement>('[aria-invalid="true"]').forEach(control => control.removeAttribute('aria-invalid'));
     const result = this.root?.querySelector<HTMLElement>('.cpe-result');
     if (result) {
       result.hidden = true;
       result.textContent = '';
       result.classList.remove('error');
+      result.setAttribute('role', 'status');
     }
     const banner = this.root?.querySelector<HTMLElement>('.cpe-conflict-banner');
     if (banner) {
@@ -697,37 +1013,66 @@ export class SettingsCustomProviderEditor {
   }
 
   private setFieldError(field: string, message: string): void {
+    const normalized = field.replace(/^provider\./, '');
+    const control = this.root?.querySelector<HTMLElement>(`[data-field-path="${normalized}"]`);
+    if (control) {
+      control.setAttribute('aria-invalid', 'true');
+      const row = control.closest<HTMLElement>('.cpe-header-row, .cpe-model-row');
+      const rowError = row?.querySelector<HTMLElement>('.cpe-header-error, .cpe-model-error');
+      if (rowError) {
+        rowError.dataset.fieldError = normalized;
+        rowError.textContent = message;
+        return;
+      }
+    }
     const target = [...(this.root?.querySelectorAll<HTMLElement>('[data-field-error]') ?? [])]
-      .find(candidate => candidate.dataset.fieldError === field);
+      .find(candidate => candidate.dataset.fieldError === normalized);
     if (target) target.textContent = message;
     else this.showResult(message, true);
   }
 
-  private showResult(message: string, error: boolean): void {
-    const result = this.root?.querySelector<HTMLElement>('.cpe-result');
+  private showResult(
+    message: string,
+    error: boolean,
+    root = this.root,
+    secrets?: readonly string[],
+  ): void {
+    const result = root?.querySelector<HTMLElement>('.cpe-result');
     if (!result) return;
     result.hidden = false;
     result.classList.toggle('error', error);
-    result.textContent = this.redact(message);
+    result.setAttribute('role', error ? 'alert' : 'status');
+    result.textContent = this.redact(message, secrets);
   }
 
-  private errorText(value: unknown, fallback: string): string {
+  private errorText(value: unknown, fallback: string, secrets?: readonly string[]): string {
     if (!value || typeof value !== 'object') return fallback;
     const body = value as Record<string, unknown>;
     const message = typeof body.error === 'string' ? body.error : fallback;
     const code = typeof body.code === 'string' ? `${body.code}: ` : '';
-    return this.redact(code + message);
+    return this.redact(code + message, secrets);
   }
 
-  private redact(message: string): string {
-    const secrets = [
-      this.root?.querySelector<HTMLInputElement>('#cpe-api-key')?.value,
-      ...[...(this.root?.querySelectorAll<HTMLInputElement>('.cpe-header-value') ?? [])].map(input => input.value),
-    ]
-      .filter((secret): secret is string => typeof secret === 'string' && secret.length > 0)
-      .sort((left, right) => right.length - left.length);
+  private redact(message: string, capturedSecrets?: readonly string[]): string {
+    const secrets = capturedSecrets ?? (this.root ? this.captureSecrets(this.root) : []);
+    const variants = new Set<string>();
+    for (const secret of secrets) {
+      if (!secret) continue;
+      variants.add(secret);
+      const json = JSON.stringify(secret);
+      if (json.length >= 2) variants.add(json.slice(1, -1));
+      try {
+        const encoded = encodeURIComponent(secret);
+        variants.add(encoded);
+        variants.add(encoded.replace(/%[0-9A-F]{2}/g, part => part.toLowerCase()));
+        variants.add(encoded.replace(/%[0-9a-f]{2}/g, part => part.toUpperCase()));
+        variants.add(encoded.replace(/%20/gi, '+'));
+      } catch {}
+    }
     let redacted = message;
-    for (const secret of secrets) redacted = redacted.split(secret).join('[REDACTED]');
+    for (const secret of [...variants].sort((left, right) => right.length - left.length)) {
+      redacted = redacted.split(secret).join('[REDACTED]');
+    }
     return redacted
       .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
       .replace(/\bsk-[A-Za-z0-9_-]{6,}\b/g, '[REDACTED]');

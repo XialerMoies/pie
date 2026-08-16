@@ -104,6 +104,7 @@ function openSettingsModal(): void {
 
 function closeSettingsModal(): void {
   if (settingsActiveTab === 'permissions') settingsPermissions?.unmount?.();
+  if (settingsActiveTab === 'model') settingsComponents.providers.unmount();
   $('settings-modal')?.remove();
 }
 
@@ -111,6 +112,7 @@ function switchSettingsModal(tab: string): void {
   const previousTab = settingsActiveTab;
   settingsActiveTab = tab;
   if (previousTab === 'permissions' && tab !== 'permissions') settingsPermissions?.unmount?.();
+  if (previousTab === 'model' && tab !== 'model') settingsComponents.providers.unmount();
   document.querySelectorAll('.ms-item').forEach(element => {
     element.classList.toggle('on', (element as HTMLElement).dataset.st === tab);
   });

@@ -185,6 +185,18 @@ describe("frontend component tree boundaries", () => {
     assert.ok(actionIndex < editorIndex && editorIndex < providerIndex, "custom provider editor must load after ListAddAction and before provider owner");
   });
 
+  it("keeps provider settings usable at the 600px narrow breakpoint", () => {
+    const css = source("src/frontend/dashboard.css");
+    const narrow = css.match(/@media\s*\(max-width:\s*600px\)\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+
+    assert.ok(narrow, "provider settings need a dedicated 600px breakpoint");
+    assert.match(narrow, /\.model-split\s*\{[^}]*flex-direction:\s*column/);
+    assert.match(narrow, /\.ms-left\s*\{[^}]*width:\s*100%/);
+    assert.match(narrow, /\.ms-right\s*\{[^}]*min-width:\s*0/);
+    assert.match(narrow, /\.cpe-actions\s*\{[^}]*flex-wrap:\s*wrap/);
+    assert.match(narrow, /\.cpe-(?:inline-row|header-row|model-main)[^\{]*\{[^}]*min-width:\s*0/);
+  });
+
   it("uses component views for git pane content", () => {
     const src = source("src/frontend/pane/git/index.ts");
     for (const name of ["GitPanelView", "GitChangeRowView", "GitDiffPreviewView", "GitHistoryView"]) assertClass(src, name);

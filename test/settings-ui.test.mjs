@@ -108,6 +108,16 @@ async function flushAsyncWork() {
   await Promise.resolve();
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
 function customProvider(overrides = {}) {
   return {
     id: "acme",
@@ -395,6 +405,8 @@ describe("settings DOM boundary", () => {
     setInput("#cpe-name", "Fresh");
     setInput("#cpe-id", "openai");
     setInput("#cpe-base-url", "https://fresh.example/v1");
+    setInput(".cpe-model-id", "fresh-model");
+    setInput(".cpe-model-name", "Fresh Model");
     host.querySelector("#cpe-protocol").value = "openai-responses";
     host.querySelector('input[name="cpe-auth-mode"][value="none"]').click();
 
@@ -708,6 +720,322 @@ describe("settings DOM boundary", () => {
     await win.App.SettingsComponents.providers.customEditor.test();
     assert.strictEqual(document.querySelector(".cpe-result")?.textContent.includes(hostile), true);
     assert.strictEqual(document.querySelector("#custom-provider-xss"), null);
+  });
+
+  it("invalidates every pending custom provider action when another provider is mounted", async () => {
+    const beta = customProvider({ id: "beta", name: "Beta Gateway" });
+    const outcomes = {
+      save: response({ schemaVersion: 1, revision: 5, providers: [customProvider()] }),
+      test: response({ ok: false, code: "late", message: "late test error" }, 502),
+      discover: response({ ids: ["late-model"] }),
+      delete: response({ schemaVersion: 1, revision: 5, providers: [] }),
+    };
+
+    for (const action of Object.keys(outcomes)) {
+      const host = document.createElement("div");
+      document.body.replaceChildren(host);
+      settingsSpies.toastCalls.length = 0;
+      const pending = deferred();
+      const requests = [];
+      let saved = 0;
+      let deleted = 0;
+      let confirmations = 0;
+      const originalConfirm = win.confirm;
+      win.confirm = () => { confirmations += 1; return true; };
+      fetchImpl = async (url, init = {}) => {
+        requests.push({ url: String(url), signal: init.signal });
+        return pending.promise;
+      };
+      const editor = createCustomProviderEditor({
+        onSaved: () => { saved += 1; },
+        onDeleted: () => { deleted += 1; },
+      });
+      editor.mount(host, customProvider(), 4);
+
+      let operation;
+      if (action === "delete") {
+        await editor.delete();
+        operation = editor.delete();
+      } else {
+        operation = editor[action === "discover" ? "discoverModels" : action]();
+      }
+      await Promise.resolve();
+      assert.strictEqual(requests.length, 1, `${action}: request should start`);
+
+      editor.mount(host, beta, 9);
+      assert.strictEqual(requests[0].signal?.aborted, true, `${action}: switching providers must abort the request`);
+      pending.resolve(outcomes[action]);
+      await operation;
+
+      assert.strictEqual(host.querySelector("#cpe-id")?.value, "beta", `${action}: late result must not replace provider B`);
+      assert.strictEqual(host.querySelector(".cpe-result")?.hidden, true, `${action}: late result must not update provider B status`);
+      assert.deepStrictEqual([...host.querySelectorAll(".cpe-model-id")].map((input) => input.value), ["model-a", "model-b"]);
+      assert.strictEqual(saved, 0, `${action}: stale save must not invoke onSaved`);
+      assert.strictEqual(deleted, 0, `${action}: stale delete must not invoke onDeleted`);
+      assert.strictEqual(confirmations, 0, `${action}: stale discovery must not prompt`);
+      assert.deepStrictEqual(settingsSpies.toastCalls, []);
+      win.confirm = originalConfirm;
+    }
+  });
+
+  it("deduplicates an action and lets a newer different action supersede it", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const first = deferred();
+    const second = deferred();
+    const requests = [];
+    fetchImpl = async (url, init = {}) => {
+      requests.push({ url: String(url), signal: init.signal });
+      return requests.length === 1 ? first.promise : second.promise;
+    };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 4);
+
+    const firstTest = editor.test();
+    const duplicateTest = editor.test();
+    await Promise.resolve();
+    const testButton = host.querySelector('[data-cpe-action="test"]');
+    assert.strictEqual(requests.length, 1);
+    assert.strictEqual(testButton?.disabled, true);
+    assert.strictEqual(testButton?.getAttribute("aria-busy"), "true");
+
+    const save = editor.save();
+    await Promise.resolve();
+    assert.strictEqual(requests.length, 2);
+    assert.strictEqual(requests[0].signal?.aborted, true);
+    first.resolve(response({ ok: false, code: "late", message: "must stay hidden" }, 502));
+    second.resolve(response({ schemaVersion: 1, revision: 5, providers: [customProvider()] }));
+    await Promise.all([firstTest, duplicateTest, save]);
+
+    assert.strictEqual(host.querySelector(".cpe-result")?.textContent.includes("must stay hidden"), false);
+    assert.strictEqual(host.querySelector('[data-cpe-action="save"]')?.disabled, false);
+    assert.strictEqual(host.querySelector('[data-cpe-action="save"]')?.hasAttribute("aria-busy"), false);
+  });
+
+  it("aborts custom provider work when leaving the model settings tab", async () => {
+    const pending = deferred();
+    let actionSignal;
+    fetchImpl = async (url, init = {}) => {
+      if (String(url) === "/api/auth") return response({ providers: [] });
+      if (String(url) === "/api/custom-providers") {
+        return response({ revision: 4, official: [], custom: [customProvider()] });
+      }
+      if (String(url) === "/api/custom-providers/capabilities") return response(capabilities());
+      if (String(url) === "/api/custom-providers/test") {
+        actionSignal = init.signal;
+        return pending.promise;
+      }
+      return response({});
+    };
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+    const operation = win.App.SettingsComponents.providers.customEditor.test();
+    await Promise.resolve();
+
+    document.querySelector('.ms-item[data-st="general"]').click();
+    assert.strictEqual(actionSignal?.aborted, true);
+    pending.resolve(response({ ok: false, message: "late tab error" }, 502));
+    await operation;
+
+    assert.ok(document.querySelector("#gs-theme"));
+    assert.strictEqual(document.body.textContent.includes("late tab error"), false);
+  });
+
+  it("reveals a configured custom API key only on explicit active-mount request", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const first = deferred();
+    const revealRequests = [];
+    fetchImpl = async (url, init = {}) => {
+      if (String(url) === "/api/custom-providers/reveal") {
+        revealRequests.push({ body: JSON.parse(init.body), signal: init.signal });
+        if (revealRequests.length === 1) return first.promise;
+        return response({ apiKey: "active-secret" });
+      }
+      return response({});
+    };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 4);
+    const reveal = host.querySelector('.rp-key-toggle[data-cpe-action="reveal-api-key"]');
+    assert.ok(reveal, "configured custom API keys need an eye reveal action");
+    assert.strictEqual(reveal.type, "button");
+    assert.match(reveal.getAttribute("aria-label") ?? "", /API Key/);
+    assert.ok(reveal.title);
+    assert.strictEqual(host.querySelector(".cpe-header-row .rp-key-toggle"), null, "Headers must never expose reveal");
+    assert.strictEqual(revealRequests.length, 0);
+
+    reveal.click();
+    reveal.click();
+    await Promise.resolve();
+    assert.strictEqual(revealRequests.length, 1, "double-click reveal should be deduplicated");
+    assert.deepStrictEqual(revealRequests[0].body, { providerId: "acme" });
+    assert.strictEqual(reveal.disabled, true);
+
+    editor.mount(host, customProvider({ id: "beta", name: "Beta" }), 5);
+    assert.strictEqual(revealRequests[0].signal?.aborted, true);
+    first.resolve(response({ apiKey: "late-secret" }));
+    await flushAsyncWork();
+    assert.strictEqual(host.querySelector("#cpe-api-key")?.value, "");
+
+    host.querySelector('[data-cpe-action="reveal-api-key"]').click();
+    await flushAsyncWork();
+    assert.strictEqual(host.querySelector("#cpe-api-key")?.value, "active-secret");
+  });
+
+  it("redacts hostile custom API key reveal errors", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const secret = 'xy"\\z';
+    const variants = [secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)];
+    fetchImpl = async () => response({
+      code: "reveal_failed",
+      error: `reveal rejected ${variants.join(" | ")} <img id="reveal-error-xss">`,
+    }, 502);
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 4);
+    setInput("#cpe-api-key", secret);
+
+    host.querySelector('[data-cpe-action="reveal-api-key"]').click();
+    await flushAsyncWork();
+
+    const observable = JSON.stringify({
+      text: host.querySelector(".cpe-result")?.textContent,
+      notifications: settingsSpies.toastCalls,
+    });
+    for (const variant of variants) assert.strictEqual(observable.includes(variant), false);
+    assert.strictEqual(host.querySelector("#reveal-error-xss"), null);
+    assert.strictEqual(host.querySelector(".cpe-result")?.getAttribute("role"), "alert");
+  });
+
+  it("validates Header and model rows against the backend contract before requesting", async () => {
+    const cases = [
+      {
+        path: "headers[1].value",
+        mutate: (host) => {
+          host.querySelector('[data-cpe-action="add-header"]').click();
+          setInput('.cpe-header-row:not([data-configured="true"]) .cpe-header-name', "X-New");
+        },
+      },
+      { path: "models", mutate: (host) => [...host.querySelectorAll('[data-cpe-action="remove-model"]')].forEach((button) => button.click()) },
+      { path: "models[0].id", mutate: () => setInput(".cpe-model-id", "") },
+      { path: "models[0].name", mutate: () => setInput(".cpe-model-name", "") },
+      { path: "models[1].id", mutate: () => setInput(".cpe-model-row:nth-child(2) .cpe-model-id", "model-a") },
+      { path: "models[1].name", mutate: () => setInput(".cpe-model-row:nth-child(2) .cpe-model-name", "MODEL A") },
+      { path: "models[0].contextWindow", mutate: () => setInput(".cpe-model-context", "0") },
+      { path: "models[0].maxTokens", mutate: () => setInput(".cpe-model-max", "1.5") },
+      { path: "models[0].maxTokens", mutate: () => setInput(".cpe-model-max", "999999") },
+      { path: "models[0].samplingParams", mutate: () => setInput(".cpe-model-sampling", "[]") },
+      { path: "models[0].compatibility", mutate: () => setInput(".cpe-model-compatibility", "{") },
+    ];
+    let requests = 0;
+    fetchImpl = async () => { requests += 1; return response({}); };
+
+    for (const testCase of cases) {
+      const host = document.createElement("div");
+      document.body.replaceChildren(host);
+      const editor = createCustomProviderEditor();
+      editor.mount(host, customProvider(), 4);
+      testCase.mutate(host);
+      await editor.save();
+      const error = host.querySelector(`[data-field-error="${testCase.path}"]`);
+      assert.ok(error, `${testCase.path}: exact field error should be rendered`);
+      assert.notStrictEqual(error.textContent, "", `${testCase.path}: field error should explain the violation`);
+    }
+    assert.strictEqual(requests, 0);
+  });
+
+  it("maps indexed backend field paths to their exact Header and model controls", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const paths = ["provider.headers[0].value", "provider.models[1].maxTokens"];
+    fetchImpl = async () => response({ code: "invalid_request", fieldPath: paths.shift() }, 400);
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 4);
+
+    await editor.save();
+    const headerValue = host.querySelector('.cpe-header-row:nth-child(1) .cpe-header-value');
+    assert.strictEqual(headerValue?.getAttribute("aria-invalid"), "true");
+    assert.notStrictEqual(host.querySelector('[data-field-error="headers[0].value"]')?.textContent, "");
+
+    await editor.save();
+    const secondMax = host.querySelector('.cpe-model-row:nth-child(2) .cpe-model-max');
+    assert.strictEqual(secondMax?.getAttribute("aria-invalid"), "true");
+    assert.notStrictEqual(host.querySelector('[data-field-error="models[1].maxTokens"]')?.textContent, "");
+  });
+
+  it("provides keyboard-operable provider items and accessible dynamic editor controls", async () => {
+    fetchImpl = async (url) => {
+      if (String(url) === "/api/auth") return response({ providers: [{ provider: "openai", hasKey: false }] });
+      if (String(url) === "/api/custom-providers") return response({
+        revision: 4,
+        official: [{ id: "openai", name: "OpenAI", configured: false }],
+        custom: [customProvider()],
+      });
+      if (String(url) === "/api/custom-providers/capabilities") return response(capabilities());
+      return response({ models: [] });
+    };
+    win.App.Settings.openSettingsModal();
+    await flushAsyncWork();
+
+    const providerItems = [...document.querySelectorAll(".msl-item")];
+    assert.ok(providerItems.length >= 2);
+    for (const item of providerItems) {
+      assert.strictEqual(item.tagName, "BUTTON");
+      assert.strictEqual(item.type, "button");
+    }
+    const customItem = providerItems.find((item) => item.dataset.prov === "acme");
+    activateButtonFromKeyboard(customItem, "Enter");
+    assert.strictEqual(document.querySelector("#cpe-id")?.value, "acme");
+
+    const dynamicControls = document.querySelectorAll([
+      ".cpe-header-name", ".cpe-header-value", ".cpe-model-id", ".cpe-model-name",
+      ".cpe-model-context", ".cpe-model-max", ".cpe-model-reasoning", ".cpe-model-image",
+      ".cpe-model-sampling", ".cpe-model-compatibility",
+    ].join(","));
+    assert.ok(dynamicControls.length > 0);
+    for (const control of dynamicControls) {
+      assert.ok(control.getAttribute("aria-label") || control.closest("label"), `${control.className}: needs an accessible label`);
+    }
+    for (const button of document.querySelectorAll(".cpe-editor button")) assert.strictEqual(button.type, "button");
+    for (const button of document.querySelectorAll('[data-cpe-action="remove-header"], [data-cpe-action="remove-model"]')) {
+      assert.ok(button.getAttribute("aria-label"));
+      assert.ok(button.title);
+    }
+    for (const error of document.querySelectorAll(".cpe-field-error")) assert.strictEqual(error.getAttribute("role"), "alert");
+    assert.strictEqual(document.querySelector(".cpe-result")?.getAttribute("aria-live"), "polite");
+    assert.strictEqual(document.querySelector(".cpe-conflict-banner")?.getAttribute("role"), "alert");
+    assert.strictEqual(document.querySelector(".msl-custom-status")?.getAttribute("aria-live"), "polite");
+  });
+
+  it("redacts raw, percent-encoded, and JSON-escaped draft secrets from errors", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const apiKey = 'a"b\\nc\\d';
+    const headerSecret = "xy";
+    const variants = [
+      apiKey,
+      encodeURIComponent(apiKey),
+      encodeURIComponent(apiKey).replace(/%[0-9A-F]{2}/g, (part) => part.toLowerCase()),
+      JSON.stringify(apiKey).slice(1, -1),
+      headerSecret,
+      encodeURIComponent(headerSecret),
+    ];
+    const message = `upstream rejected ${variants.join(" | ")} <img id="encoded-secret-xss">`;
+    fetchImpl = async () => { throw new Error(message); };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 4);
+    setInput("#cpe-api-key", apiKey);
+    setInput(".cpe-header-value", headerSecret);
+
+    await editor.test();
+    const observable = JSON.stringify({
+      text: host.querySelector(".cpe-result")?.textContent,
+      notifications: settingsSpies.toastCalls,
+    });
+    for (const variant of variants) {
+      assert.strictEqual(observable.includes(variant), false, `must redact ${JSON.stringify(variant)} from ${observable}`);
+    }
+    assert.strictEqual(host.querySelector("#encoded-secret-xss"), null);
   });
 
   it("removes the standalone Permissions sidebar entry while keeping the mode badge", () => {

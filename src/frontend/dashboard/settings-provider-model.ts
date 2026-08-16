@@ -82,6 +82,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   }
 
   renderTab(container: HTMLElement): void {
+    this.customEditor.unmount();
     const generation = ++this.renderGeneration;
     this.selectedProvider = null;
     this.providerKeys = {};
@@ -118,11 +119,21 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       },
     });
     this.customStatus = providerElement('div', 'msl-custom-status', '正在加载自定义厂商...');
+    this.customStatus.setAttribute('aria-live', 'polite');
     addMount?.append(this.addCustomButton, this.customStatus);
 
     void this.loadOfficialAuth(generation);
     void this.loadCustomSnapshot(generation);
     void this.loadCapabilities(generation);
+  }
+
+  unmount(): void {
+    this.renderGeneration += 1;
+    this.revealRequestId += 1;
+    this.customEditor.unmount();
+    this.selectedProvider = null;
+    this.addCustomButton = null;
+    this.customStatus = null;
   }
 
   selectProvider(provider: string): void {
@@ -140,6 +151,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       this.customEditor.mount(content, custom, this.revision);
       return;
     }
+    this.customEditor.unmount();
     this.renderOfficialProvider(content, provider);
   }
 
@@ -450,7 +462,8 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       const official = officialById.get(id);
       if (!custom && !official) return [];
       const selected = id === this.selectedProvider;
-      const item = providerElement('div', `msl-item${selected ? ' on' : ''}`);
+      const item = providerElement('button', `msl-item${selected ? ' on' : ''}`);
+      item.type = 'button';
       item.draggable = true;
       item.dataset.prov = id;
       item.dataset.index = String(index);

@@ -566,8 +566,9 @@ body{background:var(--bg);height:100vh}
 .ms-left{width:178px;min-width:0;flex-shrink:0;border-right:1px solid var(--bd);padding:0;display:flex;flex-direction:column;overflow:hidden}
 .msl-title{font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--tm);padding:6px 8px;font-family:var(--fd)}
 .msl-list{display:flex;flex:1;min-height:0;flex-direction:column;gap:1px;overflow-y:auto}
-.msl-item{display:flex;align-items:center;gap:3px;padding:6px 8px 6px 0;border-radius:5px;cursor:pointer;font-size:.72rem;color:var(--ts);transition:all .1s}
+.msl-item{display:flex;width:100%;align-items:center;gap:3px;padding:6px 8px 6px 0;border:0;border-radius:5px;background:transparent;cursor:pointer;font:400 .72rem var(--fb);color:var(--ts);text-align:left;transition:all .1s}
 .msl-item:hover{background:var(--bc)}
+.msl-item:focus-visible{outline:1px solid var(--am);outline-offset:-1px}
 .msl-item.on{background:rgba(245,158,11,.08);color:var(--am)}
 .msl-drag{font-size:10px;color:var(--tm);cursor:grab;flex-shrink:0;user-select:none}
 .msl-name{flex:1;font-family:var(--fm);overflow:hidden;text-overflow:ellipsis;text-align:left}
@@ -648,11 +649,27 @@ textarea.cpe-input{resize:vertical;line-height:1.45}
 .cpe-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;margin-top:12px;padding-top:10px;border-top:1px solid var(--bd)}
 .cpe-button{height:30px;padding:0 10px;border:1px solid var(--bd);border-radius:4px;background:transparent;color:var(--ts);font:500 .68rem var(--fb);cursor:pointer;white-space:nowrap}
 .cpe-button:hover{background:var(--bc);color:var(--tx)}
+.cpe-button:disabled,.cpe-icon-button:disabled,.rp-key-toggle:disabled{cursor:wait;opacity:.58}
 .cpe-button.primary{border-color:var(--am);color:var(--am)}
 .cpe-button.danger{margin-right:auto;color:var(--rs)}
 .cpe-button.danger.armed{border-color:var(--rs);background:rgba(248,113,113,.08)}
 .cpe-button.subtle{flex-shrink:0;color:var(--tm)}
 @media(max-width:760px){.ms-left{width:150px}.cpe-form{grid-template-columns:minmax(0,1fr)}.cpe-section{grid-column:1}.cpe-model-grid,.cpe-advanced-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){
+  .model-split{height:auto;min-height:100%;flex-direction:column}
+  .ms-left{width:100%;max-height:148px;flex-shrink:0;border-right:0;border-bottom:1px solid var(--bd)}
+  .msl-list{min-height:38px;flex-direction:row;overflow-x:auto;overflow-y:hidden}
+  .msl-item{width:auto;min-width:132px;flex:0 0 auto;padding-left:4px}
+  .ms-left>.list-add-action-mount{display:flex;align-items:center;border-top:1px solid var(--bd)}
+  .ms-left>.list-add-action-mount .list-add-action{flex:0 0 auto}
+  .msl-custom-status{min-width:0;padding:4px 8px;overflow-wrap:anywhere}
+  .ms-right{width:100%;min-width:0;padding:10px 8px;overflow:visible}
+  .cpe-editor,.cpe-form,.cpe-section,.cpe-inline-row,.cpe-header-row,.cpe-model-main{min-width:0}
+  .cpe-actions{flex-wrap:wrap}
+  .cpe-model-grid,.cpe-advanced-grid{grid-template-columns:minmax(0,1fr)}
+  .cpe-json-field{grid-column:1}
+  .cpe-header-name{flex-basis:100%}
+}
 
 /* ─── Settings page (modal) ─────────────────────────────────── */
 .s-title{display:block;font-family:var(--fb);font-size:.95rem;font-weight:700;line-height:1.5;color:var(--tx);margin:0 0 4px;padding:2px 0 3px;overflow:visible}
