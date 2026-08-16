@@ -221,7 +221,12 @@ function expectHttpUrl(value: unknown, path: string): asserts value is string {
   if (typeof value !== "string") fail(path, "must be an absolute HTTP(S) URL");
   try {
     const parsed = new URL(value);
-    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname) {
+    if (
+      (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+      || !parsed.hostname
+      || parsed.username.length > 0
+      || parsed.password.length > 0
+    ) {
       fail(path, "must be an absolute HTTP(S) URL");
     }
   } catch {
@@ -235,7 +240,12 @@ function expectHttpUrlReference(value: unknown, baseUrl: string, path: string): 
   }
   try {
     const parsed = new URL(value, baseUrl);
-    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname) {
+    if (
+      (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+      || !parsed.hostname
+      || parsed.username.length > 0
+      || parsed.password.length > 0
+    ) {
       fail(path, "must be an HTTP(S) URL or relative URL reference");
     }
   } catch {

@@ -306,6 +306,19 @@ void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, succe
     for (const baseUrl of ["/relative", "ftp://example.test/models", "not a url"]) {
       assert.throws(() => validateCustomProviderDefinition(provider({ baseUrl })), /provider\.baseUrl/);
     }
+    for (const baseUrl of [
+      "https://user@api.example.test/v1",
+      "https://user:password@api.example.test/v1",
+    ]) {
+      assert.throws(() => validateCustomProviderDefinition(provider({ baseUrl })), /provider\.baseUrl/);
+      const unsafeDraft = {
+        ...provider({ baseUrl }),
+        apiKey: "draft-secret",
+        headers: [{ name: "X-Tenant", value: "tenant-secret" }],
+      };
+      delete unsafeDraft.apiKeyRef;
+      assert.throws(() => validateCustomProviderDraft(unsafeDraft), /provider\.baseUrl/);
+    }
     assert.equal(
       validateCustomProviderDefinition(provider({ modelDiscovery: "../models" })).modelDiscovery,
       "../models",
@@ -320,6 +333,20 @@ void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, succe
     for (const modelDiscovery of ["", "   ", "javascript:alert(1)", "data:text/plain,models", "ftp://example.test/models", "http://["]) {
       assert.throws(
         () => validateCustomProviderDefinition(provider({ modelDiscovery })),
+        /provider\.modelDiscovery/,
+      );
+    }
+    for (const modelDiscovery of [
+      "https://user@api.example.test/models",
+      "https://user:password@api.example.test/models",
+      "//user:password@api.example.test/models",
+    ]) {
+      assert.throws(
+        () => validateCustomProviderDefinition(provider({ modelDiscovery })),
+        /provider\.modelDiscovery/,
+      );
+      assert.throws(
+        () => validateCustomProviderDraft({ ...relativeDraft, modelDiscovery }),
         /provider\.modelDiscovery/,
       );
     }

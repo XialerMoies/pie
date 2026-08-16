@@ -175,6 +175,32 @@ describe("custom provider service", () => {
     }
   });
 
+  it("rejects URL userinfo before service network operations or persistence", async () => {
+    let networkCalls = 0;
+    const env = await fixture({
+      networkClient: {
+        testConnection: async () => { networkCalls += 1; return { ok: false }; },
+        discoverModels: async () => { networkCalls += 1; return { ids: [] }; },
+      },
+    });
+    try {
+      await assert.rejects(
+        () => env.service.testConnection(draft({ baseUrl: "https://user:password@api.example.test/v1" })),
+        (error) => error instanceof CustomProviderValidationError && error.fieldPath === "provider.baseUrl",
+      );
+      await assert.rejects(
+        () => env.service.discoverModels(draft({
+          modelDiscovery: "https://user:password@api.example.test/models",
+        })),
+        (error) => error instanceof CustomProviderValidationError && error.fieldPath === "provider.modelDiscovery",
+      );
+      assert.equal(networkCalls, 0);
+      assert.equal((await env.store.readSnapshot()).revision, 0);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
   it("creates, lists, updates, deletes, reveals only API keys, and syncs a model runtime", async () => {
     const env = await fixture();
     try {

@@ -1,4 +1,4 @@
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, type FetchFunction } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@xiamol/pi-coding-agent";
 
 import {
@@ -12,7 +12,6 @@ import { PiCustomProviderAdapter } from "./pi-custom-provider-adapter.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_DISCOVERY_BODY_BYTES = 64 * 1024;
-const MAX_ERROR_EXCERPT_BYTES = 1_024;
 const REDACTED = "[redacted]";
 
 type ConnectionErrorCode = Extract<ConnectionTestResult, { ok: false }>["code"];
@@ -22,7 +21,6 @@ export class ProviderNetworkError extends Error {
   constructor(
     public readonly code: ProviderNetworkErrorCode,
     message: string,
-    public readonly excerpt = "",
   ) {
     super(message);
     this.name = "ProviderNetworkError";
@@ -68,36 +66,6 @@ function redact(value: string, secrets: readonly string[]): string {
   let redacted = value;
   for (const secret of secrets) redacted = redacted.replaceAll(secret, REDACTED);
   return redacted;
-}
-
-function replaceBytes(value: Buffer, target: Buffer, replacement: Buffer): Buffer {
-  const chunks: Buffer[] = [];
-  let offset = 0;
-  let index = value.indexOf(target, offset);
-  while (index !== -1) {
-    chunks.push(value.subarray(offset, index), replacement);
-    offset = index + target.byteLength;
-    index = value.indexOf(target, offset);
-  }
-  if (offset === 0) return value;
-  chunks.push(value.subarray(offset));
-  return Buffer.concat(chunks);
-}
-
-function redactTruncatedExcerpt(value: Uint8Array, secrets: readonly string[]): string {
-  const replacement = Buffer.from(REDACTED, "utf8");
-  let redacted: Buffer<ArrayBufferLike> = Buffer.from(value);
-  const encodedSecrets = secrets.map((secret) => Buffer.from(secret, "utf8"));
-  for (const secret of encodedSecrets) redacted = replaceBytes(redacted, secret, replacement);
-  for (const secret of encodedSecrets) {
-    const maxPrefixLength = Math.min(secret.byteLength - 1, redacted.byteLength);
-    for (let prefixLength = maxPrefixLength; prefixLength > 0; prefixLength -= 1) {
-      if (!redacted.subarray(-prefixLength).equals(secret.subarray(0, prefixLength))) continue;
-      redacted = Buffer.concat([redacted.subarray(0, -prefixLength), replacement]);
-      break;
-    }
-  }
-  return truncateUtf8(redacted.toString("utf8"), MAX_ERROR_EXCERPT_BYTES);
 }
 
 function statusCode(error: unknown): number | undefined {
@@ -166,12 +134,10 @@ function classifyError(error: unknown, scope: AbortScope): ProviderNetworkErrorC
 function networkError(
   code: ProviderNetworkErrorCode,
   secrets: readonly string[],
-  excerpt = "",
 ): ProviderNetworkError {
   return new ProviderNetworkError(
     code,
     redact(stableMessage(code), secrets),
-    redact(excerpt, secrets),
   );
 }
 
@@ -235,41 +201,6 @@ async function readLimitedBody(response: Response, limit: number): Promise<strin
   }
 }
 
-async function readErrorExcerpt(response: Response, limit: number): Promise<Buffer> {
-  if (response.body === null) return Buffer.alloc(0);
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (size < limit) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const remaining = limit - size;
-      chunks.push(value.byteLength > remaining ? value.subarray(0, remaining) : value);
-      size += Math.min(value.byteLength, remaining);
-      if (value.byteLength > remaining || size === limit) {
-        await reader.cancel();
-        break;
-      }
-    }
-    return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-function truncateUtf8(value: string, limit: number): string {
-  let bytes = 0;
-  let truncated = "";
-  for (const codePoint of value) {
-    const codePointBytes = Buffer.byteLength(codePoint, "utf8");
-    if (bytes + codePointBytes > limit) break;
-    truncated += codePoint;
-    bytes += codePointBytes;
-  }
-  return truncated;
-}
-
 function parseModelIds(body: string, secrets: readonly string[]): string[] {
   let parsed: unknown;
   try {
@@ -312,6 +243,54 @@ function connectionDefinition(input: ResolvedCustomProviderDraft): CustomProvide
       name,
       credentialRef: `credential:network-header-${index}` as const,
     })),
+  };
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Aborted", "AbortError");
+}
+
+function raceWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const settle = (callback: (value: T | PromiseLike<T>) => void, value: T | PromiseLike<T>) => {
+      signal.removeEventListener("abort", onAbort);
+      callback(value);
+    };
+    const fail = (error: unknown) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+    };
+    const onAbort = () => fail(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then((value) => settle(resolve, value), fail);
+  });
+}
+
+function connectionFetch(
+  fetchImplementation: FetchFunction,
+  baseUrl: string,
+  secrets: readonly string[],
+): FetchFunction {
+  const origin = new URL(baseUrl).origin;
+  return async (input, init) => {
+    let request: Request;
+    try {
+      request = new Request(input, { ...init, redirect: "manual" });
+      if (new URL(request.url).origin !== origin) throw networkError("upstream", secrets);
+    } catch (error) {
+      if (error instanceof ProviderNetworkError) throw error;
+      throw networkError("upstream", secrets);
+    }
+    const response = await fetchImplementation(request, { redirect: "manual" });
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      throw networkError("upstream", secrets);
+    }
+    return response;
   };
 }
 
@@ -373,9 +352,9 @@ export class ProviderNetworkClient {
         throw networkError("upstream", secrets);
       }
       if (!response.ok) {
-        const excerpt = await readErrorExcerpt(response, MAX_ERROR_EXCERPT_BYTES);
+        await response.body?.cancel();
         const code = codeForStatus(response.status);
-        throw networkError(code, secrets, redactTruncatedExcerpt(excerpt, secrets));
+        throw networkError(code, secrets);
       }
       const body = await readLimitedBody(response, MAX_DISCOVERY_BODY_BYTES);
       return { ids: parseModelIds(body, secrets) };
@@ -384,7 +363,6 @@ export class ProviderNetworkClient {
         throw new ProviderNetworkError(
           error.code,
           redact(error.message, secrets),
-          redact(error.excerpt, secrets),
         );
       }
       const code = classifyError(error, scope);
@@ -404,35 +382,47 @@ export class ProviderNetworkClient {
     const scope = createAbortScope(signal, this.timeoutMs);
     const started = performance.now();
     try {
-      assertSupportedProtocol(input.provider.protocol, secrets);
-      if (modelId === undefined) throw networkError("unsupported_response", secrets);
-      const runtime = await this.#runtimeFactory({
-        credentials: new InMemoryCredentialStore(),
-        modelsPath: null,
-        refreshOnCreate: false,
-      });
-      const adapter = this.#adapterFactory();
-      const prepared = adapter.prepare(connectionDefinition(input), input.secrets);
-      await adapter.replaceRuntimeProviders(runtime as ModelRuntime, [prepared]);
-      const selectedModel = runtime.getModel(providerId, modelId);
-      if (selectedModel === undefined) throw networkError("upstream", secrets);
-      const response = await runtime.completeSimple(
-        selectedModel,
-        { messages: [{ role: "user", content: "ping", timestamp: Date.now() }] },
-        { signal: scope.signal },
-      );
-      if (response.stopReason === "error" || response.stopReason === "aborted") {
-        const error = new Error(response.errorMessage ?? response.stopReason);
-        if (response.stopReason === "aborted") (error as Error & { code?: string }).code = "ABORT_ERR";
-        throw error;
-      }
-      return {
-        ok: true,
-        providerId,
-        modelId,
-        latencyMs: Math.max(0, Math.round(performance.now() - started)),
-        usage: adapter.toProviderUsage(response.usage),
-      };
+      const operation = (async (): Promise<ConnectionTestResult> => {
+        throwIfAborted(scope.signal);
+        assertSupportedProtocol(input.provider.protocol, secrets);
+        if (modelId === undefined) throw networkError("unsupported_response", secrets);
+        const runtime = await this.#runtimeFactory({
+          credentials: new InMemoryCredentialStore(),
+          modelsPath: null,
+          refreshOnCreate: false,
+        });
+        throwIfAborted(scope.signal);
+        const adapter = this.#adapterFactory();
+        const prepared = adapter.prepare(connectionDefinition(input), input.secrets);
+        throwIfAborted(scope.signal);
+        await adapter.replaceRuntimeProviders(runtime as ModelRuntime, [prepared]);
+        throwIfAborted(scope.signal);
+        const selectedModel = runtime.getModel(providerId, modelId);
+        if (selectedModel === undefined) throw networkError("upstream", secrets);
+        const response = await runtime.completeSimple(
+          selectedModel,
+          { messages: [{ role: "user", content: "ping", timestamp: Date.now() }] },
+          {
+            signal: scope.signal,
+            fetch: connectionFetch(this.#fetch, input.provider.baseUrl, secrets),
+            maxRetries: 0,
+          },
+        );
+        throwIfAborted(scope.signal);
+        if (response.stopReason === "error" || response.stopReason === "aborted") {
+          const error = new Error(response.errorMessage ?? response.stopReason);
+          if (response.stopReason === "aborted") (error as Error & { code?: string }).code = "ABORT_ERR";
+          throw error;
+        }
+        return {
+          ok: true,
+          providerId,
+          modelId,
+          latencyMs: Math.max(0, Math.round(performance.now() - started)),
+          usage: adapter.toProviderUsage(response.usage),
+        };
+      })();
+      return await raceWithAbort(operation, scope.signal);
     } catch (error) {
       const code = error instanceof ProviderNetworkError ? error.code : classifyError(error, scope);
       const connectionCode = code === "unsupported_response" ? "upstream" : code;

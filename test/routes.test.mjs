@@ -2215,6 +2215,39 @@ describe("custom provider settings routes", () => {
     }
     assert.equal((await store.readSnapshot()).revision, 0);
   });
+
+  it("rejects URL userinfo in network drafts at the real route boundary", async () => {
+    let networkCalls = 0;
+    const ctx = customContext({
+      customProviderService: service({
+        testConnection: async () => { networkCalls += 1; return { ok: false }; },
+        discoverModels: async () => { networkCalls += 1; return { ids: [] }; },
+      }),
+    });
+    const cases = [
+      ["/api/custom-providers/test", {
+        ...providerDraft,
+        baseUrl: "https://user:password@api.example.test/v1",
+      }, "provider.baseUrl"],
+      ["/api/custom-providers/discover-models", {
+        ...providerDraft,
+        modelDiscovery: "//user:password@api.example.test/models",
+      }, "provider.modelDiscovery"],
+    ];
+
+    for (const [url, provider, fieldPath] of cases) {
+      const result = await callHandler(handleSettings, "POST", url, { provider }, ctx);
+      assert.equal(result.status, 400);
+      assert.deepEqual(parseJSON(result.body), {
+        error: "Invalid custom provider request",
+        code: "invalid_request",
+        fieldPath,
+      });
+      assert.equal(result.body.includes("user"), false);
+      assert.equal(result.body.includes("password"), false);
+    }
+    assert.equal(networkCalls, 0);
+  });
 });
 
 describe("provider reference writer locking", () => {

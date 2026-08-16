@@ -7,6 +7,7 @@ import {
   ProviderNetworkClient,
   ProviderNetworkError,
 } from "../src/model-provider/provider-network-client.ts";
+import { PROVIDER_PROTOCOLS } from "../src/model-provider/contracts.ts";
 
 const model = {
   id: "model-a",
@@ -212,7 +213,7 @@ describe("ProviderNetworkClient model discovery", () => {
     }
   });
 
-  it("redacts API key and custom Header values from messages and truncated excerpts", async () => {
+  it("does not expose upstream response excerpts on public errors", async () => {
     const apiKey = "api-key-network-fixture";
     const headerValue = "header-network-fixture";
     let receivedHeaders;
@@ -230,15 +231,15 @@ describe("ProviderNetworkClient model discovery", () => {
       assert.equal(receivedHeaders["x-tenant"], headerValue);
       assert.equal(error.message.includes(apiKey), false);
       assert.equal(error.message.includes(headerValue), false);
-      assert.equal(error.excerpt.includes(apiKey), false);
-      assert.equal(error.excerpt.includes(headerValue), false);
-      assert.ok(Buffer.byteLength(error.excerpt, "utf8") <= 1_024);
+      assert.equal(Object.hasOwn(error, "excerpt"), false);
+      assert.equal(JSON.stringify(error).includes(apiKey), false);
+      assert.equal(JSON.stringify(error).includes(headerValue), false);
     } finally {
       await server.close();
     }
   });
 
-  it("redacts secret prefixes split by the error excerpt boundary", async () => {
+  it("does not expose secrets split by the former error excerpt boundary", async () => {
     for (const [kind, secret] of [
       ["apiKey", "APIKE-boundary-secret-value"],
       ["header", "HDRSE-boundary-secret-value"],
@@ -256,16 +257,16 @@ describe("ProviderNetworkClient model discovery", () => {
         const error = await captureError(() => new ProviderNetworkClient().discoverModels(draft));
 
         assert.equal(error.code, "upstream");
-        assert.equal(error.excerpt.includes(secret), false);
-        assert.equal(error.excerpt.includes(secret.slice(0, 5)), false);
-        assert.ok(Buffer.byteLength(error.excerpt, "utf8") <= 1_024);
+        assert.equal(Object.hasOwn(error, "excerpt"), false);
+        assert.equal(JSON.stringify(error).includes(secret), false);
+        assert.equal(JSON.stringify(error).includes(secret.slice(0, 5)), false);
       } finally {
         await server.close();
       }
     }
   });
 
-  it("redacts a multibyte secret split inside a UTF-8 code point at the excerpt boundary", async () => {
+  it("does not expose a multibyte secret split at the former excerpt boundary", async () => {
     const secret = "Aé-boundary-secret";
     const server = await fixture((_req, res) => {
       res.writeHead(500, { "content-type": "text/plain" });
@@ -277,9 +278,48 @@ describe("ProviderNetworkClient model discovery", () => {
       ));
 
       assert.equal(error.code, "upstream");
-      assert.equal(error.excerpt.includes(secret), false);
-      assert.equal(error.excerpt.includes(secret.slice(0, 1)), false);
-      assert.ok(Buffer.byteLength(error.excerpt, "utf8") <= 1_024);
+      assert.equal(Object.hasOwn(error, "excerpt"), false);
+      assert.equal(JSON.stringify(error).includes(secret), false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not serialize raw, percent-encoded, or JSON-escaped secret variants", async () => {
+    const apiKey = "api/key?tenant=one&scope=%secure";
+    const headerValue = 'tenant/one?filter="private"\\segment';
+    const body = [
+      apiKey,
+      headerValue,
+      encodeURIComponent(apiKey),
+      encodeURIComponent(headerValue),
+      JSON.stringify(apiKey).slice(1, -1),
+      JSON.stringify(headerValue).slice(1, -1),
+    ].join("|");
+    const server = await fixture((_req, res) => {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(body);
+    });
+    try {
+      const error = await captureError(() => new ProviderNetworkClient().discoverModels(resolvedDraft(
+        server.origin,
+        { secrets: { apiKey, headers: { "X-Tenant": headerValue } } },
+      )));
+      const serialized = JSON.stringify(error);
+
+      assert.equal(error.code, "upstream");
+      assert.equal(Object.hasOwn(error, "excerpt"), false);
+      for (const variant of [
+        apiKey,
+        headerValue,
+        encodeURIComponent(apiKey),
+        encodeURIComponent(headerValue),
+        JSON.stringify(apiKey).slice(1, -1),
+        JSON.stringify(headerValue).slice(1, -1),
+      ]) {
+        assert.equal(serialized.includes(variant), false, `serialized error leaked ${variant}`);
+      }
+      assert.deepEqual(Object.keys(error).sort(), ["code", "name"]);
     } finally {
       await server.close();
     }
@@ -300,6 +340,77 @@ describe("ProviderNetworkClient model discovery", () => {
 });
 
 describe("ProviderNetworkClient isolated connection test", () => {
+  it("rejects every redirect status without forwarding credentials to another origin", async () => {
+    for (const status of [301, 302, 303, 307, 308]) {
+      const forwarded = [];
+      const target = await fixture((req, res) => {
+        forwarded.push({ authorization: req.headers.authorization, tenant: req.headers["x-tenant"] });
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end("data: [DONE]\n\n");
+      });
+      const source = await fixture((req, res) => {
+        assert.equal(req.headers.authorization, "Bearer api-key-network-fixture");
+        assert.equal(req.headers["x-tenant"], "header-network-fixture");
+        res.writeHead(status, { location: `${target.origin}/captured` });
+        res.end();
+      });
+      try {
+        const result = await new ProviderNetworkClient().testConnection(resolvedDraft(`${source.origin}/v1`));
+        assert.equal(result.ok, false, `status ${status} must fail`);
+        assert.equal(result.code, "upstream");
+        assert.deepEqual(forwarded, [], `status ${status} forwarded credentials cross-origin`);
+      } finally {
+        await source.close();
+        await target.close();
+      }
+    }
+  });
+
+  it("uses the request-local manual-redirect transport for all six custom protocols", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchCalls = [];
+    const runtime = {
+      getModel: (providerId, modelId) => ({ provider: providerId, id: modelId }),
+      async completeSimple(_selectedModel, _context, options) {
+        assert.equal(typeof options.fetch, "function");
+        try {
+          await options.fetch("https://api.example.test/v1/request", { method: "POST" });
+        } catch (error) {
+          return {
+            stopReason: "error",
+            errorMessage: error.message,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          };
+        }
+        assert.fail("redirect transport must reject");
+      },
+    };
+    const client = new ProviderNetworkClient({
+      fetch: async (input, init) => {
+        fetchCalls.push({ url: new Request(input, init).url, redirect: init?.redirect });
+        return new Response(null, { status: 307, headers: { location: "https://other.example.test/" } });
+      },
+      runtimeFactory: async () => runtime,
+      adapterFactory: () => ({
+        prepare: (definition) => ({ providerId: definition.id, models: definition.models }),
+        replaceRuntimeProviders: async () => {},
+        toProviderUsage: (usage) => usage,
+      }),
+    });
+
+    for (const protocol of PROVIDER_PROTOCOLS) {
+      const result = await client.testConnection(resolvedDraft("https://api.example.test/v1/", {
+        provider: { protocol },
+      }));
+      assert.equal(result.ok, false, protocol);
+      assert.equal(result.code, "upstream", protocol);
+    }
+
+    assert.equal(globalThis.fetch, originalFetch);
+    assert.equal(fetchCalls.length, PROVIDER_PROTOCOLS.length);
+    assert.deepEqual(fetchCalls.map((entry) => entry.redirect), PROVIDER_PROTOCOLS.map(() => "manual"));
+  });
+
   it("runs the default PI runtime and adapter against an isolated local provider", async () => {
     let requestBody;
     const server = await fixture(async (req, res) => {
@@ -428,5 +539,62 @@ describe("ProviderNetworkClient isolated connection test", () => {
     assert.equal(result.message.includes(headerValue), false);
     assert.equal(JSON.stringify(result).includes("authorization"), false);
     assert.equal(JSON.stringify(result).includes("full body"), false);
+  });
+
+  it("times out while runtime creation is unresolved", async () => {
+    const client = new ProviderNetworkClient({
+      timeoutMs: 25,
+      runtimeFactory: () => new Promise(() => {}),
+      adapterFactory: () => assert.fail("adapter must not be created after timeout"),
+    });
+    const started = Date.now();
+
+    const result = await Promise.race([
+      client.testConnection(resolvedDraft("https://api.example.test/v1/")),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("connection test hung")), 500)),
+    ]);
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "timeout");
+    assert.ok(Date.now() - started < 400);
+  });
+
+  it("does not continue a delayed runtime pipeline after timeout or caller abort", async () => {
+    for (const cancellation of ["timeout", "caller"]) {
+      let resolveRuntime;
+      const events = [];
+      const runtimePromise = new Promise((resolve) => { resolveRuntime = resolve; });
+      const controller = new AbortController();
+      const client = new ProviderNetworkClient({
+        timeoutMs: cancellation === "timeout" ? 20 : 1_000,
+        runtimeFactory: () => runtimePromise,
+        adapterFactory: () => {
+          events.push("adapter");
+          return {
+            prepare: () => { events.push("prepare"); },
+            replaceRuntimeProviders: async () => { events.push("replace"); },
+            toProviderUsage: (usage) => usage,
+          };
+        },
+      });
+      const pending = client.testConnection(
+        resolvedDraft("https://api.example.test/v1/"),
+        controller.signal,
+      );
+      if (cancellation === "caller") controller.abort();
+
+      const result = await Promise.race([
+        pending,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`${cancellation} did not settle`)), 500)),
+      ]);
+      assert.equal(result.ok, false);
+      assert.equal(result.code, cancellation === "timeout" ? "timeout" : "aborted");
+      resolveRuntime({
+        getModel: () => { events.push("getModel"); },
+        completeSimple: async () => { events.push("completeSimple"); },
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(events, []);
+    }
   });
 });
