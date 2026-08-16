@@ -354,6 +354,7 @@ describe("settings DOM boundary", () => {
     editor.mount(host, customProvider(), 4);
 
     assert.strictEqual(host.querySelector("#cpe-id")?.readOnly, true);
+    assert.strictEqual(host.querySelector(".cpe-header-name")?.readOnly, true);
     assert.strictEqual(host.querySelector(".cpe-header-status")?.textContent, "已保存");
     assert.strictEqual(host.querySelector(".cpe-header-value")?.value, "");
     assert.match(host.querySelector(".cpe-header-value")?.placeholder ?? "", /留空保留/);
@@ -449,7 +450,7 @@ describe("settings DOM boundary", () => {
     assert.strictEqual("apiKey" in bodies[1].provider, false);
   });
 
-  it("keeps configured Header references until an explicit remove action", async () => {
+  it("keeps configured Header names immutable and replaces them through explicit remove plus add", async () => {
     const host = document.createElement("div");
     document.body.append(host);
     const bodies = [];
@@ -460,16 +461,41 @@ describe("settings DOM boundary", () => {
     const editor = createCustomProviderEditor();
     editor.mount(host, customProvider(), 8);
 
-    setInput(".cpe-header-name", "");
+    const configuredName = host.querySelector(".cpe-header-name");
+    assert.strictEqual(configuredName.readOnly, true);
+    assert.match(configuredName.title, /删除.*新增/);
+    assert.match(configuredName.getAttribute("aria-label") ?? "", /已配置/);
+    setInput(".cpe-header-name", "X-Renamed");
     await editor.save();
-    assert.strictEqual(bodies.length, 0);
-    assert.strictEqual(host.querySelectorAll(".cpe-header-row").length, 1);
-    assert.strictEqual(host.querySelector(".cpe-header-row")?.dataset.originalName, "X-Tenant");
-    assert.match(host.querySelector(".cpe-header-error")?.textContent ?? "", /Header/);
+    assert.deepStrictEqual(bodies[0].provider.headers, [{ name: "X-Tenant" }]);
 
     host.querySelector('[data-cpe-action="remove-header"]').click();
+    host.querySelector('[data-cpe-action="add-header"]').click();
+    const newName = host.querySelector('.cpe-header-row:not([data-configured="true"]) .cpe-header-name');
+    const newValue = host.querySelector('.cpe-header-row:not([data-configured="true"]) .cpe-header-value');
+    assert.strictEqual(newName.readOnly, false);
+    newName.value = "X-New-Tenant";
+    newName.dispatchEvent(new win.Event("input", { bubbles: true }));
+    newValue.value = "new-secret";
+    newValue.dispatchEvent(new win.Event("input", { bubbles: true }));
     await editor.save();
-    assert.deepStrictEqual(bodies[0].provider.headers, [{ name: "X-Tenant", remove: true }]);
+    assert.deepStrictEqual(bodies[1].provider.headers, [
+      { name: "X-Tenant", remove: true },
+      { name: "X-New-Tenant", value: "new-secret" },
+    ]);
+  });
+
+  it("renders hostile configured Header names as inert readonly values", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const hostile = '<img id="header-name-xss" src=x>';
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider({ headers: [{ name: hostile, configured: true }] }), 8);
+
+    const name = host.querySelector(".cpe-header-name");
+    assert.strictEqual(name.value, hostile);
+    assert.strictEqual(name.readOnly, true);
+    assert.strictEqual(host.querySelector("#header-name-xss"), null);
   });
 
   it("blocks unconfigured Headers with an empty or invalid name without dropping the row", async () => {
@@ -483,6 +509,7 @@ describe("settings DOM boundary", () => {
     const editor = createCustomProviderEditor();
     editor.mount(host, customProvider({ headers: [] }), 8);
     host.querySelector('[data-cpe-action="add-header"]').click();
+    assert.strictEqual(host.querySelector(".cpe-header-name")?.readOnly, false);
     setInput(".cpe-header-value", "xy");
 
     await editor.save();

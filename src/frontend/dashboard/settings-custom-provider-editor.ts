@@ -397,6 +397,11 @@ export class SettingsCustomProviderEditor {
     row.dataset.configured = String(configured);
     const nameInput = cpeInput('', 'cpe-input cpe-header-name', name);
     nameInput.placeholder = 'Header name';
+    if (configured) {
+      nameInput.readOnly = true;
+      nameInput.title = '如需修改名称，请删除此 Header 后新增';
+      nameInput.setAttribute('aria-label', '已配置 Header 名称，只读');
+    }
     const valueInput = cpeInput('', 'cpe-input cpe-header-value', '', 'password');
     valueInput.placeholder = configured ? '留空保留已保存值' : 'Header value';
     row.append(nameInput, valueInput);
@@ -538,12 +543,15 @@ export class SettingsCustomProviderEditor {
     const headers: CustomProviderDraft['headers'] = [];
     const headerNames = new Set<string>();
     for (const row of this.root.querySelectorAll<HTMLElement>('.cpe-header-row')) {
-      const headerName = row.querySelector<HTMLInputElement>('.cpe-header-name')?.value.trim() ?? '';
       const originalName = row.dataset.originalName ?? '';
       if (row.dataset.removed === 'true') {
         if (originalName) headers.push({ name: originalName, remove: true });
         continue;
       }
+      const configured = row.dataset.configured === 'true';
+      const headerName = configured
+        ? originalName
+        : row.querySelector<HTMLInputElement>('.cpe-header-name')?.value.trim() ?? '';
       const error = row.querySelector<HTMLElement>('.cpe-header-error');
       const normalizedName = headerName.toLowerCase();
       let message = '';
