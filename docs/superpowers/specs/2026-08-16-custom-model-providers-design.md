@@ -100,7 +100,7 @@ Settings UI
 
 高级字段：
 
-- 输入、输出、缓存读写价格。
+- 输入、输出、缓存读写价格；币种固定为 USD，计价单位固定为每百万 Token，与 PI `ModelCostRates` 和后续 CostLedger 契约一致。
 - 采样参数。
 - 受控的协议兼容选项。
 
