@@ -1,0 +1,280 @@
+import assert from "node:assert/strict"
+import { describe, it } from "node:test"
+
+import { AgentRuntime } from "../src/agent/runtime.ts"
+import { CustomProviderRuntimeCoordinator } from "../src/model-provider/runtime-coordinator.ts"
+import { handleChat } from "../src/server/routes/chat.ts"
+import { makeReq, makeResWithEvents } from "./helpers/http.mjs"
+
+function snapshot(revision, providerIds = []) {
+  return {
+    schemaVersion: 1,
+    revision,
+    providers: providerIds.map((id) => ({ id })),
+  }
+}
+
+function createHarness(snapshots = [snapshot(0)]) {
+  const reads = []
+  const resolutions = []
+  const preparations = []
+  const applications = []
+  let readIndex = 0
+  const store = {
+    async readSnapshot() {
+      reads.push(readIndex)
+      return snapshots[Math.min(readIndex++, snapshots.length - 1)]
+    },
+    async resolveSecrets(provider) {
+      resolutions.push(provider.id)
+      return { apiKey: `secret:${provider.id}`, headers: {} }
+    },
+  }
+  const adapter = {
+    prepare(provider, secrets) {
+      preparations.push(provider.id)
+      return { providerId: provider.id, secret: secrets.apiKey }
+    },
+    replaceRuntimeProviders(runtime, prepared) {
+      applications.push(prepared.map((provider) => provider.providerId))
+      runtime.providers = prepared
+    },
+  }
+  const coordinator = new CustomProviderRuntimeCoordinator({ store, adapter })
+  const runtime = { providers: [] }
+  return { coordinator, runtime, store, adapter, reads, resolutions, preparations, applications }
+}
+
+describe("CustomProviderRuntimeCoordinator", () => {
+  it("loads revision zero once and skips an unchanged revision", async () => {
+    const harness = createHarness([snapshot(0)])
+
+    assert.equal(await harness.coordinator.sync(harness.runtime), 0)
+    assert.equal(await harness.coordinator.sync(harness.runtime), 0)
+
+    assert.equal(harness.coordinator.loadedRevision(harness.runtime), 0)
+    assert.equal(harness.reads.length, 2)
+    assert.deepEqual(harness.applications, [[]])
+  })
+
+  it("does not resolve or prepare providers for an unchanged revision", async () => {
+    const harness = createHarness([snapshot(4, ["first"]), snapshot(4, ["changed-but-stale"])])
+
+    assert.equal(await harness.coordinator.sync(harness.runtime), 4)
+    assert.equal(await harness.coordinator.sync(harness.runtime), 4)
+
+    assert.deepEqual(harness.resolutions, ["first"])
+    assert.deepEqual(harness.preparations, ["first"])
+    assert.deepEqual(harness.applications, [["first"]])
+  })
+
+  it("shares one promise, store read, and apply across concurrent calls", async () => {
+    let releaseRead
+    let readCount = 0
+    const pendingSnapshot = new Promise((resolve) => { releaseRead = resolve })
+    const applications = []
+    const store = {
+      readSnapshot() {
+        readCount += 1
+        return pendingSnapshot
+      },
+      async resolveSecrets(provider) {
+        return { apiKey: `secret:${provider.id}`, headers: {} }
+      },
+    }
+    const adapter = {
+      prepare(provider) { return { providerId: provider.id } },
+      replaceRuntimeProviders(_runtime, prepared) {
+        applications.push(prepared.map((provider) => provider.providerId))
+      },
+    }
+    const coordinator = new CustomProviderRuntimeCoordinator({ store, adapter })
+    const runtime = {}
+
+    const first = coordinator.sync(runtime)
+    const second = coordinator.sync(runtime)
+    const third = coordinator.sync(runtime)
+    assert.strictEqual(first, second)
+    assert.strictEqual(second, third)
+
+    releaseRead(snapshot(3, ["shared"]))
+    assert.deepEqual(await Promise.all([first, second, third]), [3, 3, 3])
+    assert.equal(readCount, 1)
+    assert.deepEqual(applications, [["shared"]])
+  })
+
+  it("does not let an older reentrant load overwrite a newer generation", async () => {
+    let coordinator
+    let runtime
+    let nestedSync
+    let releaseOlder
+    let reads = 0
+    const olderSnapshot = new Promise((resolve) => { releaseOlder = resolve })
+    const applications = []
+    const store = {
+      readSnapshot() {
+        reads += 1
+        if (reads === 1) {
+          nestedSync = coordinator.sync(runtime)
+          return olderSnapshot
+        }
+        return Promise.resolve(snapshot(2, ["newer"]))
+      },
+      async resolveSecrets(provider) {
+        return { apiKey: `secret:${provider.id}`, headers: {} }
+      },
+    }
+    const adapter = {
+      prepare(provider) { return { providerId: provider.id } },
+      replaceRuntimeProviders(target, prepared) {
+        const ids = prepared.map((provider) => provider.providerId)
+        applications.push(ids)
+        target.providers = ids
+      },
+    }
+    coordinator = new CustomProviderRuntimeCoordinator({ store, adapter })
+    runtime = { providers: [] }
+
+    const olderSync = coordinator.sync(runtime)
+    assert.equal(await nestedSync, 2)
+    releaseOlder(snapshot(1, ["older"]))
+
+    assert.equal(await olderSync, 2)
+    assert.equal(coordinator.loadedRevision(runtime), 2)
+    assert.deepEqual(runtime.providers, ["newer"])
+    assert.deepEqual(applications, [["newer"]])
+  })
+
+  it("keeps the loaded revision and prior providers when apply fails, then retries", async () => {
+    const harness = createHarness([
+      snapshot(1, ["stable"]),
+      snapshot(2, ["replacement"]),
+      snapshot(2, ["replacement"]),
+    ])
+
+    assert.equal(await harness.coordinator.sync(harness.runtime), 1)
+    const stableProviders = harness.runtime.providers
+    const replace = harness.adapter.replaceRuntimeProviders
+    let failNext = true
+    harness.adapter.replaceRuntimeProviders = (runtime, prepared) => {
+      if (failNext) {
+        failNext = false
+        throw new Error("apply failed")
+      }
+      replace(runtime, prepared)
+    }
+
+    await assert.rejects(harness.coordinator.sync(harness.runtime), /apply failed/)
+    assert.equal(harness.coordinator.loadedRevision(harness.runtime), 1)
+    assert.strictEqual(harness.runtime.providers, stableProviders)
+
+    assert.equal(await harness.coordinator.sync(harness.runtime), 2)
+    assert.equal(harness.coordinator.loadedRevision(harness.runtime), 2)
+    assert.deepEqual(harness.runtime.providers.map((provider) => provider.providerId), ["replacement"])
+  })
+})
+
+describe("AgentRuntime custom provider synchronization", () => {
+  it("returns zero when no synchronization hook is configured", async () => {
+    const runtime = Object.create(AgentRuntime.prototype)
+    runtime.config = {}
+
+    assert.equal(await runtime.syncModelProviders(), 0)
+  })
+
+  it("deduplicates a streaming refresh and rebinds a changed active model", async () => {
+    let releaseIdle
+    const idle = new Promise((resolve) => { releaseIdle = resolve })
+    const activeModel = { provider: "custom", id: "active" }
+    const refreshedModel = { provider: "custom", id: "active" }
+    const events = []
+    const session = {
+      isStreaming: true,
+      model: activeModel,
+      async waitForIdle() {
+        events.push("wait")
+        await idle
+        this.isStreaming = false
+      },
+      async setModel(model) {
+        events.push("set")
+        this.model = model
+      },
+    }
+    const runtime = Object.create(AgentRuntime.prototype)
+    runtime.session = session
+    runtime.modelRuntime = { kind: "runtime" }
+    runtime.modelRegistry = {
+      find(provider, id) {
+        events.push(`find:${provider}/${id}`)
+        return refreshedModel
+      },
+    }
+    runtime.config = {
+      async syncModelProviders(modelRuntime) {
+        events.push("sync")
+        assert.strictEqual(modelRuntime, runtime.modelRuntime)
+        return 7
+      },
+    }
+
+    const background = runtime.syncModelProviders()
+    const foreground = runtime.syncModelProviders()
+    assert.strictEqual(background, foreground)
+    await Promise.resolve()
+    assert.deepEqual(events, ["wait"])
+
+    releaseIdle()
+    assert.deepEqual(await Promise.all([background, foreground]), [7, 7])
+    assert.deepEqual(events, ["wait", "sync", "find:custom/active", "set"])
+    assert.strictEqual(session.model, refreshedModel)
+  })
+
+  it("makes foreground chat await an in-flight background refresh", async () => {
+    let releaseIdle
+    const idle = new Promise((resolve) => { releaseIdle = resolve })
+    const model = { provider: "custom", id: "active" }
+    const events = []
+    const session = {
+      isStreaming: true,
+      model,
+      async waitForIdle() {
+        events.push("wait")
+        await idle
+        this.isStreaming = false
+      },
+      async prompt(message) {
+        events.push(`prompt:${message}`)
+      },
+    }
+    const runtime = Object.create(AgentRuntime.prototype)
+    runtime.session = session
+    runtime.currentWorkspace = process.cwd()
+    runtime.modelRuntime = {}
+    runtime.modelRegistry = { find: () => model }
+    runtime.config = {
+      async syncModelProviders() {
+        events.push("sync")
+        return 5
+      },
+    }
+    const chatStream = {}
+    const response = makeResWithEvents()
+
+    const background = runtime.syncModelProviders()
+    const handled = await handleChat(
+      makeReq("POST", "/api/chat", { message: "hello" }),
+      response,
+      { runtime, chatStream, paths: { APP_ROOT: process.cwd() } },
+    )
+    assert.equal(handled, true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(events, ["wait"])
+
+    releaseIdle()
+    await background
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(events, ["wait", "sync", "prompt:hello"])
+    assert.equal(response._status, 200)
+  })
+})

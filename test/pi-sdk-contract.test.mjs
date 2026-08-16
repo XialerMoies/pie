@@ -63,10 +63,40 @@ test("type-checks model provider production modules from the root config", async
 test("wires main and subagent sessions through ModelRuntime", async () => {
   const runtimeSource = await readFile(resolve("src/agent/runtime.ts"), "utf8")
   const subagentSource = await readFile(resolve("src/server/subagent-session.ts"), "utf8")
+  const chatSource = await readFile(resolve("src/server/routes/chat.ts"), "utf8")
+  const modelsSource = await readFile(resolve("src/server/routes/settings/models.ts"), "utf8")
 
   assert.match(runtimeSource, /ModelRuntime\.create\(/)
   assert.match(runtimeSource, /modelRuntime:\s*this\.modelRuntime/)
   assert.doesNotMatch(runtimeSource, /\bAuthStorage\b/)
   assert.match(subagentSource, /modelRuntime:\s*runtime\.modelRuntime/)
   assert.doesNotMatch(subagentSource, /authStorage:\s*runtime\.authStorage/)
+
+  const createRuntime = runtimeSource.indexOf("ModelRuntime.create(")
+  const initSync = runtimeSource.indexOf("syncModelProviders?.(this.modelRuntime)", createRuntime)
+  const createRegistry = runtimeSource.indexOf("new ModelRegistry(this.modelRuntime)", createRuntime)
+  const createMainSession = runtimeSource.indexOf("createAgentSession({", createRuntime)
+  assert.ok(createRuntime >= 0 && initSync > createRuntime)
+  assert.ok(createRegistry > initSync && createMainSession > initSync)
+
+  const subagentSync = subagentSource.indexOf("await runtime.syncModelProviders()")
+  assert.ok(subagentSync >= 0)
+  assert.ok(subagentSource.indexOf("resolveModel(", subagentSync) > subagentSync)
+  assert.ok(subagentSource.indexOf("createSession({", subagentSync) > subagentSync)
+
+  const chatRoute = chatSource.indexOf('url === "/api/chat"')
+  const chatSync = chatSource.indexOf("await runtime.syncModelProviders", chatRoute)
+  const captureChatSession = chatSource.indexOf("const session = runtime.session", chatRoute)
+  const prompt = chatSource.indexOf("session.prompt(", chatRoute)
+  assert.ok(chatSync > chatRoute && captureChatSession > chatSync && prompt > captureChatSession)
+
+  const listRoute = modelsSource.indexOf('url === "/api/models"')
+  const listSync = modelsSource.indexOf("await runtime.syncModelProviders", listRoute)
+  const listRegistry = modelsSource.indexOf("runtime.modelRegistry", listRoute)
+  assert.ok(listSync > listRoute && listRegistry > listSync)
+
+  const switchRoute = modelsSource.indexOf('url === "/api/model/switch"')
+  const switchSync = modelsSource.indexOf("await runtime.syncModelProviders", switchRoute)
+  const switchFind = modelsSource.indexOf(".find(provider, modelId)", switchRoute)
+  assert.ok(switchSync > switchRoute && switchFind > switchSync)
 })

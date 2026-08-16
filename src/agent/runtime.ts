@@ -43,6 +43,7 @@ export interface RuntimeConfig {
   getSubagentDefinitions?: ToolContext["getSubagentDefinitions"]
   getSubagentLimits?: ToolContext["getSubagentLimits"]
   delegateTasks?: ToolContext["delegateTasks"]
+  syncModelProviders?: (runtime: ModelRuntime) => Promise<number>
 }
 
 type RuntimeToolExtraContext = Pick<
@@ -135,6 +136,7 @@ export class AgentRuntime {
   private _workspaceChangeSubscriptions = new Set<WorkspaceChangeCallback>()
   private _transitionTail: Promise<void> = Promise.resolve()
   private _pendingOpens = new Map<string, Promise<void>>()
+  private _modelProviderSync?: Promise<number>
 
   private constructor() {}
 
@@ -152,6 +154,32 @@ export class AgentRuntime {
 
   getContextUsageSnapshot(): ContextUsageSnapshot | undefined {
     return calculateContextUsageSnapshot(this.session)
+  }
+
+  syncModelProviders(): Promise<number> {
+    const sync = this.config.syncModelProviders
+    if (!sync) return Promise.resolve(0)
+    if (this._modelProviderSync) return this._modelProviderSync
+
+    const operation = Promise.resolve().then(async () => {
+      if (this._session?.isStreaming) await this._session.waitForIdle()
+      const session = this._session
+      const activeModel = session?.model
+      const revision = await sync(this.modelRuntime)
+      if (activeModel && session && this._session === session) {
+        const refreshedModel = this.modelRegistry.find(activeModel.provider, activeModel.id)
+        if (refreshedModel && refreshedModel !== activeModel) {
+          await session.setModel(refreshedModel)
+        }
+      }
+      return revision
+    })
+    let pending: Promise<number>
+    pending = operation.finally(() => {
+      if (this._modelProviderSync === pending) this._modelProviderSync = undefined
+    })
+    this._modelProviderSync = pending
+    return pending
   }
 
   /** 仅在会话完整初始化后更新对外可见对象。 */
@@ -470,6 +498,7 @@ export class AgentRuntime {
     const { agentDir, sessionsDir, authFile, modelsFile } = this.config
 
     this.modelRuntime = await ModelRuntime.create({ authPath: authFile, modelsPath: modelsFile })
+    await this.config.syncModelProviders?.(this.modelRuntime)
     this.modelRegistry = new ModelRegistry(this.modelRuntime)
 
     const systemPrompt = resolveSystemPrompt()

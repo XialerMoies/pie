@@ -13,12 +13,14 @@ function createHarness() {
   const modelFinds = [];
   const loaderOptions = [];
   const sessionOptions = [];
+  const lifecycle = [];
   let promptResolutions = 0;
 
   const runtime = {
     modelRuntime: { kind: "shared-model-runtime" },
     modelRegistry: {
       find(provider, id) {
+        lifecycle.push("find");
         modelFinds.push({ provider, id });
         if (provider === overrideModel.provider && id === overrideModel.id) return overrideModel;
         return undefined;
@@ -27,6 +29,10 @@ function createHarness() {
     config: {
       agentDir: "/agent",
       desktopApiToken: "desktop-token",
+    },
+    async syncModelProviders() {
+      lifecycle.push("sync");
+      return 1;
     },
     session: { model: inheritedModel },
   };
@@ -52,6 +58,7 @@ function createHarness() {
       };
     },
     async createSession(options) {
+      lifecycle.push("create");
       sessionOptions.push(options);
       return { session: { kind: "embedded-session", options } };
     },
@@ -66,6 +73,7 @@ function createHarness() {
     modelFinds,
     loaderOptions,
     sessionOptions,
+    lifecycle,
     get promptResolutions() { return promptResolutions; },
   };
 }
@@ -133,6 +141,7 @@ describe("embedded subagent session factory", () => {
 
     await harness.factory(input);
 
+    assert.deepStrictEqual(harness.lifecycle, ["sync", "find", "create"]);
     assert.deepStrictEqual(harness.modelFinds, [{ provider: "review", id: "review-model" }]);
     assert.strictEqual(harness.sessionOptions[0].model, harness.overrideModel);
     assert.strictEqual(harness.inheritedModel.id, "main-model");

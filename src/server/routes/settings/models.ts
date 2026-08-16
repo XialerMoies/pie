@@ -10,12 +10,12 @@ import { hasProviderAuth } from "./auth.js";
 export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
   const { runtime, paths: p } = ctx;
-  const session = runtime.session;
-  const modelRegistry = runtime.modelRegistry;
 
   // List available models (only those with configured API key in auth.json)
   if (url === "/api/models") {
     try {
+      await runtime.syncModelProviders?.();
+      const modelRegistry = runtime.modelRegistry;
       const all = modelRegistry.getAvailable();
       let authData: Record<string, unknown> = {};
       try {
@@ -70,6 +70,9 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/model/switch" && method === "POST") {
     try {
       const { provider, modelId } = await parseBody(req);
+      await runtime.syncModelProviders?.();
+      const session = runtime.session;
+      const modelRegistry = runtime.modelRegistry;
       const model = modelRegistry.find(provider, modelId);
       if (!model) {
         res.writeHead(404, { ...cors });

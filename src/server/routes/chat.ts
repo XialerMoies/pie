@@ -191,10 +191,12 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
             console.log(`📎 Added ${blocks.length} file(s) to context`);
           }
         }
+        await runtime.syncModelProviders?.();
+        const session = runtime.session;
         // 立即返回，不 await prompt()，SSE 流式推送 + agent_end 处理 workspace 标记
         console.log(`[chat] → session.prompt()`);
         const promptStart = Date.now();
-        runtime.session.prompt(finalMessage).catch((err: unknown) => {
+        session.prompt(finalMessage).catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
           const stack = err instanceof Error ? err.stack : "";
           console.log(`[chat] ❌ session.prompt error after ${Date.now() - promptStart}ms: ${msg}`);
