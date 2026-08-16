@@ -2,9 +2,26 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import ts from "typescript";
 
 function source(file) {
   return readFileSync(resolve(process.cwd(), file), "utf8");
+}
+
+function stringArrayInitializer(src, variableName) {
+  const sourceFile = ts.createSourceFile("source.mjs", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || declaration.name.text !== variableName) continue;
+      assert.ok(ts.isArrayLiteralExpression(declaration.initializer), `${variableName} must be an array literal`);
+      return declaration.initializer.elements.map((element) => {
+        assert.ok(ts.isStringLiteral(element), `${variableName} entries must be string literals`);
+        return element.text;
+      });
+    }
+  }
+  assert.fail(`${variableName} array should exist`);
 }
 
 function assertClass(src, name) {
@@ -39,14 +56,15 @@ describe("frontend component tree boundaries", () => {
 
   it("loads ListAddAction before chat, subagent, and settings consumers", () => {
     const compiler = source("scripts/compile-frontend-ts.mjs");
-    const actionIndex = compiler.indexOf('"gen/ui/list-add-action.js"');
+    const bundleOrder = stringArrayInitializer(compiler, "bundleOrder");
+    const actionIndex = bundleOrder.indexOf("gen/ui/list-add-action.js");
     assert.ok(actionIndex >= 0, "ListAddAction must be included in the dashboard bundle");
     for (const consumer of [
       "gen/pane/chat/index.js",
       "gen/dashboard/settings-custom-subagents.js",
       "gen/dashboard/dashboard-settings.js",
     ]) {
-      const consumerIndex = compiler.indexOf(`"${consumer}"`);
+      const consumerIndex = bundleOrder.indexOf(consumer);
       assert.ok(consumerIndex > actionIndex, `${consumer} must load after ListAddAction`);
     }
   });
