@@ -1302,6 +1302,56 @@ describe("settings DOM boundary", () => {
     }
   });
 
+  it("does not close a reopened same-provider draft when an older save or delete settles", async () => {
+    const beta = customProvider({ id: "beta", name: "Beta Gateway" });
+    for (const action of ["save", "delete"]) {
+      document.body.innerHTML = "";
+      const pending = deferred();
+      fetchImpl = async (url, init = {}) => {
+        const path = String(url);
+        if (path === "/api/auth") return response({ providers: [] });
+        if (path === "/api/custom-providers") {
+          return response({ revision: 4, official: [], custom: [customProvider(), beta] });
+        }
+        if (path === "/api/custom-providers/capabilities") return response(capabilities());
+        if (init.method === "PUT" || init.method === "DELETE") return pending.promise;
+        return response({ models: [] });
+      };
+      win.App.Settings.openSettingsModal();
+      await flushAsyncWork();
+      const editor = win.App.SettingsComponents.providers.customEditor;
+      editProvider("acme");
+      let operation;
+      if (action === "delete") {
+        await editor.delete();
+        operation = editor.delete();
+      } else operation = editor.save();
+      await Promise.resolve();
+
+      document.querySelector('[data-provider-action="back"]')?.click();
+      editProvider("acme");
+      setInput("#cpe-name", `Reopened ${action} draft`);
+      const snapshot = {
+        schemaVersion: 1,
+        revision: 5,
+        providers: action === "save"
+          ? [customProvider({ name: "Saved Acme" }), beta]
+          : [beta],
+      };
+      pending.resolve(response(snapshot));
+      await operation;
+
+      assert.ok(document.querySelector(".cpe-editor"), `${action}: reopened editor must remain mounted`);
+      assert.strictEqual(document.querySelector("#cpe-id")?.value, "acme", action);
+      assert.strictEqual(document.querySelector("#cpe-name")?.value, `Reopened ${action} draft`, action);
+      document.querySelector('[data-provider-action="back"]')?.click();
+      if (action === "save") {
+        assert.strictEqual(providerCard("acme")?.querySelector(".provider-identity-name")?.textContent, "Saved Acme");
+      } else assert.strictEqual(providerCard("acme"), null);
+      win.App.Settings.closeSettingsModal();
+    }
+  });
+
   it("deduplicates an action and lets a newer different action supersede it", async () => {
     const host = document.createElement("div");
     document.body.append(host);

@@ -342,6 +342,43 @@ describe("provider settings views", () => {
     assert.equal(card.querySelector(".provider-card-current")?.textContent, "当前：DeepSeek Chat");
   });
 
+  it("marks only the pending card choice busy and allows a different choice to supersede it", async () => {
+    const { ProviderCardListView } = await loadViews();
+    const host = document.createElement("div");
+    const calls = [];
+    new ProviderCardListView({
+      onUse: (providerId, modelId) => calls.push([providerId, modelId]),
+      onEdit() {},
+      onAdd() {},
+    }).render(host, {
+      current: { providerId: "deepseek", modelId: "deepseek-chat" },
+      pendingSwitch: { providerId: "deepseek", modelId: "deepseek-reasoner" },
+      providers: [{
+        id: "deepseek", name: "DeepSeek", custom: false, configured: true,
+        baseUrl: "https://api.deepseek.com/v1", protocolLabel: "官方",
+        models: [
+          { id: "deepseek-chat", name: "DeepSeek Chat" },
+          { id: "deepseek-reasoner", name: "DeepSeek Reasoner" },
+        ],
+      }],
+    });
+
+    const select = host.querySelector(".provider-card-model-select");
+    const use = host.querySelector('[data-provider-action="use"]');
+    assert.equal(select.value, "deepseek-reasoner");
+    assert.equal(use.disabled, true);
+    assert.equal(use.getAttribute("aria-busy"), "true");
+    assert.equal(use.textContent, "切换中...");
+
+    select.value = "deepseek-chat";
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.equal(use.disabled, false);
+    assert.equal(use.hasAttribute("aria-busy"), false);
+    assert.equal(use.textContent, "使用");
+    use.click();
+    assert.deepEqual(calls, [["deepseek", "deepseek-chat"]]);
+  });
+
   it("disables both model controls when a provider has no models", async () => {
     const { ProviderCardListView } = await loadViews();
     const host = document.createElement("div");
@@ -535,6 +572,43 @@ describe("provider settings views", () => {
 
     assert.equal(host.querySelector('[data-model-id="active-model"]').getAttribute("aria-pressed"), "true");
     assert.equal(host.querySelector('[data-model-id="other-model"]').getAttribute("aria-pressed"), "false");
+  });
+
+  it("marks only the pending official model busy", async () => {
+    const { OfficialProviderEditorView } = await loadViews();
+    const host = document.createElement("div");
+    const calls = [];
+    new OfficialProviderEditorView({
+      onBack() {},
+      onReveal() {},
+      onApiKeyChange() {},
+      onKeyVisibilityChange() {},
+      onSave() {},
+      onUse: (_providerId, modelId) => calls.push(modelId),
+    }).render(host, {
+      provider: { id: "openai", name: "OpenAI", configured: true },
+      apiKey: {
+        value: "", placeholder: "输入 API Key...", revealed: false, canReveal: false, saving: false,
+      },
+      models: {
+        status: "ready",
+        items: [
+          { id: "pending-model", name: "Pending Model" },
+          { id: "other-model", name: "Other Model" },
+        ],
+        activeModelId: null,
+        pendingModelId: "pending-model",
+        error: "",
+      },
+    });
+
+    const pending = host.querySelector('[data-model-id="pending-model"]');
+    const other = host.querySelector('[data-model-id="other-model"]');
+    assert.equal(pending.disabled, true);
+    assert.equal(pending.getAttribute("aria-busy"), "true");
+    assert.equal(other.disabled, false);
+    other.click();
+    assert.deepEqual(calls, ["other-model"]);
   });
 
   it("hides and re-shows an already revealed API key without another reveal request", async () => {
@@ -983,5 +1057,229 @@ describe("provider settings controller", () => {
     assert.equal(savedInput.value, "");
     assert.match(savedInput.placeholder, /已保存/);
     assert.equal(savedInput.placeholder.includes(rawSecret), false);
+  });
+
+  it("ignores stale initial auth and model successes after a newer post-save refresh", async () => {
+    const initialAuth = deferred();
+    const initialModels = deferred();
+    let authGets = 0;
+    let modelGets = 0;
+    const fetchImpl = async (url, init = {}) => {
+      const path = String(url);
+      if (path === "/api/auth" && init.method === "POST") return response({ ok: true });
+      if (path === "/api/auth") {
+        authGets += 1;
+        return authGets === 1 ? initialAuth.promise : response({
+          providers: [{ provider: "openai", hasKey: true, canReveal: true, keyPreview: "fresh-preview" }],
+        });
+      }
+      if (path === "/api/custom-providers") return response({
+        revision: 1,
+        official: [{ id: "openai", name: "OpenAI", configured: false }],
+        custom: [],
+      });
+      if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
+      if (path === "/api/models") {
+        modelGets += 1;
+        return modelGets === 1 ? initialModels.promise : response({
+          models: [{ provider: "openai", id: "fresh-model", name: "Fresh Model" }],
+        });
+      }
+      return response({ ok: true });
+    };
+    const { host } = await loadController({ fetchImpl });
+    host.querySelector('[data-provider-action="add"]').click();
+    host.querySelector('.provider-preset-official[data-provider-id="openai"]').click();
+    const input = host.querySelector(".rp-key-input");
+    input.value = "sk-request-order";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    host.querySelector('[data-provider-action="save-key"]').click();
+    await flushControllerWork();
+    assert.ok(host.querySelector('.provider-card[data-provider-id="openai"]'));
+
+    initialAuth.resolve(response({
+      providers: [{ provider: "openai", hasKey: false, canReveal: false, keyPreview: "" }],
+    }));
+    initialModels.resolve(response({
+      models: [{ provider: "openai", id: "stale-model", name: "Stale Model" }],
+    }));
+    await flushControllerWork();
+
+    assert.ok(host.querySelector('.provider-card[data-provider-id="openai"]'));
+    host.querySelector('.provider-card[data-provider-id="openai"] [data-provider-action="edit"]').click();
+    assert.ok(host.querySelector('[data-model-id="fresh-model"]'));
+    assert.equal(host.querySelector('[data-model-id="stale-model"]'), null);
+    assert.match(host.querySelector(".rp-key-input").placeholder, /fresh-preview/);
+  });
+
+  it("ignores stale initial auth and model failures after a newer post-save refresh", async () => {
+    const initialAuth = deferred();
+    const initialModels = deferred();
+    let authGets = 0;
+    let modelGets = 0;
+    const fetchImpl = async (url, init = {}) => {
+      const path = String(url);
+      if (path === "/api/auth" && init.method === "POST") return response({ ok: true });
+      if (path === "/api/auth") {
+        authGets += 1;
+        return authGets === 1 ? initialAuth.promise : response({
+          providers: [{ provider: "openai", hasKey: true, canReveal: true, keyPreview: "fresh-preview" }],
+        });
+      }
+      if (path === "/api/custom-providers") return response({
+        revision: 1,
+        official: [{ id: "openai", name: "OpenAI", configured: false }],
+        custom: [],
+      });
+      if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
+      if (path === "/api/models") {
+        modelGets += 1;
+        return modelGets === 1 ? initialModels.promise : response({
+          models: [{ provider: "openai", id: "fresh-model", name: "Fresh Model" }],
+        });
+      }
+      return response({ ok: true });
+    };
+    const { host, toastCalls } = await loadController({ fetchImpl });
+    host.querySelector('[data-provider-action="add"]').click();
+    host.querySelector('.provider-preset-official[data-provider-id="openai"]').click();
+    const input = host.querySelector(".rp-key-input");
+    input.value = "sk-request-errors";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    host.querySelector('[data-provider-action="save-key"]').click();
+    await flushControllerWork();
+
+    initialAuth.reject(new Error("stale auth failure"));
+    initialModels.reject(new Error("stale models failure"));
+    await flushControllerWork();
+
+    assert.deepEqual(toastCalls, [["已保存", "success"]]);
+    assert.ok(host.querySelector('.provider-card[data-provider-id="openai"]'));
+    host.querySelector('.provider-card[data-provider-id="openai"] [data-provider-action="edit"]').click();
+    assert.ok(host.querySelector('[data-model-id="fresh-model"]'));
+    assert.equal(host.querySelector(".msl-error"), null);
+  });
+
+  it("clears the raw official key before post-save refreshes settle", async () => {
+    const refreshAuth = deferred();
+    const refreshModels = deferred();
+    let authGets = 0;
+    let modelGets = 0;
+    const rawSecret = "sk-hanging-refresh-secret";
+    const fetchImpl = async (url, init = {}) => {
+      const path = String(url);
+      if (path === "/api/auth" && init.method === "POST") return response({ ok: true });
+      if (path === "/api/auth") {
+        authGets += 1;
+        return authGets === 1
+          ? response({ providers: [{ provider: "openai", hasKey: false, canReveal: false, keyPreview: "" }] })
+          : refreshAuth.promise;
+      }
+      if (path === "/api/custom-providers") return response({
+        revision: 1,
+        official: [{ id: "openai", name: "OpenAI", configured: false }],
+        custom: [],
+      });
+      if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
+      if (path === "/api/models") {
+        modelGets += 1;
+        return modelGets === 1 ? response({ models: [] }) : refreshModels.promise;
+      }
+      return response({ ok: true });
+    };
+    const { host } = await loadController({ fetchImpl });
+    host.querySelector('[data-provider-action="add"]').click();
+    host.querySelector('.provider-preset-official[data-provider-id="openai"]').click();
+    const input = host.querySelector(".rp-key-input");
+    input.value = rawSecret;
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    host.querySelector('[data-provider-action="save-key"]').click();
+    await flushControllerWork();
+
+    assert.equal(host.querySelector(".rp-key-input").value, "");
+    assert.equal(host.textContent.includes(rawSecret), false);
+    assert.equal(host.querySelector(".rp-status").textContent, "已配置");
+    assert.match(host.querySelector(".rp-key-input").placeholder, /已保存/);
+    host.querySelector('[data-provider-action="back"]').click();
+    assert.ok(host.querySelector('.provider-card[data-provider-id="openai"]'));
+  });
+
+  it("deduplicates repeated pending model switches", async () => {
+    const switchRequest = deferred();
+    const requests = [];
+    const baseFetch = standardControllerFetch();
+    const fetchImpl = async (url, init = {}) => {
+      if (String(url) === "/api/model/switch") {
+        requests.push(JSON.parse(init.body));
+        return switchRequest.promise;
+      }
+      return baseFetch(url, init);
+    };
+    const { host } = await loadController({ fetchImpl });
+    const firstUse = host.querySelector('.provider-card[data-provider-id="acme"] [data-provider-action="use"]');
+    firstUse.click();
+    firstUse.click();
+
+    assert.deepEqual(requests, [{ provider: "acme", modelId: "acme-chat" }]);
+    const pendingUse = host.querySelector('.provider-card[data-provider-id="acme"] [data-provider-action="use"]');
+    assert.equal(pendingUse.disabled, true);
+    assert.equal(pendingUse.getAttribute("aria-busy"), "true");
+
+    switchRequest.resolve(response({ ok: true }));
+    await flushControllerWork();
+  });
+
+  it("lets a newer model switch supersede stale success and error completions", async () => {
+    for (const staleOutcome of ["success", "error"]) {
+      const dashboard = { modelProvider: "openai", modelId: "initial-model" };
+      const first = deferred();
+      const second = deferred();
+      const switches = [];
+      const fetchImpl = async (url, init = {}) => {
+        const path = String(url);
+        if (path === "/api/auth") return response({
+          providers: [{ provider: "openai", hasKey: true, canReveal: false, keyPreview: "" }],
+        });
+        if (path === "/api/custom-providers") return response({
+          revision: 1,
+          official: [{ id: "openai", name: "OpenAI", configured: true }],
+          custom: [],
+        });
+        if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
+        if (path === "/api/models") return response({ models: [
+          { provider: "openai", id: "first-model", name: "First Model" },
+          { provider: "openai", id: "second-model", name: "Second Model" },
+        ] });
+        if (path === "/api/model/switch") {
+          switches.push(JSON.parse(init.body));
+          return switches.length === 1 ? first.promise : second.promise;
+        }
+        return response({ ok: true });
+      };
+      const { host, toastCalls, getRefreshes } = await loadController({ fetchImpl, dashboard });
+      host.querySelector('.provider-card[data-provider-id="openai"] [data-provider-action="edit"]').click();
+      host.querySelector('[data-model-id="first-model"]').click();
+      assert.equal(host.querySelector('[data-model-id="first-model"]').disabled, true);
+      host.querySelector('[data-model-id="second-model"]').click();
+      assert.equal(host.querySelector('[data-model-id="second-model"]').disabled, true);
+      assert.equal(host.querySelector('[data-model-id="first-model"]').disabled, false);
+
+      dashboard.modelId = "second-model";
+      second.resolve(response({ ok: true }));
+      await flushControllerWork();
+      assert.equal(host.querySelector('[data-model-id="second-model"]').getAttribute("aria-pressed"), "true");
+
+      if (staleOutcome === "success") first.resolve(response({ ok: true }));
+      else first.resolve(response({ error: "stale failure" }, 500));
+      await flushControllerWork();
+
+      assert.deepEqual(switches, [
+        { provider: "openai", modelId: "first-model" },
+        { provider: "openai", modelId: "second-model" },
+      ]);
+      assert.deepEqual(toastCalls, [["已切换: second-model", "success"]], staleOutcome);
+      assert.equal(getRefreshes(), 1, staleOutcome);
+      assert.equal(host.querySelector('[data-model-id="second-model"]').getAttribute("aria-pressed"), "true");
+    }
   });
 });

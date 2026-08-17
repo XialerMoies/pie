@@ -3,8 +3,13 @@
 interface SettingsCustomProviderEditorDependencies {
   notify: typeof toast;
   listAddAction: typeof ListAddAction;
-  onSaved(snapshot: RedactedCustomProviderSnapshot, selectedId: string, activateSaved: boolean): void;
-  onDeleted(snapshot: RedactedCustomProviderSnapshot): void;
+  onSaved(
+    snapshot: RedactedCustomProviderSnapshot,
+    selectedId: string,
+    activateSaved: boolean,
+    currentMount: boolean,
+  ): void;
+  onDeleted(snapshot: RedactedCustomProviderSnapshot, currentMount: boolean): void;
 }
 
 interface CustomProviderErrorResponse {
@@ -252,7 +257,7 @@ export class SettingsCustomProviderEditor {
         this.apiKeyCleared = false;
         this.render(saved);
       }
-      this.dependencies.onSaved(snapshot, saved.id, currentMount && operation.newProvider && accepted);
+      this.dependencies.onSaved(snapshot, saved.id, currentMount && operation.newProvider && accepted, currentMount);
       if (currentMount && accepted) this.dependencies.notify('已保存', 'success');
     } finally {
       this.finishMutation(operation);
@@ -374,7 +379,7 @@ export class SettingsCustomProviderEditor {
       const snapshot = response.body;
       const currentMount = this.isCurrentMount(operation);
       const accepted = this.consumeSnapshot(snapshot);
-      this.dependencies.onDeleted(snapshot);
+      this.dependencies.onDeleted(snapshot, currentMount);
       if (currentMount && accepted) this.dependencies.notify('已删除', 'success');
     } finally {
       this.finishMutation(operation);

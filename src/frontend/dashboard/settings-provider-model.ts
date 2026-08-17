@@ -31,6 +31,12 @@ interface OfficialApiKeyDraft {
   saving: boolean;
 }
 
+interface ProviderModelSwitchOperation {
+  requestId: number;
+  providerId: string;
+  modelId: string;
+}
+
 const SETTINGS_CUSTOM_PROVIDER_PROTOCOLS = new Set<string>([
   'openai-completions',
   'openai-responses',
@@ -88,6 +94,9 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   private lifecycleGeneration = 0;
   private viewGeneration = 0;
   private revealRequestId = 0;
+  private officialAuthRequestId = 0;
+  private officialModelsRequestId = 0;
+  private modelSwitchRequestId = 0;
   private providerKeys: Record<string, ProviderKeyInfo> = {};
   private officialProviders: OfficialProviderListItem[] = [];
   private authOfficialProviders: OfficialProviderListItem[] = [];
@@ -102,16 +111,17 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   private currentModel: ProviderCardListState['current'] = null;
   private officialDrafts = new Map<string, OfficialApiKeyDraft>();
   private optimisticOfficialKeys = new Set<string>();
+  private pendingModelSwitch: ProviderModelSwitchOperation | null = null;
   customEditor: SettingsCustomProviderEditor;
 
   constructor(private readonly dependencies: SettingsProviderModelDependencies) {
     this.customEditor = new dependencies.customEditorType({
       notify: dependencies.notify,
       listAddAction: dependencies.listAddAction,
-      onSaved: (snapshot, selectedId, activateSaved) => {
-        this.applyCustomSnapshot(snapshot, { kind: 'save', selectedId, activateSaved });
+      onSaved: (snapshot, selectedId, activateSaved, currentMount) => {
+        this.applyCustomSnapshot(snapshot, { kind: 'save', selectedId, activateSaved, currentMount });
       },
-      onDeleted: snapshot => this.applyCustomSnapshot(snapshot, { kind: 'delete' }),
+      onDeleted: (snapshot, currentMount) => this.applyCustomSnapshot(snapshot, { kind: 'delete', currentMount }),
     });
   }
 
@@ -135,6 +145,8 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     this.currentModel = this.readCurrentModel();
     this.officialDrafts.clear();
     this.optimisticOfficialKeys.clear();
+    this.pendingModelSwitch = null;
+    this.modelSwitchRequestId += 1;
     this.customEditor.setProtocols([]);
 
     const shell = providerElement('section', 'provider-settings-shell');
@@ -158,6 +170,8 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     this.content = null;
     this.view = { kind: 'list' };
     this.officialDrafts.clear();
+    this.pendingModelSwitch = null;
+    this.modelSwitchRequestId += 1;
   }
 
   private showPicker(): void {
@@ -229,7 +243,13 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       },
       onAdd: () => this.showPicker(),
     });
-    view.render(this.content, { current: this.currentModel, providers: this.visibleCards() });
+    view.render(this.content, {
+      current: this.currentModel,
+      pendingSwitch: this.pendingModelSwitch
+        ? { providerId: this.pendingModelSwitch.providerId, modelId: this.pendingModelSwitch.modelId }
+        : null,
+      providers: this.visibleCards(),
+    });
     this.appendCustomStatus(this.content.querySelector('.provider-card-list'));
   }
 
@@ -280,6 +300,9 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
         status: this.officialModelsState,
         items: this.modelsForProvider(providerId, false),
         activeModelId: this.currentModel?.providerId === providerId ? this.currentModel.modelId : null,
+        pendingModelId: this.pendingModelSwitch?.providerId === providerId
+          ? this.pendingModelSwitch.modelId
+          : null,
         error: this.officialModelsState === 'error' ? '加载模型列表失败' : '',
       },
     });
@@ -455,9 +478,10 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   }
 
   private async loadOfficialAuth(generation: number): Promise<void> {
+    const requestId = ++this.officialAuthRequestId;
     try {
       const value = await providerJson('/api/auth');
-      if (generation !== this.lifecycleGeneration) return;
+      if (generation !== this.lifecycleGeneration || requestId !== this.officialAuthRequestId) return;
       if (!providerRecord(value) || !Array.isArray(value.providers)) throw new Error('Invalid auth response');
       const keys: Record<string, ProviderKeyInfo> = {};
       const official: OfficialProviderListItem[] = [];
@@ -495,7 +519,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       this.authOfficialProviders = official;
       this.renderAfterDataChange();
     } catch {
-      if (generation !== this.lifecycleGeneration) return;
+      if (generation !== this.lifecycleGeneration || requestId !== this.officialAuthRequestId) return;
       this.dependencies.notify('加载官方厂商认证失败', 'error');
       this.renderAfterDataChange();
     }
@@ -550,11 +574,12 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   }
 
   private async loadOfficialModels(generation: number): Promise<void> {
+    const requestId = ++this.officialModelsRequestId;
     this.officialModelsState = 'loading';
     this.renderAfterDataChange();
     try {
       const value = await providerJson('/api/models');
-      if (generation !== this.lifecycleGeneration) return;
+      if (generation !== this.lifecycleGeneration || requestId !== this.officialModelsRequestId) return;
       if (!providerRecord(value) || !Array.isArray(value.models)) throw new Error('Invalid models response');
       const models = new Map<string, ProviderCardModel[]>();
       const seen = new Set<string>();
@@ -571,7 +596,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       this.officialModelsState = 'ready';
       this.renderAfterDataChange();
     } catch {
-      if (generation !== this.lifecycleGeneration) return;
+      if (generation !== this.lifecycleGeneration || requestId !== this.officialModelsRequestId) return;
       this.officialModels = new Map();
       this.officialModelsState = 'error';
       this.renderAfterDataChange();
@@ -581,7 +606,9 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
 
   private applyCustomSnapshot(
     snapshot: RedactedCustomProviderSnapshot,
-    source: { kind: 'save'; selectedId: string; activateSaved: boolean } | { kind: 'delete' },
+    source:
+      | { kind: 'save'; selectedId: string; activateSaved: boolean; currentMount: boolean }
+      | { kind: 'delete'; currentMount: boolean },
   ): void {
     if (!this.dependencies.isValidRevision(snapshot.revision) || !Array.isArray(snapshot.providers)) return;
     const accepted = !this.hasCustomAuthority || snapshot.revision > this.revision;
@@ -597,11 +624,11 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     }
 
     const activeView = this.view;
-    const shouldReturn = source.kind === 'save'
+    const shouldReturn = source.currentMount && (source.kind === 'save'
       ? (activeView.kind === 'custom' && activeView.providerId === source.selectedId)
         || (activeView.kind === 'new-custom' && source.activateSaved)
       : activeView.kind === 'custom'
-        && !snapshot.providers.some(provider => provider.id === activeView.providerId);
+        && !snapshot.providers.some(provider => provider.id === activeView.providerId));
     if (shouldReturn) this.showList();
     else this.renderAfterDataChange();
   }
@@ -641,7 +668,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   }
 
   private async saveOfficialKey(providerId: string, value: string): Promise<void> {
-    const apiKey = value.trim();
+    let apiKey = value.trim();
     if (!apiKey) {
       this.dependencies.notify('请输入 API Key');
       return;
@@ -661,6 +688,10 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       let result: unknown = {};
       try { result = await response.json(); } catch {}
       if (!response.ok || !providerRecord(result) || result.ok !== true) throw new Error('Save failed');
+      draft.value = '';
+      draft.revealed = false;
+      value = '';
+      apiKey = '';
       if (lifecycle !== this.lifecycleGeneration) return;
       this.optimisticOfficialKeys.add(providerId);
       this.providerKeys[providerId] = { hasKey: true, canReveal: true, keyPreview: '********' };
@@ -668,6 +699,11 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       const existing = this.authOfficialProviders.find(candidate => candidate.id === providerId);
       if (existing) existing.configured = true;
       else this.authOfficialProviders.push({ id: providerId, name: provider.name, configured: true });
+      if (
+        view === this.viewGeneration
+        && this.view.kind === 'official'
+        && this.view.providerId === providerId
+      ) this.renderOfficial(providerId);
       this.dependencies.notify('已保存', 'success');
       await Promise.all([this.loadOfficialAuth(lifecycle), this.loadOfficialModels(lifecycle)]);
       if (
@@ -690,7 +726,18 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   }
 
   private async switchModel(providerId: string, modelId: string): Promise<void> {
+    if (
+      this.pendingModelSwitch?.providerId === providerId
+      && this.pendingModelSwitch.modelId === modelId
+    ) return;
     const generation = this.lifecycleGeneration;
+    const operation: ProviderModelSwitchOperation = {
+      requestId: ++this.modelSwitchRequestId,
+      providerId,
+      modelId,
+    };
+    this.pendingModelSwitch = operation;
+    this.renderAfterDataChange();
     try {
       const response = await fetch('/api/model/switch', {
         method: 'POST',
@@ -699,20 +746,32 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       });
       let result: unknown = {};
       try { result = await response.json(); } catch {}
+      if (!this.isCurrentModelSwitch(generation, operation)) return;
       if (!response.ok || !providerRecord(result) || result.ok !== true) {
         const suffix = providerRecord(result) && typeof result.error === 'string' ? `: ${result.error}` : '';
+        this.pendingModelSwitch = null;
+        this.renderAfterDataChange();
         this.dependencies.notify(`切换失败${suffix}`, 'error');
         return;
       }
-      if (generation !== this.lifecycleGeneration) return;
       this.dependencies.notify(`已切换: ${modelId}`, 'success');
       await this.dependencies.refreshDashboard();
-      if (generation !== this.lifecycleGeneration) return;
+      if (!this.isCurrentModelSwitch(generation, operation)) return;
       this.currentModel = this.readCurrentModel();
+      this.pendingModelSwitch = null;
       this.renderAfterDataChange();
     } catch {
-      if (generation === this.lifecycleGeneration) this.dependencies.notify('切换失败', 'error');
+      if (!this.isCurrentModelSwitch(generation, operation)) return;
+      this.pendingModelSwitch = null;
+      this.renderAfterDataChange();
+      this.dependencies.notify('切换失败', 'error');
     }
+  }
+
+  private isCurrentModelSwitch(generation: number, operation: ProviderModelSwitchOperation): boolean {
+    return generation === this.lifecycleGeneration
+      && operation.requestId === this.modelSwitchRequestId
+      && this.pendingModelSwitch === operation;
   }
 }
 

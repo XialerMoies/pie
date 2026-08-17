@@ -62,7 +62,12 @@ export class ProviderCardListView {
     }
 
     const cards = providerViewElement('div', 'provider-cards');
-    for (const provider of state.providers) cards.append(this.createCard(provider, state.current));
+    for (const provider of state.providers) {
+      const pendingModelId = state.pendingSwitch?.providerId === provider.id
+        ? state.pendingSwitch.modelId
+        : null;
+      cards.append(this.createCard(provider, state.current, pendingModelId));
+    }
 
     const actions = providerViewElement('div', 'provider-list-actions');
     actions.append(this.createAddButton());
@@ -73,6 +78,7 @@ export class ProviderCardListView {
   private createCard(
     provider: ProviderCardItem,
     current: ProviderCardListState['current'],
+    pendingModelId: string | null,
   ): HTMLElement {
     const card = providerViewElement('article', 'provider-card');
     card.dataset.providerId = provider.id;
@@ -118,13 +124,23 @@ export class ProviderCardListView {
       option.value = model.id;
       select.append(option);
     }
-    if (current?.providerId === provider.id && provider.models.some(model => model.id === current.modelId)) {
+    if (pendingModelId && provider.models.some(model => model.id === pendingModelId)) {
+      select.value = pendingModelId;
+    } else if (current?.providerId === provider.id && provider.models.some(model => model.id === current.modelId)) {
       select.value = current.modelId;
     }
 
     const use = providerViewButton('provider-card-use', '使用');
     use.dataset.providerAction = 'use';
-    use.disabled = provider.models.length === 0;
+    const syncPendingState = (): void => {
+      const pending = Boolean(pendingModelId && select.value === pendingModelId);
+      use.disabled = provider.models.length === 0 || pending;
+      use.textContent = pending ? '切换中...' : '使用';
+      if (pending) use.setAttribute('aria-busy', 'true');
+      else use.removeAttribute('aria-busy');
+    };
+    syncPendingState();
+    select.addEventListener('change', syncPendingState);
     use.addEventListener('click', () => {
       if (select.value) this.callbacks.onUse(provider.id, select.value);
     });
@@ -233,6 +249,10 @@ export class OfficialProviderEditorView {
       item.dataset.modelProvider = state.provider.id;
       item.dataset.modelId = model.id;
       item.setAttribute('aria-pressed', String(active));
+      if (model.id === state.models.pendingModelId) {
+        item.disabled = true;
+        item.setAttribute('aria-busy', 'true');
+      }
       item.addEventListener('click', () => this.callbacks.onUse(state.provider.id, model.id));
       models.append(item);
     }

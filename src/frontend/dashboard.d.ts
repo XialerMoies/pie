@@ -91,6 +91,7 @@ interface ProviderCardItem {
 
 interface ProviderCardListState {
   current: { providerId: string; modelId: string } | null;
+  pendingSwitch: { providerId: string; modelId: string } | null;
   providers: ProviderCardItem[];
 }
 
@@ -126,6 +127,7 @@ interface OfficialProviderEditorState {
     status: OfficialProviderModelsStatus;
     items: ProviderCardModel[];
     activeModelId: string | null;
+    pendingModelId: string | null;
     error: string;
   };
 }
@@ -291,8 +293,13 @@ interface CustomProviderCapabilitiesResponse {
 interface SettingsCustomProviderEditorDependencies {
   notify: typeof toast;
   listAddAction: typeof ListAddAction;
-  onSaved(snapshot: RedactedCustomProviderSnapshot, selectedId: string, activateSaved: boolean): void;
-  onDeleted(snapshot: RedactedCustomProviderSnapshot): void;
+  onSaved(
+    snapshot: RedactedCustomProviderSnapshot,
+    selectedId: string,
+    activateSaved: boolean,
+    currentMount: boolean,
+  ): void;
+  onDeleted(snapshot: RedactedCustomProviderSnapshot, currentMount: boolean): void;
 }
 interface SettingsCustomProviderEditor {
   setProtocols(protocols: readonly CustomProviderProtocol[]): void;
