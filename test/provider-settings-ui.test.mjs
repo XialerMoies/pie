@@ -302,6 +302,20 @@ describe("provider settings views", () => {
     assert.ok(common.querySelector('[data-cpe-action="add-model"]'));
     assert.ok(common.querySelector('[data-cpe-action="remove-model"]'));
     assert.equal(host.querySelector("#cpe-id").readOnly, true);
+
+    for (const [selector, fieldPath] of [
+      ["#cpe-name", "name"],
+      ["#cpe-base-url", "baseUrl"],
+      ["#cpe-id", "id"],
+      ["#cpe-protocol", "protocol"],
+      ["#cpe-model-discovery", "modelDiscovery"],
+      ["#cpe-api-key", "apiKey"],
+    ]) {
+      assert.equal(host.querySelector(selector)?.dataset.fieldPath, fieldPath, `${selector} should expose its exact field path`);
+    }
+    for (const radio of host.querySelectorAll('input[name="cpe-auth-mode"]')) {
+      assert.equal(radio.dataset.fieldPath, "authMode", "auth controls should expose their shared field path");
+    }
   });
 
   it("applies custom-provider templates and keeps generated IDs separate from manual IDs", async () => {

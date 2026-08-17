@@ -105,7 +105,6 @@ const APPROVED_SINKS = new Map([
   ["src/frontend/dashboard/settings-custom-subagents.ts|render|innerHTML|list", approved(1, "e587b641983f", REVIEW.escaped)],
   ["src/frontend/dashboard/settings-general.ts|renderGeneralTab|innerHTML|container", approved(1, "ddb6c319c780", REVIEW.static)],
   ["src/frontend/dashboard/settings-general.ts|renderSubagentLimits|innerHTML|container", approved(1, "106ecbc73847", REVIEW.static)],
-  ["src/frontend/dashboard/settings-provider-model.ts|renderTab|innerHTML|container", approved(1, "47d706d3044f", REVIEW.static)],
   ["src/frontend/dashboard/settings-storage.ts|mount|insertAdjacentHTML|container", approved(1, "7dbaa78485c6", REVIEW.static)],
   ["src/frontend/pane/chat/index.ts|chatPaneRender|innerHTML|container", approved(1, "772eb1f8e30d", REVIEW.static)],
   ["src/frontend/pane/chat/index.ts|chatPaneRender|innerHTML|list", approved(1, "2efb387f77d0", REVIEW.static)],
@@ -225,12 +224,16 @@ describe("frontend HTML sink boundary", () => {
     assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML/);
   });
 
-  it("keeps the custom provider editor on DOM APIs with no direct HTML sinks", () => {
-    const source = readFileSync(resolve(FRONTEND_ROOT, "dashboard/settings-custom-provider-editor.ts"), "utf8");
+  it("keeps custom provider editing on safe DOM APIs with form-owned writes", () => {
+    const editorSource = readFileSync(resolve(FRONTEND_ROOT, "dashboard/settings-custom-provider-editor.ts"), "utf8");
+    const formSource = readFileSync(resolve(FRONTEND_ROOT, "dashboard/settings-custom-provider-form.ts"), "utf8");
 
-    assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
-    assert.match(source, /\.textContent\s*=/);
-    assert.match(source, /\.value\s*=/);
+    assert.doesNotMatch(editorSource, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+    assert.doesNotMatch(formSource, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+    assert.doesNotMatch(editorSource, /\.textContent\s*=/);
+    assert.doesNotMatch(editorSource, /\.value\s*=/);
+    assert.match(formSource, /\.textContent\s*=/);
+    assert.match(formSource, /\.value\s*=/);
   });
 
   it("requires every direct HTML sink to remain in the reviewed structural baseline", () => {

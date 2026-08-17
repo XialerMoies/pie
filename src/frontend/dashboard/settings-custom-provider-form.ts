@@ -476,9 +476,11 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
 
   private field(labelText: string, control: HTMLElement, errorField?: string): HTMLElement {
     const field = formElement('label', 'cpe-field');
+    const fieldPath = errorField ?? this.fieldNameForControl(control.id);
+    control.dataset.fieldPath = fieldPath;
     field.append(formElement('span', 'cpe-label', labelText), control);
     const error = formElement('span', 'cpe-field-error');
-    error.dataset.fieldError = errorField ?? this.fieldNameForControl(control.id);
+    error.dataset.fieldError = fieldPath;
     field.append(error);
     return field;
   }
@@ -520,6 +522,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       radio.type = 'radio';
       radio.name = 'cpe-auth-mode';
       radio.value = mode;
+      radio.dataset.fieldPath = 'authMode';
       radio.checked = defaultMode === mode;
       label.append(radio, formElement('span', undefined, mode === 'none' ? 'None' : 'API Key'));
       segmented.append(label);
@@ -539,6 +542,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     section.append(line);
     const row = formElement('div', 'cpe-inline-row');
     const input = formInput('cpe-api-key', 'cpe-input', '', 'password');
+    input.dataset.fieldPath = 'apiKey';
     input.setAttribute('aria-label', 'API Key');
     input.placeholder = provider?.apiKeyConfigured ? '留空保留已保存值' : '输入 API Key';
     row.append(input);

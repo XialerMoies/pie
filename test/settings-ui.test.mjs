@@ -1562,6 +1562,38 @@ describe("settings DOM boundary", () => {
     assert.equal(compatibility?.getAttribute("aria-invalid"), "true");
   });
 
+  it("maps advanced scalar backend errors to their exact controls", async () => {
+    const cases = [
+      { fieldPath: "provider.id", selector: "#cpe-id", normalizedPath: "id" },
+      { fieldPath: "provider.protocol", selector: "#cpe-protocol", normalizedPath: "protocol" },
+      { fieldPath: "provider.modelDiscovery", selector: "#cpe-model-discovery", normalizedPath: "modelDiscovery" },
+    ];
+
+    for (const testCase of cases) {
+      const host = document.createElement("div");
+      document.body.replaceChildren(host);
+      fetchImpl = async () => response({
+        code: "invalid_request",
+        fieldPath: testCase.fieldPath,
+      }, 400);
+      const editor = createCustomProviderEditor();
+      editor.mount(host, customProvider(), 4);
+
+      const advanced = host.querySelector("details.cpe-advanced");
+      const control = host.querySelector(testCase.selector);
+      assert.equal(advanced?.open, false, `${testCase.fieldPath}: advanced should start closed`);
+
+      await editor.save();
+
+      assert.equal(advanced?.open, true, `${testCase.fieldPath}: advanced should open`);
+      assert.equal(document.activeElement, control, `${testCase.fieldPath}: exact control should receive focus`);
+      assert.equal(control?.getAttribute("aria-invalid"), "true", `${testCase.fieldPath}: control should be invalid`);
+      const error = host.querySelector(`[data-field-error="${testCase.normalizedPath}"]`);
+      assert.ok(error, `${testCase.fieldPath}: exact field error should exist`);
+      assert.notEqual(error.textContent, "", `${testCase.fieldPath}: exact field error should be rendered`);
+    }
+  });
+
   it("treats hostile backend field paths as inert data and always clears mutation busy state", async () => {
     const paths = ['provider.models[0].x"]', `provider.${"x[".repeat(4096)}`];
     for (const fieldPath of paths) {
