@@ -64,6 +64,12 @@ before(async () => {
   await import(`../src/frontend/services/chat-runtime-store.ts?settings-ui=${Date.now()}`);
   await import(`../src/frontend/services/preferences.ts?settings-ui=${Date.now()}`);
   await import("../src/frontend/dashboard/settings-general.ts");
+  const { ProviderSettingsUtils } = await import("../src/frontend/dashboard/settings-provider-utils.ts");
+  global.ProviderSettingsUtils = ProviderSettingsUtils;
+  const providerViews = await import("../src/frontend/dashboard/settings-provider-views.ts");
+  global.ProviderCardListView = providerViews.ProviderCardListView;
+  global.ProviderPickerView = providerViews.ProviderPickerView;
+  global.OfficialProviderEditorView = providerViews.OfficialProviderEditorView;
   ({ SettingsCustomProviderEditor } = await import("../src/frontend/dashboard/settings-custom-provider-editor.ts"));
   await import("../src/frontend/dashboard/settings-provider-model.ts");
   await import("../src/frontend/dashboard/settings-custom-subagents.ts");
@@ -79,7 +85,6 @@ beforeEach(() => {
   delete win.__monaco;
   delete win.electronAPI;
   win.__state.D = null;
-  win._provOrder = [];
   fetchImpl = async (url) => {
     if (String(url) === "/api/auth") return { ok: true, json: async () => ({ providers: [] }) };
     if (String(url) === "/api/custom-providers") return { ok: true, json: async () => ({ revision: 0, official: [], custom: [] }) };
@@ -205,6 +210,29 @@ function activateButtonFromKeyboard(button, key) {
   if (!button.disabled && key === " " && allowKeyupDefault) button.click();
 }
 
+function providerCard(providerId) {
+  return [...document.querySelectorAll(".provider-card")]
+    .find((card) => card.dataset.providerId === providerId) ?? null;
+}
+
+function editProvider(providerId) {
+  const card = providerCard(providerId);
+  assert.ok(card, `${providerId} provider card should render`);
+  const edit = card.querySelector('[data-provider-action="edit"]');
+  assert.ok(edit, `${providerId} edit action should render`);
+  edit.click();
+}
+
+function startNewCustomProvider(template = "other") {
+  const add = document.querySelector('.provider-card-list [data-provider-action="add"]');
+  assert.ok(add, "provider add action should render");
+  add.click();
+  const preset = document.querySelector(`[data-custom-template="${template}"]`);
+  assert.ok(preset, `${template} custom template should render`);
+  assert.strictEqual(preset.disabled, false, `${template} custom template should be available`);
+  preset.click();
+}
+
 async function openGeneralSettings() {
   win.App.Settings.openSettingsModal();
   await flushAsyncWork();
@@ -270,7 +298,7 @@ describe("settings DOM boundary", () => {
     assert.strictEqual(globalThis.__listAddInjected, undefined);
   });
 
-  it("renders official and custom providers in one ordered list with a shared add action", async () => {
+  it("renders configured official and custom provider cards using the saved order as a hint", async () => {
     storage.set("providers_order", JSON.stringify(["acme", "openai", "removed-provider"]));
     fetchImpl = async (url) => {
       if (String(url) === "/api/auth") return response({ providers: [{ provider: "openai", hasKey: false, keyPreview: "" }] });
@@ -289,16 +317,14 @@ describe("settings DOM boundary", () => {
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();
 
-    const list = document.querySelector(".msl-list");
-    assert.ok(list);
-    const items = [...list.querySelectorAll(".msl-item")];
-    assert.deepStrictEqual(items.map((item) => item.dataset.prov), ["acme", "openai", "anthropic"]);
-    assert.deepStrictEqual(win._provOrder, ["acme", "openai", "anthropic"]);
-    assert.strictEqual(items[0].querySelector(".msl-kind")?.textContent, "自定义");
-    assert.strictEqual(items[1].querySelector(".msl-kind"), null);
-    const add = document.querySelector(".ms-left > .list-add-action-mount .list-add-action");
+    const cards = [...document.querySelectorAll(".provider-card")];
+    assert.deepStrictEqual(cards.map((card) => card.dataset.providerId), ["acme", "anthropic"]);
+    assert.strictEqual(cards[0].querySelector(".provider-identity-name")?.textContent, "Acme Gateway");
+    assert.strictEqual(cards[1].querySelector(".provider-identity-name")?.textContent, "Anthropic");
+    assert.strictEqual(document.querySelector('.provider-card[data-provider-id="openai"]'), null);
+    const add = document.querySelector('.provider-card-list [data-provider-action="add"]');
     assert.ok(add);
-    assert.strictEqual(add.querySelector(".list-add-action-label")?.textContent, "添加自定义厂商");
+    assert.strictEqual(add.textContent, "添加厂商");
   });
 
   it("requires an explicit auth choice for new drafts and exposes only six supported protocols", async () => {
@@ -343,7 +369,7 @@ describe("settings DOM boundary", () => {
 
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();
-    document.querySelector("#msl-add-action .list-add-action")?.click();
+    startNewCustomProvider("other");
 
     const protocols = [...document.querySelectorAll("#cpe-protocol option")]
       .map((option) => option.value)
@@ -591,7 +617,6 @@ describe("settings DOM boundary", () => {
     try {
       for (const failure of ["reject", "invalid-json"]) {
         document.body.innerHTML = '<div id="provider-host"></div>';
-        win._provOrder = [];
         let revealRequests = 0;
         let modelRequests = 0;
         fetchImpl = async (url) => {
@@ -620,14 +645,18 @@ describe("settings DOM boundary", () => {
         await flushAsyncWork();
         await flushAsyncWork();
 
-        assert.ok(document.querySelector('.msl-item[data-prov="openai"]'), `${failure}: official provider should render`);
-        assert.strictEqual(document.querySelector(".rp-prov-name")?.textContent, "openai");
+        const card = providerCard("openai");
+        assert.ok(card, `${failure}: official provider should render`);
+        assert.strictEqual(revealRequests, 0, `${failure}: reveal must remain explicit`);
+        assert.match(document.querySelector(".provider-custom-status")?.textContent ?? "", /自定义厂商不可用/);
+        editProvider("openai");
+        document.querySelector('[data-provider-action="reveal-key"]')?.click();
+        await flushAsyncWork();
+        assert.strictEqual(document.querySelector(".provider-identity-name")?.textContent, "OpenAI");
         assert.strictEqual(document.querySelector("#key-input")?.value, "sk-official-secret");
         assert.strictEqual(document.querySelector(".rp-model-item")?.textContent, "official-model");
-        assert.ok(revealRequests > 0, `${failure}: reveal should run`);
+        assert.strictEqual(revealRequests, 1, `${failure}: explicit reveal should run once`);
         assert.ok(modelRequests > 0, `${failure}: models should run`);
-        assert.strictEqual(document.querySelector("#msl-add-action .list-add-action")?.disabled, true);
-        assert.match(document.querySelector(".msl-custom-status")?.textContent ?? "", /自定义厂商不可用/);
       }
       await flushAsyncWork();
       assert.deepStrictEqual(unhandled, []);
@@ -712,9 +741,9 @@ describe("settings DOM boundary", () => {
 
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();
-    const item = document.querySelector('.msl-item[data-prov="hostile-id"]');
-    assert.strictEqual(item?.querySelector(".msl-name")?.textContent, hostile);
-    item.click();
+    const item = providerCard("hostile-id");
+    assert.strictEqual(item?.querySelector(".provider-identity-name")?.textContent, hostile);
+    editProvider("hostile-id");
     assert.strictEqual(document.querySelector("#cpe-name")?.value, hostile);
     assert.strictEqual(document.querySelector(".cpe-model-id")?.value, hostile);
     await win.App.SettingsComponents.providers.customEditor.test();
@@ -831,7 +860,6 @@ describe("settings DOM boundary", () => {
     const beta = customProvider({ id: "beta", name: "Beta Gateway" });
     for (const action of ["save", "delete"]) {
       document.body.innerHTML = "";
-      win._provOrder = [];
       const pending = deferred();
       let newDraftRequest;
       fetchImpl = async (url, init = {}) => {
@@ -854,6 +882,7 @@ describe("settings DOM boundary", () => {
       win.App.Settings.openSettingsModal();
       await flushAsyncWork();
       const editor = win.App.SettingsComponents.providers.customEditor;
+      editProvider("acme");
       let operation;
       if (action === "delete") {
         await editor.delete();
@@ -861,7 +890,8 @@ describe("settings DOM boundary", () => {
       } else operation = editor.save();
       await Promise.resolve();
 
-      document.querySelector("#msl-add-action .list-add-action")?.click();
+      document.querySelector('[data-provider-action="back"]')?.click();
+      startNewCustomProvider("other");
       setInput("#cpe-name", "Unsaved Fresh");
       setInput("#cpe-id", "fresh");
       setInput("#cpe-base-url", "https://fresh.example.test/v1");
@@ -883,9 +913,6 @@ describe("settings DOM boundary", () => {
       assert.strictEqual(document.querySelector("#cpe-id")?.value, "fresh");
       assert.strictEqual(document.querySelector("#cpe-name")?.value, "Unsaved Fresh");
       assert.strictEqual(document.querySelector("#cpe-id")?.readOnly, false);
-      assert.strictEqual(document.querySelector(".msl-item.on"), null);
-      if (action === "save") assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"] .msl-name')?.textContent, "Saved Acme");
-      else assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"]'), null);
 
       await editor.save();
       assert.strictEqual(newDraftRequest?.expectedRevision, 5, `${action}: authority revision must advance without replacing the draft`);
@@ -925,12 +952,13 @@ describe("settings DOM boundary", () => {
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();
     const editor = win.App.SettingsComponents.providers.customEditor;
+    editProvider("acme");
     const oldSave = editor.save();
     await Promise.resolve();
     win.App.Settings.closeSettingsModal();
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();
-    document.querySelector('.msl-item[data-prov="beta"]').click();
+    editProvider("beta");
     setInput("#cpe-name", "Unsaved Beta Six");
 
     pending.resolve(response({
@@ -940,12 +968,12 @@ describe("settings DOM boundary", () => {
     }));
     await oldSave;
 
-    assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"] .msl-name')?.textContent, "Fresh Acme");
-    assert.ok(document.querySelector('.msl-item[data-prov="gamma"]'));
     assert.strictEqual(document.querySelector("#cpe-name")?.value, "Unsaved Beta Six");
     assert.strictEqual(document.querySelector(".cpe-revision")?.textContent, "Revision 6");
     await editor.save();
     assert.strictEqual(latestWrite?.expectedRevision, 6);
+    assert.strictEqual(providerCard("acme")?.querySelector(".provider-identity-name")?.textContent, "Fresh Acme");
+    assert.ok(providerCard("gamma"));
     win.App.Settings.closeSettingsModal();
   });
 
@@ -974,6 +1002,7 @@ describe("settings DOM boundary", () => {
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();
     const editor = win.App.SettingsComponents.providers.customEditor;
+    editProvider("acme");
     const oldSave = editor.save();
     await Promise.resolve();
     win.App.Settings.closeSettingsModal();
@@ -988,20 +1017,18 @@ describe("settings DOM boundary", () => {
     await oldSave;
     pendingCapabilities.resolve(response(capabilities()));
     await flushAsyncWork();
-    const add = document.querySelector("#msl-add-action .list-add-action");
-    assert.strictEqual(add?.disabled, false);
-    add.click();
+    startNewCustomProvider("other");
     setInput("#cpe-name", "Unsaved After Authority");
     setInput("#cpe-id", "unsaved-authority");
 
     pendingList.reject(new Error("late list failure"));
     await flushAsyncWork();
 
-    assert.strictEqual(add.disabled, false);
-    assert.strictEqual(document.querySelector(".msl-custom-status")?.hidden, true);
-    assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"] .msl-name')?.textContent, "Mutation Authority");
     assert.strictEqual(document.querySelector("#cpe-name")?.value, "Unsaved After Authority");
     assert.strictEqual(document.querySelector("#cpe-id")?.value, "unsaved-authority");
+    document.querySelector('[data-provider-action="back"]')?.click();
+    assert.strictEqual(document.querySelector(".provider-custom-status")?.hidden, true);
+    assert.strictEqual(providerCard("acme")?.querySelector(".provider-identity-name")?.textContent, "Mutation Authority");
     win.App.Settings.closeSettingsModal();
   });
 
@@ -1025,6 +1052,7 @@ describe("settings DOM boundary", () => {
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();
     const editor = win.App.SettingsComponents.providers.customEditor;
+    editProvider("acme");
     const oldSave = editor.save();
     await Promise.resolve();
     win.App.Settings.closeSettingsModal();
@@ -1038,9 +1066,9 @@ describe("settings DOM boundary", () => {
     pendingList.resolve(response({ revision: 5, official: [], custom: [customProvider({ name: "Equal GET" })] }));
     await flushAsyncWork();
 
-    assert.strictEqual(document.querySelector("#msl-add-action .list-add-action")?.disabled, false);
-    assert.strictEqual(document.querySelector(".msl-custom-status")?.hidden, true);
-    assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"] .msl-name')?.textContent, "Mutation Authority");
+    assert.strictEqual(document.querySelector(".provider-custom-status")?.hidden, true);
+    assert.strictEqual(providerCard("acme")?.querySelector(".provider-identity-name")?.textContent, "Mutation Authority");
+    editProvider("acme");
     assert.strictEqual(document.querySelector("#cpe-name")?.value, "Mutation Authority");
     win.App.Settings.closeSettingsModal();
   });
@@ -1167,8 +1195,10 @@ describe("settings DOM boundary", () => {
     };
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();
-    assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"]'), null);
-    assert.strictEqual(document.querySelector("#msl-add-action .list-add-action")?.disabled, true);
+    assert.strictEqual(providerCard("acme"), null);
+    document.querySelector('.provider-card-list [data-provider-action="add"]')?.click();
+    assert.ok([...document.querySelectorAll("[data-custom-template]")].every((button) => button.disabled));
+    assert.match(document.querySelector(".provider-custom-status")?.textContent ?? "", /配置列表加载失败/);
     win.App.Settings.closeSettingsModal();
 
     for (const { currentRevision, reloadRevision, expectedRevision } of [
@@ -1223,7 +1253,6 @@ describe("settings DOM boundary", () => {
     const beta = customProvider({ id: "beta", name: "Beta Gateway" });
     for (const action of ["save", "delete"]) {
       document.body.innerHTML = "";
-      win._provOrder = [];
       const pending = deferred();
       let mutationSignal;
       fetchImpl = async (url, init = {}) => {
@@ -1241,6 +1270,7 @@ describe("settings DOM boundary", () => {
       win.App.Settings.openSettingsModal();
       await flushAsyncWork();
       const editor = win.App.SettingsComponents.providers.customEditor;
+      editProvider("acme");
       let operation;
       if (action === "delete") {
         await editor.delete();
@@ -1248,7 +1278,8 @@ describe("settings DOM boundary", () => {
       } else operation = editor.save();
       await Promise.resolve();
 
-      document.querySelector('.msl-item[data-prov="beta"]').click();
+      document.querySelector('[data-provider-action="back"]')?.click();
+      editProvider("beta");
       setInput("#cpe-name", "Unsaved Beta Name");
       const snapshot = {
         schemaVersion: 1,
@@ -1261,11 +1292,12 @@ describe("settings DOM boundary", () => {
       await operation;
 
       assert.strictEqual(mutationSignal?.aborted, false);
-      assert.strictEqual(document.querySelector('.msl-item[data-prov="beta"]')?.classList.contains("on"), true);
       assert.strictEqual(document.querySelector("#cpe-id")?.value, "beta");
       assert.strictEqual(document.querySelector("#cpe-name")?.value, "Unsaved Beta Name");
-      if (action === "save") assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"] .msl-name')?.textContent, "Saved Acme");
-      else assert.strictEqual(document.querySelector('.msl-item[data-prov="acme"]'), null);
+      document.querySelector('[data-provider-action="back"]')?.click();
+      if (action === "save") {
+        assert.strictEqual(providerCard("acme")?.querySelector(".provider-identity-name")?.textContent, "Saved Acme");
+      } else assert.strictEqual(providerCard("acme"), null);
       win.App.Settings.closeSettingsModal();
     }
   });
@@ -1321,6 +1353,7 @@ describe("settings DOM boundary", () => {
     };
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();
+    editProvider("acme");
     const operation = win.App.SettingsComponents.providers.customEditor.test();
     await Promise.resolve();
 
@@ -1570,14 +1603,14 @@ describe("settings DOM boundary", () => {
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();
 
-    const providerItems = [...document.querySelectorAll(".msl-item")];
-    assert.ok(providerItems.length >= 2);
-    for (const item of providerItems) {
-      assert.strictEqual(item.tagName, "BUTTON");
-      assert.strictEqual(item.type, "button");
-    }
-    const customItem = providerItems.find((item) => item.dataset.prov === "acme");
-    activateButtonFromKeyboard(customItem, "Enter");
+    const card = providerCard("acme");
+    assert.ok(card);
+    assert.strictEqual(card.tagName, "ARTICLE");
+    const edit = card.querySelector('[data-provider-action="edit"]');
+    assert.strictEqual(edit?.tagName, "BUTTON");
+    assert.strictEqual(edit?.type, "button");
+    assert.strictEqual(document.querySelector(".provider-custom-status")?.getAttribute("aria-live"), "polite");
+    activateButtonFromKeyboard(edit, "Enter");
     assert.strictEqual(document.querySelector("#cpe-id")?.value, "acme");
 
     const dynamicControls = document.querySelectorAll([
@@ -1597,7 +1630,6 @@ describe("settings DOM boundary", () => {
     for (const error of document.querySelectorAll(".cpe-field-error")) assert.strictEqual(error.getAttribute("role"), "alert");
     assert.strictEqual(document.querySelector(".cpe-result")?.getAttribute("aria-live"), "polite");
     assert.strictEqual(document.querySelector(".cpe-conflict-banner")?.getAttribute("role"), "alert");
-    assert.strictEqual(document.querySelector(".msl-custom-status")?.getAttribute("aria-live"), "polite");
   });
 
   it("redacts raw, percent-encoded, and JSON-escaped draft secrets from errors", async () => {
@@ -1799,17 +1831,18 @@ describe("settings DOM boundary", () => {
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();
 
-    const providers = [...document.querySelectorAll(".msl-item[data-prov]")];
-    const hostileItem = providers.find((item) => item.dataset.prov === hostileProvider);
+    document.querySelector('.provider-card-list [data-provider-action="add"]')?.click();
+    const providers = [...document.querySelectorAll(".provider-preset-official[data-provider-id]")];
+    const hostileItem = providers.find((item) => item.dataset.providerId === hostileProvider);
     assert.ok(hostileItem, "provider should remain an exact data attribute value");
     assert.strictEqual(hostileItem.textContent.includes(hostileProvider), true);
     assert.strictEqual(hostileItem.hasAttribute("onclick"), false);
     assert.strictEqual(global.__settingsInjected, undefined);
 
-    const openaiItem = providers.find((item) => item.dataset.prov === "openai");
+    const openaiItem = providers.find((item) => item.dataset.providerId === "openai");
     assert.ok(openaiItem);
     openaiItem.click();
-    assert.strictEqual(document.querySelector(".rp-prov-name")?.textContent, "openai");
+    assert.strictEqual(document.querySelector(".rp-official .provider-identity-name")?.textContent, "OpenAI");
   });
 
   it("keeps hostile model ids as inert data and submits the exact selected model", async () => {
@@ -1834,11 +1867,13 @@ describe("settings DOM boundary", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
-    const model = document.querySelector(".rp-model-item");
+    const card = providerCard("openai");
+    assert.ok(card);
+    const model = card.querySelector("option");
     assert.ok(model);
-    assert.strictEqual(model.dataset.modelId, hostileModel);
+    assert.strictEqual(model.value, hostileModel);
     assert.strictEqual(model.hasAttribute("onclick"), false);
-    model.click();
+    card.querySelector('[data-provider-action="use"]').click();
     await flushAsyncWork();
 
     assert.deepStrictEqual(switchRequest, { provider: "openai", modelId: hostileModel });
@@ -1863,6 +1898,10 @@ describe("settings DOM boundary", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
+    editProvider("openai");
+    assert.strictEqual(document.querySelector("#key-input")?.value, "");
+    document.querySelector('[data-provider-action="reveal-key"]')?.click();
+    await flushAsyncWork();
     const input = document.querySelector("#key-input");
     assert.strictEqual(input?.type, "text");
     assert.strictEqual(input?.value, "sk-test-secret-value");
@@ -1888,6 +1927,7 @@ describe("settings DOM boundary", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
+    editProvider("openai");
     const input = document.querySelector("#key-input");
     assert.strictEqual(revealRequests, 0);
     assert.strictEqual(input?.type, "password");

@@ -29,6 +29,150 @@ async function loadViews() {
   return import(viewsUrl);
 }
 
+function response(body, status = 200) {
+  return { ok: status >= 200 && status < 300, status, json: async () => body };
+}
+
+function controllerCustomProvider(overrides = {}) {
+  return {
+    id: "acme",
+    name: "Acme Gateway",
+    protocol: "openai-responses",
+    baseUrl: "https://api.example.test/v1",
+    authMode: "apiKey",
+    apiKeyConfigured: true,
+    headers: [],
+    models: [{
+      id: "acme-chat",
+      name: "Acme Chat",
+      contextWindow: 128000,
+      maxTokens: 8192,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }],
+    ...overrides,
+  };
+}
+
+function controllerCapabilities() {
+  return response({
+    protocols: ["openai-responses", "anthropic-messages"].map(id => ({
+      id,
+      authModes: ["none", "apiKey"],
+      supportsCompatibility: true,
+    })),
+    price: { currency: "USD", unit: "millionTokens" },
+  });
+}
+
+async function flushControllerWork() {
+  await Promise.resolve();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await Promise.resolve();
+}
+
+async function loadController({ fetchImpl, dashboard = null, order = [] } = {}) {
+  const win = new Window();
+  global.window = win;
+  global.document = win.document;
+  global.self = win;
+  global.$ = id => document.getElementById(id);
+
+  const utilsUrl = `../src/frontend/dashboard/settings-provider-utils.ts?controller-${Date.now()}-${Math.random()}`;
+  const { ProviderSettingsUtils } = await import(utilsUrl);
+  global.ProviderSettingsUtils = ProviderSettingsUtils;
+  const viewsUrl = `../src/frontend/dashboard/settings-provider-views.ts?controller-${Date.now()}-${Math.random()}`;
+  const views = await import(viewsUrl);
+  global.ProviderCardListView = views.ProviderCardListView;
+  global.ProviderPickerView = views.ProviderPickerView;
+  global.OfficialProviderEditorView = views.OfficialProviderEditorView;
+
+  const editorCalls = [];
+  let editorDependencies;
+  class FakeCustomEditor {
+    constructor(dependencies) {
+      editorDependencies = dependencies;
+    }
+    setProtocols(protocols) {
+      editorCalls.push(["setProtocols", [...protocols]]);
+    }
+    mount(container, provider, revision) {
+      editorCalls.push(["mount", provider.id, revision]);
+      const root = document.createElement("div");
+      root.className = "cpe-editor";
+      root.textContent = provider.name;
+      container.replaceChildren(root);
+    }
+    startNew(container, revision, options) {
+      editorCalls.push(["startNew", revision, options]);
+      const root = document.createElement("div");
+      root.className = "cpe-editor";
+      container.replaceChildren(root);
+    }
+    unmount() {
+      editorCalls.push(["unmount"]);
+    }
+  }
+
+  const preferences = {
+    get: key => key === "providers_order" ? JSON.stringify(order) : "",
+    setJson() {},
+  };
+  let refreshes = 0;
+  win.App = {
+    Preferences: preferences,
+    ChatState: { getDashboard: () => dashboard },
+    Ui: { ListAddAction: { create: () => document.createElement("button") } },
+    SettingsCustomProviderEditor: FakeCustomEditor,
+    isCustomProviderRevision: value => Number.isSafeInteger(value) && value >= 0,
+  };
+  global.App = win.App;
+  global.toast = () => {};
+  global.getD = () => { refreshes += 1; };
+  global.fetch = fetchImpl;
+
+  const controllerUrl = `../src/frontend/dashboard/settings-provider-model.ts?controller-${Date.now()}-${Math.random()}`;
+  await import(controllerUrl);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const controller = win.App.SettingsComponents.providers;
+  controller.renderTab(host);
+  await flushControllerWork();
+  return { controller, host, editorCalls, editorDependencies, getRefreshes: () => refreshes };
+}
+
+function standardControllerFetch({ requests = [] } = {}) {
+  return async (url, init = {}) => {
+    const path = String(url);
+    requests.push([path, init]);
+    if (path === "/api/auth") return response({
+      providers: [
+        { provider: "openai", hasKey: false, canReveal: false, keyPreview: "" },
+        { provider: "anthropic", hasKey: true, canReveal: false, keyPreview: "" },
+      ],
+    });
+    if (path === "/api/custom-providers") return response({
+      revision: 4,
+      official: [
+        { id: "openai", name: "OpenAI", configured: false },
+        { id: "anthropic", name: "Anthropic", configured: true },
+      ],
+      custom: [controllerCustomProvider()],
+    });
+    if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
+    if (path === "/api/models") return response({
+      models: [
+        { provider: "openai", id: "gpt-5", name: "GPT-5" },
+        { provider: "anthropic", id: "claude-sonnet", name: "Claude Sonnet" },
+      ],
+    });
+    if (path === "/api/model/switch") return response({ ok: true });
+    if (path === "/api/auth/reveal") return response({ ok: true, apiKey: "sk-revealed" });
+    return response({ ok: true });
+  };
+}
+
 describe("provider settings presentation utilities", () => {
   it("derives stable provider ids with a collision suffix", async () => {
     const { deriveProviderId } = await loadUtils();
@@ -542,5 +686,105 @@ describe("provider settings views", () => {
     assert.equal(input.type, "text");
     assert.deepEqual(visibilityCalls, [["openai", true]]);
     assert.deepEqual(revealCalls, []);
+  });
+});
+
+describe("provider settings controller", () => {
+  it("shows configured official providers and saved custom providers only", async () => {
+    const { host } = await loadController({
+      fetchImpl: standardControllerFetch(),
+      order: ["acme", "openai", "anthropic"],
+    });
+
+    assert.deepEqual(
+      [...host.querySelectorAll(".provider-card")].map(card => card.dataset.providerId),
+      ["acme", "anthropic"],
+    );
+  });
+
+  it("keeps the current unconfigured official provider visible", async () => {
+    const { host } = await loadController({
+      fetchImpl: standardControllerFetch(),
+      dashboard: { modelProvider: "openai", modelId: "gpt-5" },
+    });
+
+    const openai = host.querySelector('.provider-card[data-provider-id="openai"]');
+    assert.ok(openai);
+    assert.equal(openai.getAttribute("aria-current"), "true");
+  });
+
+  it("opens the provider picker without mounting a custom editor", async () => {
+    const { host, editorCalls } = await loadController({ fetchImpl: standardControllerFetch() });
+    const callsBeforeAdd = editorCalls.length;
+    const add = host.querySelector('[data-provider-action="add"]');
+    assert.ok(add, "card list add action should render");
+
+    add.click();
+
+    assert.ok(host.querySelector(".provider-picker"));
+    assert.equal(host.querySelector(".cpe-editor"), null);
+    assert.equal(editorCalls.slice(callsBeforeAdd).some(([name]) => name === "startNew"), false);
+  });
+
+  it("opens official presets and starts custom templates with occupied provider ids", async () => {
+    const first = await loadController({ fetchImpl: standardControllerFetch() });
+    const firstAdd = first.host.querySelector('[data-provider-action="add"]');
+    assert.ok(firstAdd, "card list add action should render");
+    firstAdd.click();
+    const officialPreset = first.host.querySelector('.provider-preset-official[data-provider-id="openai"]');
+    assert.ok(officialPreset, "OpenAI preset should render");
+    officialPreset.click();
+    assert.ok(first.host.querySelector(".rp-official"));
+    assert.equal(first.host.querySelector(".cpe-editor"), null);
+
+    const second = await loadController({ fetchImpl: standardControllerFetch() });
+    const secondAdd = second.host.querySelector('[data-provider-action="add"]');
+    assert.ok(secondAdd, "card list add action should render");
+    secondAdd.click();
+    const customPreset = second.host.querySelector('[data-custom-template="anthropic"]');
+    assert.ok(customPreset, "Anthropic custom template should render");
+    customPreset.click();
+    const start = second.editorCalls.find(([name]) => name === "startNew");
+    assert.equal(start?.[2]?.template, "anthropic");
+    assert.deepEqual([...start[2].occupiedProviderIds], ["openai", "anthropic", "acme"]);
+  });
+
+  it("switches models only when the use action is clicked", async () => {
+    const requests = [];
+    const { host } = await loadController({
+      fetchImpl: standardControllerFetch({ requests }),
+      dashboard: { modelProvider: "anthropic", modelId: "claude-sonnet" },
+    });
+    const card = host.querySelector('.provider-card[data-provider-id="acme"]');
+    assert.ok(card, "custom provider card should render");
+    const select = card.querySelector("select");
+    assert.ok(select, "provider model select should render");
+
+    select.value = "acme-chat";
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.equal(requests.filter(([url, init]) => url === "/api/model/switch" && init.method === "POST").length, 0);
+
+    card.querySelector('[data-provider-action="use"]').click();
+    await flushControllerWork();
+    const switches = requests.filter(([url, init]) => url === "/api/model/switch" && init.method === "POST");
+    assert.equal(switches.length, 1);
+    assert.deepEqual(JSON.parse(switches[0][1].body), { provider: "acme", modelId: "acme-chat" });
+  });
+
+  it("unmounts the custom editor when returning to the card list", async () => {
+    const { host, editorCalls } = await loadController({ fetchImpl: standardControllerFetch() });
+    const edit = host.querySelector('.provider-card[data-provider-id="acme"] [data-provider-action="edit"]');
+    assert.ok(edit, "custom provider edit action should render");
+    edit.click();
+    assert.ok(host.querySelector(".cpe-editor"));
+    const unmountsBeforeBack = editorCalls.filter(([name]) => name === "unmount").length;
+
+    const back = host.querySelector('[data-provider-action="back"]');
+    assert.ok(back, "custom provider back action should render");
+    back.click();
+
+    assert.ok(host.querySelector(".provider-card-list"));
+    assert.equal(host.querySelector(".cpe-editor"), null);
+    assert.equal(editorCalls.filter(([name]) => name === "unmount").length, unmountsBeforeBack + 1);
   });
 });

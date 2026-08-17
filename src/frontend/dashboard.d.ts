@@ -243,6 +243,7 @@ type CustomProviderProtocol =
   | 'azure-openai-responses'
   | 'pi-messages';
 type CustomProviderAuthMode = 'none' | 'apiKey';
+type CustomProviderTemplate = 'openai' | 'anthropic' | 'other';
 interface CustomProviderModel {
   id: string;
   name: string;
@@ -296,7 +297,11 @@ interface SettingsCustomProviderEditorDependencies {
 interface SettingsCustomProviderEditor {
   setProtocols(protocols: readonly CustomProviderProtocol[]): void;
   mount(container: HTMLElement, provider: RedactedCustomProvider | null, revision: number): void;
-  startNew(container: HTMLElement, revision: number): void;
+  startNew(
+    container: HTMLElement,
+    revision: number,
+    options?: { template: CustomProviderTemplate; occupiedProviderIds: ReadonlySet<string> },
+  ): void;
   unmount(): void;
   save(): Promise<void>;
   test(): Promise<void>;
@@ -497,14 +502,6 @@ interface AppSettings {
   openSettingsModal(): void;
   closeSettingsModal(): void;
   switchSettingsModal(tab: string): void;
-  selectProvider(prov: string): void;
-  toggleKeyVis(prov: string): void;
-  saveApiKey(provider: string): void;
-  loadProviderModels(prov: string): void;
-  selectModel(provider: string, modelId: string): void;
-  provDragStart(ev: DragEvent, idx: number): void;
-  provDragOver(ev: DragEvent, idx: number): void;
-  provDrop(ev: DragEvent, idx: number): void;
   changeFontSize(delta: number): void;
   applyGeneralSetting(key: string, val: boolean): void;
   toggleAutoSaveSetting(): void;
@@ -525,14 +522,6 @@ interface SettingsProviderModelApi {
   customEditor: SettingsCustomProviderEditor;
   renderTab(container: HTMLElement): void;
   unmount(): void;
-  selectProvider(provider: string): void;
-  toggleKeyVisibility(provider: string): void;
-  saveApiKey(provider: string): void;
-  loadProviderModels(provider: string): void;
-  selectModel(provider: string, modelId: string): void;
-  dragStart(event: DragEvent, index: number): void;
-  dragOver(event: DragEvent, index: number): void;
-  drop(event: DragEvent, index: number): void;
 }
 interface SettingsCustomSubagentApi {
   mount(container: HTMLElement): void;
@@ -847,7 +836,6 @@ interface OnceSessionActivated {
 
 interface Window {
   electronAPI?: ElectronAPI;
-  _provOrder?: string[];
   App: AppNamespace;
   __monaco: MonacoAPI;
   __problemsStore: ProblemsStoreAPI;
@@ -909,14 +897,6 @@ declare function launchCli(): void;
 declare function openSettingsModal(): void;
 declare function closeSettingsModal(): void;
 declare function switchSettingsModal(tab: string): void;
-declare function selectProvider(prov: string): void;
-declare function toggleKeyVis(prov: string): void;
-declare function saveApiKey(provider: string): void;
-declare function loadProviderModels(prov: string): void;
-declare function selectModel(provider: string, modelId: string): void;
-declare function provDragStart(ev: DragEvent, idx: number): void;
-declare function provDragOver(ev: DragEvent, idx: number): void;
-declare function provDrop(ev: DragEvent, idx: number): void;
 declare function isConversationSearchActive(): boolean;
 declare function loadMonaco(): Promise<void>;
 declare function openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video', options?: { activate?: boolean }): void;

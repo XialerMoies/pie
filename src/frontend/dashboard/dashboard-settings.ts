@@ -25,31 +25,12 @@ function bindSettingsModalEvents(overlay: HTMLElement): void {
       if (agentId) void settingsComponents.subagents.delete(agentId);
       return;
     }
-    if (action === 'toggle-key') {
-      const provider = actionTarget?.dataset.provider;
-      if (provider) toggleKeyVis(provider);
-      return;
-    }
-    if (action === 'save-key') {
-      const provider = actionTarget?.dataset.provider;
-      if (provider) saveApiKey(provider);
-      return;
-    }
     if (action === 'choose-data-root') { void settingsComponents.storage.chooseDataRoot(); return; }
     if (action === 'preview-storage-migration') { void settingsComponents.storage.previewMigration(); return; }
     if (action === 'confirm-storage-migration') { void settingsComponents.storage.confirmMigration(); return; }
 
     const tab = target.closest<HTMLElement>('.ms-item[data-st]')?.dataset.st;
     if (tab) { switchSettingsModal(tab); return; }
-    const provider = target.closest<HTMLElement>('.msl-item[data-prov]')?.dataset.prov;
-    if (provider) {
-      selectProvider(provider);
-      return;
-    }
-    const model = target.closest<HTMLElement>('.rp-model-item[data-model-id]');
-    const modelProvider = model?.dataset.modelProvider;
-    const modelId = model?.dataset.modelId;
-    if (modelProvider && modelId) selectModel(modelProvider, modelId);
     const subagentId = target.closest<HTMLElement>('.sa-agent-item[data-agent-id]')?.dataset.agentId;
     if (subagentId) settingsComponents.subagents.select(subagentId);
   });
@@ -60,19 +41,6 @@ function bindSettingsModalEvents(overlay: HTMLElement): void {
     else if (target.matches('#gs-indent-type, #gs-tab-size, #gs-theme')) applyGeneralSetting();
     else if (target.matches('#gs-timeline-enabled, #gs-timeline-window, #gs-jump-enabled, #gs-jump-smooth, #gs-jump-threshold')) settingsComponents.general.applyReading(target);
     else if (target.matches('#gs-subagent-max-tasks, #gs-subagent-max-concurrent')) settingsComponents.general.applySubagent(target as HTMLInputElement);
-  });
-
-  overlay.addEventListener('dragstart', event => {
-    const index = Number((event.target as HTMLElement).closest<HTMLElement>('.msl-item[data-index]')?.dataset.index);
-    if (Number.isInteger(index)) provDragStart(event, index);
-  });
-  overlay.addEventListener('dragover', event => {
-    const index = Number((event.target as HTMLElement).closest<HTMLElement>('.msl-item[data-index]')?.dataset.index);
-    if (Number.isInteger(index)) provDragOver(event, index);
-  });
-  overlay.addEventListener('drop', event => {
-    const index = Number((event.target as HTMLElement).closest<HTMLElement>('.msl-item[data-index]')?.dataset.index);
-    if (Number.isInteger(index)) provDrop(event, index);
   });
 }
 
@@ -141,38 +109,6 @@ function switchSettingsModal(tab: string): void {
   }
 }
 
-function selectProvider(provider: string): void {
-  settingsComponents.providers.selectProvider(provider);
-}
-
-function toggleKeyVis(provider: string): void {
-  settingsComponents.providers.toggleKeyVisibility(provider);
-}
-
-function saveApiKey(provider: string): void {
-  settingsComponents.providers.saveApiKey(provider);
-}
-
-function loadProviderModels(provider: string): void {
-  settingsComponents.providers.loadProviderModels(provider);
-}
-
-function selectModel(provider: string, modelId: string): void {
-  settingsComponents.providers.selectModel(provider, modelId);
-}
-
-function provDragStart(event: DragEvent, index: number): void {
-  settingsComponents.providers.dragStart(event, index);
-}
-
-function provDragOver(event: DragEvent, index: number): void {
-  settingsComponents.providers.dragOver(event, index);
-}
-
-function provDrop(event: DragEvent, index: number): void {
-  settingsComponents.providers.drop(event, index);
-}
-
 function changeFontSize(delta: number): void {
   settingsComponents.general.changeFontSize(delta);
 }
@@ -188,14 +124,6 @@ function toggleAutoSaveSetting(): void {
 window.openSettingsModal = openSettingsModal;
 window.closeSettingsModal = closeSettingsModal;
 window.switchSettingsModal = switchSettingsModal;
-window.selectProvider = selectProvider as any;
-window.toggleKeyVis = toggleKeyVis;
-window.saveApiKey = saveApiKey;
-window.loadProviderModels = loadProviderModels;
-window.selectModel = selectModel;
-window.provDragStart = provDragStart as any;
-window.provDragOver = provDragOver as any;
-window.provDrop = provDrop as any;
 window.changeFontSize = changeFontSize;
 window.applyGeneralSetting = applyGeneralSetting;
 window.toggleAutoSaveSetting = toggleAutoSaveSetting;
@@ -205,14 +133,6 @@ if (settingsFacade) Object.assign(settingsFacade, {
   openSettingsModal,
   closeSettingsModal,
   switchSettingsModal,
-  selectProvider,
-  toggleKeyVis,
-  saveApiKey,
-  loadProviderModels,
-  selectModel,
-  provDragStart,
-  provDragOver,
-  provDrop,
   changeFontSize,
   applyGeneralSetting,
   toggleAutoSaveSetting,
