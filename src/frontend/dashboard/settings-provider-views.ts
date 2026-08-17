@@ -271,17 +271,20 @@ export class OfficialProviderEditorView {
       userEdited = true;
       localValueAvailable = input.value.length > 0;
       syncRevealControl();
+      this.callbacks.onApiKeyChange(state.provider.id, input.value);
     });
     reveal.addEventListener('click', () => {
       if (input.type === 'text') {
         input.type = 'password';
         syncRevealControl();
+        this.callbacks.onKeyVisibilityChange(state.provider.id, false);
         return;
       }
       if (localValueAvailable || (userEdited && input.value.length > 0)) {
         input.type = 'text';
         localValueAvailable = true;
         syncRevealControl();
+        this.callbacks.onKeyVisibilityChange(state.provider.id, true);
         return;
       }
       if (state.apiKey.canReveal) this.callbacks.onReveal(state.provider.id);

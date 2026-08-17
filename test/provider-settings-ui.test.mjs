@@ -283,6 +283,8 @@ describe("provider settings views", () => {
     const view = new OfficialProviderEditorView({
       onBack: () => calls.push(["back"]),
       onReveal: providerId => calls.push(["reveal", providerId]),
+      onApiKeyChange: (providerId, value) => calls.push(["key-change", providerId, value]),
+      onKeyVisibilityChange: (providerId, revealed) => calls.push(["visibility", providerId, revealed]),
       onSave: (providerId, apiKey) => calls.push(["save", providerId, apiKey]),
       onUse: (providerId, modelId) => calls.push(["use", providerId, modelId]),
     });
@@ -308,11 +310,17 @@ describe("provider settings views", () => {
     assert.equal(label?.htmlFor, input.id);
     assert.equal(input.type, "password");
     host.querySelector('[data-provider-action="reveal-key"]').click();
+    assert.deepEqual(calls, [["reveal", "official-test"]]);
     input.value = "sk-new";
     input.dispatchEvent(new window.Event("input", { bubbles: true }));
     host.querySelector('[data-provider-action="save-key"]').click();
     host.querySelector('[data-provider-action="back"]').click();
-    assert.deepEqual(calls, [["reveal", "official-test"], ["save", "official-test", "sk-new"], ["back"]]);
+    assert.deepEqual(calls, [
+      ["reveal", "official-test"],
+      ["key-change", "official-test", "sk-new"],
+      ["save", "official-test", "sk-new"],
+      ["back"],
+    ]);
 
     view.render(host, {
       ...state,
@@ -343,7 +351,14 @@ describe("provider settings views", () => {
   it("exposes active official models through aria-pressed", async () => {
     const { OfficialProviderEditorView } = await loadViews();
     const host = document.createElement("div");
-    new OfficialProviderEditorView({ onBack() {}, onReveal() {}, onSave() {}, onUse() {} }).render(host, {
+    new OfficialProviderEditorView({
+      onBack() {},
+      onReveal() {},
+      onApiKeyChange() {},
+      onKeyVisibilityChange() {},
+      onSave() {},
+      onUse() {},
+    }).render(host, {
       provider: { id: "openai", name: "OpenAI", configured: true },
       apiKey: {
         value: "",
@@ -370,10 +385,13 @@ describe("provider settings views", () => {
   it("hides and re-shows an already revealed API key without another reveal request", async () => {
     const { OfficialProviderEditorView } = await loadViews();
     const host = document.createElement("div");
-    const calls = [];
+    const revealCalls = [];
+    const visibilityCalls = [];
     new OfficialProviderEditorView({
       onBack() {},
-      onReveal: providerId => calls.push(providerId),
+      onReveal: providerId => revealCalls.push(providerId),
+      onApiKeyChange() {},
+      onKeyVisibilityChange: (providerId, revealed) => visibilityCalls.push([providerId, revealed]),
       onSave() {},
       onUse() {},
     }).render(host, {
@@ -401,16 +419,21 @@ describe("provider settings views", () => {
     assert.equal(toggle.getAttribute("aria-label"), "显示 API Key");
     toggle.click();
     assert.equal(input.type, "text");
-    assert.deepEqual(calls, []);
+    assert.deepEqual(revealCalls, []);
+    assert.deepEqual(visibilityCalls, [["openai", false], ["openai", true]]);
   });
 
   it("shows and hides a newly typed API key locally when stored reveal is unavailable", async () => {
     const { OfficialProviderEditorView } = await loadViews();
     const host = document.createElement("div");
-    const calls = [];
+    const revealCalls = [];
+    const keyChanges = [];
+    const visibilityCalls = [];
     new OfficialProviderEditorView({
       onBack() {},
-      onReveal: providerId => calls.push(providerId),
+      onReveal: providerId => revealCalls.push(providerId),
+      onApiKeyChange: (providerId, value) => keyChanges.push([providerId, value]),
+      onKeyVisibilityChange: (providerId, revealed) => visibilityCalls.push([providerId, revealed]),
       onSave() {},
       onUse() {},
     }).render(host, {
@@ -438,6 +461,48 @@ describe("provider settings views", () => {
     assert.equal(toggle.getAttribute("aria-label"), "隐藏 API Key");
     toggle.click();
     assert.equal(input.type, "password");
-    assert.deepEqual(calls, []);
+    assert.deepEqual(revealCalls, []);
+    assert.deepEqual(keyChanges, [["openai", "sk-new"]]);
+    assert.deepEqual(visibilityCalls, [["openai", true], ["openai", false]]);
+  });
+
+  it("preserves controller-owned API key drafts and visibility across rerenders", async () => {
+    const { OfficialProviderEditorView } = await loadViews();
+    const host = document.createElement("div");
+    const revealCalls = [];
+    let draft = "";
+    let revealed = false;
+    const view = new OfficialProviderEditorView({
+      onBack() {},
+      onReveal: providerId => revealCalls.push(providerId),
+      onApiKeyChange: (_providerId, value) => { draft = value; },
+      onKeyVisibilityChange: (_providerId, value) => { revealed = value; },
+      onSave() {},
+      onUse() {},
+    });
+    const render = status => view.render(host, {
+      provider: { id: "openai", name: "OpenAI", configured: false },
+      apiKey: {
+        value: draft,
+        placeholder: "输入 API Key...",
+        revealed,
+        canReveal: false,
+        saving: false,
+      },
+      models: { status, items: [], activeModelId: null, error: "" },
+    });
+
+    render("loading");
+    const input = host.querySelector(".rp-key-input");
+    input.value = "sk-draft";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    host.querySelector('[data-provider-action="reveal-key"]').click();
+    render("ready");
+
+    assert.equal(draft, "sk-draft");
+    assert.equal(revealed, true);
+    assert.equal(host.querySelector(".rp-key-input").value, "sk-draft");
+    assert.equal(host.querySelector(".rp-key-input").type, "text");
+    assert.deepEqual(revealCalls, []);
   });
 });

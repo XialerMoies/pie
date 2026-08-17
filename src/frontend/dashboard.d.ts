@@ -133,6 +133,8 @@ interface OfficialProviderEditorState {
 interface OfficialProviderEditorCallbacks {
   onBack(): void;
   onReveal(providerId: string): void;
+  onApiKeyChange(providerId: string, value: string): void;
+  onKeyVisibilityChange(providerId: string, revealed: boolean): void;
   onSave(providerId: string, apiKey: string): void;
   onUse(providerId: string, modelId: string): void;
 }
