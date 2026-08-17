@@ -185,12 +185,18 @@ describe("frontend component tree boundaries", () => {
     assert.ok(actionIndex < editorIndex && editorIndex < providerIndex, "custom provider editor must load after ListAddAction and before provider owner");
   });
 
-  it("keeps provider settings usable at the 600px narrow breakpoint", () => {
+  it("keeps provider settings responsive above the Electron minimum window width", () => {
     const css = source("src/frontend/dashboard.css");
-    const narrow = css.match(/@media\s*\(max-width:\s*600px\)\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+    const electronMain = source("src/electron/electron-main.ts");
+    const narrowMatch = css.match(/@media\s*\(max-width:\s*(\d+)px\)\s*\{\s*\.model-split([\s\S]*?)\n\}/);
+    const narrowBreakpoint = Number(narrowMatch?.[1] ?? 0);
+    const minimumWindowWidth = Number(electronMain.match(/minWidth:\s*(\d+)/)?.[1] ?? 0);
+    const narrow = narrowMatch?.[2] ?? "";
 
-    assert.ok(narrow, "provider settings need a dedicated 600px breakpoint");
-    assert.match(narrow, /\.model-split\s*\{[^}]*flex-direction:\s*column/);
+    assert.ok(narrow, "provider settings need a dedicated narrow breakpoint");
+    assert.ok(minimumWindowWidth > 0, "Electron BrowserWindow.minWidth must remain explicit");
+    assert.ok(narrowBreakpoint > minimumWindowWidth, "narrow breakpoint must remain reachable above BrowserWindow.minWidth");
+    assert.match(`.model-split${narrow}`, /\.model-split\s*\{[^}]*flex-direction:\s*column/);
     assert.match(narrow, /\.ms-left\s*\{[^}]*width:\s*100%/);
     assert.match(narrow, /\.ms-right\s*\{[^}]*min-width:\s*0/);
     assert.match(narrow, /\.cpe-actions\s*\{[^}]*flex-wrap:\s*wrap/);

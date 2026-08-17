@@ -655,7 +655,7 @@ textarea.cpe-input{resize:vertical;line-height:1.45}
 .cpe-button.danger.armed{border-color:var(--rs);background:rgba(248,113,113,.08)}
 .cpe-button.subtle{flex-shrink:0;color:var(--tm)}
 @media(max-width:760px){.ms-left{width:150px}.cpe-form{grid-template-columns:minmax(0,1fr)}.cpe-section{grid-column:1}.cpe-model-grid,.cpe-advanced-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:600px){
+@media(max-width:640px){
   .model-split{height:auto;min-height:100%;flex-direction:column}
   .ms-left{width:100%;max-height:148px;flex-shrink:0;border-right:0;border-bottom:1px solid var(--bd)}
   .msl-list{min-height:38px;flex-direction:row;overflow-x:auto;overflow-y:hidden}
