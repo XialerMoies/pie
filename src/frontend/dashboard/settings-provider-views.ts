@@ -256,7 +256,8 @@ export class OfficialProviderEditorView {
 
     const reveal = providerViewButton('rp-key-toggle', '');
     reveal.dataset.providerAction = 'reveal-key';
-    let localValueAvailable = state.apiKey.revealed;
+    let localValueAvailable = state.apiKey.revealed
+      || (!state.apiKey.canReveal && state.apiKey.value.length > 0);
     let userEdited = false;
     const syncRevealControl = (): void => {
       const action = input.type === 'text' ? '隐藏' : '显示';

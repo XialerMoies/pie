@@ -505,4 +505,42 @@ describe("provider settings views", () => {
     assert.equal(host.querySelector(".rp-key-input").type, "text");
     assert.deepEqual(revealCalls, []);
   });
+
+  it("keeps a preserved hidden draft locally revealable immediately after rerender", async () => {
+    const { OfficialProviderEditorView } = await loadViews();
+    const host = document.createElement("div");
+    const revealCalls = [];
+    const visibilityCalls = [];
+    const view = new OfficialProviderEditorView({
+      onBack() {},
+      onReveal: providerId => revealCalls.push(providerId),
+      onApiKeyChange() {},
+      onKeyVisibilityChange: (providerId, revealed) => visibilityCalls.push([providerId, revealed]),
+      onSave() {},
+      onUse() {},
+    });
+    const render = status => view.render(host, {
+      provider: { id: "openai", name: "OpenAI", configured: false },
+      apiKey: {
+        value: "sk-preserved-draft",
+        placeholder: "输入 API Key...",
+        revealed: false,
+        canReveal: false,
+        saving: false,
+      },
+      models: { status, items: [], activeModelId: null, error: "" },
+    });
+
+    render("loading");
+    render("ready");
+    const input = host.querySelector(".rp-key-input");
+    const toggle = host.querySelector('[data-provider-action="reveal-key"]');
+    assert.equal(input.value, "sk-preserved-draft");
+    assert.equal(input.type, "password");
+    assert.equal(toggle.disabled, false);
+    toggle.click();
+    assert.equal(input.type, "text");
+    assert.deepEqual(visibilityCalls, [["openai", true]]);
+    assert.deepEqual(revealCalls, []);
+  });
 });
