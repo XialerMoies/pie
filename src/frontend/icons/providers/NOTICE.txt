@@ -1,0 +1,8 @@
+Provider SVG assets were copied from CC Switch:
+https://github.com/farion1231/cc-switch
+
+CC Switch is distributed under the MIT License.
+Copyright (c) 2025 Jason Young.
+
+Provider names and logos may be trademarks of their respective owners.
+They are used only to identify user-configured services.
