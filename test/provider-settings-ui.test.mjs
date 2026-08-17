@@ -72,6 +72,16 @@ async function flushControllerWork() {
   await Promise.resolve();
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
 async function loadController({ fetchImpl, dashboard = null, order = [] } = {}) {
   const win = new Window();
   global.window = win;
@@ -128,7 +138,8 @@ async function loadController({ fetchImpl, dashboard = null, order = [] } = {}) 
     isCustomProviderRevision: value => Number.isSafeInteger(value) && value >= 0,
   };
   global.App = win.App;
-  global.toast = () => {};
+  const toastCalls = [];
+  global.toast = (...args) => toastCalls.push(args);
   global.getD = () => { refreshes += 1; };
   global.fetch = fetchImpl;
 
@@ -139,7 +150,7 @@ async function loadController({ fetchImpl, dashboard = null, order = [] } = {}) 
   const controller = win.App.SettingsComponents.providers;
   controller.renderTab(host);
   await flushControllerWork();
-  return { controller, host, editorCalls, editorDependencies, getRefreshes: () => refreshes };
+  return { controller, host, editorCalls, editorDependencies, toastCalls, getRefreshes: () => refreshes };
 }
 
 function standardControllerFetch({ requests = [] } = {}) {
@@ -786,5 +797,191 @@ describe("provider settings controller", () => {
     assert.ok(host.querySelector(".provider-card-list"));
     assert.equal(host.querySelector(".cpe-editor"), null);
     assert.equal(editorCalls.filter(([name]) => name === "unmount").length, unmountsBeforeBack + 1);
+  });
+
+  it("converges official metadata from an equal-revision list without replacing an active custom editor", async () => {
+    const listRequest = deferred();
+    const fetchImpl = async url => {
+      const path = String(url);
+      if (path === "/api/auth") return response({ providers: [] });
+      if (path === "/api/custom-providers") return listRequest.promise;
+      if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
+      if (path === "/api/models") return response({ models: [] });
+      return response({ ok: true });
+    };
+    const { host, editorCalls, editorDependencies } = await loadController({ fetchImpl });
+    editorDependencies.onSaved({ revision: 8, providers: [controllerCustomProvider()] }, "acme", false);
+
+    host.querySelector('.provider-card[data-provider-id="acme"] [data-provider-action="edit"]').click();
+    const mountedEditor = host.querySelector(".cpe-editor");
+    const mountsBeforeList = editorCalls.filter(([name]) => name === "mount").length;
+    assert.ok(mountedEditor);
+
+    listRequest.resolve(response({
+      revision: 8,
+      official: [
+        { id: "openai", name: "OpenAI", configured: true },
+        { id: "anthropic", name: "Anthropic", configured: false },
+      ],
+      custom: [controllerCustomProvider({ name: "Acme from list" })],
+    }));
+    await flushControllerWork();
+
+    assert.equal(host.querySelector(".cpe-editor"), mountedEditor);
+    assert.equal(editorCalls.filter(([name]) => name === "mount").length, mountsBeforeList);
+    host.querySelector('[data-provider-action="back"]').click();
+    assert.ok(host.querySelector('.provider-card[data-provider-id="openai"]'));
+    host.querySelector('[data-provider-action="add"]').click();
+    assert.deepEqual(
+      [...host.querySelectorAll(".provider-preset-official")].map(node => node.dataset.providerId),
+      ["openai", "anthropic"],
+    );
+  });
+
+  it("suppresses a reveal failure after navigation invalidates the request", async () => {
+    const revealRequest = deferred();
+    const fetchImpl = async (url, init = {}) => {
+      const path = String(url);
+      if (path === "/api/auth" && init.method !== "POST") return response({
+        providers: [{ provider: "openai", hasKey: true, canReveal: true, keyPreview: "sk-...view" }],
+      });
+      if (path === "/api/custom-providers") return response({
+        revision: 1,
+        official: [{ id: "openai", name: "OpenAI", configured: true }],
+        custom: [],
+      });
+      if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
+      if (path === "/api/models") return response({ models: [] });
+      if (path === "/api/auth/reveal") return revealRequest.promise;
+      return response({ ok: true });
+    };
+    const { host, toastCalls } = await loadController({ fetchImpl });
+    host.querySelector('.provider-card[data-provider-id="openai"] [data-provider-action="edit"]').click();
+    host.querySelector('[data-provider-action="reveal-key"]').click();
+    host.querySelector('[data-provider-action="back"]').click();
+
+    revealRequest.reject(new Error("late reveal failure"));
+    await flushControllerWork();
+
+    assert.deepEqual(toastCalls, []);
+    assert.ok(host.querySelector('.provider-card[data-provider-id="openai"]'));
+    assert.equal(host.querySelector(".rp-official"), null);
+  });
+
+  it("suppresses a superseded reveal failure in the active official editor", async () => {
+    const firstReveal = deferred();
+    let revealCalls = 0;
+    const fetchImpl = async (url, init = {}) => {
+      const path = String(url);
+      if (path === "/api/auth") return response({
+        providers: [{ provider: "openai", hasKey: true, canReveal: true, keyPreview: "sk-...view" }],
+      });
+      if (path === "/api/custom-providers") return response({
+        revision: 1,
+        official: [{ id: "openai", name: "OpenAI", configured: true }],
+        custom: [],
+      });
+      if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
+      if (path === "/api/models") return response({ models: [] });
+      if (path === "/api/auth/reveal" && init.method === "POST") {
+        revealCalls += 1;
+        return revealCalls === 1 ? firstReveal.promise : response({ ok: true, apiKey: "sk-current-reveal" });
+      }
+      return response({ ok: true });
+    };
+    const { host, toastCalls } = await loadController({ fetchImpl });
+    host.querySelector('.provider-card[data-provider-id="openai"] [data-provider-action="edit"]').click();
+    const reveal = host.querySelector('[data-provider-action="reveal-key"]');
+    reveal.click();
+    reveal.click();
+    await flushControllerWork();
+    assert.equal(host.querySelector(".rp-key-input").value, "sk-current-reveal");
+
+    firstReveal.reject(new Error("superseded reveal failed"));
+    await flushControllerWork();
+
+    assert.deepEqual(toastCalls, []);
+    assert.equal(host.querySelector(".rp-key-input").value, "sk-current-reveal");
+  });
+
+  it("suppresses a save failure after navigation invalidates the request", async () => {
+    const saveRequest = deferred();
+    const fetchImpl = async (url, init = {}) => {
+      const path = String(url);
+      if (path === "/api/auth" && init.method === "POST") return saveRequest.promise;
+      if (path === "/api/auth") return response({
+        providers: [{ provider: "openai", hasKey: true, canReveal: false, keyPreview: "" }],
+      });
+      if (path === "/api/custom-providers") return response({
+        revision: 1,
+        official: [{ id: "openai", name: "OpenAI", configured: true }],
+        custom: [],
+      });
+      if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
+      if (path === "/api/models") return response({ models: [] });
+      return response({ ok: true });
+    };
+    const { host, toastCalls } = await loadController({ fetchImpl });
+    host.querySelector('.provider-card[data-provider-id="openai"] [data-provider-action="edit"]').click();
+    const input = host.querySelector(".rp-key-input");
+    input.value = "sk-late-save-secret";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    host.querySelector('[data-provider-action="save-key"]').click();
+    host.querySelector('[data-provider-action="back"]').click();
+
+    saveRequest.reject(new Error("late save failure"));
+    await flushControllerWork();
+
+    assert.deepEqual(toastCalls, []);
+    assert.ok(host.querySelector('.provider-card[data-provider-id="openai"]'));
+    assert.equal(host.querySelector(".rp-official"), null);
+    assert.equal(host.textContent.includes("sk-late-save-secret"), false);
+  });
+
+  it("keeps an optimistically configured official card when post-save refreshes are stale or fail", async () => {
+    let authGets = 0;
+    let modelGets = 0;
+    const rawSecret = "sk-new-official-secret";
+    const fetchImpl = async (url, init = {}) => {
+      const path = String(url);
+      if (path === "/api/auth" && init.method === "POST") return response({ ok: true });
+      if (path === "/api/auth") {
+        authGets += 1;
+        return response({
+          providers: [{ provider: "openai", hasKey: false, canReveal: false, keyPreview: "" }],
+        });
+      }
+      if (path === "/api/custom-providers") return response({
+        revision: 1,
+        official: [{ id: "openai", name: "OpenAI", configured: false }],
+        custom: [],
+      });
+      if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
+      if (path === "/api/models") {
+        modelGets += 1;
+        if (modelGets > 1) throw new Error("models refresh failed");
+        return response({ models: [] });
+      }
+      return response({ ok: true });
+    };
+    const { host } = await loadController({ fetchImpl });
+    host.querySelector('[data-provider-action="add"]').click();
+    host.querySelector('.provider-preset-official[data-provider-id="openai"]').click();
+    const input = host.querySelector(".rp-key-input");
+    input.value = rawSecret;
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    host.querySelector('[data-provider-action="save-key"]').click();
+    await flushControllerWork();
+
+    assert.equal(authGets, 2);
+    assert.equal(modelGets, 2);
+    assert.ok(host.querySelector('.provider-card[data-provider-id="openai"]'));
+    assert.equal(host.textContent.includes(rawSecret), false);
+
+    host.querySelector('.provider-card[data-provider-id="openai"] [data-provider-action="edit"]').click();
+    const savedInput = host.querySelector(".rp-key-input");
+    assert.equal(savedInput.value, "");
+    assert.match(savedInput.placeholder, /已保存/);
+    assert.equal(savedInput.placeholder.includes(rawSecret), false);
   });
 });

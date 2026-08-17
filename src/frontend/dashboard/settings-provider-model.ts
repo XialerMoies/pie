@@ -101,6 +101,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   private officialModels = new Map<string, ProviderCardModel[]>();
   private currentModel: ProviderCardListState['current'] = null;
   private officialDrafts = new Map<string, OfficialApiKeyDraft>();
+  private optimisticOfficialKeys = new Set<string>();
   customEditor: SettingsCustomProviderEditor;
 
   constructor(private readonly dependencies: SettingsProviderModelDependencies) {
@@ -133,6 +134,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     this.officialModels = new Map();
     this.currentModel = this.readCurrentModel();
     this.officialDrafts.clear();
+    this.optimisticOfficialKeys.clear();
     this.customEditor.setProtocols([]);
 
     const shell = providerElement('section', 'provider-settings-shell');
@@ -462,17 +464,32 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       const seen = new Set<string>();
       for (const entry of value.providers) {
         if (!providerRecord(entry) || typeof entry.provider !== 'string') continue;
-        const hasKey = entry.hasKey === true;
-        const keyPreview = typeof entry.keyPreview === 'string' ? entry.keyPreview : '';
+        const confirmedKey = entry.hasKey === true;
+        const optimisticKey = this.optimisticOfficialKeys.has(entry.provider);
+        const hasKey = confirmedKey || optimisticKey;
+        const currentKey = this.providerKeys[entry.provider];
+        const keyPreview = optimisticKey && !confirmedKey
+          ? currentKey?.keyPreview ?? '********'
+          : typeof entry.keyPreview === 'string' ? entry.keyPreview : '';
         keys[entry.provider] = {
           hasKey,
-          canReveal: typeof entry.canReveal === 'boolean' ? entry.canReveal : Boolean(keyPreview),
+          canReveal: optimisticKey && !confirmedKey
+            ? currentKey?.canReveal ?? true
+            : typeof entry.canReveal === 'boolean' ? entry.canReveal : Boolean(keyPreview),
           keyPreview,
         };
         if (!seen.has(entry.provider)) {
           seen.add(entry.provider);
           official.push({ id: entry.provider, name: entry.provider, configured: hasKey });
         }
+        if (confirmedKey) this.optimisticOfficialKeys.delete(entry.provider);
+      }
+      for (const providerId of this.optimisticOfficialKeys) {
+        if (seen.has(providerId)) continue;
+        const currentKey = this.providerKeys[providerId];
+        keys[providerId] = currentKey ?? { hasKey: true, canReveal: true, keyPreview: '********' };
+        const currentProvider = this.officialById(providerId);
+        official.push({ id: providerId, name: currentProvider.name, configured: true });
       }
       this.providerKeys = keys;
       this.authOfficialProviders = official;
@@ -500,6 +517,8 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
         this.officialProviders = snapshot.official;
         this.customProviders = snapshot.custom;
         this.revision = snapshot.revision;
+      } else if (snapshot.revision === this.revision) {
+        this.officialProviders = snapshot.official;
       }
       this.customSnapshotState = this.hasCustomAuthority ? 'ready' : 'loading';
       this.renderAfterDataChange();
@@ -614,6 +633,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       if (
         lifecycle === this.lifecycleGeneration
         && view === this.viewGeneration
+        && requestId === this.revealRequestId
         && this.view.kind === 'official'
         && this.view.providerId === providerId
       ) this.dependencies.notify('显示 API Key 失败', 'error');
@@ -642,6 +662,12 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       try { result = await response.json(); } catch {}
       if (!response.ok || !providerRecord(result) || result.ok !== true) throw new Error('Save failed');
       if (lifecycle !== this.lifecycleGeneration) return;
+      this.optimisticOfficialKeys.add(providerId);
+      this.providerKeys[providerId] = { hasKey: true, canReveal: true, keyPreview: '********' };
+      const provider = this.officialById(providerId);
+      const existing = this.authOfficialProviders.find(candidate => candidate.id === providerId);
+      if (existing) existing.configured = true;
+      else this.authOfficialProviders.push({ id: providerId, name: provider.name, configured: true });
       this.dependencies.notify('已保存', 'success');
       await Promise.all([this.loadOfficialAuth(lifecycle), this.loadOfficialModels(lifecycle)]);
       if (
@@ -651,12 +677,15 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
         && this.view.providerId === providerId
       ) this.showList();
     } catch {
-      if (lifecycle !== this.lifecycleGeneration) return;
       draft.saving = false;
+      if (
+        lifecycle !== this.lifecycleGeneration
+        || view !== this.viewGeneration
+        || this.view.kind !== 'official'
+        || this.view.providerId !== providerId
+      ) return;
       this.dependencies.notify('保存失败', 'error');
-      if (view === this.viewGeneration && this.view.kind === 'official' && this.view.providerId === providerId) {
-        this.renderOfficial(providerId);
-      }
+      this.renderOfficial(providerId);
     }
   }
 
