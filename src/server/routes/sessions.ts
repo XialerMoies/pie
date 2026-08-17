@@ -41,6 +41,13 @@ function publishActiveSessionChanged(ctx: ServerContext): void {
   try { ctx.appEvents.publish("usage.changed"); } catch {}
 }
 
+function runWithProviderReferenceLock<T>(
+  ctx: ServerContext,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  return ctx.providerReferenceLock?.runExclusive(operation) ?? Promise.resolve(operation());
+}
+
 /** 迁移会话: 从 sessions/ 根目录按 workspace 分类移入 by-project/ */
 async function migrateOldSessions(ctx: ServerContext): Promise<void> {
   const baseDir = ctx.paths.SESSIONS_DIR;
@@ -408,10 +415,13 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       });
       writeFileSync(targetFile, [JSON.stringify(branchHeader), branchInfo, ...sourceLines.slice(1)].join("\n") + "\n");
       const targetWorkspace = workspace || runtime.currentWorkspace;
-      await runWithWorkspaceOwnership(
+      await runWithProviderReferenceLock(
         ctx,
-        targetWorkspace,
-        () => runtime.openSession(targetFile, targetWorkspace),
+        () => runWithWorkspaceOwnership(
+          ctx,
+          targetWorkspace,
+          () => runtime.openSession(targetFile, targetWorkspace),
+        ),
       );
       publishActiveSessionChanged(ctx);
       const readableTarget = await authorizeSessionPath(ctx, targetFile, "read", "sessions.branch.result");
@@ -456,10 +466,13 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
         targetSessionsDir,
       );
       const targetWorkspace = workspace || runtime.currentWorkspace;
-      await runWithWorkspaceOwnership(
+      await runWithProviderReferenceLock(
         ctx,
-        targetWorkspace,
-        () => runtime.openSession(authorizedFile, targetWorkspace),
+        () => runWithWorkspaceOwnership(
+          ctx,
+          targetWorkspace,
+          () => runtime.openSession(authorizedFile, targetWorkspace),
+        ),
       );
       publishActiveSessionChanged(ctx);
       const content = readFileSync(authorizedFile, "utf-8");

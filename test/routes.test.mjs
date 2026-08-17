@@ -2536,23 +2536,83 @@ describe("sessions routes", () => {
     }
   });
 
+  it("holds the provider reference lock while activating a session", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "session-activate-reference-lock-"));
+    const workspace = resolve(root, "workspace");
+    const sessionsDir = resolve(root, "sessions");
+    const sessionDir = resolve(sessionsDir, "by-project", "workspace");
+    const sessionFile = resolve(sessionDir, "activate-locked.jsonl");
+    const events = [];
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "activate-locked", workspace }) + "\n");
+    const ctx = mockContext({
+      providerReferenceLock: {
+        async runExclusive(operation) {
+          events.push("reference-lock:enter");
+          try { return await operation(); } finally { events.push("reference-lock:exit"); }
+        },
+      },
+      runtime: mockRuntime({
+        currentWorkspace: workspace,
+        openSession: async () => { events.push("open-session"); },
+        getActiveSession: () => ({ id: "activate-locked", file: sessionFile }),
+      }),
+      paths: {
+        ...mockPaths(),
+        APP_ROOT: workspace,
+        DATA_DIR: root,
+        PI_CONFIG_DIR: resolve(root, "pi"),
+        SESSIONS_DIR: sessionsDir,
+      },
+    });
+    try {
+      const result = await callHandler(
+        handleSessions,
+        "POST",
+        "/api/sessions/activate",
+        { id: "activate-locked", workspace },
+        ctx,
+      );
+      assert.strictEqual(result.status, 200);
+      assert.deepStrictEqual(events, [
+        "reference-lock:enter",
+        "open-session",
+        "reference-lock:exit",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(ctx.paths._tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("publishes after branching opens a new active session", async () => {
     const root = mkdtempSync(resolve(tmpdir(), "session-branch-events-"));
     const workspace = resolve(root, "workspace");
     const sessionsDir = resolve(root, "sessions");
     const sessionDir = resolve(sessionsDir, "by-project", "workspace");
     const sourceFile = resolve(sessionDir, "source.jsonl");
+    const events = [];
     mkdirSync(workspace, { recursive: true });
     mkdirSync(sessionDir, { recursive: true });
     writeFileSync(sourceFile, JSON.stringify({ type: "session", id: "source", workspace }) + "\n");
     let openedFile = "";
     const runtime = mockRuntime({
       currentWorkspace: workspace,
-      openSession: async (file) => { openedFile = file; },
+      openSession: async (file) => {
+        events.push("open-session");
+        openedFile = file;
+      },
       getActiveSession: () => openedFile ? { id: openedFile.split(/[\\/]/).at(-1).replace(/\.jsonl$/, ""), file: openedFile } : null,
     });
     const ctx = mockContext({
       runtime,
+      providerReferenceLock: {
+        async runExclusive(operation) {
+          events.push("reference-lock:enter");
+          try { return await operation(); } finally { events.push("reference-lock:exit"); }
+        },
+      },
       paths: {
         ...mockPaths(),
         APP_ROOT: workspace,
@@ -2569,6 +2629,11 @@ describe("sessions routes", () => {
       assert.strictEqual(data.activeSessionId, data.id);
       assert.ok(openedFile.endsWith(`${data.id}.jsonl`));
       assert.ok(Array.isArray(data.messages));
+      assert.deepStrictEqual(events, [
+        "reference-lock:enter",
+        "open-session",
+        "reference-lock:exit",
+      ]);
       assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["dashboard.changed", "usage.changed"]);
     } finally {
       rmSync(root, { recursive: true, force: true });

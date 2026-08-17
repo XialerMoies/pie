@@ -269,6 +269,17 @@ function wrongFixtureInput(protocol, body) {
   return body
 }
 
+function appendFixtureInput(protocol, body, message) {
+  fixtureInput(protocol, body).push(message)
+  return body
+}
+
+function appendFixtureTool(protocol, body, tool) {
+  const tools = protocol === "pi-messages" ? body.context.tools : body.tools
+  tools.push(tool)
+  return body
+}
+
 function inputText(content) {
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return ""
@@ -786,6 +797,10 @@ describe("PiCustomProviderAdapter", () => {
             replaceFixtureInput(protocol, validFixtureBody(protocol), []), "POST"],
           ["wrong input content", "invalid input", fixtureEndpoint(fixture, protocol),
             wrongFixtureInput(protocol, validFixtureBody(protocol)), "POST"],
+          ["extra input", "invalid input", fixtureEndpoint(fixture, protocol),
+            appendFixtureInput(protocol, validFixtureBody(protocol), { role: "assistant", content: "unexpected" }), "POST"],
+          ["extra tool", "invalid tools", fixtureEndpoint(fixture, protocol),
+            appendFixtureTool(protocol, validFixtureBody(protocol), { type: "broken" }), "POST"],
           ...(protocol === "openai-completions" ? [[
             "missing stream options",
             "invalid stream options",

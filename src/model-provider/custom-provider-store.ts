@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -36,7 +36,15 @@ export interface CustomProviderCommit {
   secretPatch: SecretPatch;
 }
 
-export type CustomProviderAtomicWrite = (filePath: string, contents: string) => Promise<void>;
+export interface CustomProviderAtomicWriteOptions {
+  mode?: number;
+}
+
+export type CustomProviderAtomicWrite = (
+  filePath: string,
+  contents: string,
+  options?: CustomProviderAtomicWriteOptions,
+) => Promise<void>;
 
 export interface CustomProviderStoreOptions {
   configFile: string;
@@ -100,12 +108,20 @@ function serialize(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-async function defaultAtomicWrite(filePath: string, contents: string): Promise<void> {
+async function defaultAtomicWrite(
+  filePath: string,
+  contents: string,
+  options: CustomProviderAtomicWriteOptions = {},
+): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temporaryPath, contents, "utf8");
+    await writeFile(temporaryPath, contents, {
+      encoding: "utf8",
+      ...(options.mode === undefined ? {} : { mode: options.mode }),
+    });
     await rename(temporaryPath, filePath);
+    if (options.mode !== undefined) await chmod(filePath, options.mode);
   } finally {
     try {
       await unlink(temporaryPath);
@@ -298,7 +314,11 @@ export class CustomProviderStore {
     ) as Record<CredentialRef, string>;
     if (Object.keys(values).length === Object.keys(secrets.values).length) return;
     try {
-      await this.atomicWrite(this.secretsFile, serialize({ schemaVersion: 1, values } satisfies SecretDocument));
+      await this.atomicWrite(
+        this.secretsFile,
+        serialize({ schemaVersion: 1, values } satisfies SecretDocument),
+        { mode: 0o600 },
+      );
     } catch {
       // Configuration is already committed. Orphan cleanup is deliberately best-effort.
     }
@@ -326,7 +346,7 @@ export class CustomProviderStore {
       }
       if (secretsPrewritten && isDeepStrictEqual(persisted, current)) {
         try {
-          await this.atomicWrite(this.secretsFile, serialize(originalSecrets));
+          await this.atomicWrite(this.secretsFile, serialize(originalSecrets), { mode: 0o600 });
         } catch {
           // Keep the original config error; merged values are harmless orphans.
         }
@@ -446,7 +466,9 @@ export class CustomProviderStore {
       });
       requireReferencedSecrets(committed, mergedSecrets);
 
-      if (wroteNewSecret) await this.atomicWrite(this.secretsFile, serialize(mergedSecrets));
+      if (wroteNewSecret) {
+        await this.atomicWrite(this.secretsFile, serialize(mergedSecrets), { mode: 0o600 });
+      }
       return this.writeCommitPoint(current, committed, secrets, mergedSecrets, wroteNewSecret);
     });
   }

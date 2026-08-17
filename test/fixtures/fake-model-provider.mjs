@@ -386,13 +386,15 @@ function inputContentText(content) {
 function inputErrors(protocol, body, expectedUserContent) {
   const input = requestInput(protocol, body)
   if (!Array.isArray(input) || input.length === 0) return ["input must contain at least one message"]
-  const user = input.find((message) => message?.role === "user")
-  if (!user) return ["input must contain a user message"]
+  if (input.length !== 1) return ["input must contain exactly one message"]
+  const [user] = input
+  if (user?.role !== "user") return ["input must contain exactly one user message"]
   if (protocol === "openai-responses" || protocol === "azure-openai-responses") {
-    if (!Array.isArray(user.content) || !user.content.some((part) => (
-      part?.type === "input_text" && part.text === expectedUserContent
-    ))) {
-      return [`user input must contain input_text=${expectedUserContent}`]
+    if (!Array.isArray(user.content)
+      || user.content.length !== 1
+      || user.content[0]?.type !== "input_text"
+      || user.content[0]?.text !== expectedUserContent) {
+      return [`user input must equal one input_text=${expectedUserContent}`]
     }
     return []
   }
@@ -403,15 +405,14 @@ function inputErrors(protocol, body, expectedUserContent) {
 
 function toolShapeErrors(protocol, tools) {
   if (!Array.isArray(tools) || tools.length === 0) return ["tools must contain at least one definition"]
-  const tool = tools.find((entry) => {
-    if (protocol === "openai-completions" || protocol === "mistral-conversations") {
-      return entry?.type === "function" && entry.function?.name === TOOL_NAME
-    }
-    return entry?.name === TOOL_NAME && (protocol !== "openai-responses" && protocol !== "azure-openai-responses"
+  if (tools.length !== 1) return ["tools must contain exactly one definition"]
+  const [tool] = tools
+  const matches = protocol === "openai-completions" || protocol === "mistral-conversations"
+    ? tool?.type === "function" && tool.function?.name === TOOL_NAME
+    : tool?.name === TOOL_NAME && (protocol !== "openai-responses" && protocol !== "azure-openai-responses"
       ? true
-      : entry?.type === "function")
-  })
-  if (!tool) return [`missing ${TOOL_NAME} tool definition`]
+      : tool?.type === "function")
+  if (!matches) return [`missing ${TOOL_NAME} tool definition`]
   const definition = protocol === "openai-completions" || protocol === "mistral-conversations"
     ? tool.function
     : tool

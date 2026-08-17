@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { describe, it } from "node:test";
@@ -119,6 +119,56 @@ describe("custom provider store", () => {
           [stored.headers[0].credentialRef]: "tenant-secret-v1",
         },
       });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("keeps the secrets file private when creating and rotating credentials", {
+    skip: process.platform === "win32" ? "POSIX permission bits are unavailable on Windows" : false,
+  }, async () => {
+    const env = await fixture();
+    try {
+      const first = await createProvider(env.store);
+      assert.equal((await stat(env.secretsFile)).mode & 0o777, 0o600);
+
+      await chmod(env.secretsFile, 0o644);
+      await env.store.commit({
+        expectedRevision: 1,
+        provider: mutationFromStored(first.providers[0]),
+        secretPatch: { apiKey: "rotated-secret", headers: [] },
+      });
+      assert.equal((await stat(env.secretsFile)).mode & 0o777, 0o600);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("marks every secret write as private without changing config file permissions", async () => {
+    const env = await fixture();
+    const writes = [];
+    const store = new CustomProviderStore({
+      configFile: env.configFile,
+      secretsFile: env.secretsFile,
+      atomicWrite: async (filePath, contents, options) => {
+        writes.push({ filePath, mode: options?.mode });
+        await atomicWrite(filePath, contents);
+      },
+    });
+    try {
+      const first = await createProvider(store);
+      await store.commit({
+        expectedRevision: 1,
+        provider: mutationFromStored(first.providers[0]),
+        secretPatch: { apiKey: "rotated-secret", headers: [] },
+      });
+
+      const secretWrites = writes.filter((write) => write.filePath === env.secretsFile);
+      const configWrites = writes.filter((write) => write.filePath === env.configFile);
+      assert.equal(secretWrites.length >= 2, true);
+      assert.equal(secretWrites.every((write) => write.mode === 0o600), true);
+      assert.equal(configWrites.length >= 2, true);
+      assert.equal(configWrites.every((write) => write.mode === undefined), true);
     } finally {
       await env.cleanup();
     }
