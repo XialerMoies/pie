@@ -724,7 +724,8 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
 
   private async switchModel(providerId: string, modelId: string): Promise<void> {
     if (this.pendingModelSwitch) return;
-    const generation = this.lifecycleGeneration;
+    const lifecycle = this.lifecycleGeneration;
+    const view = this.viewGeneration;
     const operation: ProviderModelSwitchOperation = {
       requestId: ++this.modelSwitchRequestId,
       providerId,
@@ -740,34 +741,45 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       });
       let result: unknown = {};
       try { result = await response.json(); } catch {}
-      if (!this.isCurrentModelSwitch(generation, operation)) return;
+      if (!this.isActiveModelSwitch(operation)) return;
       if (!response.ok || !providerRecord(result) || result.ok !== true) {
         const suffix = providerRecord(result) && typeof result.error === 'string' ? `: ${result.error}` : '';
-        this.dependencies.notify(`切换失败${suffix}`, 'error');
+        if (this.isOriginalModelSwitchContext(lifecycle, view, operation)) {
+          this.dependencies.notify(`切换失败${suffix}`, 'error');
+        }
         return;
       }
-      this.dependencies.notify(`已切换: ${modelId}`, 'success');
+      if (this.isOriginalModelSwitchContext(lifecycle, view, operation)) {
+        this.dependencies.notify(`已切换: ${modelId}`, 'success');
+      }
       await this.dependencies.refreshDashboard();
-      if (!this.isCurrentModelSwitch(generation, operation)) return;
+      if (!this.isActiveModelSwitch(operation)) return;
       this.currentModel = this.readCurrentModel();
     } catch {
-      if (!this.isCurrentModelSwitch(generation, operation)) return;
-      this.dependencies.notify('切换失败', 'error');
+      if (this.isOriginalModelSwitchContext(lifecycle, view, operation)) {
+        this.dependencies.notify('切换失败', 'error');
+      }
     } finally {
-      if (
-        this.pendingModelSwitch === operation
-        && operation.requestId === this.modelSwitchRequestId
-      ) {
+      if (this.isActiveModelSwitch(operation)) {
         this.pendingModelSwitch = null;
         this.renderAfterDataChange();
       }
     }
   }
 
-  private isCurrentModelSwitch(generation: number, operation: ProviderModelSwitchOperation): boolean {
-    return generation === this.lifecycleGeneration
-      && operation.requestId === this.modelSwitchRequestId
+  private isActiveModelSwitch(operation: ProviderModelSwitchOperation): boolean {
+    return operation.requestId === this.modelSwitchRequestId
       && this.pendingModelSwitch === operation;
+  }
+
+  private isOriginalModelSwitchContext(
+    lifecycle: number,
+    view: number,
+    operation: ProviderModelSwitchOperation,
+  ): boolean {
+    return this.isActiveModelSwitch(operation)
+      && lifecycle === this.lifecycleGeneration
+      && view === this.viewGeneration;
   }
 }
 

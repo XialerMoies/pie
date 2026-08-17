@@ -82,7 +82,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-async function loadController({ fetchImpl, dashboard = null, order = [] } = {}) {
+async function loadController({ fetchImpl, dashboard = null, order = [], refreshDashboardImpl = null } = {}) {
   const win = new Window();
   global.window = win;
   global.document = win.document;
@@ -140,7 +140,10 @@ async function loadController({ fetchImpl, dashboard = null, order = [] } = {}) 
   global.App = win.App;
   const toastCalls = [];
   global.toast = (...args) => toastCalls.push(args);
-  global.getD = () => { refreshes += 1; };
+  global.getD = async () => {
+    refreshes += 1;
+    await refreshDashboardImpl?.();
+  };
   global.fetch = fetchImpl;
 
   const controllerUrl = `../src/frontend/dashboard/settings-provider-model.ts?controller-${Date.now()}-${Math.random()}`;
@@ -1300,39 +1303,71 @@ describe("provider settings controller", () => {
     await flushControllerWork();
   });
 
-  it("keeps the model-switch lock across a tab remount until the stale request settles", async () => {
+  it("syncs the current model after a successful switch settles across a tab remount", async () => {
+    const dashboard = { modelProvider: "openai", modelId: "initial-model" };
     const first = deferred();
     const second = deferred();
     const switches = [];
-    const baseFetch = standardControllerFetch();
     const fetchImpl = async (url, init = {}) => {
-      if (String(url) === "/api/model/switch") {
+      const path = String(url);
+      if (path === "/api/auth") return response({
+        providers: [{ provider: "openai", hasKey: true, canReveal: false, keyPreview: "" }],
+      });
+      if (path === "/api/custom-providers") return response({
+        revision: 1,
+        official: [{ id: "openai", name: "OpenAI", configured: true }],
+        custom: [],
+      });
+      if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
+      if (path === "/api/models") return response({ models: [
+        { provider: "openai", id: "first-model", name: "First Model" },
+        { provider: "openai", id: "second-model", name: "Second Model" },
+      ] });
+      if (path === "/api/model/switch") {
         switches.push(JSON.parse(init.body));
         return switches.length === 1 ? first.promise : second.promise;
       }
-      return baseFetch(url, init);
+      return response({ ok: true });
     };
-    const { controller, host, toastCalls, getRefreshes } = await loadController({ fetchImpl });
-    host.querySelector('.provider-card[data-provider-id="acme"] [data-provider-action="use"]').click();
+    const { controller, host, toastCalls, getRefreshes } = await loadController({
+      fetchImpl,
+      dashboard,
+      refreshDashboardImpl: () => {
+        dashboard.modelProvider = switches.at(-1).provider;
+        dashboard.modelId = switches.at(-1).modelId;
+      },
+    });
+    host.querySelector('.provider-card[data-provider-id="openai"] [data-provider-action="edit"]').click();
+    const firstModel = host.querySelector('[data-model-id="first-model"]');
+    const detachedDifferentModel = host.querySelector('[data-model-id="second-model"]');
+    firstModel.click();
 
     controller.unmount();
     controller.renderTab(host);
     await flushControllerWork();
-    assert.ok([...host.querySelectorAll(".provider-card-model-select")].every(select => select.disabled));
-    assert.ok([...host.querySelectorAll('[data-provider-action="use"]')].every(button => button.disabled));
-    host.querySelector('.provider-card[data-provider-id="anthropic"] [data-provider-action="use"]').click();
-    assert.deepEqual(switches, [{ provider: "acme", modelId: "acme-chat" }]);
+    host.querySelector('.provider-card[data-provider-id="openai"] [data-provider-action="edit"]').click();
+    assert.ok([...host.querySelectorAll(".rp-model-item")].every(button => button.disabled));
+    detachedDifferentModel.click();
+    assert.deepEqual(switches, [{ provider: "openai", modelId: "first-model" }]);
 
     first.resolve(response({ ok: true }));
     await flushControllerWork();
-    assert.ok([...host.querySelectorAll(".provider-card-model-select")].every(select => !select.disabled));
+    assert.equal(getRefreshes(), 1);
     assert.deepEqual(toastCalls, []);
-    assert.equal(getRefreshes(), 0);
+    assert.equal(host.querySelector('[data-model-id="first-model"]').getAttribute("aria-pressed"), "true");
+    assert.ok([...host.querySelectorAll(".rp-model-item")].every(button => !button.disabled));
 
-    host.querySelector('.provider-card[data-provider-id="anthropic"] [data-provider-action="use"]').click();
+    host.querySelector('[data-provider-action="back"]').click();
+    const card = host.querySelector('.provider-card[data-provider-id="openai"]');
+    assert.equal(card.getAttribute("aria-current"), "true");
+    assert.match(card.querySelector(".provider-card-current").textContent, /First Model/);
+
+    const select = card.querySelector(".provider-card-model-select");
+    select.value = "second-model";
+    card.querySelector('[data-provider-action="use"]').click();
     assert.deepEqual(switches, [
-      { provider: "acme", modelId: "acme-chat" },
-      { provider: "anthropic", modelId: "claude-sonnet" },
+      { provider: "openai", modelId: "first-model" },
+      { provider: "openai", modelId: "second-model" },
     ]);
     second.resolve(response({ ok: true }));
     await flushControllerWork();
