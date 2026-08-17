@@ -273,6 +273,35 @@ interface CustomProviderDraft extends Omit<RedactedCustomProvider, 'apiKeyConfig
   apiKey?: string | null;
   headers: Array<{ name: string; value?: string; remove?: boolean }>;
 }
+interface CustomProviderFormOptions {
+  provider: RedactedCustomProvider | null;
+  template?: CustomProviderTemplate;
+  protocols: readonly CustomProviderProtocol[];
+  occupiedProviderIds: ReadonlySet<string>;
+}
+interface CustomProviderFormReadOptions {
+  showErrors: boolean;
+  purpose: 'save' | 'test' | 'discover';
+}
+interface SettingsCustomProviderFormView {
+  mount(container: HTMLElement, revision: number): HTMLElement;
+  read(options: CustomProviderFormReadOptions): CustomProviderDraft | null;
+  getRoot(): HTMLElement | null;
+  captureSecrets(): string[];
+  appendDiscoveredModels(ids: readonly string[]): void;
+  setApiKey(value: string): void;
+  setDeleteArmed(armed: boolean): void;
+  setQueryBusy(action: 'test' | 'discover' | 'reveal', busy: boolean): void;
+  setMutationBusy(action: 'save' | 'delete', busy: boolean): void;
+  clearFeedback(): void;
+  setFieldError(field: string, message: string, focus?: boolean): void;
+  showResult(message: string, error: boolean): void;
+  showConflict(revision: number): void;
+  showReferences(references: readonly string[]): void;
+}
+interface SettingsCustomProviderFormViewConstructor {
+  new(options: CustomProviderFormOptions, listAddAction: typeof ListAddAction): SettingsCustomProviderFormView;
+}
 interface RedactedCustomProviderSnapshot {
   schemaVersion: 1;
   revision: number;
@@ -294,6 +323,7 @@ interface CustomProviderCapabilitiesResponse {
 interface SettingsCustomProviderEditorDependencies {
   notify: typeof toast;
   listAddAction: typeof ListAddAction;
+  formType?: SettingsCustomProviderFormViewConstructor;
   onSaved(
     snapshot: RedactedCustomProviderSnapshot,
     selectedId: string,
@@ -308,7 +338,7 @@ interface SettingsCustomProviderEditor {
   startNew(
     container: HTMLElement,
     revision: number,
-    options?: { template: CustomProviderTemplate; occupiedProviderIds: ReadonlySet<string> },
+    options: { template: CustomProviderTemplate; occupiedProviderIds: ReadonlySet<string> },
   ): void;
   unmount(): void;
   save(): Promise<void>;

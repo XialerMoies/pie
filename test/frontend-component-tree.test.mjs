@@ -35,6 +35,25 @@ function assertDelegates(src, fn, view) {
 }
 
 describe("frontend component tree boundaries", () => {
+  it("keeps custom-provider form DOM and validation in a dedicated view", () => {
+    const form = source("src/frontend/dashboard/settings-custom-provider-form.ts");
+    const editor = source("src/frontend/dashboard/settings-custom-provider-editor.ts");
+    assertClass(form, "CustomProviderFormView");
+    assert.doesNotMatch(form, /\bApp\./);
+    assert.doesNotMatch(form, /\bfetch\s*\(/);
+    assert.match(editor, /formType/);
+    assert.doesNotMatch(editor, /createModelRow|createHeaderRow|readDraft\s*\(/);
+  });
+
+  it("loads the custom-provider form before its editor and provider controller", () => {
+    const compiler = source("scripts/compile-frontend-ts.mjs");
+    const bundleOrder = stringArrayInitializer(compiler, "bundleOrder");
+    const formIndex = bundleOrder.indexOf("gen/dashboard/settings-custom-provider-form.js");
+    const editorIndex = bundleOrder.indexOf("gen/dashboard/settings-custom-provider-editor.js");
+    const providerIndex = bundleOrder.indexOf("gen/dashboard/settings-provider-model.js");
+    assert.ok(formIndex >= 0 && formIndex < editorIndex && editorIndex < providerIndex);
+  });
+
   it("shares the DOM-backed ListAddAction across chat and subagent consumers", () => {
     const action = source("src/frontend/ui/list-add-action.ts");
     const chat = source("src/frontend/pane/chat/index.ts");

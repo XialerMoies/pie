@@ -29,6 +29,17 @@ async function loadViews() {
   return import(viewsUrl);
 }
 
+async function loadCustomProviderForm() {
+  const win = new Window();
+  global.window = win;
+  global.document = win.document;
+  global.self = win;
+  const { ListAddAction } = await import(`../src/frontend/ui/list-add-action.ts?form-${Date.now()}-${Math.random()}`);
+  const moduleUrl = `../src/frontend/dashboard/settings-custom-provider-form.ts?${Date.now()}-${Math.random()}`;
+  const { CustomProviderFormView } = await import(moduleUrl);
+  return { CustomProviderFormView, ListAddAction, win };
+}
+
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
 }
@@ -251,6 +262,85 @@ describe("provider settings presentation utilities", () => {
 });
 
 describe("provider settings views", () => {
+  it("separates common custom-provider fields from one closed advanced section", async () => {
+    const { CustomProviderFormView, ListAddAction } = await loadCustomProviderForm();
+    const host = document.createElement("div");
+    const form = new CustomProviderFormView({
+      provider: controllerCustomProvider(),
+      protocols: ["openai-responses", "anthropic-messages"],
+      occupiedProviderIds: new Set(["openai", "acme"]),
+    }, ListAddAction);
+
+    form.mount(host, 4);
+
+    const common = host.querySelector(".cpe-common");
+    const advanced = host.querySelector("details.cpe-advanced");
+    assert.ok(common);
+    assert.ok(advanced);
+    assert.equal(host.querySelectorAll("details.cpe-advanced").length, 1);
+    assert.equal(advanced.open, false);
+    for (const selector of ["#cpe-name", "#cpe-base-url", "#cpe-api-key", ".cpe-model-rows"]) {
+      assert.ok(common.querySelector(selector), `${selector} should be common`);
+      assert.equal(advanced.querySelector(selector), null, `${selector} must stay out of advanced`);
+    }
+    for (const selector of [
+      "#cpe-id", "#cpe-protocol", ".cpe-header-rows", "#cpe-model-discovery",
+      ".cpe-model-context", ".cpe-model-max", ".cpe-model-reasoning", ".cpe-model-image",
+      ".cpe-cost-input", ".cpe-cost-output", ".cpe-cost-cache-read", ".cpe-cost-cache-write",
+      ".cpe-model-sampling", ".cpe-model-compatibility",
+    ]) {
+      assert.ok(advanced.querySelector(selector), `${selector} should be advanced`);
+      assert.equal(common.querySelector(selector), null, `${selector} must stay out of common`);
+    }
+    assert.deepEqual(
+      [...common.querySelectorAll("input")].map(input => input.id || input.className),
+      [
+        "cpe-name", "cpe-base-url", "none", "apiKey", "cpe-api-key",
+        "cpe-input cpe-model-id", "cpe-input cpe-model-name",
+      ],
+    );
+    assert.ok(common.querySelector('[data-cpe-action="add-model"]'));
+    assert.ok(common.querySelector('[data-cpe-action="remove-model"]'));
+    assert.equal(host.querySelector("#cpe-id").readOnly, true);
+  });
+
+  it("applies custom-provider templates and keeps generated IDs separate from manual IDs", async () => {
+    const { CustomProviderFormView, ListAddAction, win } = await loadCustomProviderForm();
+    const protocols = ["openai-completions", "openai-responses", "anthropic-messages"];
+    const mount = (template, occupiedProviderIds = new Set()) => {
+      const host = document.createElement("div");
+      const form = new CustomProviderFormView({ provider: null, template, protocols, occupiedProviderIds }, ListAddAction);
+      form.mount(host, 1);
+      return host;
+    };
+
+    const openai = mount("openai");
+    assert.equal(openai.querySelector("#cpe-protocol").value, "openai-completions");
+    assert.equal(openai.querySelector('input[name="cpe-auth-mode"]:checked')?.value, "apiKey");
+    const name = openai.querySelector("#cpe-name");
+    const id = openai.querySelector("#cpe-id");
+    name.value = "Acme Relay";
+    name.dispatchEvent(new win.Event("input", { bubbles: true }));
+    assert.equal(id.value, "acme-relay");
+    id.value = "my-relay";
+    id.dispatchEvent(new win.Event("input", { bubbles: true }));
+    name.value = "Renamed Relay";
+    name.dispatchEvent(new win.Event("input", { bubbles: true }));
+    assert.equal(id.value, "my-relay");
+
+    const anthropic = mount("anthropic");
+    assert.equal(anthropic.querySelector("#cpe-protocol").value, "anthropic-messages");
+    assert.equal(anthropic.querySelector('input[name="cpe-auth-mode"]:checked')?.value, "apiKey");
+
+    const other = mount("other", new Set(["custom-provider", "custom-provider-2"]));
+    assert.equal(other.querySelector("#cpe-protocol").value, "");
+    assert.equal(other.querySelector('input[name="cpe-auth-mode"]:checked'), null);
+    const otherName = other.querySelector("#cpe-name");
+    otherName.value = "\u4e2d\u6587\u5382\u5546";
+    otherName.dispatchEvent(new win.Event("input", { bubbles: true }));
+    assert.equal(other.querySelector("#cpe-id").value, "custom-provider-3");
+  });
+
   it("renders compact provider cards without turning the card into an action", async () => {
     const { ProviderCardListView } = await loadViews();
     const host = document.createElement("div");

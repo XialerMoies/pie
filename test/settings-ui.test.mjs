@@ -11,6 +11,7 @@ const settingsSpies = {
   toastCalls: [],
 };
 let ListAddAction;
+let CustomProviderFormView;
 let SettingsCustomProviderEditor;
 
 global.window = win;
@@ -70,6 +71,7 @@ before(async () => {
   global.ProviderCardListView = providerViews.ProviderCardListView;
   global.ProviderPickerView = providerViews.ProviderPickerView;
   global.OfficialProviderEditorView = providerViews.OfficialProviderEditorView;
+  ({ CustomProviderFormView } = await import("../src/frontend/dashboard/settings-custom-provider-form.ts"));
   ({ SettingsCustomProviderEditor } = await import("../src/frontend/dashboard/settings-custom-provider-editor.ts"));
   await import("../src/frontend/dashboard/settings-provider-model.ts");
   await import("../src/frontend/dashboard/settings-custom-subagents.ts");
@@ -181,6 +183,7 @@ function editorDependencies(overrides = {}) {
   return {
     notify: global.toast,
     listAddAction: ListAddAction,
+    formType: CustomProviderFormView,
     onSaved: () => {},
     onDeleted: () => {},
     ...overrides,
@@ -331,7 +334,7 @@ describe("settings DOM boundary", () => {
     const host = document.createElement("div");
     document.body.append(host);
     const editor = createCustomProviderEditor();
-    editor.startNew(host, 3);
+    editor.startNew(host, 3, { template: "other", occupiedProviderIds: new Set() });
 
     const auth = [...host.querySelectorAll('input[name="cpe-auth-mode"]')];
     assert.deepStrictEqual(auth.map((input) => input.value), ["none", "apiKey"]);
@@ -427,7 +430,7 @@ describe("settings DOM boundary", () => {
     const editor = createCustomProviderEditor({
       onSaved: (_snapshot, selectedId) => { savedSelection = selectedId; },
     });
-    editor.startNew(host, 5);
+    editor.startNew(host, 5, { template: "other", occupiedProviderIds: new Set(["openai"]) });
     setInput("#cpe-name", "Fresh");
     setInput("#cpe-id", "openai");
     setInput("#cpe-base-url", "https://fresh.example/v1");
@@ -1533,9 +1536,30 @@ describe("settings DOM boundary", () => {
     assert.notStrictEqual(host.querySelector('[data-field-error="headers[0].value"]')?.textContent, "");
 
     await editor.save();
-    const secondMax = host.querySelector('.cpe-model-row:nth-child(2) .cpe-model-max');
+    const secondMax = host.querySelector('[data-field-path="models[1].maxTokens"]');
     assert.strictEqual(secondMax?.getAttribute("aria-invalid"), "true");
     assert.notStrictEqual(host.querySelector('[data-field-error="models[1].maxTokens"]')?.textContent, "");
+  });
+
+  it("opens advanced settings and focuses the exact backend compatibility error", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    fetchImpl = async () => response({
+      code: "invalid_request",
+      fieldPath: "provider.models[0].compatibility",
+    }, 400);
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 4);
+
+    const advanced = host.querySelector("details.cpe-advanced");
+    const compatibility = host.querySelector('[data-field-path="models[0].compatibility"]');
+    assert.equal(advanced?.open, false);
+
+    await editor.save();
+
+    assert.equal(advanced?.open, true);
+    assert.equal(document.activeElement, compatibility);
+    assert.equal(compatibility?.getAttribute("aria-invalid"), "true");
   });
 
   it("treats hostile backend field paths as inert data and always clears mutation busy state", async () => {
