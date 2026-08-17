@@ -72,6 +72,8 @@ export interface CustomProviderServiceOptions {
   networkClient?: Pick<ProviderNetworkClient, "testConnection" | "discoverModels">;
 }
 
+const MODEL_DISCOVERY_SENTINEL_ID = "__model_discovery__";
+
 function assertRevision(expectedRevision: number, currentRevision: number): void {
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
     throw new CustomProviderInvalidRequestError("expectedRevision");
@@ -241,8 +243,16 @@ export class CustomProviderService {
     return apiKey;
   }
 
-  async #resolveNetworkDraft(draft: CustomProviderDraft): Promise<ResolvedCustomProviderDraft> {
+  async #resolveNetworkDraft(
+    draft: CustomProviderDraft,
+    options: { allowDiscoverySentinel?: boolean } = {},
+  ): Promise<ResolvedCustomProviderDraft> {
     const validated = validateCustomProviderDraft(draft);
+    const models = options.allowDiscoverySentinel
+      && validated.models.length === 1
+      && validated.models[0]?.id === MODEL_DISCOVERY_SENTINEL_ID
+      ? []
+      : validated.models;
     const snapshot = await this.#store.readSnapshot();
     const saved = snapshot.providers.find((provider) => provider.id === validated.id);
     const activeHeaders = validated.headers.flatMap((header, index) => (
@@ -283,13 +293,14 @@ export class CustomProviderService {
     return {
       provider: {
         ...provider,
+        models,
         headers: activeHeaders.map(({ header }) => header.name),
       },
       secrets: {
         ...(apiKey === undefined ? {} : { apiKey }),
         headers,
       },
-      modelId: validated.models[0]?.id,
+      modelId: models[0]?.id,
     };
   }
 
@@ -298,7 +309,10 @@ export class CustomProviderService {
   }
 
   async discoverModels(draft: CustomProviderDraft, signal?: AbortSignal): Promise<{ ids: string[] }> {
-    return this.#networkClient.discoverModels(await this.#resolveNetworkDraft(draft), signal);
+    return this.#networkClient.discoverModels(
+      await this.#resolveNetworkDraft(draft, { allowDiscoverySentinel: true }),
+      signal,
+    );
   }
 
   async syncRuntime(runtime: ModelRuntime): Promise<number> {

@@ -231,7 +231,7 @@ export class SettingsCustomProviderEditor {
       for (const value of safeArray((response.body as { ids?: unknown }).ids)) {
         if (typeof value !== 'string') continue;
         const id = value.trim();
-        if (!id || seen.has(id)) continue;
+        if (!id || seen.has(id) || this.redact(id, operation.secrets) !== id) continue;
         seen.add(id);
         ids.push(id);
       }
@@ -248,6 +248,9 @@ export class SettingsCustomProviderEditor {
         return;
       }
       if (!this.isCurrentQuery(operation)) return;
+      if (typeof operation.draft?.modelDiscovery === 'string') {
+        operation.form.setModelDiscovery(operation.draft.modelDiscovery);
+      }
       operation.form.appendDiscoveredModels(imported);
       this.showResult(operation, `已导入 ${imported.length} 个模型 ID，保存后生效`, false);
     } finally {
@@ -307,7 +310,7 @@ export class SettingsCustomProviderEditor {
     else if (action === 'test') void this.test();
     else if (action === 'discover') void this.discoverModels();
     else if (action === 'delete') void this.delete();
-    else if (action === 'reveal-api-key') void this.revealApiKey();
+    else if (action === 'reveal-api-key' && !this.form?.toggleApiKeyVisibility()) void this.revealApiKey();
   }
 
   private invalidateQuery(): void {
@@ -454,6 +457,7 @@ export class SettingsCustomProviderEditor {
     if (!this.isCurrentMount(operation)) return;
     const body = value && typeof value === 'object' ? value as CustomProviderErrorResponse : {};
     if (body.code === 'provider_id_conflict' || body.code === 'immutable_provider_id') {
+      this.finishMutation(operation);
       operation.form.setFieldError(
         'id',
         body.code === 'provider_id_conflict' ? 'Provider ID 已被占用' : 'Provider ID 创建后不可修改',
@@ -478,6 +482,7 @@ export class SettingsCustomProviderEditor {
       return;
     }
     if (body.code === 'invalid_request' && typeof body.fieldPath === 'string') {
+      this.finishMutation(operation);
       operation.form.setFieldError(body.fieldPath.replace(/^provider\./, ''), '字段值无效');
       return;
     }

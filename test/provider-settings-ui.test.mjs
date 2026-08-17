@@ -612,13 +612,13 @@ describe("provider settings views", () => {
     assert.equal(label?.htmlFor, input.id);
     assert.equal(input.type, "password");
     host.querySelector('[data-provider-action="reveal-key"]').click();
-    assert.deepEqual(calls, [["reveal", "official-test"]]);
+    assert.deepEqual(calls, [["visibility", "official-test", true]]);
     input.value = "sk-new";
     input.dispatchEvent(new window.Event("input", { bubbles: true }));
     host.querySelector('[data-provider-action="save-key"]').click();
     host.querySelector('[data-provider-action="back"]').click();
     assert.deepEqual(calls, [
-      ["reveal", "official-test"],
+      ["visibility", "official-test", true],
       ["key-change", "official-test", "sk-new"],
       ["save", "official-test", "sk-new"],
       ["back"],
@@ -762,6 +762,42 @@ describe("provider settings views", () => {
     assert.equal(input.type, "text");
     assert.deepEqual(revealCalls, []);
     assert.deepEqual(visibilityCalls, [["openai", false], ["openai", true]]);
+  });
+
+  it("locally reveals a preserved hidden official API key draft instead of fetching the stored key", async () => {
+    const { OfficialProviderEditorView } = await loadViews();
+    const host = document.createElement("div");
+    const revealCalls = [];
+    const visibilityCalls = [];
+    new OfficialProviderEditorView({
+      onBack() {},
+      onReveal: providerId => revealCalls.push(providerId),
+      onApiKeyChange() {},
+      onKeyVisibilityChange: (providerId, revealed) => visibilityCalls.push([providerId, revealed]),
+      onSave() {},
+      onUse() {},
+    }).render(host, {
+      provider: { id: "openai", name: "OpenAI", configured: true },
+      apiKey: {
+        value: "typed-but-hidden",
+        placeholder: "留空保留已保存值",
+        revealed: false,
+        canReveal: true,
+        saving: false,
+      },
+      models: { status: "idle", items: [], activeModelId: null, error: "" },
+    });
+
+    const input = host.querySelector(".rp-key-input");
+    const toggle = host.querySelector('[data-provider-action="reveal-key"]');
+    assert.equal(input.type, "password");
+
+    toggle.click();
+
+    assert.equal(input.type, "text");
+    assert.equal(input.value, "typed-but-hidden");
+    assert.deepEqual(revealCalls, []);
+    assert.deepEqual(visibilityCalls, [["openai", true]]);
   });
 
   it("shows and hides a newly typed API key locally when stored reveal is unavailable", async () => {

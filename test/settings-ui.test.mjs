@@ -526,6 +526,58 @@ describe("settings DOM boundary", () => {
     ]);
   });
 
+  it("replaces a removed configured Header with the same final name", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const bodies = [];
+    fetchImpl = async (_url, init = {}) => {
+      bodies.push(JSON.parse(init.body));
+      return response({ schemaVersion: 1, revision: 9, providers: [customProvider()] });
+    };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 8);
+
+    host.querySelector('[data-cpe-action="remove-header"]').click();
+    host.querySelector('[data-cpe-action="add-header"]').click();
+    setInput('.cpe-header-row:not([data-configured="true"]) .cpe-header-name', "x-tenant");
+    setInput('.cpe-header-row:not([data-configured="true"]) .cpe-header-value', "replacement-secret");
+
+    await editor.save();
+
+    assert.strictEqual(bodies.length, 1);
+    assert.deepStrictEqual(bodies[0].provider.headers, [
+      { name: "x-tenant", value: "replacement-secret" },
+    ]);
+  });
+
+  it("maps backend errors for a same-name Header replacement to the visible row", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    fetchImpl = async () => response({
+      code: "invalid_request",
+      fieldPath: "provider.headers[0].value",
+    }, 400);
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 8);
+
+    host.querySelector('[data-cpe-action="remove-header"]').click();
+    host.querySelector('[data-cpe-action="add-header"]').click();
+    setInput('.cpe-header-row:not([data-configured="true"]) .cpe-header-name', "x-tenant");
+    setInput('.cpe-header-row:not([data-configured="true"]) .cpe-header-value', "replacement-secret");
+
+    await editor.save();
+
+    const hiddenOriginal = host.querySelector('.cpe-header-row[data-configured="true"]');
+    const visibleReplacement = host.querySelector('.cpe-header-row:not([data-configured="true"])');
+    assert.equal(hiddenOriginal.hidden, true);
+    assert.strictEqual(hiddenOriginal.querySelector('[aria-invalid="true"]'), null);
+    assert.strictEqual(visibleReplacement.querySelector(".cpe-header-value")?.getAttribute("aria-invalid"), "true");
+    assert.notStrictEqual(
+      visibleReplacement.querySelector('[data-field-error="headers[0].value"]')?.textContent,
+      "",
+    );
+  });
+
   it("renders hostile configured Header names as inert readonly values", () => {
     const host = document.createElement("div");
     document.body.append(host);
@@ -1305,6 +1357,40 @@ describe("settings DOM boundary", () => {
     }
   });
 
+  it("locks and restores all form controls during save and delete mutations", async () => {
+    for (const action of ["save", "delete"]) {
+      const host = document.createElement("div");
+      document.body.replaceChildren(host);
+      const pending = deferred();
+      fetchImpl = async () => pending.promise;
+      const editor = createCustomProviderEditor();
+      editor.mount(host, customProvider(), 4);
+
+      const initiallyDisabled = host.querySelector(".cpe-model-max");
+      initiallyDisabled.disabled = true;
+      const controls = [...host.querySelectorAll("input, select, textarea, button")];
+      const initialStates = new Map(controls.map((control) => [control, control.disabled]));
+
+      let operation;
+      if (action === "delete") {
+        await editor.delete();
+        operation = editor.delete();
+      } else operation = editor.save();
+      await Promise.resolve();
+
+      for (const control of controls) {
+        assert.strictEqual(control.disabled, true, `${action}: ${control.id || control.dataset.cpeAction || control.className} must lock`);
+      }
+
+      pending.resolve(response({ code: "mutation_failed", error: "try again" }, 500));
+      await operation;
+
+      for (const [control, disabled] of initialStates) {
+        assert.strictEqual(control.disabled, disabled, `${action}: original disabled state must be restored`);
+      }
+    }
+  });
+
   it("does not close a reopened same-provider draft when an older save or delete settles", async () => {
     const beta = customProvider({ id: "beta", name: "Beta Gateway" });
     for (const action of ["save", "delete"]) {
@@ -1457,7 +1543,17 @@ describe("settings DOM boundary", () => {
 
     host.querySelector('[data-cpe-action="reveal-api-key"]').click();
     await flushAsyncWork();
-    assert.strictEqual(host.querySelector("#cpe-api-key")?.value, "active-secret");
+    const apiKey = host.querySelector("#cpe-api-key");
+    const activeReveal = host.querySelector('[data-cpe-action="reveal-api-key"]');
+    assert.strictEqual(apiKey?.value, "active-secret");
+    assert.strictEqual(apiKey?.type, "text", "a revealed API key must be visible");
+
+    activeReveal.click();
+    assert.strictEqual(apiKey.type, "password", "the revealed key should hide locally");
+    assert.strictEqual(revealRequests.length, 2, "hiding a revealed key must not fetch");
+    activeReveal.click();
+    assert.strictEqual(apiKey.type, "text", "the cached key should re-show locally");
+    assert.strictEqual(revealRequests.length, 2, "re-showing a revealed key must not fetch");
   });
 
   it("redacts hostile custom API key reveal errors", async () => {
@@ -1471,7 +1567,7 @@ describe("settings DOM boundary", () => {
     }, 502);
     const editor = createCustomProviderEditor();
     editor.mount(host, customProvider(), 4);
-    setInput("#cpe-api-key", secret);
+    setInput(".cpe-header-value", secret);
 
     host.querySelector('[data-cpe-action="reveal-api-key"]').click();
     await flushAsyncWork();
@@ -1539,6 +1635,25 @@ describe("settings DOM boundary", () => {
     const secondMax = host.querySelector('[data-field-path="models[1].maxTokens"]');
     assert.strictEqual(secondMax?.getAttribute("aria-invalid"), "true");
     assert.notStrictEqual(host.querySelector('[data-field-error="models[1].maxTokens"]')?.textContent, "");
+  });
+
+  it("reindexes common and advanced model error paths after removing a model", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const paths = ["provider.models[1].id", "provider.models[1].maxTokens"];
+    fetchImpl = async () => response({ code: "invalid_request", fieldPath: paths.shift() }, 400);
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 4);
+
+    await editor.save();
+    await editor.save();
+    assert.ok(host.querySelector('.cpe-model-row:nth-child(2) [data-field-error="models[1].id"]'));
+    assert.ok(host.querySelector('.cpe-model-detail-row:nth-child(2) [data-field-error="models[1].maxTokens"]'));
+
+    host.querySelector('.cpe-model-row:nth-child(1) [data-cpe-action="remove-model"]').click();
+
+    assert.ok(host.querySelector('.cpe-model-row:nth-child(1) [data-field-error="models[0].id"]'));
+    assert.ok(host.querySelector('.cpe-model-detail-row:nth-child(1) [data-field-error="models[0].maxTokens"]'));
   });
 
   it("opens advanced settings and focuses the exact backend compatibility error", async () => {
@@ -1692,6 +1807,75 @@ describe("settings DOM boundary", () => {
     assert.strictEqual((prompt.match(/new-b/g) ?? []).length, 1);
     assert.strictEqual((prompt.match(/new-c/g) ?? []).length, 1);
     assert.deepStrictEqual([...host.querySelectorAll(".cpe-model-id")].map((input) => input.value), ["model-a", "new-b", "new-c"]);
+    win.confirm = originalConfirm;
+  });
+
+  it("derives OpenAI discovery path and sends a request-only sentinel when no models exist", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const discoveryDrafts = [];
+    fetchImpl = async (url, init = {}) => {
+      if (!String(url).endsWith("discover-models")) return response({});
+      discoveryDrafts.push(JSON.parse(init.body).provider);
+      return response({ ids: ["discovered-a"] });
+    };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider({
+      modelDiscovery: undefined,
+      models: [],
+      protocol: "openai-completions",
+      baseUrl: "https://api.example.test/v1/",
+    }), 2);
+    const originalConfirm = win.confirm;
+    win.confirm = () => true;
+
+    await editor.discoverModels();
+
+    assert.equal(discoveryDrafts.length, 1);
+    assert.strictEqual(discoveryDrafts[0].modelDiscovery, "/v1/models");
+    assert.deepStrictEqual(discoveryDrafts[0].models, [
+      {
+        id: "__model_discovery__",
+        name: "Model discovery placeholder",
+        contextWindow: 1,
+        maxTokens: 1,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ]);
+    assert.deepStrictEqual([...host.querySelectorAll(".cpe-model-id")].map((input) => input.value), ["discovered-a"]);
+    assert.strictEqual(host.querySelector("#cpe-model-discovery")?.value, "/v1/models");
+    win.confirm = originalConfirm;
+  });
+
+  it("rejects discovered model IDs that contain captured secrets before confirmation and import", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const apiKey = 'api" key';
+    const headerSecret = "tenant/secret";
+    const leakedIds = [
+      `leaked-${apiKey}`,
+      `leaked-${encodeURIComponent(headerSecret)}`,
+    ];
+    fetchImpl = async () => response({ ids: [...leakedIds, "safe-model"] });
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider({ models: [customProvider().models[0]] }), 4);
+    setInput("#cpe-api-key", apiKey);
+    setInput(".cpe-header-value", headerSecret);
+    const originalConfirm = win.confirm;
+    let prompt = "";
+    win.confirm = (message) => { prompt = message; return true; };
+
+    await editor.discoverModels();
+
+    assert.match(prompt, /safe-model/);
+    for (const leaked of leakedIds) assert.strictEqual(prompt.includes(leaked), false);
+    assert.strictEqual(prompt.includes("[REDACTED]"), false, "secret-bearing IDs should be rejected, not masked and imported");
+    assert.deepStrictEqual(
+      [...host.querySelectorAll(".cpe-model-id")].map((input) => input.value),
+      ["model-a", "safe-model"],
+    );
     win.confirm = originalConfirm;
   });
 

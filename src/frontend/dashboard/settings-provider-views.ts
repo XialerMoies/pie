@@ -116,7 +116,7 @@ export class ProviderCardListView {
       ));
     }
 
-    const modelRow = providerViewElement('div', 'provider-card-model-row');
+    const modelRow = providerViewElement('div', 'provider-card-model-row provider-card-actions');
     const select = providerViewElement('select', 'provider-card-model-select');
     select.setAttribute('aria-label', `${provider.name} 模型`);
     select.disabled = provider.models.length === 0 || switchPending;
@@ -170,7 +170,7 @@ export class ProviderPickerView {
 
     const official = providerViewElement('section', 'provider-preset-group provider-preset-official-group');
     official.append(providerViewElement('h3', 'provider-preset-heading', '官方厂商'));
-    const officialList = providerViewElement('div', 'provider-preset-list');
+    const officialList = providerViewElement('div', 'provider-preset-list provider-picker-grid');
     for (const provider of state.official) {
       const tile = providerViewButton('provider-preset provider-preset-official', '');
       tile.dataset.providerId = provider.id;
@@ -189,7 +189,7 @@ export class ProviderPickerView {
 
     const custom = providerViewElement('section', 'provider-preset-group provider-preset-custom-group');
     custom.append(providerViewElement('h3', 'provider-preset-heading', '自定义厂商'));
-    const customList = providerViewElement('div', 'provider-preset-list');
+    const customList = providerViewElement('div', 'provider-preset-list provider-picker-grid');
     for (const template of PROVIDER_CUSTOM_TEMPLATES) {
       const tile = providerViewButton('provider-preset provider-preset-custom', template.label);
       tile.dataset.customTemplate = template.id;
@@ -235,7 +235,7 @@ export class OfficialProviderEditorView {
       return models;
     }
     if (state.models.status === 'error') {
-      models.append(providerViewElement('p', 'msl-error', state.models.error || '加载失败'));
+      models.append(providerViewElement('p', 'rp-error', state.models.error || '加载失败'));
       return models;
     }
     if (state.models.status !== 'ready' || state.models.items.length === 0) {
@@ -277,8 +277,7 @@ export class OfficialProviderEditorView {
 
     const reveal = providerViewButton('rp-key-toggle', '');
     reveal.dataset.providerAction = 'reveal-key';
-    let localValueAvailable = state.apiKey.revealed
-      || (!state.apiKey.canReveal && state.apiKey.value.length > 0);
+    let localValueAvailable = state.apiKey.revealed || state.apiKey.value.length > 0;
     let userEdited = false;
     const syncRevealControl = (): void => {
       const action = input.type === 'text' ? '隐藏' : '显示';

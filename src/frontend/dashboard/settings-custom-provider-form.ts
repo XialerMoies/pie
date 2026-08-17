@@ -1,9 +1,17 @@
 /// <reference path="../dashboard.d.ts" />
 
 type CustomProviderFormModel = CustomProviderDraft['models'][number];
-type CustomProviderFormAction = 'save' | 'test' | 'discover' | 'delete' | 'reveal-api-key';
 type CustomProviderFormMutationAction = 'save' | 'delete';
 
+const MODEL_DISCOVERY_SENTINEL: CustomProviderFormModel = {
+  id: '__model_discovery__',
+  name: 'Model discovery placeholder',
+  contextWindow: 1,
+  maxTokens: 1,
+  reasoning: false,
+  input: ['text'],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
 const CUSTOM_HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const CUSTOM_FORBIDDEN_HEADERS = new Set([
   'host',
@@ -17,14 +25,6 @@ const CUSTOM_FORBIDDEN_HEADERS = new Set([
   'upgrade',
 ]);
 const CUSTOM_ADVANCED_JSON_MAX_BYTES = 16 * 1024;
-const CUSTOM_NETWORK_ACTIONS: readonly CustomProviderFormAction[] = [
-  'save',
-  'delete',
-  'test',
-  'discover',
-  'reveal-api-key',
-];
-
 function formElement<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -95,6 +95,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
   private apiKeyCleared = false;
   private generatedId = true;
   private modelSequence = 0;
+  private mutationControlStates: Map<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement, boolean> | null = null;
 
   constructor(
     private readonly options: CustomProviderFormOptions,
@@ -107,6 +108,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     this.root = root;
     this.apiKeyCleared = false;
     this.generatedId = !provider;
+    this.mutationControlStates = null;
 
     const heading = formElement('div', 'cpe-heading');
     heading.append(
@@ -188,6 +190,12 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     const modelDiscovery = value('#cpe-model-discovery');
     const protocol = this.root.querySelector<HTMLSelectElement>('#cpe-protocol')?.value ?? '';
     const authMode = this.root.querySelector<HTMLInputElement>('input[name="cpe-auth-mode"]:checked')?.value ?? '';
+    const derivedModelDiscovery = options.purpose === 'discover'
+      && protocol === 'openai-completions'
+      && !modelDiscovery
+      ? ProviderSettingsUtils.deriveOpenAiDiscoveryPath(baseUrl)
+      : null;
+    const effectiveModelDiscovery = modelDiscovery || derivedModelDiscovery || '';
     let valid = true;
     const fail = (field: string, message: string) => {
       valid = false;
@@ -209,10 +217,10 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
         fail('baseUrl', '请输入有效的 HTTP(S) URL');
       }
     }
-    if (baseUrl && modelDiscovery) {
+    if (baseUrl && effectiveModelDiscovery) {
       try {
         const base = new URL(baseUrl);
-        const parsed = new URL(modelDiscovery, base);
+        const parsed = new URL(effectiveModelDiscovery, base);
         if (
           !['http:', 'https:'].includes(parsed.protocol)
           || !parsed.hostname
@@ -229,6 +237,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     const headers: CustomProviderDraft['headers'] = [];
     const headerNames = new Set<string>();
     const headerRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-header-row')];
+    const headerFieldIndexes = this.headerFieldIndexes(headerRows);
     for (let index = 0; index < headerRows.length; index += 1) {
       const row = headerRows[index];
       const originalName = row.dataset.originalName ?? '';
@@ -241,25 +250,47 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
         ? originalName
         : row.querySelector<HTMLInputElement>('.cpe-header-name')?.value.trim() ?? '';
       const normalizedName = headerName.toLowerCase();
+      const fieldIndex = headerFieldIndexes.get(row) ?? index;
       let message = '';
       if (!headerName) message = '请输入 Header name';
       else if (!CUSTOM_HEADER_NAME_PATTERN.test(headerName) || CUSTOM_FORBIDDEN_HEADERS.has(normalizedName)) {
         message = 'Header name 无效';
       } else if (headerNames.has(normalizedName)) message = 'Header name 重复';
-      if (message) fail(`headers[${index}].name`, message);
+      if (message) fail(`headers[${fieldIndex}].name`, message);
       else headerNames.add(normalizedName);
       const headerValue = row.querySelector<HTMLInputElement>('.cpe-header-value')?.value ?? '';
       const hasHeaderValue = headerValue.trim().length > 0;
-      if (!configured && !hasHeaderValue) fail(`headers[${index}].value`, '请输入 Header value');
+      if (!configured && !hasHeaderValue) fail(`headers[${fieldIndex}].value`, '请输入 Header value');
       if (!message && (configured || hasHeaderValue)) {
         headers.push({ name: headerName, ...(hasHeaderValue ? { value: headerValue } : {}) });
       }
     }
     if (!valid) return null;
 
+    const activeHeaderNames = new Set(
+      headers.filter(header => header.remove !== true).map(header => header.name.toLowerCase()),
+    );
+    const finalHeaders = headers.filter(header => (
+      header.remove !== true || !activeHeaderNames.has(header.name.toLowerCase())
+    ));
+
     const commonRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-row')];
     const detailRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-detail-row')];
     if (commonRows.length === 0 || commonRows.length !== detailRows.length) {
+      if (options.purpose === 'discover' && effectiveModelDiscovery) {
+        const apiKeyValue = value('#cpe-api-key');
+        return {
+          id,
+          name,
+          protocol: protocol as CustomProviderDraft['protocol'],
+          baseUrl,
+          authMode: authMode as CustomProviderDraft['authMode'],
+          ...(authMode === 'apiKey' && apiKeyValue ? { apiKey: apiKeyValue } : {}),
+          headers: finalHeaders,
+          models: [MODEL_DISCOVERY_SENTINEL],
+          modelDiscovery: effectiveModelDiscovery,
+        };
+      }
       if (showErrors) this.setFieldError('models', '至少添加一个模型', false);
       return null;
     }
@@ -340,9 +371,9 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       baseUrl,
       authMode: authMode as CustomProviderDraft['authMode'],
       ...(this.apiKeyCleared ? { apiKey: null } : authMode === 'apiKey' && apiKeyValue ? { apiKey: apiKeyValue } : {}),
-      headers,
+      headers: finalHeaders,
       models,
-      ...(modelDiscovery ? { modelDiscovery } : {}),
+      ...(effectiveModelDiscovery ? { modelDiscovery: effectiveModelDiscovery } : {}),
     };
   }
 
@@ -371,7 +402,23 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     const input = this.root?.querySelector<HTMLInputElement>('#cpe-api-key');
     if (!input) return;
     input.value = value;
+    input.type = 'text';
     this.apiKeyCleared = false;
+    this.syncApiKeyToggle(true);
+  }
+
+  setModelDiscovery(value: string): void {
+    const input = this.root?.querySelector<HTMLInputElement>('#cpe-model-discovery');
+    if (input) input.value = value;
+  }
+
+  toggleApiKeyVisibility(): boolean {
+    const input = this.root?.querySelector<HTMLInputElement>('#cpe-api-key');
+    if (!input?.value) return false;
+    const visible = input.type !== 'text';
+    input.type = visible ? 'text' : 'password';
+    this.syncApiKeyToggle(visible);
+    return true;
   }
 
   setDeleteArmed(armed: boolean): void {
@@ -392,14 +439,23 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
 
   setMutationBusy(action: CustomProviderFormMutationAction, busy: boolean): void {
     if (!this.root) return;
-    for (const buttonAction of CUSTOM_NETWORK_ACTIONS) {
-      const button = this.root.querySelector<HTMLButtonElement>(`[data-cpe-action="${buttonAction}"]`);
-      if (button) button.disabled = busy;
+    if (busy) {
+      if (!this.mutationControlStates) {
+        const controls = this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
+          'input, select, textarea, button',
+        );
+        this.mutationControlStates = new Map([...controls].map(control => [control, control.disabled]));
+      }
+      for (const control of this.mutationControlStates.keys()) control.disabled = true;
+    } else if (this.mutationControlStates) {
+      for (const [control, disabled] of this.mutationControlStates) control.disabled = disabled;
+      this.mutationControlStates = null;
     }
     const active = this.root.querySelector<HTMLButtonElement>(`[data-cpe-action="${action}"]`);
-    if (!active) return;
-    if (busy) active.setAttribute('aria-busy', 'true');
-    else active.removeAttribute('aria-busy');
+    if (active) {
+      if (busy) active.setAttribute('aria-busy', 'true');
+      else active.removeAttribute('aria-busy');
+    }
   }
 
   clearFeedback(): void {
@@ -701,7 +757,9 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       const input = this.root?.querySelector<HTMLInputElement>('#cpe-api-key');
       if (input) {
         input.value = '';
+        input.type = 'password';
         input.placeholder = '保存后清除';
+        this.syncApiKeyToggle(false);
       }
     } else if (action === 'remove-header') {
       const row = target.closest<HTMLElement>('.cpe-header-row');
@@ -757,22 +815,32 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
   private refreshDynamicMetadata(): void {
     if (!this.root) return;
     const headerRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-header-row')];
+    const headerFieldIndexes = this.headerFieldIndexes(headerRows);
     headerRows.forEach((row, index) => {
       const number = index + 1;
+      const fieldIndex = headerFieldIndexes.get(row);
       const name = row.querySelector<HTMLInputElement>('.cpe-header-name');
       const value = row.querySelector<HTMLInputElement>('.cpe-header-value');
       if (name) {
-        name.dataset.fieldPath = `headers[${index}].name`;
+        if (fieldIndex === undefined) delete name.dataset.fieldPath;
+        else name.dataset.fieldPath = `headers[${fieldIndex}].name`;
         if (!name.getAttribute('aria-label')) name.setAttribute('aria-label', `Header ${number} 名称`);
       }
       if (value) {
-        value.dataset.fieldPath = `headers[${index}].value`;
+        if (fieldIndex === undefined) delete value.dataset.fieldPath;
+        else value.dataset.fieldPath = `headers[${fieldIndex}].value`;
         value.setAttribute('aria-label', `Header ${number} 值`);
       }
       const nameError = row.querySelector<HTMLElement>('.cpe-header-name-error');
-      if (nameError) nameError.dataset.fieldError = `headers[${index}].name`;
+      if (nameError) {
+        if (fieldIndex === undefined) delete nameError.dataset.fieldError;
+        else nameError.dataset.fieldError = `headers[${fieldIndex}].name`;
+      }
       const valueError = row.querySelector<HTMLElement>('.cpe-header-value-error');
-      if (valueError) valueError.dataset.fieldError = `headers[${index}].value`;
+      if (valueError) {
+        if (fieldIndex === undefined) delete valueError.dataset.fieldError;
+        else valueError.dataset.fieldError = `headers[${fieldIndex}].value`;
+      }
       const remove = row.querySelector<HTMLButtonElement>('[data-cpe-action="remove-header"]');
       if (remove) {
         remove.title = `删除 Header ${number}`;
@@ -806,6 +874,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
         name.dataset.fieldPath = `models[${index}].name`;
         name.setAttribute('aria-label', `模型 ${number} name`);
       }
+      this.reindexModelError(row.querySelector<HTMLElement>('.cpe-model-error'), index);
       const remove = row.querySelector<HTMLButtonElement>('[data-cpe-action="remove-model"]');
       if (remove) {
         remove.title = `删除模型 ${number}`;
@@ -813,6 +882,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       }
       const detail = detailRows[index];
       if (!detail) return;
+      this.reindexModelError(detail.querySelector<HTMLElement>('.cpe-model-error'), index);
       for (const [selector, field] of detailFields) {
         const control = detail.querySelector<HTMLElement>(selector);
         if (!control) continue;
@@ -820,6 +890,41 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
         control.setAttribute('aria-label', `模型 ${number} ${field}`);
       }
     });
+  }
+
+  private headerFieldIndexes(rows: readonly HTMLElement[]): Map<HTMLElement, number> {
+    const activeNames = new Set<string>();
+    for (const row of rows) {
+      if (row.dataset.removed === 'true') continue;
+      const name = row.dataset.configured === 'true'
+        ? row.dataset.originalName ?? ''
+        : row.querySelector<HTMLInputElement>('.cpe-header-name')?.value.trim() ?? '';
+      if (name) activeNames.add(name.toLowerCase());
+    }
+
+    const indexes = new Map<HTMLElement, number>();
+    let fieldIndex = 0;
+    for (const row of rows) {
+      const originalName = row.dataset.originalName ?? '';
+      if (row.dataset.removed === 'true' && (!originalName || activeNames.has(originalName.toLowerCase()))) continue;
+      indexes.set(row, fieldIndex);
+      fieldIndex += 1;
+    }
+    return indexes;
+  }
+
+  private syncApiKeyToggle(visible: boolean): void {
+    const toggle = this.root?.querySelector<HTMLButtonElement>('[data-cpe-action="reveal-api-key"]');
+    if (!toggle) return;
+    const label = visible ? '隐藏 API Key' : '显示 API Key';
+    toggle.title = label;
+    toggle.setAttribute('aria-label', label);
+  }
+
+  private reindexModelError(error: HTMLElement | null, index: number): void {
+    const path = error?.dataset.fieldError;
+    const suffix = path?.match(/^models\[\d+\](\..+)$/)?.[1];
+    if (error && suffix) error.dataset.fieldError = `models[${index}]${suffix}`;
   }
 }
 

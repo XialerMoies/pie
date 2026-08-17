@@ -290,6 +290,8 @@ interface SettingsCustomProviderFormView {
   captureSecrets(): string[];
   appendDiscoveredModels(ids: readonly string[]): void;
   setApiKey(value: string): void;
+  setModelDiscovery(value: string): void;
+  toggleApiKeyVisibility(): boolean;
   setDeleteArmed(armed: boolean): void;
   setQueryBusy(action: 'test' | 'discover' | 'reveal', busy: boolean): void;
   setMutationBusy(action: 'save' | 'delete', busy: boolean): void;

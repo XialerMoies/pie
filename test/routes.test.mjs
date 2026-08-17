@@ -1926,6 +1926,39 @@ describe("custom provider settings routes", () => {
       assert.equal(input.provider.modelDiscovery, "../models");
     }
 
+    const sentinelDraft = {
+      ...providerDraft,
+      models: [{
+        id: "__model_discovery__",
+        name: "Model discovery placeholder",
+        contextWindow: 1,
+        maxTokens: 1,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      }],
+      modelDiscovery: "/v1/models",
+    };
+    const discoveredWithSentinel = await callHandler(handleSettings, "POST", "/api/custom-providers/discover-models", {
+      provider: sentinelDraft,
+    }, ctx);
+    assert.equal(discoveredWithSentinel.status, 200);
+    assert.deepEqual(parseJSON(discoveredWithSentinel.body), { ids: ["discovered-a"] });
+    const [, sentinelInput] = networkInputs.at(-1);
+    assert.deepEqual(sentinelInput.provider.models, []);
+    assert.equal(sentinelInput.provider.modelDiscovery, "/v1/models");
+
+    const rejectedSentinelSave = await callHandler(handleSettings, "POST", "/api/custom-providers", {
+      expectedRevision: 1,
+      provider: sentinelDraft,
+    }, ctx);
+    assert.equal(rejectedSentinelSave.status, 400);
+    assert.deepEqual(parseJSON(rejectedSentinelSave.body), {
+      error: "Invalid custom provider request",
+      code: "invalid_request",
+      fieldPath: "provider.models[0].id",
+    });
+
     const missingCredentials = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
       provider: { ...draftWithoutSecrets, id: "unsaved", name: "Unsaved" },
     }, ctx);
@@ -1935,14 +1968,14 @@ describe("custom provider settings routes", () => {
       code: "invalid_request",
       fieldPath: "provider.apiKey",
     });
-    assert.equal(networkInputs.length, 3);
+    assert.equal(networkInputs.length, 4);
 
     const explicitlyCleared = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
       provider: { ...draftWithoutSecrets, apiKey: null },
     }, ctx);
     assert.equal(explicitlyCleared.status, 400);
     assert.equal(parseJSON(explicitlyCleared.body).fieldPath, "provider.apiKey");
-    assert.equal(networkInputs.length, 3);
+    assert.equal(networkInputs.length, 4);
 
     const missingSecondHeader = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
       provider: {
@@ -1959,7 +1992,7 @@ describe("custom provider settings routes", () => {
     }, ctx);
     assert.equal(missingSecondHeader.status, 400);
     assert.equal(parseJSON(missingSecondHeader.body).fieldPath, "provider.headers[1].value");
-    assert.equal(networkInputs.length, 3);
+    assert.equal(networkInputs.length, 4);
     assert.equal((await store.readSnapshot()).revision, 1);
     assert.equal(commits, 1);
   });

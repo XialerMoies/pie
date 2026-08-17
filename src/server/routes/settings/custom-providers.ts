@@ -25,6 +25,7 @@ import { cors } from "./common.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json", ...cors };
 const ITEM_ROUTE = /^\/api\/custom-providers\/([^/]+)$/;
+const MODEL_DISCOVERY_SENTINEL_ID = "__model_discovery__";
 
 type CustomProviderRoute =
   | { kind: "capabilities" | "list" | "reveal" | "test" | "discover"; allow: readonly string[] }
@@ -48,7 +49,7 @@ function mutationInput(value: unknown): CustomProviderMutationInput {
   }
   return {
     expectedRevision: value.expectedRevision as number,
-    provider: validateCustomProviderDraft(value.provider),
+    provider: rejectDiscoverySentinel(validateCustomProviderDraft(value.provider)),
   };
 }
 
@@ -62,11 +63,23 @@ function deleteInput(value: unknown): CustomProviderDeleteInput {
   return { expectedRevision: value.expectedRevision as number };
 }
 
-function networkDraftInput(value: unknown) {
+function networkDraftInput(value: unknown, options: { allowDiscoverySentinel?: boolean } = {}) {
   if (!isRecord(value)) throw new CustomProviderInvalidRequestError();
   const unknown = Object.keys(value).find((key) => key !== "provider");
   if (unknown) throw new CustomProviderInvalidRequestError("request");
-  return validateCustomProviderDraft(value.provider);
+  const draft = validateCustomProviderDraft(value.provider);
+  if (options.allowDiscoverySentinel && isDiscoverySentinelOnly(draft.models)) return draft;
+  return rejectDiscoverySentinel(draft);
+}
+
+function isDiscoverySentinelOnly(models: readonly { id: string }[]): boolean {
+  return models.length === 1 && models[0]?.id === MODEL_DISCOVERY_SENTINEL_ID;
+}
+
+function rejectDiscoverySentinel<T extends { models: readonly { id: string }[] }>(draft: T): T {
+  const index = draft.models.findIndex(model => model.id === MODEL_DISCOVERY_SENTINEL_ID);
+  if (index !== -1) throw new CustomProviderInvalidRequestError(`provider.models[${index}].id`);
+  return draft;
 }
 
 function writeError(res: ServerResponse, error: unknown): void {
@@ -268,7 +281,7 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
     if (route.kind === "test" || route.kind === "discover") {
       const lifecycle = createRequestLifecycleScope(req, res);
       try {
-        const draft = networkDraftInput(await parseBody(req));
+        const draft = networkDraftInput(await parseBody(req), { allowDiscoverySentinel: route.kind === "discover" });
         await authorizeStoredCredentialsIfNeeded(ctx, draft);
         const result = route.kind === "test"
           ? await service.testConnection(draft, lifecycle.signal)
