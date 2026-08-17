@@ -163,6 +163,45 @@ describe("provider settings views", () => {
     assert.deepEqual([...cards[1].querySelectorAll("option")].map(option => option.value), ["second-model"]);
   });
 
+  it("keeps the active model visible while a different model is pending in the select", async () => {
+    const { ProviderCardListView } = await loadViews();
+    const host = document.createElement("div");
+    new ProviderCardListView({ onUse() {}, onEdit() {}, onAdd() {} }).render(host, {
+      current: { providerId: "deepseek", modelId: "deepseek-chat" },
+      providers: [{
+        id: "deepseek", name: "DeepSeek", custom: false, configured: true,
+        baseUrl: "https://api.deepseek.com/v1", protocolLabel: "官方",
+        models: [
+          { id: "deepseek-chat", name: "DeepSeek Chat" },
+          { id: "deepseek-reasoner", name: "DeepSeek Reasoner" },
+        ],
+      }],
+    });
+
+    const card = host.querySelector('.provider-card[data-provider-id="deepseek"]');
+    const select = card.querySelector("select");
+    assert.equal(card.getAttribute("aria-current"), "true");
+    assert.equal(card.querySelector(".provider-card-current")?.textContent, "当前：DeepSeek Chat");
+    select.value = "deepseek-reasoner";
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.equal(card.querySelector(".provider-card-current")?.textContent, "当前：DeepSeek Chat");
+  });
+
+  it("disables both model controls when a provider has no models", async () => {
+    const { ProviderCardListView } = await loadViews();
+    const host = document.createElement("div");
+    new ProviderCardListView({ onUse() {}, onEdit() {}, onAdd() {} }).render(host, {
+      current: null,
+      providers: [{
+        id: "empty", name: "Empty", custom: true, configured: true,
+        baseUrl: "https://empty.example.test/v1", protocolLabel: "OpenAI 兼容", models: [],
+      }],
+    });
+
+    assert.equal(host.querySelector(".provider-card-model-select").disabled, true);
+    assert.equal(host.querySelector('[data-provider-action="use"]').disabled, true);
+  });
+
   it("renders an empty state instead of opening an editor", async () => {
     const { ProviderCardListView } = await loadViews();
     const host = document.createElement("div");
@@ -264,9 +303,13 @@ describe("provider settings views", () => {
     assert.equal(host.querySelector(".provider-identity-name")?.textContent, '<b>Official Test</b>');
     assert.match(host.querySelector(".rp-models")?.textContent ?? "", /加载中/);
     const input = host.querySelector(".rp-key-input");
+    const label = host.querySelector('label[for="key-input"]');
+    assert.equal(label?.textContent, "API Key");
+    assert.equal(label?.htmlFor, input.id);
     assert.equal(input.type, "password");
-    input.value = "sk-new";
     host.querySelector('[data-provider-action="reveal-key"]').click();
+    input.value = "sk-new";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
     host.querySelector('[data-provider-action="save-key"]').click();
     host.querySelector('[data-provider-action="back"]').click();
     assert.deepEqual(calls, [["reveal", "official-test"], ["save", "official-test", "sk-new"], ["back"]]);
@@ -282,7 +325,10 @@ describe("provider settings views", () => {
       ...state,
       models: {
         status: "ready",
-        items: [{ id: "official-model", name: '<i>Official Model</i>' }],
+        items: [
+          { id: "official-model", name: '<i>Official Model</i>' },
+          { id: "other-model", name: "Other Model" },
+        ],
         activeModelId: "official-model",
         error: "",
       },
@@ -292,5 +338,106 @@ describe("provider settings views", () => {
     assert.equal(model.textContent, '<i>Official Model</i>');
     model.click();
     assert.deepEqual(calls.at(-1), ["use", "official-test", "official-model"]);
+  });
+
+  it("exposes active official models through aria-pressed", async () => {
+    const { OfficialProviderEditorView } = await loadViews();
+    const host = document.createElement("div");
+    new OfficialProviderEditorView({ onBack() {}, onReveal() {}, onSave() {}, onUse() {} }).render(host, {
+      provider: { id: "openai", name: "OpenAI", configured: true },
+      apiKey: {
+        value: "",
+        placeholder: "输入 API Key...",
+        revealed: false,
+        canReveal: false,
+        saving: false,
+      },
+      models: {
+        status: "ready",
+        items: [
+          { id: "active-model", name: "Active Model" },
+          { id: "other-model", name: "Other Model" },
+        ],
+        activeModelId: "active-model",
+        error: "",
+      },
+    });
+
+    assert.equal(host.querySelector('[data-model-id="active-model"]').getAttribute("aria-pressed"), "true");
+    assert.equal(host.querySelector('[data-model-id="other-model"]').getAttribute("aria-pressed"), "false");
+  });
+
+  it("hides and re-shows an already revealed API key without another reveal request", async () => {
+    const { OfficialProviderEditorView } = await loadViews();
+    const host = document.createElement("div");
+    const calls = [];
+    new OfficialProviderEditorView({
+      onBack() {},
+      onReveal: providerId => calls.push(providerId),
+      onSave() {},
+      onUse() {},
+    }).render(host, {
+      provider: { id: "openai", name: "OpenAI", configured: true },
+      apiKey: {
+        value: "sk-revealed",
+        placeholder: "输入 API Key...",
+        revealed: true,
+        canReveal: true,
+        saving: false,
+      },
+      models: { status: "idle", items: [], activeModelId: null, error: "" },
+    });
+
+    const input = host.querySelector(".rp-key-input");
+    const toggle = host.querySelector('[data-provider-action="reveal-key"]');
+    assert.equal(input.type, "text");
+    assert.equal(toggle.textContent, "隐藏");
+    assert.equal(toggle.title, "隐藏 API Key");
+    assert.equal(toggle.getAttribute("aria-label"), "隐藏 API Key");
+    toggle.click();
+    assert.equal(input.type, "password");
+    assert.equal(toggle.textContent, "显示");
+    assert.equal(toggle.title, "显示 API Key");
+    assert.equal(toggle.getAttribute("aria-label"), "显示 API Key");
+    toggle.click();
+    assert.equal(input.type, "text");
+    assert.deepEqual(calls, []);
+  });
+
+  it("shows and hides a newly typed API key locally when stored reveal is unavailable", async () => {
+    const { OfficialProviderEditorView } = await loadViews();
+    const host = document.createElement("div");
+    const calls = [];
+    new OfficialProviderEditorView({
+      onBack() {},
+      onReveal: providerId => calls.push(providerId),
+      onSave() {},
+      onUse() {},
+    }).render(host, {
+      provider: { id: "openai", name: "OpenAI", configured: false },
+      apiKey: {
+        value: "",
+        placeholder: "输入 API Key...",
+        revealed: false,
+        canReveal: false,
+        saving: false,
+      },
+      models: { status: "idle", items: [], activeModelId: null, error: "" },
+    });
+
+    const input = host.querySelector(".rp-key-input");
+    const toggle = host.querySelector('[data-provider-action="reveal-key"]');
+    assert.equal(toggle.disabled, true);
+    input.value = "sk-new";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(toggle.disabled, false);
+    toggle.click();
+    assert.equal(input.type, "text");
+    assert.equal(toggle.textContent, "隐藏");
+    assert.equal(toggle.title, "隐藏 API Key");
+    assert.equal(toggle.getAttribute("aria-label"), "隐藏 API Key");
+    toggle.click();
+    assert.equal(input.type, "password");
+    assert.deepEqual(calls, []);
   });
 });

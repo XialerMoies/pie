@@ -76,6 +76,11 @@ export class ProviderCardListView {
   ): HTMLElement {
     const card = providerViewElement('article', 'provider-card');
     card.dataset.providerId = provider.id;
+    const isCurrent = current?.providerId === provider.id;
+    if (isCurrent) {
+      card.classList.add('current');
+      card.setAttribute('aria-current', 'true');
+    }
 
     const header = providerViewElement('header', 'provider-card-header');
     header.append(ProviderIdentityView.create(provider.id, provider.name, provider.custom));
@@ -95,10 +100,19 @@ export class ProviderCardListView {
       `provider-card-status${provider.configured ? ' on' : ''}`,
       provider.configured ? '已配置' : '未配置',
     ));
+    if (isCurrent) {
+      const activeModel = provider.models.find(model => model.id === current.modelId);
+      metadata.append(providerViewElement(
+        'span',
+        'provider-card-current',
+        `当前：${activeModel?.name || current.modelId}`,
+      ));
+    }
 
     const modelRow = providerViewElement('div', 'provider-card-model-row');
     const select = providerViewElement('select', 'provider-card-model-select');
     select.setAttribute('aria-label', `${provider.name} 模型`);
+    select.disabled = provider.models.length === 0;
     for (const model of provider.models) {
       const option = providerViewElement('option', undefined, model.name);
       option.value = model.id;
@@ -218,6 +232,7 @@ export class OfficialProviderEditorView {
       const item = providerViewButton(`rp-model-item${active ? ' on' : ''}`, model.name);
       item.dataset.modelProvider = state.provider.id;
       item.dataset.modelId = model.id;
+      item.setAttribute('aria-pressed', String(active));
       item.addEventListener('click', () => this.callbacks.onUse(state.provider.id, model.id));
       models.append(item);
     }
@@ -226,7 +241,6 @@ export class OfficialProviderEditorView {
 
   private createKeySection(state: OfficialProviderEditorState): HTMLElement {
     const section = providerViewElement('section', 'rp-key-section');
-    section.append(providerViewElement('div', 'rp-key-label', 'API Key'));
     const row = providerViewElement('div', 'rp-key-row');
     const input = providerViewElement('input', 'rp-key-input');
     input.type = state.apiKey.revealed ? 'text' : 'password';
@@ -237,18 +251,49 @@ export class OfficialProviderEditorView {
     input.disabled = state.apiKey.saving;
     input.autocomplete = 'off';
 
-    const reveal = providerViewButton('rp-key-toggle', '显示');
+    const label = providerViewElement('label', 'rp-key-label', 'API Key');
+    label.htmlFor = input.id;
+
+    const reveal = providerViewButton('rp-key-toggle', '');
     reveal.dataset.providerAction = 'reveal-key';
-    reveal.setAttribute('aria-label', '显示 API Key');
-    reveal.disabled = !state.apiKey.canReveal || state.apiKey.saving;
-    reveal.addEventListener('click', () => this.callbacks.onReveal(state.provider.id));
+    let localValueAvailable = state.apiKey.revealed;
+    let userEdited = false;
+    const syncRevealControl = (): void => {
+      const action = input.type === 'text' ? '隐藏' : '显示';
+      reveal.textContent = action;
+      reveal.title = `${action} API Key`;
+      reveal.setAttribute('aria-label', `${action} API Key`);
+      const canToggleLocally = localValueAvailable || (userEdited && input.value.length > 0);
+      reveal.disabled = state.apiKey.saving
+        || (input.type === 'password' && !state.apiKey.canReveal && !canToggleLocally);
+    };
+    input.addEventListener('input', () => {
+      userEdited = true;
+      localValueAvailable = input.value.length > 0;
+      syncRevealControl();
+    });
+    reveal.addEventListener('click', () => {
+      if (input.type === 'text') {
+        input.type = 'password';
+        syncRevealControl();
+        return;
+      }
+      if (localValueAvailable || (userEdited && input.value.length > 0)) {
+        input.type = 'text';
+        localValueAvailable = true;
+        syncRevealControl();
+        return;
+      }
+      if (state.apiKey.canReveal) this.callbacks.onReveal(state.provider.id);
+    });
+    syncRevealControl();
 
     const save = providerViewButton('rp-save-btn', state.apiKey.saving ? '保存中...' : '保存');
     save.dataset.providerAction = 'save-key';
     save.disabled = state.apiKey.saving;
     save.addEventListener('click', () => this.callbacks.onSave(state.provider.id, input.value));
     row.append(input, reveal, save);
-    section.append(row);
+    section.append(label, row);
     return section;
   }
 }
