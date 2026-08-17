@@ -140,6 +140,8 @@ const bundlePrev = existsSync(bundleOut) ? readFileSync(bundleOut, "utf-8") : nu
 // 与 dashboard.html 原 script 顺序一致（已移除 problems/index 和 pane/problems）
 const REQUIRED_BUNDLE_ENTRIES = [
   "gen/ui/list-add-action.js",
+  "gen/dashboard/settings-provider-utils.js",
+  "gen/dashboard/settings-provider-views.js",
   "gen/pane/permissions/permissions-views.js",
   "gen/pane/permissions/index.js",
   "gen/dashboard/settings-general.js",
@@ -153,6 +155,8 @@ const bundleOrder = [
   "gen/services/app-events.js",
   "gen/dashboard/dashboard-helpers.js",
   "gen/ui/list-add-action.js",
+  "gen/dashboard/settings-provider-utils.js",
+  "gen/dashboard/settings-provider-views.js",
   "gen/services/ui-state-store.js",
   "gen/services/preferences.js",
   "gen/services/chat-runtime-store.js",
@@ -222,13 +226,20 @@ const settingsOwnerBundleIndexes = [
 ].map(entry => bundleOrder.indexOf(entry));
 const settingsBundleIndex = bundleOrder.indexOf("gen/dashboard/dashboard-settings.js");
 const listAddActionBundleIndex = bundleOrder.indexOf("gen/ui/list-add-action.js");
+const providerUtilsBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-provider-utils.js");
+const providerViewsBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-provider-views.js");
 const customProviderEditorBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-custom-provider-editor.js");
 const providerSettingsBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-provider-model.js");
 if (
   permissionViewsBundleIndex === -1
   || permissionsBundleIndex <= permissionViewsBundleIndex
   || settingsOwnerBundleIndexes.some(index => index <= permissionsBundleIndex || index >= settingsBundleIndex)
-  || !(listAddActionBundleIndex < customProviderEditorBundleIndex && customProviderEditorBundleIndex < providerSettingsBundleIndex)
+  || !(
+    listAddActionBundleIndex < providerUtilsBundleIndex
+    && providerUtilsBundleIndex < providerViewsBundleIndex
+    && providerViewsBundleIndex < customProviderEditorBundleIndex
+    && customProviderEditorBundleIndex < providerSettingsBundleIndex
+  )
 ) {
   throw new Error("dashboard bundle 顺序错误: Permissions 和 Settings owners 必须位于 Settings facade 之前");
 }

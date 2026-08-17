@@ -74,6 +74,78 @@ interface ProviderKeyInfo {
   keyPreview: string;
 }
 
+interface ProviderCardModel {
+  id: string;
+  name: string;
+}
+
+interface ProviderCardItem {
+  id: string;
+  name: string;
+  custom: boolean;
+  configured: boolean;
+  baseUrl: string;
+  protocolLabel: string;
+  models: ProviderCardModel[];
+}
+
+interface ProviderCardListState {
+  current: { providerId: string; modelId: string } | null;
+  providers: ProviderCardItem[];
+}
+
+interface ProviderPickerState {
+  official: Array<{ id: string; name: string; configured: boolean }>;
+  customAvailable: boolean;
+}
+
+interface ProviderCardListCallbacks {
+  onUse(providerId: string, modelId: string): void;
+  onEdit(providerId: string): void;
+  onAdd(): void;
+}
+
+interface ProviderPickerCallbacks {
+  onBack(): void;
+  onOfficial(providerId: string): void;
+  onCustom(template: 'openai' | 'anthropic' | 'other'): void;
+}
+
+type OfficialProviderModelsStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+interface OfficialProviderEditorState {
+  provider: { id: string; name: string; configured: boolean };
+  apiKey: {
+    value: string;
+    placeholder: string;
+    revealed: boolean;
+    canReveal: boolean;
+    saving: boolean;
+  };
+  models: {
+    status: OfficialProviderModelsStatus;
+    items: ProviderCardModel[];
+    activeModelId: string | null;
+    error: string;
+  };
+}
+
+interface OfficialProviderEditorCallbacks {
+  onBack(): void;
+  onReveal(providerId: string): void;
+  onSave(providerId: string, apiKey: string): void;
+  onUse(providerId: string, modelId: string): void;
+}
+
+declare const ProviderSettingsUtils: {
+  providerHost(baseUrl: string): string;
+  identity(providerId: string, name: string, isCustom: boolean): {
+    iconPath?: string;
+    initials: string;
+    label: string;
+  };
+};
+
 interface WorkspaceOpenResult {
   ok: boolean;
   action: 'unchanged' | 'focused-existing' | 'binding' | 'switching';

@@ -165,6 +165,16 @@ describe("frontend component tree boundaries", () => {
     assert.ok(shell.split(/\r?\n/).length <= 400, "dashboard-settings.ts must remain a thin modal and event facade");
   });
 
+  it("keeps provider settings rendering in DOM-only component views", () => {
+    const views = source("src/frontend/dashboard/settings-provider-views.ts");
+    for (const name of ["ProviderIdentityView", "ProviderCardListView", "ProviderPickerView", "OfficialProviderEditorView"]) {
+      assertClass(views, name);
+    }
+    assert.doesNotMatch(views, /\bApp\./);
+    assert.doesNotMatch(views, /\bfetch\s*\(/);
+    assert.doesNotMatch(views, /\.innerHTML\s*=/);
+  });
+
   it("loads settings component owners before the settings facade", () => {
     const compiler = source("scripts/compile-frontend-ts.mjs");
     const facadeIndex = compiler.indexOf('"gen/dashboard/dashboard-settings.js"');
@@ -180,9 +190,14 @@ describe("frontend component tree boundaries", () => {
       assert.ok(ownerIndex < facadeIndex, `${entry} must load before dashboard-settings`);
     }
     const actionIndex = compiler.indexOf('"gen/ui/list-add-action.js"');
+    const utilsIndex = compiler.indexOf('"gen/dashboard/settings-provider-utils.js"');
+    const viewsIndex = compiler.indexOf('"gen/dashboard/settings-provider-views.js"');
     const editorIndex = compiler.indexOf('"gen/dashboard/settings-custom-provider-editor.js"');
     const providerIndex = compiler.indexOf('"gen/dashboard/settings-provider-model.js"');
-    assert.ok(actionIndex < editorIndex && editorIndex < providerIndex, "custom provider editor must load after ListAddAction and before provider owner");
+    assert.ok(
+      actionIndex < utilsIndex && utilsIndex < viewsIndex && viewsIndex < editorIndex && editorIndex < providerIndex,
+      "provider views must load after shared UI dependencies and before settings owners",
+    );
   });
 
   it("keeps provider settings responsive above the Electron minimum window width", () => {
