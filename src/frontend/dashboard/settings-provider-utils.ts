@@ -1,8 +1,8 @@
-type ProviderIdentity = {
+interface ProviderIdentityDescriptor {
   iconPath?: string;
   initials: string;
   label: string;
-};
+}
 
 const OFFICIAL_ICON_PATHS: Readonly<Record<string, string>> = Object.freeze({
   anthropic: "./icons/providers/anthropic.svg",
@@ -55,7 +55,7 @@ function providerInitials(name: string): string {
   return Array.from(words[0] || "").slice(0, 2).join("").toUpperCase();
 }
 
-function identity(providerId: string, name: string, isCustom: boolean): ProviderIdentity {
+function identity(providerId: string, name: string, isCustom: boolean): ProviderIdentityDescriptor {
   const iconPath = isCustom ? undefined : OFFICIAL_ICON_PATHS[providerId.toLowerCase()];
   return {
     ...(iconPath ? { iconPath } : {}),

@@ -1,5 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { Window } from "happy-dom";
 
 async function loadUtils() {
@@ -37,6 +39,10 @@ describe("provider settings presentation utilities", () => {
   });
 
   it("uses official icons and derives custom provider initials", async () => {
+    const source = readFileSync(resolve("src/frontend/dashboard/settings-provider-utils.ts"), "utf8");
+    assert.match(source, /interface\s+ProviderIdentityDescriptor\s*\{/);
+    assert.match(source, /function\s+identity\([^)]*\):\s*ProviderIdentityDescriptor\s*\{/);
+
     const { identity } = await loadUtils();
 
     const deepseek = identity("deepseek", "DeepSeek", false);
