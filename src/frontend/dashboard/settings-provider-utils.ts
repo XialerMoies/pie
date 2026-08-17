@@ -1,6 +1,7 @@
 type ProviderIdentity = {
-  iconPath: string | null;
+  iconPath?: string;
   initials: string;
+  label: string;
 };
 
 const OFFICIAL_ICON_PATHS: Readonly<Record<string, string>> = Object.freeze({
@@ -55,9 +56,11 @@ function providerInitials(name: string): string {
 }
 
 function identity(providerId: string, name: string, isCustom: boolean): ProviderIdentity {
+  const iconPath = isCustom ? undefined : OFFICIAL_ICON_PATHS[providerId.toLowerCase()];
   return {
-    iconPath: isCustom ? null : OFFICIAL_ICON_PATHS[providerId.toLowerCase()] || null,
+    ...(iconPath ? { iconPath } : {}),
     initials: providerInitials(name),
+    label: name,
   };
 }
 

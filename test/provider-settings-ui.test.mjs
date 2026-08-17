@@ -39,12 +39,26 @@ describe("provider settings presentation utilities", () => {
   it("uses official icons and derives custom provider initials", async () => {
     const { identity } = await loadUtils();
 
-    assert.equal(identity("deepseek", "DeepSeek", false).iconPath, "./icons/providers/deepseek.svg");
+    const deepseek = identity("deepseek", "DeepSeek", false);
+    assert.equal(deepseek.label, "DeepSeek");
+    assert.equal(deepseek.iconPath, "./icons/providers/deepseek.svg");
     for (const id of ["anthropic", "google", "openai", "openrouter"]) {
       assert.equal(identity(id, id, false).iconPath, `./icons/providers/${id}.svg`);
     }
-    assert.equal(identity("custom-provider", "我的服务", true).initials, "我的");
-    assert.equal(identity("acme-gateway", "Acme Gateway", true).initials, "AG");
+
+    const chineseCustom = identity("custom-provider", "我的服务", true);
+    assert.equal(chineseCustom.label, "我的服务");
+    assert.equal(chineseCustom.initials, "我的");
+    assert.equal(Object.hasOwn(chineseCustom, "iconPath"), false);
+
+    const acmeCustom = identity("acme-gateway", "Acme Gateway", true);
+    assert.equal(acmeCustom.label, "Acme Gateway");
+    assert.equal(acmeCustom.initials, "AG");
+    assert.equal(Object.hasOwn(acmeCustom, "iconPath"), false);
+
+    const unsupported = identity("unsupported", "Unsupported Relay", false);
+    assert.equal(unsupported.label, "Unsupported Relay");
+    assert.equal(Object.hasOwn(unsupported, "iconPath"), false);
   });
 
   it("returns only the hostname for valid provider URLs", async () => {
