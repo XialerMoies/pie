@@ -145,8 +145,6 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     this.currentModel = this.readCurrentModel();
     this.officialDrafts.clear();
     this.optimisticOfficialKeys.clear();
-    this.pendingModelSwitch = null;
-    this.modelSwitchRequestId += 1;
     this.customEditor.setProtocols([]);
 
     const shell = providerElement('section', 'provider-settings-shell');
@@ -170,8 +168,6 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
     this.content = null;
     this.view = { kind: 'list' };
     this.officialDrafts.clear();
-    this.pendingModelSwitch = null;
-    this.modelSwitchRequestId += 1;
   }
 
   private showPicker(): void {
@@ -300,6 +296,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
         status: this.officialModelsState,
         items: this.modelsForProvider(providerId, false),
         activeModelId: this.currentModel?.providerId === providerId ? this.currentModel.modelId : null,
+        switchPending: Boolean(this.pendingModelSwitch),
         pendingModelId: this.pendingModelSwitch?.providerId === providerId
           ? this.pendingModelSwitch.modelId
           : null,
@@ -726,10 +723,7 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
   }
 
   private async switchModel(providerId: string, modelId: string): Promise<void> {
-    if (
-      this.pendingModelSwitch?.providerId === providerId
-      && this.pendingModelSwitch.modelId === modelId
-    ) return;
+    if (this.pendingModelSwitch) return;
     const generation = this.lifecycleGeneration;
     const operation: ProviderModelSwitchOperation = {
       requestId: ++this.modelSwitchRequestId,
@@ -749,8 +743,6 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       if (!this.isCurrentModelSwitch(generation, operation)) return;
       if (!response.ok || !providerRecord(result) || result.ok !== true) {
         const suffix = providerRecord(result) && typeof result.error === 'string' ? `: ${result.error}` : '';
-        this.pendingModelSwitch = null;
-        this.renderAfterDataChange();
         this.dependencies.notify(`切换失败${suffix}`, 'error');
         return;
       }
@@ -758,13 +750,17 @@ class SettingsProviderModelController implements SettingsProviderModelApi {
       await this.dependencies.refreshDashboard();
       if (!this.isCurrentModelSwitch(generation, operation)) return;
       this.currentModel = this.readCurrentModel();
-      this.pendingModelSwitch = null;
-      this.renderAfterDataChange();
     } catch {
       if (!this.isCurrentModelSwitch(generation, operation)) return;
-      this.pendingModelSwitch = null;
-      this.renderAfterDataChange();
       this.dependencies.notify('切换失败', 'error');
+    } finally {
+      if (
+        this.pendingModelSwitch === operation
+        && operation.requestId === this.modelSwitchRequestId
+      ) {
+        this.pendingModelSwitch = null;
+        this.renderAfterDataChange();
+      }
     }
   }
 

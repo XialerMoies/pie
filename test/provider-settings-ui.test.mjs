@@ -342,7 +342,7 @@ describe("provider settings views", () => {
     assert.equal(card.querySelector(".provider-card-current")?.textContent, "当前：DeepSeek Chat");
   });
 
-  it("marks only the pending card choice busy and allows a different choice to supersede it", async () => {
+  it("locks every card model control while one switch is pending", async () => {
     const { ProviderCardListView } = await loadViews();
     const host = document.createElement("div");
     const calls = [];
@@ -353,30 +353,33 @@ describe("provider settings views", () => {
     }).render(host, {
       current: { providerId: "deepseek", modelId: "deepseek-chat" },
       pendingSwitch: { providerId: "deepseek", modelId: "deepseek-reasoner" },
-      providers: [{
-        id: "deepseek", name: "DeepSeek", custom: false, configured: true,
-        baseUrl: "https://api.deepseek.com/v1", protocolLabel: "官方",
-        models: [
-          { id: "deepseek-chat", name: "DeepSeek Chat" },
-          { id: "deepseek-reasoner", name: "DeepSeek Reasoner" },
-        ],
-      }],
+      providers: [
+        {
+          id: "deepseek", name: "DeepSeek", custom: false, configured: true,
+          baseUrl: "https://api.deepseek.com/v1", protocolLabel: "官方",
+          models: [
+            { id: "deepseek-chat", name: "DeepSeek Chat" },
+            { id: "deepseek-reasoner", name: "DeepSeek Reasoner" },
+          ],
+        },
+        {
+          id: "other", name: "Other", custom: true, configured: true,
+          baseUrl: "https://other.example.test/v1", protocolLabel: "OpenAI 兼容",
+          models: [{ id: "other-model", name: "Other Model" }],
+        },
+      ],
     });
 
-    const select = host.querySelector(".provider-card-model-select");
-    const use = host.querySelector('[data-provider-action="use"]');
-    assert.equal(select.value, "deepseek-reasoner");
-    assert.equal(use.disabled, true);
-    assert.equal(use.getAttribute("aria-busy"), "true");
-    assert.equal(use.textContent, "切换中...");
-
-    select.value = "deepseek-chat";
-    select.dispatchEvent(new window.Event("change", { bubbles: true }));
-    assert.equal(use.disabled, false);
-    assert.equal(use.hasAttribute("aria-busy"), false);
-    assert.equal(use.textContent, "使用");
-    use.click();
-    assert.deepEqual(calls, [["deepseek", "deepseek-chat"]]);
+    const selects = [...host.querySelectorAll(".provider-card-model-select")];
+    const uses = [...host.querySelectorAll('[data-provider-action="use"]')];
+    assert.equal(selects[0].value, "deepseek-reasoner");
+    assert.ok(selects.every(select => select.disabled));
+    assert.ok(uses.every(use => use.disabled));
+    assert.equal(uses[0].getAttribute("aria-busy"), "true");
+    assert.equal(uses[0].textContent, "切换中...");
+    assert.equal(uses[1].hasAttribute("aria-busy"), false);
+    uses.forEach(use => use.click());
+    assert.deepEqual(calls, []);
   });
 
   it("disables both model controls when a provider has no models", async () => {
@@ -574,7 +577,7 @@ describe("provider settings views", () => {
     assert.equal(host.querySelector('[data-model-id="other-model"]').getAttribute("aria-pressed"), "false");
   });
 
-  it("marks only the pending official model busy", async () => {
+  it("locks every official model while one switch is pending", async () => {
     const { OfficialProviderEditorView } = await loadViews();
     const host = document.createElement("div");
     const calls = [];
@@ -597,6 +600,7 @@ describe("provider settings views", () => {
           { id: "other-model", name: "Other Model" },
         ],
         activeModelId: null,
+        switchPending: true,
         pendingModelId: "pending-model",
         error: "",
       },
@@ -606,9 +610,10 @@ describe("provider settings views", () => {
     const other = host.querySelector('[data-model-id="other-model"]');
     assert.equal(pending.disabled, true);
     assert.equal(pending.getAttribute("aria-busy"), "true");
-    assert.equal(other.disabled, false);
+    assert.equal(other.disabled, true);
+    assert.equal(other.hasAttribute("aria-busy"), false);
     other.click();
-    assert.deepEqual(calls, ["other-model"]);
+    assert.deepEqual(calls, []);
   });
 
   it("hides and re-shows an already revealed API key without another reveal request", async () => {
@@ -1204,82 +1209,132 @@ describe("provider settings controller", () => {
     assert.ok(host.querySelector('.provider-card[data-provider-id="openai"]'));
   });
 
-  it("deduplicates repeated pending model switches", async () => {
-    const switchRequest = deferred();
+  it("serializes card model switches until the active success settles", async () => {
+    const first = deferred();
+    const second = deferred();
     const requests = [];
     const baseFetch = standardControllerFetch();
     const fetchImpl = async (url, init = {}) => {
       if (String(url) === "/api/model/switch") {
         requests.push(JSON.parse(init.body));
-        return switchRequest.promise;
+        return requests.length === 1 ? first.promise : second.promise;
       }
       return baseFetch(url, init);
     };
     const { host } = await loadController({ fetchImpl });
     const firstUse = host.querySelector('.provider-card[data-provider-id="acme"] [data-provider-action="use"]');
+    const differentUse = host.querySelector('.provider-card[data-provider-id="anthropic"] [data-provider-action="use"]');
     firstUse.click();
     firstUse.click();
+    differentUse.click();
 
     assert.deepEqual(requests, [{ provider: "acme", modelId: "acme-chat" }]);
-    const pendingUse = host.querySelector('.provider-card[data-provider-id="acme"] [data-provider-action="use"]');
-    assert.equal(pendingUse.disabled, true);
-    assert.equal(pendingUse.getAttribute("aria-busy"), "true");
+    assert.ok([...host.querySelectorAll(".provider-card-model-select")].every(select => select.disabled));
+    assert.ok([...host.querySelectorAll('[data-provider-action="use"]')].every(button => button.disabled));
+    assert.equal(
+      host.querySelector('.provider-card[data-provider-id="acme"] [data-provider-action="use"]').getAttribute("aria-busy"),
+      "true",
+    );
 
-    switchRequest.resolve(response({ ok: true }));
+    first.resolve(response({ ok: true }));
+    await flushControllerWork();
+    assert.ok([...host.querySelectorAll(".provider-card-model-select")].every(select => !select.disabled));
+    assert.ok([...host.querySelectorAll('[data-provider-action="use"]')].every(button => !button.disabled));
+
+    host.querySelector('.provider-card[data-provider-id="anthropic"] [data-provider-action="use"]').click();
+    assert.deepEqual(requests, [
+      { provider: "acme", modelId: "acme-chat" },
+      { provider: "anthropic", modelId: "claude-sonnet" },
+    ]);
+    second.resolve(response({ ok: true }));
     await flushControllerWork();
   });
 
-  it("lets a newer model switch supersede stale success and error completions", async () => {
-    for (const staleOutcome of ["success", "error"]) {
-      const dashboard = { modelProvider: "openai", modelId: "initial-model" };
-      const first = deferred();
-      const second = deferred();
-      const switches = [];
-      const fetchImpl = async (url, init = {}) => {
-        const path = String(url);
-        if (path === "/api/auth") return response({
-          providers: [{ provider: "openai", hasKey: true, canReveal: false, keyPreview: "" }],
-        });
-        if (path === "/api/custom-providers") return response({
-          revision: 1,
-          official: [{ id: "openai", name: "OpenAI", configured: true }],
-          custom: [],
-        });
-        if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
-        if (path === "/api/models") return response({ models: [
-          { provider: "openai", id: "first-model", name: "First Model" },
-          { provider: "openai", id: "second-model", name: "Second Model" },
-        ] });
-        if (path === "/api/model/switch") {
-          switches.push(JSON.parse(init.body));
-          return switches.length === 1 ? first.promise : second.promise;
-        }
-        return response({ ok: true });
-      };
-      const { host, toastCalls, getRefreshes } = await loadController({ fetchImpl, dashboard });
-      host.querySelector('.provider-card[data-provider-id="openai"] [data-provider-action="edit"]').click();
-      host.querySelector('[data-model-id="first-model"]').click();
-      assert.equal(host.querySelector('[data-model-id="first-model"]').disabled, true);
-      host.querySelector('[data-model-id="second-model"]').click();
-      assert.equal(host.querySelector('[data-model-id="second-model"]').disabled, true);
-      assert.equal(host.querySelector('[data-model-id="first-model"]').disabled, false);
+  it("serializes official model switches until the active failure settles", async () => {
+    const first = deferred();
+    const second = deferred();
+    const switches = [];
+    const fetchImpl = async (url, init = {}) => {
+      const path = String(url);
+      if (path === "/api/auth") return response({
+        providers: [{ provider: "openai", hasKey: true, canReveal: false, keyPreview: "" }],
+      });
+      if (path === "/api/custom-providers") return response({
+        revision: 1,
+        official: [{ id: "openai", name: "OpenAI", configured: true }],
+        custom: [],
+      });
+      if (path === "/api/custom-providers/capabilities") return controllerCapabilities();
+      if (path === "/api/models") return response({ models: [
+        { provider: "openai", id: "first-model", name: "First Model" },
+        { provider: "openai", id: "second-model", name: "Second Model" },
+      ] });
+      if (path === "/api/model/switch") {
+        switches.push(JSON.parse(init.body));
+        return switches.length === 1 ? first.promise : second.promise;
+      }
+      return response({ ok: true });
+    };
+    const { host } = await loadController({ fetchImpl });
+    host.querySelector('.provider-card[data-provider-id="openai"] [data-provider-action="edit"]').click();
+    const firstModel = host.querySelector('[data-model-id="first-model"]');
+    const differentModel = host.querySelector('[data-model-id="second-model"]');
+    firstModel.click();
+    firstModel.click();
+    differentModel.click();
 
-      dashboard.modelId = "second-model";
-      second.resolve(response({ ok: true }));
-      await flushControllerWork();
-      assert.equal(host.querySelector('[data-model-id="second-model"]').getAttribute("aria-pressed"), "true");
+    assert.deepEqual(switches, [{ provider: "openai", modelId: "first-model" }]);
+    assert.ok([...host.querySelectorAll(".rp-model-item")].every(button => button.disabled));
+    assert.equal(host.querySelector('[data-model-id="first-model"]').getAttribute("aria-busy"), "true");
 
-      if (staleOutcome === "success") first.resolve(response({ ok: true }));
-      else first.resolve(response({ error: "stale failure" }, 500));
-      await flushControllerWork();
+    first.reject(new Error("active switch failed"));
+    await flushControllerWork();
+    assert.ok([...host.querySelectorAll(".rp-model-item")].every(button => !button.disabled));
 
-      assert.deepEqual(switches, [
-        { provider: "openai", modelId: "first-model" },
-        { provider: "openai", modelId: "second-model" },
-      ]);
-      assert.deepEqual(toastCalls, [["已切换: second-model", "success"]], staleOutcome);
-      assert.equal(getRefreshes(), 1, staleOutcome);
-      assert.equal(host.querySelector('[data-model-id="second-model"]').getAttribute("aria-pressed"), "true");
-    }
+    host.querySelector('[data-model-id="second-model"]').click();
+    assert.deepEqual(switches, [
+      { provider: "openai", modelId: "first-model" },
+      { provider: "openai", modelId: "second-model" },
+    ]);
+    second.resolve(response({ ok: true }));
+    await flushControllerWork();
+  });
+
+  it("keeps the model-switch lock across a tab remount until the stale request settles", async () => {
+    const first = deferred();
+    const second = deferred();
+    const switches = [];
+    const baseFetch = standardControllerFetch();
+    const fetchImpl = async (url, init = {}) => {
+      if (String(url) === "/api/model/switch") {
+        switches.push(JSON.parse(init.body));
+        return switches.length === 1 ? first.promise : second.promise;
+      }
+      return baseFetch(url, init);
+    };
+    const { controller, host, toastCalls, getRefreshes } = await loadController({ fetchImpl });
+    host.querySelector('.provider-card[data-provider-id="acme"] [data-provider-action="use"]').click();
+
+    controller.unmount();
+    controller.renderTab(host);
+    await flushControllerWork();
+    assert.ok([...host.querySelectorAll(".provider-card-model-select")].every(select => select.disabled));
+    assert.ok([...host.querySelectorAll('[data-provider-action="use"]')].every(button => button.disabled));
+    host.querySelector('.provider-card[data-provider-id="anthropic"] [data-provider-action="use"]').click();
+    assert.deepEqual(switches, [{ provider: "acme", modelId: "acme-chat" }]);
+
+    first.resolve(response({ ok: true }));
+    await flushControllerWork();
+    assert.ok([...host.querySelectorAll(".provider-card-model-select")].every(select => !select.disabled));
+    assert.deepEqual(toastCalls, []);
+    assert.equal(getRefreshes(), 0);
+
+    host.querySelector('.provider-card[data-provider-id="anthropic"] [data-provider-action="use"]').click();
+    assert.deepEqual(switches, [
+      { provider: "acme", modelId: "acme-chat" },
+      { provider: "anthropic", modelId: "claude-sonnet" },
+    ]);
+    second.resolve(response({ ok: true }));
+    await flushControllerWork();
   });
 });

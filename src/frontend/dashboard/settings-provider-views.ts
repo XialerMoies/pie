@@ -66,7 +66,7 @@ export class ProviderCardListView {
       const pendingModelId = state.pendingSwitch?.providerId === provider.id
         ? state.pendingSwitch.modelId
         : null;
-      cards.append(this.createCard(provider, state.current, pendingModelId));
+      cards.append(this.createCard(provider, state.current, Boolean(state.pendingSwitch), pendingModelId));
     }
 
     const actions = providerViewElement('div', 'provider-list-actions');
@@ -78,6 +78,7 @@ export class ProviderCardListView {
   private createCard(
     provider: ProviderCardItem,
     current: ProviderCardListState['current'],
+    switchPending: boolean,
     pendingModelId: string | null,
   ): HTMLElement {
     const card = providerViewElement('article', 'provider-card');
@@ -118,7 +119,7 @@ export class ProviderCardListView {
     const modelRow = providerViewElement('div', 'provider-card-model-row');
     const select = providerViewElement('select', 'provider-card-model-select');
     select.setAttribute('aria-label', `${provider.name} 模型`);
-    select.disabled = provider.models.length === 0;
+    select.disabled = provider.models.length === 0 || switchPending;
     for (const model of provider.models) {
       const option = providerViewElement('option', undefined, model.name);
       option.value = model.id;
@@ -134,7 +135,7 @@ export class ProviderCardListView {
     use.dataset.providerAction = 'use';
     const syncPendingState = (): void => {
       const pending = Boolean(pendingModelId && select.value === pendingModelId);
-      use.disabled = provider.models.length === 0 || pending;
+      use.disabled = provider.models.length === 0 || switchPending;
       use.textContent = pending ? '切换中...' : '使用';
       if (pending) use.setAttribute('aria-busy', 'true');
       else use.removeAttribute('aria-busy');
@@ -249,8 +250,8 @@ export class OfficialProviderEditorView {
       item.dataset.modelProvider = state.provider.id;
       item.dataset.modelId = model.id;
       item.setAttribute('aria-pressed', String(active));
+      item.disabled = state.models.switchPending;
       if (model.id === state.models.pendingModelId) {
-        item.disabled = true;
         item.setAttribute('aria-busy', 'true');
       }
       item.addEventListener('click', () => this.callbacks.onUse(state.provider.id, model.id));

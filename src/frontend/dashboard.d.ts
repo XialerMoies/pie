@@ -127,6 +127,7 @@ interface OfficialProviderEditorState {
     status: OfficialProviderModelsStatus;
     items: ProviderCardModel[];
     activeModelId: string | null;
+    switchPending: boolean;
     pendingModelId: string | null;
     error: string;
   };
