@@ -7,6 +7,7 @@ interface DashboardChatApi extends AppChat {
   handleSlash?: (input: HTMLTextAreaElement) => void;
   loadModeState?: () => void;
   showModePopup?: (button: HTMLElement) => void;
+  permissionFailureToChatError?: (failure: PermissionFailurePayload) => ChatErrorState;
 }
 
 interface DashboardChatDependencies {
@@ -72,6 +73,12 @@ function chatGetReadingControls(): AppChatReadingControls {
 
 function chatScrollToLatest(options: { force?: boolean; smooth?: boolean } = {}): boolean {
   return chatGetReadingControls().scrollToLatest(options);
+}
+
+function reconnectChatStream(): void {
+  const generation = dashboardChatStream.open();
+  chatSseControllerView?.bind(generation);
+  toast('正在重新连接对话流', 'info');
 }
 
 function refreshReadingSettings(): void {
@@ -328,15 +335,15 @@ function bind(): void {
 
   let renderFrame: number | null = null;
 
-  function makeErrorState(title: string, message: string, reason?: string, nextSteps?: string[], raw?: string): ChatErrorState {
-    return { title, message, reason, nextSteps, raw };
+  function makeErrorState(title: string, message: string, reason?: string, nextSteps?: string[], raw?: string, actions?: ChatErrorAction[]): ChatErrorState {
+    return { title, message, reason, nextSteps, raw, actions };
   }
 
-  function setAssistantError(title: string, message: string, reason?: string, nextSteps?: string[], raw?: string): void {
+  function setAssistantError(title: string, message: string, reason?: string, nextSteps?: string[], raw?: string, actions?: ChatErrorAction[]): void {
     const messages = dashboardChatRuntimeState.getMessages();
     const last = messages[messages.length - 1];
     if (!last) return;
-    last.error = makeErrorState(title, message, reason, nextSteps, raw);
+    last.error = makeErrorState(title, message, reason, nextSteps, raw, actions);
     last.streaming = false;
     last.thinking = '';
     last._rv = (last._rv || 0) + 1;
@@ -457,9 +464,22 @@ function bind(): void {
       const finalMsg = dashboardChatChat.buildInstruction?.(ciVal) || ciVal;
       const body = pending ? { message: finalMsg, workspace: _ws, attachments: pending } : { message: finalMsg, workspace: _ws };
       fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-        .then(() => { if (pending) dashboardChatChat.clearAttachments?.(); })
+        .then(async (response) => {
+          const data = await response.json().catch(() => ({} as { ok?: boolean; error?: string; failure?: PermissionFailurePayload }));
+          if (!response.ok || data?.ok !== true) {
+            const error = new Error(data?.error || `请求失败 (${response.status})`) as Error & { permissionFailure?: PermissionFailurePayload };
+            error.permissionFailure = data?.failure;
+            throw error;
+          }
+          if (pending) dashboardChatChat.clearAttachments?.();
+        })
         .catch((err: unknown) => {
           if (!dashboardChatStream.isCurrent(gen)) return;
+          const failure = (err as { permissionFailure?: PermissionFailurePayload })?.permissionFailure;
+          const failureError = failure ? dashboardChatChat.permissionFailureToChatError?.(failure) : undefined;
+          if (failureError) {
+            setAssistantError(failureError.title, failureError.message, failureError.reason, failureError.nextSteps, failureError.raw, failureError.actions);
+          } else {
           setAssistantError(
             '发送失败',
             '消息没有成功送达后端，请检查当前连接。',
@@ -467,6 +487,7 @@ function bind(): void {
             ['确认后端服务是否仍在运行', '检查当前工作区是否有效', '重新发送当前消息'],
             err instanceof Error ? err.stack || err.message : String(err),
           );
+          }
           dashboardChatRuntimeState.setBusy(false);
           updateUI();
           const failedContext = activeSendContext;
@@ -606,6 +627,8 @@ window.showModelPicker = showModelPicker;
   dashboardChatPublicApi.updateModelName = updateModelName;
   dashboardChatPublicApi.retryLastTurn = retryLastTurn;
   dashboardChatPublicApi.copyLastError = copyLastError;
+  dashboardChatPublicApi.reconnect = reconnectChatStream;
+  dashboardChatPublicApi.permissionFailureToChatError = dashboardChatViews.permissionFailureToChatError;
   dashboardChatPublicApi.refreshWorkspaceState = refreshWorkspaceState;
   dashboardChatPublicApi.resetMsgKeys = resetMsgKeys;
   dashboardChatPublicApi.scrollToLatest = chatScrollToLatest;

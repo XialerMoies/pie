@@ -36,16 +36,18 @@ win.ExplorerService = global.ExplorerService;
 // layout-tabs 以裸 `renderTabs` 引用（bundle 中共享作用域可用；模块加载下转发到 window.renderTabs）
 global.renderTabs = () => win.renderTabs?.();
 
+let legacyState;
+
 describe("file tab render before Monaco", { concurrency: false }, () => {
   before(async () => {
-    win.__state = { D: null, M: [], IL: false, CS: null, CT: "chat", _activePanel: "explorer", _fileTabs: [], _activeFileTab: null, _sessionTabs: [], _sessionTabLabels: {} };
+    legacyState = { D: null, M: [], IL: false, CS: null, CT: "chat", _activePanel: "explorer", _fileTabs: [], _activeFileTab: null, _sessionTabs: [], _sessionTabLabels: {} };
     win.App = {
       Constants: { WS_KEY: "workspace_path" },
       State: {
         getWorkspacePath: () => "/test",
         getSnapshot: () => ({ activeView: { type: "chat" }, tabs: { items: [], activeId: null }, panel: { active: "explorer", width: 260 } }),
         syncTabs: (items, activeId) => {
-          const st = win.__state._uiStateStore._state;
+          const st = legacyState._uiStateStore._state;
           st.tabs = { ...st.tabs, items: items.map((i) => ({ ...i })), activeId };
         },
         saveNow: async () => true,
@@ -54,7 +56,7 @@ describe("file tab render before Monaco", { concurrency: false }, () => {
       UI: {}, Chat: { clearAttachments: () => {} },
       File: {}, Session: {}, Settings: {}, Git: {},
     };
-    win.__state._uiStateStore = { _state: { activeView: { type: "chat" }, tabs: { items: [], activeId: null } }, saveNow: async () => true };
+    legacyState._uiStateStore = { _state: { activeView: { type: "chat" }, tabs: { items: [], activeId: null } }, saveNow: async () => true };
     // 模块加载时引用裸 `App`，须与 window.App 保持同一对象（真实 bundle 中共享 window.App）
     global.App = win.App;
 

@@ -4,6 +4,8 @@
  * 适配新版 ServerContext（使用 runtime 替代 session + modelRegistry）
  */
 
+import { PiAgentEngineAdapter } from "../../src/agent-engine/index.ts";
+
 function makeMockRuntime(overrides = {}) {
   const cwd = overrides.cwd || "/test";
   return {
@@ -28,13 +30,53 @@ function makeMockRuntime(overrides = {}) {
   };
 }
 
+export function withServerGroups(context) {
+  context.engine ||= new PiAgentEngineAdapter(context.runtime);
+  context.groups = {
+    core: {
+      get engine() { return context.engine; },
+      get runtime() { return context.runtime; },
+      get chatStream() { return context.chatStream; },
+      get appEvents() { return context.appEvents || { publish() {} }; },
+      get recordUserNote() { return context.recordUserNote; },
+    },
+    security: {
+      get config() { return context.security; },
+      get permissionService() { return context.permissionService; },
+      get rootRegistry() { return context.rootRegistry; },
+      get permissionMode() { return context.permissionMode; },
+    },
+    storage: {
+      get paths() { return context.paths; },
+      get workspaceLock() { return context.workspaceLock; },
+    },
+    providers: {
+      get customProviderService() { return context.customProviderService; },
+      get providerReferenceLock() { return context.providerReferenceLock; },
+      model: {
+        get modelRuntime() { return context.runtime.modelRuntime; },
+        get modelRegistry() { return context.runtime.modelRegistry; },
+        syncModelProviders: (...args) => context.runtime.syncModelProviders?.(...args) || Promise.resolve(0),
+        runWithStableSession: (operation) => context.runtime.runWithStableSession(operation),
+      },
+    },
+    infra: {
+      get tsServer() { return context.tsServer; },
+      get observability() { return context.observability; },
+    },
+  };
+  return context;
+}
+
 /**
  * 通用 mock context
  * @param {object} overrides - 要覆盖的字段
  */
 export function mockCtx(overrides = {}) {
-  return {
-    runtime: makeMockRuntime(overrides),
+  const runtime = overrides.runtime || makeMockRuntime(overrides);
+  const context = {
+    runtime,
+    engine: new PiAgentEngineAdapter(runtime),
     chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" },
     sseClients: [],
     paths: {
@@ -49,6 +91,7 @@ export function mockCtx(overrides = {}) {
     },
     ...overrides,
   };
+  return withServerGroups(context);
 }
 
 /**
@@ -60,10 +103,11 @@ export function mockCtx(overrides = {}) {
 export function mockChatCtx(captured = [], root = "/test") {
   const runtime = makeMockRuntime({ cwd: root });
   runtime.session.prompt = async (msg) => { captured.push(msg); };
-  return {
+  return withServerGroups({
     runtime,
+    engine: new PiAgentEngineAdapter(runtime),
     paths: { APP_ROOT: root },
     chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" },
     sseClients: [],
-  };
+  });
 }

@@ -1,20 +1,19 @@
-import type { RouteHandler } from "../types.js";
+import { resolveEngine, type RouteHandler } from "../types.js";
 import { parseBody } from "../parse-body.js";
 import { cors, publishDashboardChanged } from "./common.js";
 
 export const handleThinkingSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
+  const engine = resolveEngine(ctx);
 
   if (url === "/api/thinking-level" && method === "GET") {
-    const session = ctx.runtime.session;
-    const extended = (session as any).getAvailableThinkingLevels?.() ?? ["low", "medium", "high"];
-    // "off" 不在 extended levels 中（由 reasoning 开关控制），手动补上
-    const available = ["off", ...extended.filter((l: string) => l !== "off")];
+    const session = engine.session;
+    const available = session.availableThinkingLevels ?? ["off", "low", "medium", "high"];
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
     res.end(JSON.stringify({
       level: session.thinkingLevel ?? "off",
       availableLevels: available,
-      supportsThinking: extended.length > 0,
+      supportsThinking: session.supportsThinking ?? available.some((level) => level !== "off"),
     }));
     return true;
   }
@@ -22,11 +21,10 @@ export const handleThinkingSettings: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/thinking-level" && method === "POST") {
     try {
       const { level } = await parseBody(req);
-      const session = ctx.runtime.session;
-      session.setThinkingLevel(level);
-      const extended = (session as any).getAvailableThinkingLevels?.() ?? ["low", "medium", "high"];
-      const available = ["off", ...extended.filter((l: string) => l !== "off")];
-      const supportsThinking = (session as any).supportsThinking?.() ?? available.some((item: string) => item !== "off");
+      await engine.setThinkingLevel(level);
+      const session = engine.session;
+      const available = session.availableThinkingLevels ?? ["off", "low", "medium", "high"];
+      const supportsThinking = session.supportsThinking ?? available.some((item) => item !== "off");
       publishDashboardChanged(ctx);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({

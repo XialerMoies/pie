@@ -1,5 +1,5 @@
 import type { RouteHandler } from "../types.js";
-import type { AgentRuntime } from "../../../agent/index.js";
+import type { ModelProviderContext } from "../../server-context.js";
 import { existsSync, readFileSync } from "fs";
 import { parseBody } from "../parse-body.js";
 import { writePathGuardError } from "../path-guard.js";
@@ -15,21 +15,22 @@ export function storedApiKey(value: unknown): string {
   return typeof record.apiKey === "string" ? record.apiKey : "";
 }
 
-function authStatus(runtime: AgentRuntime, provider: string): { configured?: boolean; source?: string } | undefined {
-  const modelRuntime = runtime.modelRuntime;
+function authStatus(model: ModelProviderContext, provider: string): { configured?: boolean; source?: string } | undefined {
+  const modelRuntime = model.modelRuntime;
   if (typeof modelRuntime?.getProviderAuthStatus !== "function") return undefined;
   try { return modelRuntime.getProviderAuthStatus(provider); } catch { return undefined; }
 }
 
-export function hasProviderAuth(runtime: AgentRuntime, provider: string, stored: unknown): boolean {
-  const status = authStatus(runtime, provider);
+export function hasProviderAuth(model: ModelProviderContext, provider: string, stored: unknown): boolean {
+  const status = authStatus(model, provider);
   return Boolean(storedApiKey(stored) || status?.configured || status?.source);
 }
 
 export const handleAuthSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
-  const { runtime, paths: p } = ctx;
-  const modelRegistry = runtime.modelRegistry;
+  const { paths: p } = ctx;
+  const model = ctx.groups.providers.model;
+  const modelRegistry = model.modelRegistry;
 
   if (url === "/api/auth" && method === "GET") {
     try {
@@ -43,7 +44,7 @@ export const handleAuthSettings: RouteHandler = async (req, res, ctx) => {
         const apiKey = storedApiKey(authData[provider]);
         return {
           provider,
-          hasKey: hasProviderAuth(runtime, provider, authData[provider]),
+          hasKey: hasProviderAuth(model, provider, authData[provider]),
           canReveal: Boolean(apiKey),
           keyPreview: apiKey ? apiKey.slice(0, 8) + "..." : "",
         };
@@ -69,7 +70,7 @@ export const handleAuthSettings: RouteHandler = async (req, res, ctx) => {
       }
       const authFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "auth.json", "read", "settings.auth.reveal")).path;
       const authData = existsSync(authFile) ? JSON.parse(readFileSync(authFile, "utf-8")) : {};
-      if (!hasProviderAuth(runtime, provider, authData[provider])) {
+      if (!hasProviderAuth(model, provider, authData[provider])) {
         res.writeHead(404, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ error: "provider is not configured" }));
         return true;
@@ -100,7 +101,7 @@ export const handleAuthSettings: RouteHandler = async (req, res, ctx) => {
         authData[provider] = { type: "api_key", key: apiKey };
         return authData;
       }, { trailingNewline: false });
-      await runtime.modelRuntime.refresh({ providers: [provider], allowNetwork: false });
+      await model.modelRuntime.refresh({ providers: [provider], allowNetwork: false });
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {

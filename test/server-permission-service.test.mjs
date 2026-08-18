@@ -26,9 +26,10 @@ import { handleUiState } from "../src/server/routes/ui-state.ts";
 import { RootRegistry } from "../src/server/root-registry.ts";
 import { createPermissionModeController } from "../src/server/permission-mode.ts";
 import { makeReq, makeRes, makeResWithEvents } from "./helpers/http.mjs";
+import { withServerGroups } from "./helpers/context.mjs";
 
 function routeCtx(root, permissionService) {
-  return {
+  return withServerGroups({
     runtime: {
       session: {
         isStreaming: false,
@@ -54,7 +55,7 @@ function routeCtx(root, permissionService) {
       FRONTEND_SRC_DIR: resolve(root, "src", "frontend"),
       HAS_BUILT_FRONTEND: false,
     },
-  };
+  });
 }
 
 function writeSessionFixture(root, id, options = {}) {
@@ -610,7 +611,7 @@ describe("server permission service", () => {
 
       await assert.rejects(
         () => service.authorizePath(external, "blocked.txt", "write", "test.no-confirm"),
-        (error) => error instanceof ServerPermissionError && error.code === "permission_confirmation_required",
+        (error) => error instanceof ServerPermissionError && error.code === "confirmation_unavailable",
       );
       const audit = service.getAuditTrail();
       assert.strictEqual(audit.length, 1);
@@ -956,9 +957,15 @@ describe("server permission service", () => {
 
       assert.strictEqual(result.allow, false);
       assert.match(result.reason, /unavailable/);
+      assert.strictEqual(result.failure?.code, "confirmation_unavailable");
+      assert.strictEqual(result.failure?.category, "confirmation");
+      assert.deepStrictEqual(result.failure?.suggestions, [
+        { action: "reconnect", label: "重新连接" },
+        { action: "retry", label: "重试操作" },
+      ]);
       const audit = service.getAuditTrail();
       assert.deepStrictEqual(audit.map((entry) => entry.decision), ["ask", "deny"]);
-      assert.strictEqual(audit[1].code, "permission_confirmation_required");
+      assert.strictEqual(audit[1].code, "confirmation_unavailable");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

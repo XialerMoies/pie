@@ -11,6 +11,7 @@ import {
 } from "../src/server/startup-paths.ts";
 import { canonicalWorkspacePath } from "../src/data/data-layout.ts";
 import { handleDashboard } from "../src/server/routes/dashboard.ts";
+import { withServerGroups } from "./helpers/context.mjs";
 
 async function readBootstrap(paths) {
   const request = { url: "/api/bootstrap", method: "GET" };
@@ -20,10 +21,10 @@ async function readBootstrap(paths) {
     writeHead(status) { response.status = status; return response; },
     end(value) { response.body += value ? String(value) : ""; return response; },
   };
-  const context = {
+  const context = withServerGroups({
     runtime: { session: {} },
     paths,
-  };
+  });
   await handleDashboard(request, response, context);
   return { status: response.status, body: JSON.parse(response.body) };
 }

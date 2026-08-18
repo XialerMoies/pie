@@ -31,20 +31,23 @@ global.E = (v) => String(v ?? "");
 global.S = () => '<svg></svg>';
 global.toast = () => {};
 
+let legacyState;
+let legacyTabs;
+
 describe("File tab restore", () => {
   let activateCalls;
   let raw;
 
   before(async () => {
-    win.__state = {
+    legacyState = {
       D: null, M: [], IL: false, CS: null, CT: "chat",
       _activePanel: "explorer",
       _fileTabs: [], _activeFileTab: null,
       _sessionTabs: [], _sessionTabLabels: {},
     };
-    win.__tabs = {
+    legacyTabs = {
       getTab: () => undefined,
-      openTab: (t) => { if (t.kind === 'file') { win.__state._fileTabs.push(t); } },
+      openTab: (t) => { if (t.kind === 'file') { legacyState._fileTabs.push(t); } },
       replaceTab: () => {},
       getActiveFileTabId: () => null,
       activateTab: () => {},
@@ -67,7 +70,7 @@ describe("File tab restore", () => {
       close() {},
       contextMenu() {},
     };
-    Object.assign(win.App.Tabs, win.__tabs);
+    Object.assign(win.App.Tabs, legacyTabs);
     global.App = win.App;
     global.ExplorerService = { iconFor: () => '<svg></svg>', getWorkspacePath: () => "/test" };
     win.ExplorerService = global.ExplorerService;
@@ -84,7 +87,7 @@ describe("File tab restore", () => {
     Object.keys(store).forEach(k => delete store[k]);
     raw.activeView = { type: "chat" };
     raw.tabs = { items: [] };
-    win.__state._fileTabs = [];
+    legacyState._fileTabs = [];
   });
 
   it("activeView=session 时优先于 stale last-active-tab", () => {
@@ -116,7 +119,7 @@ describe("File tab restore", () => {
   it("openFileTab 带 renderer 参数时传递给 TabStore", () => {
     win.openFileTab("/img/photo.png", "", "png", "image");
 
-    const tabs = win.__state._fileTabs;
+    const tabs = legacyState._fileTabs;
     assert.ok(tabs.some(function(t) { return t.id === "/img/photo.png"; }), "tab 应被打开");
     const ft = tabs.find(function(t) { return t.id === "/img/photo.png"; });
     assert.strictEqual(ft && ft.renderer, "image", "renderer 应保留为 image");
@@ -133,7 +136,7 @@ describe("File tab restore", () => {
     win.restoreFileTabs();
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    assert.deepStrictEqual(win.__state._fileTabs.map(tab => tab.id), ["/src/one.ts", "/src/two.ts"], "both file tabs should be restored");
+    assert.deepStrictEqual(legacyState._fileTabs.map(tab => tab.id), ["/src/one.ts", "/src/two.ts"], "both file tabs should be restored");
     assert.deepStrictEqual(activateCalls, ["sess-restore"], "restored files must not activate before the persisted session");
   });
 

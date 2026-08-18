@@ -10,6 +10,7 @@ import assert from "node:assert";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeReq, makeRes } from "./helpers/http.mjs";
+import { withServerGroups } from "./helpers/context.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -19,7 +20,8 @@ describe("chat route workspace", () => {
 
   before(async () => {
     const ts = Date.now();
-    handleChat = (await import(`../src/server/routes/chat.ts?t=${ts}`)).handleChat;
+    const rawHandleChat = (await import(`../src/server/routes/chat.ts?t=${ts}`)).handleChat;
+    handleChat = (req, res, ctx) => rawHandleChat(req, res, withServerGroups(ctx));
   });
 
   function chatCtx(overrides = {}) {

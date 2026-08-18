@@ -1,7 +1,8 @@
 /**
  * Dashboard route — /api/dashboard, /api/paths, /layout-config, /api/usage/*
  */
-import type { RouteHandler, ServerContext } from "./types.js";
+import { resolveEngine, type RouteHandler, type ServerContext } from "./types.js";
+import type { AgentEngine, EngineContextUsage } from "../../agent-engine/index.js";
 import { readFileSync, readdirSync, statSync } from "fs";
 import { resolve } from "path";
 import { handleDashboardMcp } from "./dashboard-mcp.js";
@@ -13,9 +14,10 @@ import { writePathGuardError } from "./path-guard.js";
 import { workspaceDataPaths } from "./session-dir.js";
 
 function activeWorkspaceStorage(ctx: ServerContext): { sessionsDir: string; usageIndexFile: string } {
-  const { paths, runtime } = ctx;
+  const { paths } = ctx;
+  const engine = resolveEngine(ctx);
   if (paths.STARTUP?.dataRoot) {
-    const workspace = runtime.currentWorkspace || paths.STARTUP.workspace || paths.APP_ROOT;
+    const workspace = engine.session.workspace || paths.STARTUP.workspace || paths.APP_ROOT;
     const workspacePaths = workspaceDataPaths(paths.DATA_DIR, workspace);
     return {
       sessionsDir: workspacePaths.sessionsDir,
@@ -28,28 +30,16 @@ function activeWorkspaceStorage(ctx: ServerContext): { sessionsDir: string; usag
   };
 }
 
-interface ContextUsageLike {
-  tokens: number | null;
-  contextWindow: number;
-  percent: number | null;
-  source?: "exact" | "mixed" | "estimated";
-  exactTokens?: number;
-  estimatedTokens?: number;
+function readContextUsage(engine: AgentEngine): EngineContextUsage | null {
+  try { return engine.getContextUsage() ?? null; } catch { return null; }
 }
 
-function readContextUsage(runtime: ServerContext["runtime"], session: any): ContextUsageLike | null {
-  try {
-    const current = (runtime as any).getContextUsageSnapshot?.();
-    if (current) return current;
-  } catch {}
-  try { return session.getContextUsage?.() ?? null; } catch { return null; }
-}
-
-function serializeContextUsage(usage: ContextUsageLike): ContextUsageLike {
-  const response: ContextUsageLike = {
+function serializeContextUsage(usage: EngineContextUsage): EngineContextUsage {
+  const response: EngineContextUsage = {
     tokens: usage.tokens ?? null,
     contextWindow: usage.contextWindow ?? 200000,
     percent: usage.percent ?? null,
+    source: usage.source,
   };
   if (usage.source) response.source = usage.source;
   if (typeof usage.exactTokens === "number") response.exactTokens = usage.exactTokens;
@@ -60,7 +50,8 @@ function serializeContextUsage(usage: ContextUsageLike): ContextUsageLike {
 export const handleDashboard: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
   const cors = { "Access-Control-Allow-Origin": "*" };
-  const { runtime, paths: p } = ctx;
+  const { paths: p } = ctx;
+  const engine = resolveEngine(ctx);
 
   if (url === "/api/bootstrap" && (method === "GET" || method === "HEAD")) {
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
@@ -69,16 +60,14 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
     return true;
   }
 
-  let session;
   try {
-    session = typeof (runtime as any).waitForSessionReady === "function"
-      ? await runtime.waitForSessionReady()
-      : runtime.session;
+    await ctx.runtime.waitForSessionReady?.();
   } catch {
     res.writeHead(503, { "Content-Type": "application/json", ...cors, "Retry-After": "1" });
     res.end(JSON.stringify({ ok: false, code: "SESSION_NOT_READY" }));
     return true;
   }
+  const session = engine.session;
 
   // Dashboard data
   if (url === "/api/dashboard") {
@@ -87,17 +76,17 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
     res.end(JSON.stringify({
       modelProvider: session.model?.provider ?? "N/A",
       modelId: session.model?.id ?? "N/A",
-      modelContextWindow: session.model?.contextWindow ?? "N/A",
-      modelMaxTokens: session.model?.maxTokens ?? "N/A",
+      modelContextWindow: session.model?.capabilities.contextWindow.status === "known" ? session.model.capabilities.contextWindow.value : "N/A",
+      modelMaxTokens: session.model?.capabilities.maxOutputTokens.status === "known" ? session.model.capabilities.maxOutputTokens.value : "N/A",
       thinkingLevel: session.thinkingLevel ?? "off",
       runtime: process.uptime(),
-      messagesCount: session.messages?.length ?? 0,
+      messagesCount: session.messagesCount ?? 0,
       isIdle: !session.isStreaming,
-      tools: ((session.agent?.state?.tools as Array<{name: string}> | undefined) || []).map((t) => t.name),
-      activeTools: ((session.agent?.state?.tools as Array<{name: string}> | undefined) || []).map((t) => t.name),
+      tools: session.tools ?? [],
+      activeTools: session.tools ?? [],
       dataDir: p.DATA_DIR,
       sessionsDir: workspaceStorage.sessionsDir,
-      sessionId: (session as any).sessionManager?.getSessionId?.() ?? "",
+      sessionId: session.id,
       _debug: { sessionsDir: workspaceStorage.sessionsDir, cwd: process.cwd(), appRoot: p.APP_ROOT },
     }));
     return true;
@@ -105,10 +94,11 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
 
   // Token usage — context + session stats + cost + provider
   if (url === "/api/token-usage") {
-    let cu: ContextUsageLike | null = null;
-    let stats: { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }; cost: number } | null = null;
-    cu = readContextUsage(runtime, session);
-    try { stats = (session as any).getSessionStats?.(); } catch {}
+    let cu: EngineContextUsage | null = null;
+    let stats: { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }; cost: number | null } | null = null;
+    cu = readContextUsage(engine);
+    const engineStats = engine.getSessionStats();
+    if (engineStats) stats = { tokens: engineStats.usage, cost: engineStats.usage.cost.status === "known" ? engineStats.usage.cost.amount : null };
     const provider = session.model?.provider ?? "unknown";
     const out: { contextUsage: typeof cu; sessionStats: typeof stats; provider: string } = { contextUsage: null, sessionStats: null, provider };
     if (cu) out.contextUsage = serializeContextUsage(cu);
@@ -120,10 +110,13 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
 
   // GET /api/usage/current — 当前会话 usage 数据（Token Rail + Usage 面板）
   if (url === "/api/usage/current") {
-    let cu: ContextUsageLike | null = null;
+    let cu: EngineContextUsage | null = null;
     let stats: SessionStatsLike | null = null;
-    cu = readContextUsage(runtime, session);
-    try { stats = (session as any).getSessionStats?.(); } catch {}
+    cu = readContextUsage(engine);
+    const engineStats = engine.getSessionStats();
+    if (engineStats) {
+      stats = { tokens: engineStats.usage, cost: engineStats.usage.cost.status === "known" ? engineStats.usage.cost.amount : null };
+    }
 
     const tokens = stats?.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     // B-4：命中率口径 = 缓存命中 / 全部输入。input 已是"非缓存输入"
@@ -137,23 +130,11 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
     const hitRate = totalInput > 0
       ? Math.round(tokens.cacheRead / totalInput * 100)
       : 0;
-    const sessionId = (session as any).sessionManager?.getSessionId?.() ?? "";
-    const isCompacting = !!(session as any).isCompacting;
-
-    // 从 session entries 统计 compact 次数和摘要
-    let compactCount = 0;
-    let lastCompactionAt: string | null = null;
-    let lastCompactionSummary: string | null = null;
-    try {
-      const entries = (session as any).sessionManager?.getBranch?.() ?? [];
-      for (const e of entries) {
-        if (e.type === "compaction") {
-          compactCount++;
-          lastCompactionAt = e.timestamp || null;
-          lastCompactionSummary = e.summary || null;
-        }
-      }
-    } catch {}
+    const sessionId = session.id;
+    const isCompacting = session.isCompacting;
+    const compactCount = engineStats?.compactCount ?? 0;
+    const lastCompactionAt = engineStats?.lastCompactionAt ?? null;
+    const lastCompactionSummary = engineStats?.lastCompactionSummary ?? null;
 
     const provider = session.model?.provider ?? "unknown";
 
@@ -165,11 +146,11 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
       contextUsage: cu ? serializeContextUsage(cu) : null,
       tokens,
       cacheHitRate: hitRate,
-      cost: stats?.cost ?? 0,
+      cost: stats?.cost ?? null,
       compactCount,
       lastCompactionAt,
       lastCompactionSummary,
-      isStreaming: !!(session as any).isStreaming,
+      isStreaming: session.isStreaming,
       isCompacting,
     }));
     return true;
@@ -273,12 +254,12 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/compact" && method === "POST") {
     return (async (): Promise<boolean> => {
       try {
-        if ((session as any).isStreaming) {
+        if (session.isStreaming) {
           res.writeHead(409, { "Content-Type": "application/json", ...cors });
           res.end(JSON.stringify({ ok: false, error: "Please wait for the current response to finish before compacting." }));
           return true;
         }
-        if ((session as any).isCompacting) {
+        if (session.isCompacting) {
           res.writeHead(409, { "Content-Type": "application/json", ...cors });
           res.end(JSON.stringify({ ok: false, error: "Compaction is already in progress." }));
           return true;
@@ -290,12 +271,6 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
           focus = body?.focus || undefined;
         } catch {}
 
-        if (typeof (session as any).compact !== "function") {
-          res.writeHead(400, { "Content-Type": "application/json", ...cors });
-          res.end(JSON.stringify({ ok: false, error: "The current session does not support compaction." }));
-          return true;
-        }
-
         const workspaceStorage = activeWorkspaceStorage(ctx);
         const indexPath = workspaceStorage.usageIndexFile;
         const indexRoot = existingAncestorForPath(indexPath);
@@ -303,7 +278,7 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
         const authorizedFiles = await findAuthorizedUsageSessionFiles(ctx, workspaceStorage.sessionsDir, "usage.compact");
         const writableIndexPath = (await authorizeRoutePath(ctx, indexRoot, indexPath, "write", "usage.compact.index")).path;
 
-        const result = await (session as any).compact(focus);
+        await engine.compact(focus);
         const existingIndex = loadIndex(authorizedIndexPath);
         const idx = existingIndex
           ? incrementalScanFiles(workspaceStorage.sessionsDir, authorizedFiles, existingIndex)
@@ -314,7 +289,7 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({
           ok: true,
           compacted: true,
-          message: result?.summary ? "Compaction completed" : "Compaction completed",
+          message: "Compaction completed",
         }));
         return true;
       } catch (err: any) {
@@ -341,7 +316,7 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
 /** Minimal type for what we use from SessionStats */
 interface SessionStatsLike {
   tokens?: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  cost?: number;
+  cost?: number | null;
 }
 
 function roundCost(n: number): number {

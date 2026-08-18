@@ -1,7 +1,7 @@
 /**
  * Chat routes — POST /api/chat, GET /api/chat/stream (SSE)
  */
-import type { ChatStreamState, RouteHandler } from "./types.js";
+import { resolveEngine, type ChatStreamState, type RouteHandler } from "./types.js";
 import { processAttachments, buildContextBlock } from "./attach.js";
 import type { CommandConfirmationRequest, CommandConfirmationResult } from "../../agent/types.js";
 import { writeServerPermissionError } from "../permission-service.js";
@@ -64,6 +64,7 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
   const { url, method } = req;
   const cors = { "Access-Control-Allow-Origin": "*" };
   const { runtime, chatStream, paths: p } = ctx;
+  const engine = resolveEngine(ctx);
 
   if (url === "/api/chat/command-confirm" && method === "POST") {
     let body = "";
@@ -96,7 +97,7 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
   if (url === "/api/chat/note" && method === "POST") {
     let body = "";
     req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
-    req.on("end", async () => {
+    return new Promise<boolean>((done) => req.on("end", async () => {
       try {
         const parsed = JSON.parse(body || "{}");
         const message = typeof parsed.message === "string" ? parsed.message.trim() : "";
@@ -109,34 +110,29 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
           res.end(JSON.stringify({ ok: false, error: "message and mode are invalid" }));
           return;
         }
-        let session;
-        try { session = runtime.session; } catch {
+        if (!engine.session.isStreaming) {
           res.writeHead(409, { "Content-Type": "application/json", ...cors });
           res.end(JSON.stringify({ ok: false, error: "No active streaming session" }));
           return;
         }
-        if (!session.isStreaming) {
-          res.writeHead(409, { "Content-Type": "application/json", ...cors });
-          res.end(JSON.stringify({ ok: false, error: "No active streaming session" }));
-          return;
-        }
-        if (mode === "followUp") await session.followUp(message);
-        else await session.steer(message);
+        if (mode === "followUp") await engine.followUp(message);
+        else await engine.steer(message);
         ctx.recordUserNote?.({ noteId, message, mode });
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, mode, noteId }));
       } catch (err: unknown) {
         res.writeHead(400, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+      } finally {
+        done(true);
       }
-    });
-    return true;
+    }));
   }
 
   // Stop is separate from the send/note action while the composer remains usable.
   if (url === "/api/chat/abort" && method === "POST") {
     try {
-      runtime.session.abort();
+      void engine.cancel(chatStream.turnId || undefined);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {
@@ -180,8 +176,8 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         const parsed = JSON.parse(body);
         const { message, workspace: requestedWorkspace, attachments } = parsed;
         const workspace = await authorizeWorkspacePath(ctx, requestedWorkspace, "chat.workspace");
-        if (workspace && runtime.currentWorkspace !== workspace) {
-          console.log(`📂 Chat with workspace: ${workspace} (was: ${runtime.currentWorkspace})`);
+        if (workspace && engine.session.workspace !== workspace) {
+          console.log(`📂 Chat with workspace: ${workspace} (was: ${engine.session.workspace})`);
           await switchAuthorizedWorkspace(ctx, workspace, "chat.workspace");
         }
         resetChatEventHistory(chatStream);
@@ -210,24 +206,29 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
           }
         }
         try {
-          await runtime.syncModelProviders?.();
+          await engine.syncModelProviders();
         } catch {
           terminateChatTurn(chatStream, MODEL_PROVIDER_SYNC_ERROR);
           res.writeHead(503, { "Content-Type": "application/json", ...cors });
           res.end(JSON.stringify({ error: MODEL_PROVIDER_SYNC_ERROR }));
           return;
         }
-        const session = runtime.session;
         // 立即返回，不 await prompt()，SSE 流式推送 + agent_end 处理 workspace 标记
-        console.log(`[chat] → session.prompt()`);
+        console.log(`[chat] → engine.prompt()`);
         const promptStart = Date.now();
-        session.prompt(finalMessage).catch((err: unknown) => {
+        engine.prompt({ message: finalMessage, turnId: chatStream.turnId }).catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
           const stack = err instanceof Error ? err.stack : "";
-          console.log(`[chat] ❌ session.prompt error after ${Date.now() - promptStart}ms: ${msg}`);
+          const permissionFailure = (err as { metadata?: { permissionFailure?: { message?: unknown } } })?.metadata?.permissionFailure;
+          const visibleMessage = typeof permissionFailure?.message === "string" ? permissionFailure.message : msg;
+          console.log(`[chat] ❌ engine.prompt error after ${Date.now() - promptStart}ms: ${msg}`);
           if (stack) { console.log(`[chat]   stack:`, stack.split("\n").slice(0, 6).join("\n[chat]       ")); }
           // 通过 SSE 把错误推给前端，避免只显示空 "Pi"
-          writeChatEvent(chatStream, { type: "error", message: msg });
+          writeChatEvent(chatStream, {
+            type: "error",
+            message: visibleMessage,
+            ...(permissionFailure ? { failure: permissionFailure } : {}),
+          });
           try { chatStream.response?.end(); } catch { /* ignore */ }
           chatStream.response = null;
         });

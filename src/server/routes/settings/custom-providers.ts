@@ -152,7 +152,7 @@ function writeError(res: ServerResponse, error: unknown): void {
 
 function scheduleRuntimeSync(ctx: ServerContext): void {
   void Promise.resolve()
-    .then(() => ctx.runtime.syncModelProviders())
+    .then(() => ctx.groups.providers.model.syncModelProviders())
     .catch(() => console.error("[custom-provider] background sync failed"));
 }
 
@@ -247,7 +247,7 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
     return true;
   }
 
-  const service = ctx.customProviderService;
+  const service = ctx.groups.providers.customProviderService;
   if (!service) {
     writeJson(res, 503, { error: "Custom providers unavailable", code: "service_unavailable" });
     return true;
@@ -259,7 +259,7 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
       return true;
     }
     if (route.kind === "list" && req.method === "GET") {
-      writeJson(res, 200, await service.list(ctx.runtime.modelRuntime));
+      writeJson(res, 200, await service.list(ctx.groups.providers.model.modelRuntime));
       return true;
     }
     if (route.kind === "reveal") {
@@ -295,7 +295,7 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
     if (route.kind === "list" && req.method === "POST") {
       const input = mutationInput(await parseBody(req));
       await authorizeMutationFiles(ctx);
-      const snapshot = await service.create(input, ctx.runtime.modelRuntime);
+      const snapshot = await service.create(input, ctx.groups.providers.model.modelRuntime);
       const payload = JSON.stringify(snapshot);
       scheduleRuntimeSync(ctx);
       res.writeHead(201, JSON_HEADERS);
@@ -316,8 +316,8 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
       : deleteInput(await parseBody(req));
     await authorizeMutationFiles(ctx);
     const snapshot = req.method === "PUT"
-      ? await service.update(providerId, input as CustomProviderMutationInput, ctx.runtime.modelRuntime)
-      : await service.delete(providerId, input as CustomProviderDeleteInput, ctx.runtime.modelRuntime);
+      ? await service.update(providerId, input as CustomProviderMutationInput, ctx.groups.providers.model.modelRuntime)
+      : await service.delete(providerId, input as CustomProviderDeleteInput, ctx.groups.providers.model.modelRuntime);
     const payload = JSON.stringify(snapshot);
     scheduleRuntimeSync(ctx);
     res.writeHead(200, JSON_HEADERS);

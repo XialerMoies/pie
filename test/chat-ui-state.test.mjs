@@ -149,7 +149,10 @@ global.logTiming = () => {};
   global.getD = async () => {};
   global.renderPanel = () => {};
   global.ExplorerService = { getWorkspacePath: () => "", _getTree: () => null };
-  global.fetch = async () => ({ ok: true, json: async () => ({}) });
+  global.fetch = async (url, init) => ({
+    ok: true,
+    json: async () => String(url) === "/api/chat" && init?.method === "POST" ? { ok: true } : {},
+  });
   win.fetch = global.fetch;
   win.msgs = () => testState.M.map((message) => `<div class="m"><div class="mt">${message.content}</div></div>`).join('');
 
@@ -492,6 +495,111 @@ describe("chat ui state", () => {
     const last = env.state.M.at(-1);
     assert.deepStrictEqual(last.blocks, finalBlocks);
     assert.strictEqual(last.streaming, false);
+  });
+
+  it("failed terminal events stop the stream and keep the assistant error", () => {
+    const streams = [];
+    class MockEventSource {
+      constructor() {
+        this.closed = false;
+        this.onmessage = null;
+        this.onerror = null;
+        attachEventListeners(this);
+        streams.push(this);
+      }
+      close() { this.closed = true; }
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "触发失败";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    streams[0].onmessage({
+      data: JSON.stringify({ type: "done", status: "error", error: "provider failed", text: "partial" }),
+    });
+
+    const last = env.win.App.ChatState.getMessages().at(-1);
+    assert.strictEqual(env.win.App.ChatState.isBusy(), false);
+    assert.strictEqual(streams[0].closed, true);
+    assert.strictEqual(last.streaming, false);
+    assert.strictEqual(last.error?.reason, "provider failed");
+  });
+
+  it("cancelled terminal events stop busy state without completing successfully", () => {
+    const streams = [];
+    class MockEventSource {
+      constructor() {
+        this.closed = false;
+        this.onmessage = null;
+        this.onerror = null;
+        attachEventListeners(this);
+        streams.push(this);
+      }
+      close() { this.closed = true; }
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "触发取消";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    streams[0].onmessage({ data: JSON.stringify({ type: "cancelled", reason: "cancelled_by_user" }) });
+
+    const last = env.win.App.ChatState.getMessages().at(-1);
+    assert.strictEqual(env.win.App.ChatState.isBusy(), false);
+    assert.strictEqual(streams[0].closed, true);
+    assert.strictEqual(last.streaming, false);
+    assert.strictEqual(last.error, undefined);
+  });
+
+  it("real permissionFailure metadata on a tool block becomes actionable chat feedback", () => {
+    const streams = [];
+    class MockEventSource {
+      constructor() {
+        this.closed = false;
+        this.onmessage = null;
+        this.onerror = null;
+        attachEventListeners(this);
+        streams.push(this);
+      }
+      close() { this.closed = true; }
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "执行危险命令";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    streams[0].onmessage({
+      data: JSON.stringify({
+        type: "block",
+        block: {
+          type: "tool",
+          toolCallId: "call-danger",
+          name: "command",
+          status: "error",
+          error: "安全策略已阻止高风险操作。",
+          metadata: {
+            permissionFailure: {
+              code: "dangerous",
+              category: "safety",
+              message: "安全策略已阻止高风险操作。",
+              reason: "命令匹配强制安全规则",
+              suggestions: [],
+            },
+          },
+          blockId: "tool-call-danger",
+          seq: 1,
+        },
+      }),
+    });
+
+    const last = env.win.App.ChatState.getMessages().at(-1);
+    assert.strictEqual(env.win.App.ChatState.isBusy(), false);
+    assert.strictEqual(streams[0].closed, true);
+    assert.strictEqual(last.error?.title, "高风险操作已拦截");
+    assert.deepStrictEqual(last.error?.actions, ["copy"]);
   });
 
   it("terminal provider sync SSE errors clear busy state and close the stream", () => {

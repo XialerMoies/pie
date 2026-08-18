@@ -32,13 +32,19 @@ must not be edited by hand.
 `UiStateStore` owns persisted workspace UI state. `App.State` is the public
 facade for the active workspace path and retains the legacy `workspace_path`
 key only as startup compatibility state. Business modules must not read or
-write that key directly. `TabStore` is the target owner for tab state, although
-legacy `window.__state` projections still exist during migration.
+write that key directly. `TabStore` owns tab state; the obsolete
+`window.__state`, `window.__tabs`, and `__uiStateStore` projections have been
+removed. New UI code must consume the typed stores or their public facades.
 
 ### Server
 
-`src/server/server.ts` creates the Agent runtime, security services, HTTP
-server, and SSE channels. Route handlers receive a shared `ServerContext`.
+`src/server/server-bootstrap.ts` assembles the Agent engine, security services,
+storage, provider services, and infrastructure into grouped `ServerContext`
+ownership. `http-app.ts` owns request correlation, security boundaries, static
+assets, API dispatch, and the app event SSE stream. `server-lifecycle.ts` owns
+stream cancellation, watcher/tsserver cleanup, audit flushing, engine disposal,
+workspace-lock release, and signal/stdin shutdown. `server.ts` is only the
+composition entry point. Route handlers receive the grouped `ServerContext`.
 
 Before route dispatch, the server:
 
@@ -55,6 +61,41 @@ valid token is presented; public bootstrap responses do not disclose it.
 Filesystem routes call `authorizeRoutePath()`, which combines PathGuard and
 `ServerPermissionService`. Domain-specific helpers are used for internal
 configuration and session persistence.
+
+`ServerContext.groups` is the authoritative ownership graph. The flat fields
+kept on contexts created by `server-bootstrap.ts` are read-only compatibility
+views backed by those groups; they are not a second mutable store. Route
+handlers that need the model/provider compatibility surface use the explicit
+`groups.providers.model` E0-b boundary, rather than reaching through the full
+`AgentRuntime`.
+
+### Agent Engine Contract
+
+The server and CLI consume the project-owned `AgentEngine` interface in
+`src/agent-engine/contracts.ts`; PI is behind `PiAgentEngineAdapter`. The
+contract fixes the following meanings:
+
+- `AgentEvent` is versioned (`version: 1`) and sequenced per engine. Terminal
+  turn events are exactly one of `turn.completed`, `turn.failed`, or
+  `turn.cancelled`.
+- `EngineUsage` carries input/output/cache/reasoning counts, an `exact`,
+  `mixed`, or `estimated` source, and an explicit known/unknown USD cost.
+  `EngineContextUsage` separately reports the context window and token source.
+- Model capabilities are tri-state (`supported`, `unsupported`, `unknown`)
+  with numeric capabilities represented as known or unknown values.
+- Errors are normalized into a stable code/category/retryable/message shape;
+  aborts use the `cancelled` category. `compact()` reports unsupported,
+  started/completed, or failed semantics without inventing usage.
+- `cancel(turnId)` is idempotent and rejects stale turn ids; `dispose()` is
+  idempotent and detaches all event listeners.
+
+PI-specific imports remain inside the runtime/adapter, embedded subagent, and
+custom-provider compatibility modules. Server routes, CLI entry points, and
+SSE event routing consume `AgentEngine`; model/provider settings use the
+explicit E0-b compatibility boundary until that surface is replaced. Route
+contexts never synthesize a PI adapter when an engine is missing. This keeps
+the current PI runtime while allowing a future native engine to satisfy the
+same host contract.
 
 ### Agent Runtime
 
@@ -86,6 +127,17 @@ MCP configuration can come from project or application config. Config reads
 and writes pass through governed filesystem paths. A server trust decision is
 required before use, and each adapted MCP tool execution passes through the
 shared tool permission gate.
+
+### Permission Failure Envelope
+
+Permission and path denials use a structured `failure` object in HTTP and SSE
+responses. It includes a stable `code`, `category`, `decision`, safe user-facing
+`message`, redacted `reason`/`target`, `recoverable`, and explicit recovery
+suggestions. Dangerous commands are classified as non-recoverable safety
+blocks and never echo the original command. Missing confirmation channels fail
+closed as `confirmation_unavailable` and suggest reconnect/retry. The desktop
+chat renders only the actions named by the envelope, while ordinary failures
+retain the existing generic actions.
 
 ### Electron
 

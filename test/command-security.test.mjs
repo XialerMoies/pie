@@ -1735,6 +1735,10 @@ describe("commandTool.execute 安全拦截", () => {
     )
     ok(result.text.includes("⛔"), "危险命令应返回拦截提示")
     ok(result.text.includes("危险命令已拦截"), "应包含拦截原因")
+    equal(result.metadata?.permissionFailure?.code, "dangerous")
+    equal(result.metadata?.permissionFailure?.recoverable, false)
+    deepEqual(result.metadata?.permissionFailure?.suggestions, [])
+    equal(JSON.stringify(result.metadata?.permissionFailure).includes("rm -rf /"), false)
   })
 
   it("危险命令参数变体也应被拦截", async () => {

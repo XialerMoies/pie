@@ -29,7 +29,7 @@ global.togglePanel = (name) => calls.push(["togglePanel", name]);
 global.winCtrl = (action) => calls.push(["winCtrl", action]);
 global.loadSessions = () => {};
 
-win.__state = {
+const legacyState = {
   D: null,
   M: [],
   IL: false,
@@ -39,7 +39,7 @@ win.__state = {
   _fileTabs: [],
   _activeFileTab: null,
 };
-win.__tabs = {
+const legacyTabs = {
   getSessionTabIds: () => [],
   getState: () => ({ items: [], activeId: null }),
 };
@@ -79,7 +79,7 @@ win.App = {
   Settings: { openSettingsModal: () => calls.push(["settings"]) },
   Tabs: {
     getState: () => {
-      const st = win.__state || {};
+      const st = legacyState || {};
       const items = [];
       for (const file of st._fileTabs || []) items.push({ id: file.id, kind: 'file', title: file.label, order: items.length, path: file.id });
       for (const id of st._sessionTabs || []) {

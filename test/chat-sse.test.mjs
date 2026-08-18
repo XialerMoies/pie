@@ -10,6 +10,7 @@ import assert from "node:assert";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeReq, makeResWithEvents } from "./helpers/http.mjs";
+import { withServerGroups } from "./helpers/context.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -21,7 +22,8 @@ describe("Chat SSE", () => {
   before(async () => {
     const ts = Date.now();
     const chatRoute = await import(`../src/server/routes/chat.ts?t=${ts}`);
-    handleChat = chatRoute.handleChat;
+    const rawHandleChat = chatRoute.handleChat;
+    handleChat = (req, res, ctx) => rawHandleChat(req, res, withServerGroups(ctx));
     createCommandConfirmCallback = chatRoute.createCommandConfirmCallback;
   });
 
@@ -132,6 +134,52 @@ describe("Chat SSE", () => {
     assert.strictEqual(sseResponse._ended, true);
     assert.strictEqual(chatStream.response, null);
     assert.strictEqual(`${response._body}${sseResponse._body}`.includes("secret-provider-token"), false);
+  });
+
+  it("POST /api/chat forwards structured permission failures without leaking a dangerous command", async () => {
+    const sseResponse = makeResWithEvents();
+    const chatStream = {
+      textBuffer: "",
+      thinkingBuffer: "",
+      response: sseResponse,
+      currentWorkspace: "",
+      eventSeq: 0,
+      eventHistory: [],
+    };
+    const failure = {
+      code: "dangerous",
+      category: "safety",
+      decision: "block",
+      message: "安全策略已阻止高风险操作。",
+      reason: "命令命中强制安全规则",
+      operation: "execute",
+      target: "高风险命令",
+      recoverable: false,
+      suggestions: [],
+    };
+    const ctx = {
+      engine: {
+        session: { workspace: ROOT, isStreaming: false },
+        async syncModelProviders() {},
+        async prompt() {
+          const error = new Error("rm -rf / should not leak");
+          error.metadata = { permissionFailure: failure };
+          throw error;
+        },
+      },
+      runtime: { currentWorkspace: ROOT },
+      paths: { APP_ROOT: ROOT },
+      chatStream,
+    };
+    const response = makeResWithEvents();
+
+    await handleChat(makeReq("POST", "/api/chat", { message: "test" }), response, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assert.strictEqual(response._status, 200);
+    assert.match(sseResponse._body, /"failure":\{"code":"dangerous"/);
+    assert.match(sseResponse._body, /安全策略已阻止高风险操作/);
+    assert.strictEqual(sseResponse._body.includes("rm -rf /"), false);
   });
 
   it("POST /api/chat 设置 currentWorkspace", async () => {

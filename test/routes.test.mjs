@@ -26,6 +26,7 @@ import { CustomProviderReferenceConflict, ProviderReferenceChecker } from "../sr
 import { FileProviderReferenceMutationLock } from "../src/model-provider/provider-reference-lock.ts";
 import { ServerPermissionError } from "../src/server/permission-service.ts";
 import { startFakeModelProvider } from "./fixtures/fake-model-provider.mjs";
+import { PiAgentEngineAdapter } from "../src/agent-engine/index.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -163,13 +164,31 @@ function mockPaths() {
 
 function mockContext(overrides) {
   const paths = mockPaths();
-  return {
+  const context = {
     runtime: mockRuntime(),
     chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" },
     appEvents: mockAppEvents(),
     paths,
     ...overrides,
   };
+  context.engine = context.engine || new PiAgentEngineAdapter(context.runtime);
+  context.groups = {
+    core: { get engine() { return context.engine; }, get runtime() { return context.runtime; }, get chatStream() { return context.chatStream; }, get appEvents() { return context.appEvents; }, get recordUserNote() { return context.recordUserNote; } },
+    security: { get config() { return context.security; }, get permissionService() { return context.permissionService; }, get rootRegistry() { return context.rootRegistry; }, get permissionMode() { return context.permissionMode; } },
+    storage: { get paths() { return context.paths; }, get workspaceLock() { return context.workspaceLock; } },
+    providers: {
+      get customProviderService() { return context.customProviderService; },
+      get providerReferenceLock() { return context.providerReferenceLock; },
+      model: {
+        get modelRuntime() { return context.runtime.modelRuntime; },
+        get modelRegistry() { return context.runtime.modelRegistry; },
+        syncModelProviders: (...args) => context.runtime.syncModelProviders?.(...args) || Promise.resolve(0),
+        runWithStableSession: (operation) => context.runtime.runWithStableSession(operation),
+      },
+    },
+    infra: { get tsServer() { return context.tsServer; }, get observability() { return context.observability; } },
+  };
+  return context;
 }
 
 // ─── 测试辅助 ─────────────────────────────────────────────
@@ -2142,7 +2161,18 @@ describe("custom provider settings routes", () => {
     ]) {
       const result = await callHandler(handleSettings, method, url, body, ctx);
       assert.strictEqual(result.status, 403);
-      assert.deepStrictEqual(parseJSON(result.body), { error: "Denied by policy", code: "permission_denied" });
+      const response = parseJSON(result.body);
+      assert.strictEqual(response.error, "Denied by policy");
+      assert.strictEqual(response.code, "permission_denied");
+      assert.deepStrictEqual(response.failure, {
+        code: "permission_denied",
+        category: "permission",
+        decision: "deny",
+        message: "权限规则拒绝了此操作。",
+        reason: "Denied by policy",
+        recoverable: true,
+        suggestions: [{ action: "open_permissions", label: "查看权限设置" }],
+      });
     }
     assert.equal(called, false);
   });

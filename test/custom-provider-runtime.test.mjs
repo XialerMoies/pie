@@ -601,12 +601,19 @@ describe("AgentRuntime custom provider synchronization", () => {
     }
     const chatStream = {}
     const response = makeResWithEvents()
+    const engine = {
+      get session() {
+        return { workspace: runtime.currentWorkspace, isStreaming: session.isStreaming }
+      },
+      syncModelProviders: () => runtime.syncModelProviders(),
+      prompt: ({ message }) => session.prompt(message),
+    }
 
     const background = runtime.syncModelProviders()
     const handled = await handleChat(
       makeReq("POST", "/api/chat", { message: "hello" }),
       response,
-      { runtime, chatStream, paths: { APP_ROOT: process.cwd() } },
+      { engine, runtime, chatStream, paths: { APP_ROOT: process.cwd() } },
     )
     assert.equal(handled, true)
     await new Promise((resolve) => setTimeout(resolve, 0))

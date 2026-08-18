@@ -55,7 +55,7 @@ global.confirmAsync = async () => true;
 global.ExplorerService = { iconFor: () => '<svg width="14" height="14"></svg>' };
 win.ExplorerService = global.ExplorerService;
 
-win.__state = {
+const legacyState = {
   D: null,
   M: [],
   IL: false,
@@ -100,10 +100,10 @@ win.App = {
   Tabs: {
     getState() {
       const items = [];
-      for (const file of win.__state._fileTabs || []) {
+      for (const file of legacyState._fileTabs || []) {
         items.push({ id: file.id, kind: 'file', title: file.label, order: items.length, path: file.id });
       }
-      for (const id of win.__state._sessionTabs || []) {
+      for (const id of legacyState._sessionTabs || []) {
         const isDraft = id.startsWith('draft:');
         items.push({
           id,
@@ -113,11 +113,11 @@ win.App = {
           ...(isDraft ? { draftId: id } : { sessionId: id }),
         });
       }
-      return { items, activeId: win.__state._activeFileTab ?? win.__state._activeSessionTabId ?? null };
+      return { items, activeId: legacyState._activeFileTab ?? legacyState._activeSessionTabId ?? null };
     },
     getTabs() { return this.getState().items; },
     getActiveTab() {
-      const storeTab = win.__tabs?.getActiveTab?.();
+      const storeTab = legacyTabs?.getActiveTab?.();
       if (storeTab !== undefined) return storeTab;
       const state = this.getState();
       return state.items.find(tab => tab.id === state.activeId) || null;
@@ -128,22 +128,22 @@ win.App = {
       const tab = this.getActiveTab();
       return tab?.kind === 'file' ? tab.id : null;
     },
-    clearActiveTab() { win.__state._activeFileTab = null; win.__state._activeSessionTabId = null; },
+    clearActiveTab() { legacyState._activeFileTab = null; legacyState._activeSessionTabId = null; },
     activate(id) {
       // 添加到 _sessionTabs + 激活（简化：不检查旧字段，handler 负责校验）
-      if (!win.__state._sessionTabs.includes(id)) win.__state._sessionTabs.push(id);
-      win.__state._activeSessionTabId = id;
-      win.__state._activeFileTab = null;
+      if (!legacyState._sessionTabs.includes(id)) legacyState._sessionTabs.push(id);
+      legacyState._activeSessionTabId = id;
+      legacyState._activeFileTab = null;
       win.App.ChatState.replaceMessages([{ role: "user", content: "切换后" }]);
       if (typeof win.renderTabs === 'function') win.renderTabs();
     },
     close(id) {
-      const idx = win.__state._sessionTabs.indexOf(id);
+      const idx = legacyState._sessionTabs.indexOf(id);
       if (idx >= 0) {
-        win.__state._sessionTabs.splice(idx, 1);
-        if (win.__state._activeSessionTabId === id) {
-          const next = win.__state._sessionTabs[Math.min(idx, win.__state._sessionTabs.length - 1)] || null;
-          win.__state._activeSessionTabId = next;
+        legacyState._sessionTabs.splice(idx, 1);
+        if (legacyState._activeSessionTabId === id) {
+          const next = legacyState._sessionTabs[Math.min(idx, legacyState._sessionTabs.length - 1)] || null;
+          legacyState._activeSessionTabId = next;
         }
         if (typeof win.renderTabs === 'function') win.renderTabs();
       }
@@ -152,33 +152,33 @@ win.App = {
   },
 };
 global.App = win.App;
-win.__tabs = {
-  getSessionTabIds: () => [...win.__state._sessionTabs],
-  getActiveSessionTabId: () => win.__state._activeSessionTabId || null,
+const legacyTabs = {
+  getSessionTabIds: () => [...legacyState._sessionTabs],
+  getActiveSessionTabId: () => legacyState._activeSessionTabId || null,
   getActiveTab: () => {
-    const id = win.__state._activeSessionTabId;
+    const id = legacyState._activeSessionTabId;
     return id ? { id, kind: id.startsWith("draft:") ? "chat" : "session", title: id, order: 0 } : null;
   },
-  getTab: (id) => win.__state._sessionTabs.includes(id) ? { id, kind: id.startsWith("draft:") ? "chat" : "session", title: id, order: 0 } : undefined,
-  openTab: (tab) => { if (!win.__state._sessionTabs.includes(tab.id)) win.__state._sessionTabs.push(tab.id); },
-  closeTab: (id) => { win.__state._sessionTabs = win.__state._sessionTabs.filter((tabId) => tabId !== id); },
+  getTab: (id) => legacyState._sessionTabs.includes(id) ? { id, kind: id.startsWith("draft:") ? "chat" : "session", title: id, order: 0 } : undefined,
+  openTab: (tab) => { if (!legacyState._sessionTabs.includes(tab.id)) legacyState._sessionTabs.push(tab.id); },
+  closeTab: (id) => { legacyState._sessionTabs = legacyState._sessionTabs.filter((tabId) => tabId !== id); },
   replaceTab: (id, updates) => {
-    const index = win.__state._sessionTabs.indexOf(id);
-    if (index >= 0 && updates.id) win.__state._sessionTabs[index] = updates.id;
+    const index = legacyState._sessionTabs.indexOf(id);
+    if (index >= 0 && updates.id) legacyState._sessionTabs[index] = updates.id;
   },
   restoreTabs: (items, activeId) => {
-    win.__state._sessionTabs = items
+    legacyState._sessionTabs = items
       .filter((tab) => tab.kind === "session" || tab.kind === "chat")
       .map((tab) => tab.id);
-    win.__state._activeSessionTabId = activeId;
+    legacyState._activeSessionTabId = activeId;
   },
   activateTab: (id) => {
     // 镜像真实投影语义：激活会话/聊天 tab 会清空 file active（_syncMainArea 由 activeId 驱动）
-    win.__state._activeSessionTabId = id;
-    win.__state._activeFileTab = null;
+    legacyState._activeSessionTabId = id;
+    legacyState._activeFileTab = null;
   },
 };
-Object.assign(win.App.Tabs, win.__tabs);
+Object.assign(win.App.Tabs, legacyTabs);
 
 const fetchCalls = [];
 let sessionListState = 0;
@@ -326,9 +326,9 @@ describe("session ui state", () => {
   it("无标签时主区空白，无默认 chat", () => {
     store["session-tabs"] = "[]";
     delete store["chat-tab-open"];
-    win.__state._sessionTabs = [];
-    win.__state._fileTabs = [];
-    win.__state._activeFileTab = null;
+    legacyState._sessionTabs = [];
+    legacyState._fileTabs = [];
+    legacyState._activeFileTab = null;
     win.renderTabs();
 
     // Layer 0: 无 session/file 标签时主区空白，不自动创建 chat tab
@@ -338,7 +338,7 @@ describe("session ui state", () => {
 
   it("loadSessions 不会把后端 activeSessionId 当作打开高亮", async () => {
     store["session-tabs"] = "[]";
-    win.__state._sessionTabs = [];
+    legacyState._sessionTabs = [];
     localStorage.setItem("workspace_path", "E:\\my-code-agent");
     await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -377,7 +377,7 @@ describe("session ui state", () => {
 
   it("会话标签页会记录多个打开的会话", async () => {
     store["session-tabs"] = "[]";
-    win.__state._sessionTabs = [];
+    legacyState._sessionTabs = [];
     sessionListState = 0;
     await win.App.Session.loadSessions();
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -417,34 +417,34 @@ describe("session ui state", () => {
     delete store["last-session-id"];
     delete store["active-session-tab"];
     fetchCalls.length = 0;
-    win.__state._sessionTabs = [];
+    legacyState._sessionTabs = [];
     doc.body.insertAdjacentHTML("beforeend", '<div id="file-content"></div><div id="fi"></div><div class="mc editing"></div>');
-    win.__state._fileTabs = [{ id: "src/demo.ts", label: "demo.ts", content: "", lang: "ts" }];
-    win.__state._activeFileTab = "src/demo.ts";
+    legacyState._fileTabs = [{ id: "src/demo.ts", label: "demo.ts", content: "", lang: "ts" }];
+    legacyState._activeFileTab = "src/demo.ts";
     await win.App.Session.newSession();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const tab = doc.querySelector("#main-tabs .session-tab");
     assert.ok(tab?.textContent.includes("新会话"));
     assert.strictEqual(localStorage.getItem("last-session-id"), null);
-    assert.ok(win.__state._sessionTabs.some(id => id.startsWith("draft:")));
+    assert.ok(legacyState._sessionTabs.some(id => id.startsWith("draft:")));
     assert.ok(!fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/new") && method === "POST"));
     // _activeFileTab 投影自 TabStore；草稿会话激活后 file active 应被清空。
-    assert.strictEqual(win.__tabs?.getActiveFileTabId?.() ?? null, null);
+    assert.strictEqual(legacyTabs?.getActiveFileTabId?.() ?? null, null);
     assert.notStrictEqual(doc.querySelector("#ms")?.style.display, "none");
     assert.strictEqual(doc.querySelector("#file-content")?.style.display, "none");
 
-    win.__state._activeFileTab = "src/demo.ts";
-    const draftId = win.__state._sessionTabs.find(id => id.startsWith("draft:"));
+    legacyState._activeFileTab = "src/demo.ts";
+    const draftId = legacyState._sessionTabs.find(id => id.startsWith("draft:"));
     await win.App.Tabs.activate(draftId);
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    assert.strictEqual(win.__state._activeFileTab, null);
+    assert.strictEqual(legacyState._activeFileTab, null);
     assert.ok(doc.querySelector("#ms")?.textContent.includes("新会话"));
     doc.querySelector("#file-content")?.remove();
     doc.querySelector("#fi")?.remove();
     doc.querySelector(".mc")?.remove();
-    win.__state._fileTabs = [];
+    legacyState._fileTabs = [];
   });
 
   it("刷新恢复时丢弃空草稿，不把幽灵新会话带回标签栏", async () => {
@@ -456,13 +456,13 @@ describe("session ui state", () => {
     ];
     uiState.tabs.activeId = "sess-restored";
     uiState.activeView = { type: "session", id: "sess-restored" };
-    win.__state._sessionTabs = [];
-    win.__state._activeSessionTabId = null;
+    legacyState._sessionTabs = [];
+    legacyState._activeSessionTabId = null;
 
     await win.App.Session.restoreSessionTabs();
 
-    assert.deepStrictEqual(win.__state._sessionTabs, ["sess-restored"]);
-    assert.strictEqual(win.__state._activeSessionTabId, "sess-restored");
+    assert.deepStrictEqual(legacyState._sessionTabs, ["sess-restored"]);
+    assert.strictEqual(legacyState._activeSessionTabId, "sess-restored");
     assert.deepStrictEqual(uiState.tabs.items.map((tab) => tab.id), ["sess-restored"]);
     assert.ok(timelineCalls.length > timelineCallCount, "restoring session messages should sync Timeline");
   });
@@ -470,7 +470,7 @@ describe("session ui state", () => {
   it("重命名标题优先于新会话默认标题", async () => {
     store["session-tabs"] = JSON.stringify(["sess-new-empty"]);
     store["session-tab-labels"] = JSON.stringify({ "sess-new-empty": "新会话" });
-    win.__state._sessionTabs = ["sess-new-empty"];
+    legacyState._sessionTabs = ["sess-new-empty"];
     win.App.Session.renderSessionTabs("sess-new-empty");
     doc.querySelector("#sl").innerHTML = '<div class="sess-item"><span class="thread-title">新会话</span></div>';
     const button = doc.createElement("button");
@@ -488,9 +488,9 @@ describe("session ui state", () => {
   it("手动重命名后自动标题不会覆盖", async () => {
     store["session-tabs"] = JSON.stringify(["sess-new-empty"]);
     store["session-tab-labels"] = JSON.stringify({ "sess-new-empty": "新会话" });
-    win.__state._sessionTabs = ["sess-new-empty"];
-    win.__state._sessionTabLabels = {};
-    win.__state._sessionTitleSources = {};
+    legacyState._sessionTabs = ["sess-new-empty"];
+    legacyState._sessionTabLabels = {};
+    legacyState._sessionTitleSources = {};
     win.App.Session.renderSessionTabs("sess-new-empty");
     doc.querySelector("#sl").innerHTML = '<div class="sess-item"><span class="thread-title">新会话</span></div>';
     const button = doc.createElement("button");
@@ -589,7 +589,7 @@ describe("session ui state", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     assert.ok(fetchCalls.some(([url, method]) => String(url).includes("/api/sessions/branch") && method === "POST"));
-    assert.ok(win.__state._sessionTabs.includes("branch-new"));
+    assert.ok(legacyState._sessionTabs.includes("branch-new"));
     assert.strictEqual(win.App.ChatState.getMessages().length, 2);
     assert.strictEqual(win.App.ChatState.getMessages()[1].content, "分支上下文");
     assert.ok(timelineCalls.length > timelineCallCount, "branch messages should sync Timeline");
@@ -601,9 +601,9 @@ describe("session ui state", () => {
     await win.App.Tabs.activate("sess-b");
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    assert.ok(win.__state._sessionTabs.includes("sess-b"));
-    assert.strictEqual(win.__state._activeSessionTabId, "sess-b");
-    assert.strictEqual(win.__state._activeFileTab, null);
+    assert.ok(legacyState._sessionTabs.includes("sess-b"));
+    assert.strictEqual(legacyState._activeSessionTabId, "sess-b");
+    assert.strictEqual(legacyState._activeFileTab, null);
     // App.Tabs.activate mock 会设置消息
     assert.strictEqual(win.App.ChatState.getMessages().length, 1);
   });
@@ -1043,7 +1043,7 @@ describe("session ui state", () => {
   });
 
   it("重启后会话标题从缓存恢复", async () => {
-    win.__tabs.restoreTabs([
+    legacyTabs.restoreTabs([
       { id: "sess-a", kind: "session", title: "新会话", order: 0, sessionId: "sess-a" },
       { id: "sess-b", kind: "session", title: "新会话", order: 1, sessionId: "sess-b" },
     ], "sess-b");
@@ -1056,7 +1056,7 @@ describe("session ui state", () => {
     assert.ok(tabs.some(t => t.includes("session-tab") || t.length > 0), "should render 2 session tabs");
 
     win.App.State.updateSessionMetadata({ "sess-a": "手动名称" }, { "sess-a": "manual" });
-    win.__tabs.activateTab("sess-a");
+    legacyTabs.activateTab("sess-a");
     win.App.Session.renderSessionTabs("sess-a");
 
     const tabs2 = Array.from(doc.querySelectorAll("#main-tabs .session-tab")).map(node => node.textContent || "");
@@ -1066,7 +1066,7 @@ describe("session ui state", () => {
   it("会话标签关闭按钮触发 App.Tabs.close", () => {
     store["session-tabs"] = JSON.stringify(["sess-a"]);
     store["active-session-tab"] = "sess-a";
-    win.__state._sessionTabs = ["sess-a"];
+    legacyState._sessionTabs = ["sess-a"];
     sessionListState = 0;
     win.App.Session.renderSessionTabs("sess-a");
 
@@ -1085,8 +1085,8 @@ describe("session ui state", () => {
     store["session-tabs"] = JSON.stringify(["sess-a", "sess-b"]);
     store["active-session-tab"] = "sess-b";
     store["session-tab-labels"] = JSON.stringify({});
-    win.__state._sessionTabs = ["sess-a", "sess-b"];
-    win.__state._activeSessionTabId = "sess-b";
+    legacyState._sessionTabs = ["sess-a", "sess-b"];
+    legacyState._activeSessionTabId = "sess-b";
     win.App.Session.renderSessionTabs("sess-b");
 
     let tabs = Array.from(doc.querySelectorAll("#main-tabs .session-tab"));
@@ -1106,8 +1106,8 @@ describe("session ui state", () => {
   it("关闭中间 active session tab 切换到右侧相邻 tab", () => {
     store["session-tabs"] = JSON.stringify(["sess-a", "sess-b", "sess-c"]);
     store["active-session-tab"] = "sess-b";
-    win.__state._sessionTabs = ["sess-a", "sess-b", "sess-c"];
-    win.__state._activeSessionTabId = "sess-b";
+    legacyState._sessionTabs = ["sess-a", "sess-b", "sess-c"];
+    legacyState._activeSessionTabId = "sess-b";
     win.App.Session.renderSessionTabs("sess-b");
 
     const tabsBefore = Array.from(doc.querySelectorAll("#main-tabs .session-tab"));
@@ -1125,7 +1125,7 @@ describe("session ui state", () => {
 
   it("layout() 重建 DOM 后事件委托仍有效", () => {
     store["session-tabs"] = JSON.stringify(["sess-rebuild"]);
-    win.__state._sessionTabs = ["sess-rebuild"];
+    legacyState._sessionTabs = ["sess-rebuild"];
     // 模拟 layout() 重建 #app → #main-tabs 被替换
     const app = win.document.getElementById('app') || (() => {
       const a = win.document.createElement('div');

@@ -15,6 +15,9 @@ interface ChatSseEvent {
   event?: any;
   steering?: any[];
   followUp?: any[];
+  failure?: PermissionFailurePayload;
+  status?: 'done' | 'error';
+  error?: string;
 }
 
 interface ChatSseControllerDependencies {
@@ -22,6 +25,22 @@ interface ChatSseControllerDependencies {
   chatState: AppChatState;
   chatStream: AppChatStream;
   chatViews: AppChatViews;
+}
+
+function permissionFailureToChatError(failure: PermissionFailurePayload): ChatErrorState {
+  const actions: ChatErrorAction[] = failure.category === 'safety'
+    ? ['copy']
+    : failure.category === 'confirmation'
+      ? ['reconnect', 'permissions', 'copy']
+      : ['permissions', 'retry', 'copy'];
+  return {
+    title: failure.category === 'safety' ? '高风险操作已拦截' : '权限操作未完成',
+    message: failure.message || '权限检查未通过，操作已安全拒绝。',
+    reason: failure.reason,
+    nextSteps: failure.suggestions?.map((suggestion) => suggestion.label).filter(Boolean) || [],
+    raw: failure.reason,
+    actions,
+  };
 }
 
 class ChatSseControllerView {
@@ -89,7 +108,15 @@ class ChatSseControllerView {
         return;
       }
       if (data.type === 'done') {
+        if (data.status === 'error') {
+          this.handleFailedTerminal(last, data);
+          return;
+        }
         this.handleDone(last, data);
+        return;
+      }
+      if (data.type === 'cancelled') {
+        this.handleCancelled(last, data);
         return;
       }
       if (data.type === 'error') this.handleBusinessError(data);
@@ -124,6 +151,16 @@ class ChatSseControllerView {
     const updated = this.dependencies.chat.updateLastBlock?.(block) || false;
     if (!updated) this.callbacks.scheduleMessagesRender();
     else sb('ms');
+
+    const permissionFailure = block.metadata?.permissionFailure;
+    if (permissionFailure && typeof permissionFailure === 'object') {
+      const failure = permissionFailureToChatError(permissionFailure as PermissionFailurePayload);
+      this.callbacks.setAssistantError(failure.title, failure.message, failure.reason, failure.nextSteps, failure.raw, failure.actions);
+      this.dependencies.chatState.setBusy(false);
+      this.dependencies.chatStream.close();
+      this.callbacks.refreshComposer();
+      this.callbacks.failSend();
+    }
   }
 
   private handleDelta(last: any, data: ChatSseEvent): void {
@@ -158,7 +195,56 @@ class ChatSseControllerView {
     sb('ms');
   }
 
+  private handleFailedTerminal(last: any, data: ChatSseEvent): void {
+    if (!last) return;
+    if (data.turnId && !last.turnId) last.turnId = data.turnId;
+    if (typeof data.text === 'string') last.content = data.text;
+    if (Array.isArray(data.blocks)) last.blocks = data.blocks;
+    const reason = data.error || data.message || 'Agent turn failed';
+    this.callbacks.setAssistantError(
+      '回复失败',
+      '当前回复未能完成。请查看错误详情后重试。',
+      reason,
+      ['检查模型与网络状态', '重新发送当前消息'],
+      reason,
+      ['retry', 'copy'],
+    );
+    this.dependencies.chatState.setBusy(false);
+    this.dependencies.chatStream.close();
+    this.callbacks.refreshComposer();
+    this.callbacks.failSend();
+    sb('ms');
+  }
+
+  private handleCancelled(last: any, data: ChatSseEvent): void {
+    if (last) {
+      if (data.turnId && !last.turnId) last.turnId = data.turnId;
+      last.streaming = false;
+      last.error = undefined;
+      last._rv = (last._rv || 0) + 1;
+    }
+    this.dependencies.chatState.setBusy(false);
+    this.dependencies.chatStream.close();
+    const finalized = last && (this.dependencies.chat.finalizeLastMessage?.() || false);
+    if (finalized) this.callbacks.markLastMessageRendered();
+    else this.callbacks.renderMessages();
+    this.callbacks.refreshComposer();
+    this.callbacks.failSend();
+    sb('ms');
+  }
+
   private handleBusinessError(data: ChatSseEvent): void {
+    if (data.failure) {
+      const failure = permissionFailureToChatError(data.failure);
+      this.callbacks.setAssistantError(failure.title, failure.message, failure.reason, failure.nextSteps, failure.raw, failure.actions);
+      this.dependencies.chatState.setBusy(false);
+      this.dependencies.chatStream.close();
+      this.callbacks.renderMessages();
+      this.callbacks.refreshComposer();
+      this.callbacks.failSend();
+      sb('ms');
+      return;
+    }
     const reason = data.text || data.message || '未知错误';
     this.callbacks.setAssistantError(
       '发生了错误',
@@ -182,6 +268,7 @@ if (chatSseControllerApp) {
   chatSseControllerApp.ChatViews = {
     ...(chatSseControllerApp.ChatViews || {}),
     ChatSseControllerView,
+    permissionFailureToChatError,
     createSseController: (callbacks: ChatSseControllerCallbacks): AppChatSseController => new ChatSseControllerView(callbacks, {
       chat: chatSseControllerApp.Chat,
       chatState: chatSseControllerApp.ChatState,

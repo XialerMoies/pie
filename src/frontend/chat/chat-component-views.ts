@@ -314,7 +314,20 @@ class ChatErrorView {
     const steps = nextSteps.length > 0
       ? `<div class="msg-error-block"><div class="msg-error-label">下一步操作</div><ul class="msg-error-steps">${nextSteps.map(step => `<li>${E(step)}</li>`).join('')}</ul></div>`
       : '';
-    return `<details class="msg-error"><summary><span class="msg-error-title">${E(error.title || '发生了错误')}</span><span class="msg-error-summary">${E(error.message || '点击查看详情')}</span></summary><div class="msg-error-body"><div class="msg-error-message">${E(error.message || '发生了错误')}</div>${reason}${steps}${raw}<div class="msg-error-actions"><button type="button" class="msg-error-btn" data-chat-error-action="retry">重新发送</button><button type="button" class="msg-error-btn" data-chat-error-action="copy">复制错误</button><button type="button" class="msg-error-btn" data-chat-error-action="refresh">刷新工作区</button><button type="button" class="msg-error-btn" data-chat-error-action="settings">打开设置</button></div></div></details>`;
+    const defaultActions: ChatErrorAction[] = ['retry', 'copy', 'refresh', 'settings'];
+    const actionLabels: Record<ChatErrorAction, string> = {
+      retry: '重新发送',
+      copy: '复制错误',
+      refresh: '刷新工作区',
+      settings: '打开设置',
+      reconnect: '重新连接',
+      permissions: '查看权限',
+    };
+    const actions = Array.from(new Set(error.actions || defaultActions));
+    const actionButtons = actions.length > 0
+      ? `<div class="msg-error-actions">${actions.map(action => `<button type="button" class="msg-error-btn" data-chat-error-action="${E(action)}">${E(actionLabels[action] || action)}</button>`).join('')}</div>`
+      : '';
+    return `<details class="msg-error"><summary><span class="msg-error-title">${E(error.title || '发生了错误')}</span><span class="msg-error-summary">${E(error.message || '点击查看详情')}</span></summary><div class="msg-error-body"><div class="msg-error-message">${E(error.message || '发生了错误')}</div>${reason}${steps}${raw}${actionButtons}</div></details>`;
   }
 
   mount(container: HTMLElement): HTMLElement {
@@ -396,6 +409,11 @@ function chatViewBindDelegatedActions(): void {
       case 'copy': void app?.Chat?.copyLastError?.(); break;
       case 'refresh': app?.Chat?.refreshWorkspaceState?.(); break;
       case 'settings': app?.Settings?.openSettingsModal?.(); break;
+      case 'reconnect': app?.Chat?.reconnect?.(); break;
+      case 'permissions':
+        app?.Settings?.openSettingsModal?.();
+        app?.Settings?.switchSettingsModal?.('permissions');
+        break;
     }
   });
 }

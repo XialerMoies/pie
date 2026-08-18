@@ -22,12 +22,18 @@ function isRecentPermissionDecision(entry: PermissionAuditEntry): boolean {
 }
 
 function formatPermissionOperation(operation: PermissionOperation): string {
-  if (operation === "tool") return "Tool";
-  if (operation === "read") return "Read";
-  if (operation === "write") return "Write";
-  if (operation === "create") return "Create";
-  if (operation === "remove") return "Remove";
+  if (operation === "tool") return "工具";
+  if (operation === "read") return "读取";
+  if (operation === "write") return "写入";
+  if (operation === "create") return "创建";
+  if (operation === "remove") return "删除";
   return operation;
+}
+
+function formatPermissionDecision(decision: PermissionDecision): string {
+  if (decision === "allow") return "允许";
+  if (decision === "deny") return "拒绝";
+  return "询问";
 }
 
 function formatPermissionTime(value: string): string {
@@ -52,14 +58,14 @@ class PermissionAuditView {
     return `
       <div class="perm-audit-row perm-audit-row--${entry.decision}">
         <div class="perm-audit-top">
-          <span class="perm-decision">${E(entry.decision)}</span>
+          <span class="perm-decision">${E(formatPermissionDecision(entry.decision))}</span>
           <span class="perm-source">${E(entry.source)}</span>
           <span class="perm-op">${E(formatPermissionOperation(entry.operation))}</span>
           ${entry.toolName ? `<span class="perm-tool">${E(entry.toolName)}</span>` : ""}
         </div>
         <div class="perm-path" title="${E(entry.path || pathLabel)}">${E(pathLabel)}</div>
         ${entry.reason || entry.code ? `<div class="perm-reason">${E(entry.reason || entry.code || "")}</div>` : ""}
-        ${entry.riskLevel ? `<div class="perm-reason">Risk: ${E(entry.riskLevel)}</div>` : ""}
+        ${entry.riskLevel ? `<div class="perm-reason">风险：${E(entry.riskLevel)}</div>` : ""}
         ${PermissionAuditView.renderToolDetails(entry)}
         <div class="perm-time">${E(formatPermissionTime(entry.timestamp))}</div>
       </div>
@@ -70,13 +76,13 @@ class PermissionAuditView {
     if (entry.operation !== "tool") return "";
     const details = [
       Array.isArray(entry.toolOperations) && entry.toolOperations.length
-        ? `Ops: ${entry.toolOperations.join(", ")}`
+        ? `操作：${entry.toolOperations.join(", ")}`
         : "",
       typeof entry.permissionRequired === "boolean"
-        ? `Prompt: ${entry.permissionRequired ? "required" : "tracked"}`
+        ? `授权：${entry.permissionRequired ? "需要确认" : "仅记录"}`
         : "",
       typeof entry.workspaceBounded === "boolean"
-        ? `Scope: ${entry.workspaceBounded ? "workspace" : "external"}`
+        ? `范围：${entry.workspaceBounded ? "工作区" : "外部"}`
         : "",
     ].filter(Boolean);
     return details.length ? `<div class="perm-reason">${E(details.join(" · "))}</div>` : "";
@@ -88,7 +94,7 @@ class WorkingDirectoriesView {
     if (!items.length) return "";
     return `
       <section class="perm-rule-section">
-        <div class="perm-section-title">Working Directories</div>
+        <div class="perm-section-title">工作目录</div>
         ${items.map(item => `
           <div class="perm-workdir-row">
             <span class="perm-rule-match">${E(item.source)}</span>
@@ -104,9 +110,9 @@ class PermissionRulesView {
   static render(snapshot: PermissionRulesSnapshot | null): string {
     if (!snapshot) return `<div class="perm-empty">加载中...</div>`;
     return `
-      ${PermissionRulesView.renderSection("allow", "Allow", snapshot.alwaysAllowRules)}
-      ${PermissionRulesView.renderSection("deny", "Deny", snapshot.alwaysDenyRules)}
-      ${PermissionRulesView.renderSection("ask", "Ask", snapshot.alwaysAskRules)}
+      ${PermissionRulesView.renderSection("allow", "允许", snapshot.alwaysAllowRules)}
+      ${PermissionRulesView.renderSection("deny", "拒绝", snapshot.alwaysDenyRules)}
+      ${PermissionRulesView.renderSection("ask", "询问", snapshot.alwaysAskRules)}
       ${WorkingDirectoriesView.render(snapshot.additionalWorkingDirectories)}
     `;
   }

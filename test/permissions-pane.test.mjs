@@ -788,6 +788,26 @@ describe("permissions pane", { concurrency: 1 }, () => {
     assert.match(source, /isRecentPermissionDecision/);
   });
 
+  it("uses Chinese labels for permission decisions and rule groups", async () => {
+    const container = doc.createElement("div");
+    doc.body.appendChild(container);
+    try {
+      win.App.Permissions.mount(container);
+      await waitTick();
+      await waitTick();
+      container.querySelector('[data-perm-tab="rules"]').dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+      await waitTick();
+
+      assert.match(container.textContent, /允许/);
+      assert.match(container.textContent, /拒绝/);
+      assert.match(container.textContent, /询问/);
+      assert.doesNotMatch(container.textContent, /Working Directories|\bAllow\b|\bDeny\b|\bAsk\b/);
+    } finally {
+      win.App.Permissions.unmount();
+      container.remove();
+    }
+  });
+
   it("keeps session primary while exposing project-scoped confirmation", () => {
     const source = readFileSync(new URL("../src/frontend/dashboard/dashboard-helpers.ts", import.meta.url), "utf-8");
     assert.match(source, /data-choice="workspace"/);
@@ -845,7 +865,7 @@ describe("permissions pane", { concurrency: 1 }, () => {
       call.method === "DELETE" && call.url.includes("list=deny") && call.url.includes("scope=workspace")
     )));
     assert.strictEqual(state.rules.alwaysDenyRules.length, 0);
-    assert.match(container.textContent, /无 Deny 规则/);
+    assert.match(container.textContent, /无 拒绝 规则/);
     container.remove();
   });
 

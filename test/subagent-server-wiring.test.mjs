@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { createRuntimeSubagentHost } from "../src/server/subagent-delegation.ts";
 
 const serverSource = readFileSync(resolve("src/server/server.ts"), "utf8");
+const serverLifecycleSource = readFileSync(resolve("src/server/server-lifecycle.ts"), "utf8");
 const agentEventRouterSource = readFileSync(resolve("src/server/agent-event-router.ts"), "utf8");
 
 describe("subagent server wiring", () => {
@@ -96,7 +97,7 @@ describe("subagent server wiring", () => {
     assert.match(serverSource, /delegateTasks:\s*subagentBridge\.runtimeConfig\.delegateTasks/);
     assert.match(serverSource, /subagentBridge\.bind\(subagentHost\)/);
 
-    const runtimeReady = serverSource.indexOf("runtime = await initAgent(");
+    const runtimeReady = serverSource.indexOf("await initAgentHost(");
     const hostReady = serverSource.indexOf("subagentBridge.bind(subagentHost)");
     assert.ok(runtimeReady >= 0 && hostReady > runtimeReady, "host must bind only after runtime initialization");
   });
@@ -113,9 +114,9 @@ describe("subagent server wiring", () => {
   });
 
   it("awaits subagent disposal before disposing the main runtime", () => {
-    const releaseStart = serverSource.indexOf("const releaseInstanceResources");
-    const hostDispose = serverSource.indexOf("await subagentHost.dispose()", releaseStart);
-    const runtimeDispose = serverSource.indexOf("runtime.dispose()", releaseStart);
+    const releaseStart = serverLifecycleSource.indexOf("const release =");
+    const hostDispose = serverLifecycleSource.indexOf("await options.disposeSubagentHost()", releaseStart);
+    const runtimeDispose = serverLifecycleSource.indexOf("await options.disposeEngine()", releaseStart);
 
     assert.ok(hostDispose > releaseStart, "resource release must dispose the subagent host");
     assert.ok(runtimeDispose > hostDispose, "subagents must finish disposal before the main runtime is disposed");

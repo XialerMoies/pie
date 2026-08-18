@@ -4,6 +4,7 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import type { TsserverManager } from "../ts-server.js";
 import type { AgentRuntime } from "../../agent/index.js";
+import type { AgentEngine } from "../../agent-engine/index.js";
 import type { DesktopSecurityConfig } from "../security.js";
 import type { ServerPermissionService } from "../permission-service.js";
 import type { RootRegistry } from "../root-registry.js";
@@ -14,6 +15,7 @@ import type { WorkspaceLockCoordinator } from "../workspace-lock.js";
 import type { CustomProviderService } from "../../model-provider/custom-provider-service.js";
 import type { ProviderReferenceMutationLock } from "../../model-provider/provider-reference-lock.js";
 import type { ServerObservability } from "../observability.js";
+import type { ServerContextGroups } from "../server-context.js";
 
 // ─── Trace Event 类型 ────────────────────────────────────
 
@@ -72,6 +74,7 @@ export interface ChatStreamState {
 }
 
 export interface ServerContext {
+  engine: AgentEngine;
   runtime: AgentRuntime;
   chatStream: ChatStreamState;
   recordUserNote?: (note: { noteId: string; message: string; mode: "steer" | "followUp" }) => void;
@@ -98,6 +101,14 @@ export interface ServerContext {
     FRONTEND_SRC_DIR: string;
     HAS_BUILT_FRONTEND: boolean;
   };
+  groups: ServerContextGroups;
+}
+
+export function resolveEngine(ctx: ServerContext): AgentEngine {
+  const grouped = ctx.groups?.core?.engine;
+  if (grouped) return grouped;
+  if (ctx.engine) return ctx.engine;
+  throw new Error("Server context is missing an explicit AgentEngine");
 }
 
 export type RouteHandler = (

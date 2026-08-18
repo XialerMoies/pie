@@ -39,7 +39,7 @@ global.logTiming = () => {};
   }
   global.EventSource = MockEventSource;
   win.EventSource = MockEventSource;
-  win.__state = {
+  const legacyState = {
     D: null,
     M: [{ role: "user", content: "old" }, { role: "assistant", content: "stream", streaming: true }],
     IL: true,

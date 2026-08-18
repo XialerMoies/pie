@@ -48,9 +48,11 @@ global.localStorage = {
   removeItem: (k) => { delete storage[k]; },
 };
 
+let legacyState;
+
 describe("App.Tabs dispatch", { concurrency: false }, () => {
   before(async () => {
-    win.__state = {
+    legacyState = {
       D: null, M: [], IL: false, CS: null, CT: "chat",
       _activePanel: "explorer",
       _fileTabs: [], _activeFileTab: null,
@@ -62,16 +64,16 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
         getWorkspacePath: () => localStorage.getItem("workspace_path") || "",
         setWorkspacePath: (path) => localStorage.setItem("workspace_path", path),
         syncTabs: (items, activeId) => {
-          const state = win.__state._uiStateStore._state;
+          const state = legacyState._uiStateStore._state;
           state.tabs = { ...state.tabs, items: items.map((item) => ({ ...item })), activeId };
         },
       },
       UI: {}, Chat: { clearAttachments: () => {} },
       File: {}, Session: {
-        getTabLabel: (id) => win.__state._sessionTabLabels[id] || "新会话",
+        getTabLabel: (id) => legacyState._sessionTabLabels[id] || "新会话",
       }, Settings: {}, Git: {},
     };
-    win.__state._uiStateStore = {
+    legacyState._uiStateStore = {
       _state: { activeView: { type: "chat" }, tabs: { sessions: [], files: [], labels: {} }, recent: { sessions: {} } },
       saveNow: async () => true,
     };
@@ -98,12 +100,12 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     win.App.Tabs.reset();
     win.document.querySelectorAll(".ctx-menu, #toast-el").forEach((el) => el.remove());
     // 清除 __state.tabs 以防 re-init 读到旧数据
-    delete win.__state.tabs;
-    win.__state._sessionTabs = [];
-    win.__state._fileTabs = [];
-    win.__state._activeFileTab = null;
-    win.__state._activeSessionTabId = null;
-    win.App.Session.getTabLabel = (id) => win.__state._sessionTabLabels[id] || "新会话";
+    delete legacyState.tabs;
+    legacyState._sessionTabs = [];
+    legacyState._fileTabs = [];
+    legacyState._activeFileTab = null;
+    legacyState._activeSessionTabId = null;
+    win.App.Session.getTabLabel = (id) => legacyState._sessionTabLabels[id] || "新会话";
   });
 
   it("getD waits for a transient bootstrap failure before fetching dashboard", async () => {

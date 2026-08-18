@@ -1,4 +1,4 @@
-import type { ServerContext } from "./types.js";
+import { resolveEngine, type ServerContext } from "./types.js";
 import { guardPathWithinRoot, PathGuardError } from "./path-guard.js";
 import { normalizePermissionPath } from "../../agent/permissions.js";
 
@@ -42,11 +42,11 @@ function sameWorkspace(left: string | undefined, right: string): boolean {
 }
 
 function switchStateFor(ctx: ServerContext): WorkspaceSwitchState {
-  const runtime = ctx.runtime as object;
-  let state = workspaceSwitchStates.get(runtime);
+  const engine = resolveEngine(ctx) as object;
+  let state = workspaceSwitchStates.get(engine);
   if (!state) {
     state = { tail: Promise.resolve(), activeByTarget: new Map() };
-    workspaceSwitchStates.set(runtime, state);
+    workspaceSwitchStates.set(engine, state);
   }
   return state;
 }
@@ -69,7 +69,7 @@ export async function authorizeWorkspacePath(
     return ctx.permissionService.authorizeWorkspaceRoot(requestedWorkspace, source);
   }
 
-  const currentWorkspace = ctx.runtime.currentWorkspace || ctx.paths.APP_ROOT;
+  const currentWorkspace = resolveEngine(ctx).session.workspace || ctx.paths.APP_ROOT;
   return guardPathWithinRoot(currentWorkspace, requestedWorkspace, "read").path;
 }
 
@@ -84,18 +84,19 @@ export function switchAuthorizedWorkspace(
   }
 
   const state = switchStateFor(ctx);
+  const engine = resolveEngine(ctx);
   const targetKey = workspacePathKey(requestedWorkspace);
   const active = state.activeByTarget.get(targetKey);
   if (active) return active;
 
   const task = state.tail.catch(() => undefined).then(async () => {
-    const currentWorkspace = ctx.runtime.currentWorkspace || ctx.paths.APP_ROOT;
+    const currentWorkspace = engine.session.workspace || ctx.paths.APP_ROOT;
     if (sameWorkspace(currentWorkspace, requestedWorkspace)) {
       return { workspace: currentWorkspace, previousWorkspace: currentWorkspace, switched: false };
     }
 
     const authorizedWorkspace = await authorizeWorkspacePath(ctx, requestedWorkspace, source, { required: true });
-    const latestWorkspace = ctx.runtime.currentWorkspace || ctx.paths.APP_ROOT;
+    const latestWorkspace = engine.session.workspace || ctx.paths.APP_ROOT;
     if (sameWorkspace(latestWorkspace, authorizedWorkspace)) {
       return { workspace: latestWorkspace, previousWorkspace: latestWorkspace, switched: false };
     }
@@ -103,7 +104,7 @@ export function switchAuthorizedWorkspace(
     await runWithWorkspaceOwnership(
       ctx,
       authorizedWorkspace,
-      () => ctx.runtime.switchWorkspace(authorizedWorkspace),
+      () => engine.switchWorkspace(authorizedWorkspace),
     );
     publishWorkspaceChanged(ctx);
     console.log(`📂 Switched workspace: "${latestWorkspace}" → "${authorizedWorkspace}"`);

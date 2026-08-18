@@ -203,17 +203,17 @@ describe("shared user store cross-process locking", () => {
   });
 
   it("flushes permission audit writes before normal server shutdown exits", () => {
-    const serverSource = readFileSync(resolve(repositoryRoot, "src/server/server.ts"), "utf8");
-    const shutdownSource = serverSource.slice(serverSource.indexOf("const shutdown ="), serverSource.indexOf("process.once(\"SIGINT\""));
-    const releaseResourcesIndex = serverSource.indexOf("const releaseInstanceResources =");
-    const releaseResourcesEnd = serverSource.indexOf("server.on(\"close\"", releaseResourcesIndex);
-    const releaseResourcesSource = serverSource.slice(releaseResourcesIndex, releaseResourcesEnd);
-    const flushIndex = releaseResourcesSource.indexOf("await permissionService.flushAuditWrites()");
-    const releaseIndex = releaseResourcesSource.indexOf("await releaseActiveWorkspaceLock()");
+    const lifecycleSource = readFileSync(resolve(repositoryRoot, "src/server/server-lifecycle.ts"), "utf8");
+    const releaseResourcesIndex = lifecycleSource.indexOf("const release =");
+    const releaseResourcesEnd = lifecycleSource.indexOf("options.server.on(\"close\"", releaseResourcesIndex);
+    const releaseResourcesSource = lifecycleSource.slice(releaseResourcesIndex, releaseResourcesEnd);
+    const shutdownSource = lifecycleSource.slice(lifecycleSource.indexOf("const shutdown ="), lifecycleSource.indexOf("process.once(\"SIGINT\""));
+    const flushIndex = releaseResourcesSource.indexOf("await options.flushPermissionAudit()");
+    const releaseIndex = releaseResourcesSource.indexOf("await options.releaseWorkspaceLock()");
     const exitIndex = shutdownSource.indexOf("process.exit(0)");
     assert.ok(flushIndex >= 0, "normal shutdown must await permission audit flush");
     assert.ok(releaseIndex > flushIndex, "workspace lock release must follow audit flush");
-    assert.ok(shutdownSource.indexOf("releaseInstanceResources(true)") >= 0, "normal shutdown must release instance resources");
+    assert.ok(shutdownSource.indexOf("release(true)") >= 0, "normal shutdown must release instance resources");
     assert.ok(exitIndex >= 0, "normal shutdown must exit after resource release");
   });
 });

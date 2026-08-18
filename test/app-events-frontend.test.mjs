@@ -299,11 +299,11 @@ describe("App.Events frontend event bus", () => {
     new Script(bundle, { filename: "dashboard.js" }).runInNewContext(context);
 
     let eventNotifications = 0;
-    let uiStateNotifications = 0;
     context.window.App.Events.subscribe("explorer.changed", () => { eventNotifications += 1; });
-    context.window.__uiStateStore.subscribe(() => { uiStateNotifications += 1; });
 
-    assert.doesNotThrow(() => context.window.__uiStateStore.patchState({}));
+    assert.doesNotThrow(() => context.window.App.State.updatePanel({ width: 320 }));
+    assert.strictEqual(context.window.App.State.getSnapshot().panel.width, 320);
+    assert.strictEqual(eventNotifications, 0);
     const ready = context.window.App.Events.start();
     instances[0].onopen?.();
     await ready;
@@ -311,7 +311,6 @@ describe("App.Events frontend event bus", () => {
       data: JSON.stringify({ type: "explorer.changed", revision: 1 }),
     });
 
-    assert.strictEqual(uiStateNotifications, 1);
     assert.strictEqual(eventNotifications, 1);
     context.window.App.Events.stop();
   });

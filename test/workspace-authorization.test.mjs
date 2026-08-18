@@ -4,8 +4,11 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { createSessionPermissionState } from "../src/agent/permissions.ts";
 import { ServerPermissionService } from "../src/server/permission-service.ts";
-import { handleChat } from "../src/server/routes/chat.ts";
+import { handleChat as rawHandleChat } from "../src/server/routes/chat.ts";
 import { makeReq, makeRes } from "./helpers/http.mjs";
+import { withServerGroups } from "./helpers/context.mjs";
+
+const handleChat = (req, res, ctx) => rawHandleChat(req, res, withServerGroups(ctx));
 
 function chatContext(workspace, overrides = {}) {
   const session = {

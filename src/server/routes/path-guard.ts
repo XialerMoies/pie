@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from "fs";
 import { isAbsolute, relative, resolve } from "path";
 import type { ServerResponse } from "http";
+import { createPermissionFailure, type PermissionFailureContext } from "../permission-failure.js";
 
 export type PathGuardOperation = "read" | "write" | "create" | "remove";
 
@@ -14,12 +15,14 @@ export interface GuardedPath {
 export class PathGuardError extends Error {
   statusCode: number;
   code: string;
+  failureContext: PermissionFailureContext;
 
-  constructor(message: string, statusCode = 403, code = "access_denied") {
+  constructor(message: string, statusCode = 403, code = "access_denied", failureContext: PermissionFailureContext = {}) {
     super(message);
     this.name = "PathGuardError";
     this.statusCode = statusCode;
     this.code = code;
+    this.failureContext = failureContext;
   }
 }
 
@@ -57,24 +60,32 @@ export function guardPathWithinRoot(
 ): GuardedPath {
   const rootText = String(root ?? "").trim();
   if (!rootText) {
-    throw new PathGuardError("Missing root", 400, "missing_root");
+    throw new PathGuardError("Missing root", 400, "missing_root", { operation, target });
   }
 
   const rootResolved = resolve(rootText);
   const rootReal = realpathIfExists(rootResolved);
   if (!rootReal) {
-    throw new PathGuardError("Root not found", 404, "root_not_found");
+    throw new PathGuardError("Root not found", 404, "root_not_found", { operation, target, workspaceRoot: rootResolved });
   }
 
   const targetResolved = resolve(rootResolved, String(target ?? ""));
   if (!isInside(rootResolved, targetResolved)) {
-    throw new PathGuardError("Access denied");
+    throw new PathGuardError("Access denied", 403, "access_denied", {
+      operation,
+      target: targetResolved,
+      workspaceRoot: rootResolved,
+    });
   }
 
   const relativeTarget = relative(rootResolved, targetResolved);
   const guardedPath = resolveThroughExistingSegments(rootReal, relativeTarget);
   if (!isInside(rootReal, guardedPath)) {
-    throw new PathGuardError("Access denied");
+    throw new PathGuardError("Access denied", 403, "access_denied", {
+      operation,
+      target: guardedPath,
+      workspaceRoot: rootReal,
+    });
   }
 
   return {
@@ -100,6 +111,7 @@ export function writePathGuardError(
   res.end(JSON.stringify({
     error: error.message,
     code: error.code,
+    failure: createPermissionFailure(error.code, error.message, error.failureContext),
     ...(owner ? { owner } : {}),
   }));
   return true;

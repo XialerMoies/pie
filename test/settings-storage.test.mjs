@@ -12,6 +12,7 @@ import { canonicalWorkspacePath } from "../src/data/data-layout.ts";
 import { recordOpenedWorkspace } from "../src/data/user-settings.ts";
 import { handleSettings } from "../src/server/routes/settings.ts";
 import { previewLegacySessions, workspaceDataPaths } from "../src/server/routes/session-dir.ts";
+import { withServerGroups } from "./helpers/context.mjs";
 
 const roots = [];
 
@@ -49,7 +50,7 @@ async function callSettings(method, url, body, paths, options = {}) {
       return response;
     },
   };
-  const context = {
+  const context = withServerGroups({
     runtime: {
       session: {},
       modelRegistry: {},
@@ -59,7 +60,7 @@ async function callSettings(method, url, body, paths, options = {}) {
       ...options.runtime,
     },
     paths,
-  };
+  });
   await handleSettings(request, response, context);
   return { status: response.status, body: response.body ? JSON.parse(response.body) : null };
 }

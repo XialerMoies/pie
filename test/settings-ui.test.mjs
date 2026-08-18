@@ -31,7 +31,7 @@ global.E = (value) => String(value)
   .replaceAll("'", "&#39;");
 global.toast = (message, type) => settingsSpies.toastCalls.push([message, type]);
 global.getD = () => {};
-win.__state = { D: null };
+const legacyState = { D: null };
 win.App = {
   Settings: {},
   ChatTimeline: {
@@ -86,7 +86,7 @@ beforeEach(() => {
   Object.values(settingsSpies).forEach((calls) => { calls.length = 0; });
   delete win.__monaco;
   delete win.electronAPI;
-  win.__state.D = null;
+  legacyState.D = null;
   fetchImpl = async (url) => {
     if (String(url) === "/api/auth") return { ok: true, json: async () => ({ providers: [] }) };
     if (String(url) === "/api/custom-providers") return { ok: true, json: async () => ({ revision: 0, official: [], custom: [] }) };
@@ -2629,7 +2629,7 @@ describe("settings DOM boundary", () => {
 
   it("persists Timeline and jump settings through their refresh facades without changing session state", async () => {
     const sentinelDashboard = { activeSessionId: "sentinel-session" };
-    win.__state.D = sentinelDashboard;
+    legacyState.D = sentinelDashboard;
     const sentinelMessages = document.createElement("div");
     sentinelMessages.id = "ms";
     sentinelMessages.innerHTML = '<div class="sentinel-message">keep this content</div>';
@@ -2673,9 +2673,9 @@ describe("settings DOM boundary", () => {
       "reading-refresh",
       "reading-refresh",
     ]);
-    assert.strictEqual(win.__state.D, sentinelDashboard);
+    assert.strictEqual(legacyState.D, sentinelDashboard);
     assert.strictEqual(document.getElementById("ms"), sentinelMessages);
-    assert.strictEqual(win.__state.D.activeSessionId, activeSessionBefore);
+    assert.strictEqual(legacyState.D.activeSessionId, activeSessionBefore);
     assert.strictEqual(sentinelMessages.innerHTML, messageContentBefore);
     assert.strictEqual(sentinelMessages.scrollTop, scrollTopBefore);
   });

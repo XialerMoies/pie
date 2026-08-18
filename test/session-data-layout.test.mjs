@@ -13,6 +13,7 @@ import { AgentRuntime } from "../src/agent/runtime.ts";
 import { handleSessions } from "../src/server/routes/sessions.ts";
 import { handleUiState } from "../src/server/routes/ui-state.ts";
 import { handleDashboard } from "../src/server/routes/dashboard.ts";
+import { withServerGroups } from "./helpers/context.mjs";
 
 function fixture(name) {
   const root = mkdtempSync(resolve(tmpdir(), `${name}-`));
@@ -47,7 +48,7 @@ function request(method, url, body) {
 
 function context(dataRoot, workspace) {
   const paths = workspaceDataPaths(dataRoot, workspace);
-  return {
+  return withServerGroups({
     runtime: {
       currentWorkspace: workspace,
       session: {
@@ -79,7 +80,7 @@ function context(dataRoot, workspace) {
       FRONTEND_SRC_DIR: resolve(workspace, "src"),
       HAS_BUILT_FRONTEND: false,
     },
-  };
+  });
 }
 
 function writeSession(file, id, workspace, message) {

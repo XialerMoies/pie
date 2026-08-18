@@ -1,4 +1,5 @@
 import type { AgentRuntime } from "../agent/index.js";
+import type { AgentEngine, EngineEvent } from "../agent-engine/index.js";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "fs";
 import type { AssistantBlock, ChatStreamState, ServerContext, TraceEvent } from "./routes/types.js";
 import { writeChatEvent } from "./chat-stream.js";
@@ -691,6 +692,178 @@ export function attachSessionEvents(
       chatStream.textSegments = [];
       chatStream.currentWorkspace = "";
       publishLifecycleAfterIdle(sourceSession);
+    }
+  });
+}
+
+/**
+ * Engine-owned event bridge used by the desktop server. The legacy PI bridge above
+ * remains available for replay fixtures, but new runtime events never cross this
+ * boundary as raw PI objects.
+ */
+export function attachEngineEvents(
+  engine: AgentEngine,
+  runtime: AgentRuntime,
+  chatStream: ChatStreamState,
+  ctx?: ServerContext,
+): () => void {
+  let lastStreamingUsagePublishAt = 0;
+  const completedTurns = new Set<string>();
+  const publishUsageChanged = (): void => { try { ctx?.appEvents.publish("usage.changed"); } catch {} };
+  const publishLifecycleChanged = (): void => {
+    try { ctx?.appEvents.publish("dashboard.changed"); } catch {}
+    publishUsageChanged();
+  };
+  const authorizeSessionWrite: SessionWriteAuthorizer | undefined = ctx?.permissionService
+    ? (sessionFile, source) => ctx.permissionService!.authorizePathSync(ctx.paths.SESSIONS_DIR, sessionFile, "write", source)
+    : undefined;
+
+  const currentTurn = (event: EngineEvent): string => event.turnId || chatStream.turnId;
+  const upsertTextBlock = (type: "text" | "thinking", text: string, turnId: string): void => {
+    const blockId = `${type}-${turnId}`;
+    const existing = chatStream.blocks.find((block): block is Extract<AssistantBlock, { type: typeof type }> => block.type === type && block.blockId === blockId);
+    emitBlock(runtime, chatStream, {
+      type,
+      text,
+      ...(type === "thinking" ? { status: "streaming" as const } : {}),
+      turnId,
+      blockId,
+      seq: existing?.seq ?? nextBlockSeq(chatStream),
+    } as AssistantBlock, { persist: false });
+  };
+
+  const finish = (event: Extract<EngineEvent, { type: "turn.completed" | "turn.failed" | "turn.cancelled" }>): void => {
+    const turnId = currentTurn(event);
+    if (!turnId) return;
+    if (completedTurns.has(turnId)) return;
+    completedTurns.add(turnId);
+    for (const block of [...chatStream.blocks]) {
+      if (block.type === "thinking" && block.status === "streaming") {
+        emitBlock(runtime, chatStream, { ...block, status: "done" }, { persist: false });
+      }
+    }
+    for (const block of chatStream.blocks) {
+      if (block.type === "text" || block.type === "thinking") persistBlockEvent(runtime, block, { authorizeSessionWrite });
+    }
+    flushPendingTracePersist(runtime, turnId, { authorizeSessionWrite });
+    flushPendingBlockPersist(runtime, turnId, { authorizeSessionWrite });
+    const sessionId = engine.session.id;
+    const fullText = chatStream.blocks
+      .filter((block) => block.type === "text")
+      .sort((left, right) => left.seq - right.seq)
+      .map((block) => block.text)
+      .join("\n\n");
+    const status = event.type === "turn.completed" ? "done" : event.type === "turn.cancelled" ? "cancelled" : "error";
+    if (event.type === "turn.cancelled") {
+      writeChatEvent(chatStream, { type: "cancelled", turnId, sessionId, reason: event.reason });
+    } else {
+      writeChatEvent(chatStream, {
+        type: "done",
+        text: fullText || chatStream.textBuffer,
+        thinking: chatStream.thinkingBuffer || undefined,
+        turnId,
+        sessionId,
+        status,
+        ...(event.type === "turn.completed" && event.usage ? { usage: event.usage } : {}),
+        ...(event.type === "turn.failed" ? { error: event.error.message } : {}),
+        blocks: chatStream.blocks,
+      });
+    }
+    try { chatStream.response?.end(); } catch {}
+    chatStream.response = null;
+    chatStream.textBuffer = "";
+    chatStream.thinkingBuffer = "";
+    chatStream.currentTextSnapshot = "";
+    chatStream.currentThinkingSnapshot = "";
+    cleanupTracePersistState(turnId);
+    chatStream.turnId = "";
+    chatStream.emittedTraces = new Set();
+    chatStream.blocks = [];
+    chatStream.blockSeq = 0;
+    chatStream.textSegments = [];
+    chatStream.currentWorkspace = "";
+    publishLifecycleChanged();
+  };
+
+  return engine.subscribe((event) => {
+    const turnId = currentTurn(event);
+    if (event.type === "turn.started") {
+      chatStream.turnId = event.turnId || chatStream.turnId;
+      publishLifecycleChanged();
+      lastStreamingUsagePublishAt = Date.now();
+      return;
+    }
+    if (event.type === "queue.updated") {
+      writeChatEvent(chatStream, { type: "queue_update", steering: event.steering, followUp: event.followUp });
+      return;
+    }
+    if (event.type === "usage.updated") {
+      const now = Date.now();
+      if (now - lastStreamingUsagePublishAt >= 500) {
+        lastStreamingUsagePublishAt = now;
+        publishUsageChanged();
+      }
+      return;
+    }
+    if (event.type === "compaction.started" || event.type === "compaction.completed" || event.type === "compaction.failed") {
+      publishUsageChanged();
+      return;
+    }
+    if (event.type === "content.delta" && turnId) {
+      chatStream.textBuffer += event.text;
+      upsertTextBlock("text", chatStream.textBuffer, turnId);
+      writeChatEvent(chatStream, { type: "delta", text: event.text });
+      return;
+    }
+    if (event.type === "thinking.delta" && turnId) {
+      chatStream.thinkingBuffer += event.text;
+      upsertTextBlock("thinking", chatStream.thinkingBuffer, turnId);
+      writeChatEvent(chatStream, { type: "thinking", text: event.text });
+      return;
+    }
+    if (event.type === "tool.started" && turnId) {
+      const id = `${event.toolCallId}@${turnId}`;
+      const trace: TraceEvent = { type: "tool", status: "running", name: event.name, input: event.input, turnId, id };
+      emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
+      emitBlock(runtime, chatStream, {
+        type: "tool", toolCallId: event.toolCallId, name: event.name, input: event.input,
+        status: "running", turnId, blockId: `tool-${event.toolCallId}`, seq: nextBlockSeq(chatStream),
+      }, { persist: false });
+      return;
+    }
+    if (event.type === "tool.updated" && turnId) {
+      const block = chatStream.blocks.find((item): item is Extract<AssistantBlock, { type: "tool" }> => item.type === "tool" && item.toolCallId === event.toolCallId);
+      if (block) emitBlock(runtime, chatStream, { ...block, output: event.output }, { persist: false });
+      emitTrace(runtime, chatStream, { type: "tool", status: "running", name: event.name, output: event.output, turnId, id: `${event.toolCallId}@${turnId}` }, { minIntervalMs: 250, authorizeSessionWrite });
+      return;
+    }
+    if (event.type === "tool.completed" || event.type === "tool.failed") {
+      if (!turnId) return;
+      const block = chatStream.blocks.find((item): item is Extract<AssistantBlock, { type: "tool" }> => item.type === "tool" && item.toolCallId === event.toolCallId);
+      const permissionFailure = event.metadata?.permissionFailure;
+      const failed = event.type === "tool.failed" || (permissionFailure !== null && typeof permissionFailure === "object");
+      const failureMessage = event.type === "tool.failed"
+        ? event.error.message
+        : typeof (permissionFailure as { message?: unknown } | undefined)?.message === "string"
+          ? (permissionFailure as { message: string }).message
+          : undefined;
+      emitBlock(runtime, chatStream, {
+        type: "tool", toolCallId: event.toolCallId, name: event.name, input: block?.input,
+        output: event.type === "tool.completed" ? event.output : undefined,
+        error: failed ? failureMessage : undefined,
+        metadata: event.metadata,
+        status: failed ? "error" : "success", turnId,
+        blockId: `tool-${event.toolCallId}`, seq: block?.seq ?? nextBlockSeq(chatStream),
+      }, { authorizeSessionWrite });
+      emitTrace(runtime, chatStream, {
+        type: "tool", status: failed ? "error" : "success", name: event.name,
+        output: event.type === "tool.completed" ? event.output : undefined,
+        error: failed ? failureMessage : undefined, metadata: event.metadata, turnId, id: `${event.toolCallId}@${turnId}`,
+      }, { force: true, authorizeSessionWrite });
+      return;
+    }
+    if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.cancelled") {
+      finish(event);
     }
   });
 }

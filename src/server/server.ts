@@ -7,36 +7,29 @@
  *   PI_DATA_ROOT       - persistent data root
  *   PI_INSTANCE_ID     - per-launch instance id
  */
-import { initAgent, type AgentRuntime } from "../agent/index.js";
-import { createServer, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from "http";
+import { initAgentHost, type AgentRuntime } from "../agent/index.js";
+import type { AgentEngine } from "../agent-engine/index.js";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from "fs";
-import { dispatchRoute } from "./routes/index.js";
+import { writeFileSync, existsSync, mkdirSync } from "fs";
 import { cancelCommandConfirmationsForResponse, createCommandConfirmCallback } from "./routes/chat.js";
-import type { ServerContext, ChatStreamState } from "./routes/types.js";
+import type { ChatStreamState } from "./routes/types.js";
 import { TsserverManager } from "./ts-server.js";
 import { mark, logTiming } from "./timing.js";
 import { shellDialectFromEnv } from "../agent/tools/command/shell-parser.js";
 import { createSessionPermissionState } from "../agent/permissions.js";
 import {
-  authorizeLocalApiRequest,
   cleanupStaleInstanceDirectories,
   clearDesktopSessionTokenEnv,
   createDesktopSecurityConfig,
-  installSecurityHeaders,
-  isApiPreflight,
   removeInstanceRuntimeDirectory,
   writeInstanceMetadata,
-  writeSecurityError,
   type InstanceMetadata,
 } from "./security.js";
 import { ServerPermissionService } from "./permission-service.js";
-import { authorizeWorkspacePath, runWithWorkspaceOwnership } from "./routes/workspace-authorization.js";
 import { cancelPermissionConfirmationsForResponse, createPermissionConfirmCallback } from "./permission-confirmation.js";
 import { FilePermissionAuditStore } from "./permission-audit-store.js";
 import { FileWorkspacePermissionRuleStore } from "./permission-rule-store.js";
-import { contentTypeForStaticAsset, resolveStaticAssetPath } from "./static-assets.js";
 import { RootRegistry } from "./root-registry.js";
 import { createPermissionModeController } from "./permission-mode.js";
 import { AppEventHub } from "./app-events.js";
@@ -66,34 +59,14 @@ import { CustomProviderRuntimeCoordinator } from "../model-provider/runtime-coor
 import { ProviderReferenceChecker } from "../model-provider/provider-reference-checker.js";
 import { CustomProviderService } from "../model-provider/custom-provider-service.js";
 import { FileProviderReferenceMutationLock } from "../model-provider/provider-reference-lock.js";
-import { createRequestContext, safeRequestUrl, StructuredLogger } from "./observability.js";
+import { StructuredLogger } from "./observability.js";
+import { createServerContext } from "./server-bootstrap.js";
+import { createHttpApp, openAppEventStream } from "./http-app.js";
+export { openAppEventStream } from "./http-app.js";
+import { createServerLifecycle } from "./server-lifecycle.js";
 
-import { attachSessionEvents, recordUserNoteBlock } from "./agent-event-router.js";
-export { attachSessionEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
-
-export function openAppEventStream(
-  req: IncomingMessage,
-  res: ServerResponse,
-  appEvents: AppEventHub,
-  cors: OutgoingHttpHeaders,
-  correlation?: { requestId: string; traceId: string },
-): void {
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    ...cors,
-  });
-  res.write(`data: ${JSON.stringify({
-    type: "connected",
-    revision: appEvents.revision(),
-    ...(correlation ?? {}),
-  })}\n\n`);
-  appEvents.addClient(res);
-  req.on("close", () => {
-    appEvents.removeClient(res);
-  });
-}
+import { attachEngineEvents, recordUserNoteBlock } from "./agent-event-router.js";
+export { attachEngineEvents, attachSessionEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
 
 export function attachMcpEvents(appEvents: Pick<AppEventHub, "publish">): () => void {
   const toolsKey = (snapshot: ReturnType<typeof getServersStatus>): string => JSON.stringify(
@@ -209,6 +182,7 @@ async function main() {
   const unsubscribeMcpEvents = attachMcpEvents(appEvents);
   const sessionPermissionState = createSessionPermissionState();
   let runtime: AgentRuntime;
+  let engine: AgentEngine;
   let subagentHost: SubagentDelegationHost;
   const subagentBridge = createSubagentDelegationBridge();
   const security = createDesktopSecurityConfig(undefined, STARTUP.instanceId);
@@ -241,7 +215,7 @@ async function main() {
   );
   const providerReferenceChecker = new ProviderReferenceChecker({
     currentModel: () => {
-      const model = runtime.session.model;
+      const model = engine?.session.model;
       return model ? { provider: model.provider, id: model.id } : undefined;
     },
     defaultModel: () => {
@@ -260,7 +234,7 @@ async function main() {
     referenceLock: providerReferenceLock,
   });
 
-  runtime = await initAgent({
+  ({ runtime, engine } = await initAgentHost({
     agentDir: PI_CONFIG_DIR,
     cwd: STARTUP.workspace,
     sessionsDir: SESSIONS_DIR,
@@ -292,7 +266,7 @@ async function main() {
       };
     },
     delegateTasks: subagentBridge.runtimeConfig.delegateTasks,
-  });
+  }));
 
   subagentHost = createRuntimeSubagentHost({
     runtime,
@@ -326,7 +300,11 @@ async function main() {
   console.log("Pi session ready");
   mark("agent_ready");
 
-  const baseCtx: ServerContext = {
+  // TypeScript language service starts lazily, but its owner is fixed at bootstrap.
+  const tsServer = new TsserverManager();
+
+  const baseCtx = createServerContext({
+    engine,
     runtime,
     chatStream,
     appEvents,
@@ -337,6 +315,7 @@ async function main() {
     customProviderService,
     providerReferenceLock,
     observability,
+    tsServer,
     rootRegistry,
     recordUserNote: (note) => recordUserNoteBlock(runtime, chatStream, note, {
       authorizeSessionWrite: (sessionFile, source) => {
@@ -357,7 +336,7 @@ async function main() {
       FRONTEND_SRC_DIR,
       HAS_BUILT_FRONTEND,
     },
-  };
+  });
 
   // ─── 启动恢复：只恢复本实例显式指定的 workspace ─────────────
   try {
@@ -413,148 +392,16 @@ async function main() {
   });
   workspaceWatcher.watchWorkspace(runtime.currentWorkspace || STARTUP.workspace);
 
-  attachSessionEvents(runtime, chatStream, baseCtx);
-
-  // ─── tsserver（TypeScript 语言服务，延迟启动）────────────────────
-  const tsServer = new TsserverManager();
-
-  // ─── 上下文对象 ──────────────────────────────────────────────────
-  const ctx: ServerContext = {
-    ...baseCtx,
-    tsServer,
-  };
+  attachEngineEvents(engine, runtime, chatStream, baseCtx);
 
   // ─── HTTP 服务器 ─────────────────────────────────────────────
-  const server = createServer(async (req, res) => {
-    const url = req.url ?? "/";
-    const requestContext = createRequestContext(req);
-    const requestStartedAt = Date.now();
-    (req as IncomingMessage & { requestContext?: typeof requestContext }).requestContext = requestContext;
-    res.setHeader("X-Request-Id", requestContext.requestId);
-    res.setHeader("X-Trace-Id", requestContext.traceId);
-    logger.info("http.request.start", { method: req.method, url: safeRequestUrl(url) }, requestContext);
-    res.once("finish", () => {
-      logger.info("http.request.finish", {
-        method: req.method,
-        url: safeRequestUrl(url),
-        status: res.statusCode,
-        durationMs: Math.max(0, Date.now() - requestStartedAt),
-      }, requestContext);
-    });
-    res.once("close", () => {
-      if (!res.writableEnded) logger.warn("http.request.aborted", {
-        method: req.method,
-        url: safeRequestUrl(url),
-        durationMs: Math.max(0, Date.now() - requestStartedAt),
-      }, requestContext);
-    });
-    const cors = { "Access-Control-Allow-Origin": "*" };
-    installSecurityHeaders(req, res, ctx.security);
-
-    const securityDecision = authorizeLocalApiRequest(req, ctx.security);
-    if (!securityDecision.ok) {
-      writeSecurityError(res, securityDecision);
-      return;
-    }
-    if (isApiPreflight(req)) {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
-    // favicon — 返回空内容避免控制台 404 报错
-    if (url === "/favicon.ico") {
-      res.writeHead(200, { "Content-Type": "image/x-icon" });
-      res.end();
-      return;
-    }
-
-    // 图标文件 — 始终从 src/frontend/icons/ 提供
-    const reqPath = url.includes("?") ? url.slice(0, url.indexOf("?")) : url;
-    if (reqPath.startsWith("/icons/") && reqPath.endsWith(".svg")) {
-      try {
-        const iconRoot = HAS_BUILT_FRONTEND ? FRONTEND_DIR : FRONTEND_SRC_DIR;
-        const iconFile = resolveStaticAssetPath(iconRoot, reqPath);
-        const content = readFileSync(iconFile);
-        res.writeHead(200, { "Content-Type": "image/svg+xml", "Cache-Control": "max-age=3600" });
-        res.end(content);
-      } catch {
-        res.writeHead(404);
-        res.end("Not found");
-      }
-      return;
-    }
-
-    // 静态文件 — 构建产物优先，无则从 src/ 回退
-    if (HAS_BUILT_FRONTEND) {
-      const filePath = reqPath === "/" ? `/${FRONTEND_ENTRY_FILE}` : reqPath;
-      const fullPath = resolveStaticAssetPath(FRONTEND_DIR, filePath);
-      if (existsSync(fullPath) && statSync(fullPath).isFile()) {
-        const content = readFileSync(fullPath);
-        res.writeHead(200, { "Content-Type": contentTypeForStaticAsset(fullPath) });
-        res.end(content);
-        return;
-      }
-    } else {
-      // 开发模式：从 src/ 直接服务静态文件
-      const pathname = url.includes("?") ? url.slice(0, url.indexOf("?")) : url;
-      if ((pathname.startsWith("/dashboard") || pathname.startsWith("/ui/") || pathname.startsWith("/pane/") || pathname.startsWith("/service/") || pathname.startsWith("/devicon") || pathname.startsWith("/fonts/") || pathname.startsWith("/devicon-colors") || pathname.startsWith("/icons/") || pathname.startsWith("/core/") || pathname.startsWith("/shell/") || pathname.startsWith("/services/")) && (pathname.endsWith(".css") || pathname.endsWith(".js") || pathname.endsWith(".svg") || pathname.endsWith(".woff") || pathname.endsWith(".woff2"))) {
-        const ext = pathname.endsWith(".css") ? "css" : pathname.endsWith(".svg") ? "svg+xml" : pathname.endsWith(".woff") ? "font/woff" : pathname.endsWith(".woff2") ? "font/woff2" : "javascript";
-                const isText = ext === "css" || ext === "javascript" || ext === "svg+xml";
-                try {
-                  const filePath = resolveStaticAssetPath(FRONTEND_SRC_DIR, pathname);
-          if (isText) {
-            const content = readFileSync(filePath, "utf-8");
-            res.writeHead(200, { "Content-Type": `text/${ext}; charset=utf-8` });
-            res.end(content);
-          } else {
-            const content = readFileSync(filePath);
-            res.writeHead(200, { "Content-Type": ext });
-            res.end(content);
-          }
-        } catch {
-          res.writeHead(404);
-          res.end("Not found");
-        }
-        return;
-      }
-    }
-
-    // 主页
-    if (url === "/" || url === "/index.html") {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(getDashboardHTML(ctx));
-      return;
-    }
-
-    // SSE: 文件变更事件
-    if (url === "/api/events" && req.method === "GET") {
-      openAppEventStream(req, res, appEvents, cors, requestContext);
-      return;
-    }
-
-    // 领域路由分发
-    try {
-      const handled = await dispatchRoute(req, res, ctx);
-      if (handled) return;
-    } catch (error) {
-      logger.error("http.request.error", {
-        method: req.method,
-        url: safeRequestUrl(url),
-        error: error instanceof Error ? error.message : String(error),
-      }, requestContext);
-      if (!res.headersSent) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: false, error: "Internal server error", requestId: requestContext.requestId }));
-      } else {
-        try { res.end(); } catch {}
-      }
-      return;
-    }
-
-    // 404
-    res.writeHead(404);
-    res.end("Not found");
+  const server = createHttpApp({
+    ctx: baseCtx,
+    logger,
+    frontendDir: FRONTEND_DIR,
+    frontendSourceDir: FRONTEND_SRC_DIR,
+    hasBuiltFrontend: HAS_BUILT_FRONTEND,
+    appEvents,
   });
 
   const devPort = parseInt(process.env.PI_DEV_PORT || "0", 10);
@@ -581,91 +428,31 @@ async function main() {
     // ─── 文件系统监听 ──────────────────────────────────────────
   });
 
-  let releaseInstancePromise: Promise<void> | null = null;
-  const closeInstanceStreams = () => {
-    appEvents.closeAll();
-    const response = chatStream.response;
-    if (!response) return;
-    cancelCommandConfirmationsForResponse(response);
-    try { response.end(); } catch {}
-    if (chatStream.response === response) chatStream.response = null;
-  };
-  const releaseInstanceResources = (removeRuntimeData: boolean): Promise<void> => {
-    if (releaseInstancePromise) return releaseInstancePromise;
-    releaseInstancePromise = (async () => {
-      closeInstanceStreams();
-      unsubscribeMcpEvents();
-      unsubscribeWorkspaceWatcher();
-      workspaceWatcher.close();
-      tsServer.stop();
-      try {
-        await permissionService.flushAuditWrites();
-      } catch (error) {
-        console.error("Failed to flush permission audit:", error);
+  createServerLifecycle({
+    server,
+    appEvents,
+    chatStream,
+    cancelResponseConfirmations: cancelCommandConfirmationsForResponse,
+    unsubscribeMcpEvents,
+    unsubscribeWorkspaceWatcher,
+    workspaceWatcher,
+    tsServer,
+    flushPermissionAudit: () => permissionService.flushAuditWrites(),
+    logger,
+    awaitOpenedWorkspaceRecords: () => openedWorkspaceRecordTail,
+    disposeSubagentHost: () => Promise.resolve(subagentHost.dispose()),
+    disposeEngine: () => Promise.resolve(engine.dispose()),
+    releaseWorkspaceLock: releaseActiveWorkspaceLock,
+    removeRuntimeData: async () => {
+      try { await removeInstanceRuntimeDirectory(STARTUP.layout.instanceRoot); }
+      catch (error) { console.error("Failed to remove instance runtime data:", error); }
+      if (TRANSIENT_EMPTY_WORKSPACE) {
+        try { await removeInstanceRuntimeDirectory(STARTUP.layout.workspaceRoot); }
+        catch (error) { console.error("Failed to remove transient workspace data:", error); }
       }
-      await logger.flush();
-      try {
-        await openedWorkspaceRecordTail;
-      } catch (error) {
-        console.warn("Failed to finish opened workspace recording:", error);
-      }
-      try {
-        await subagentHost.dispose();
-      } catch (error) {
-        console.error("Failed to dispose subagent host:", error);
-      }
-      runtime.dispose();
-      try {
-        await releaseActiveWorkspaceLock();
-      } catch (error) {
-        console.error("Failed to release workspace lock:", error);
-      }
-      if (removeRuntimeData) {
-        try {
-          await removeInstanceRuntimeDirectory(STARTUP.layout.instanceRoot);
-        } catch (error) {
-          console.error("Failed to remove instance runtime data:", error);
-        }
-        if (TRANSIENT_EMPTY_WORKSPACE) {
-          try {
-            await removeInstanceRuntimeDirectory(STARTUP.layout.workspaceRoot);
-          } catch (error) {
-            console.error("Failed to remove transient workspace data:", error);
-          }
-        }
-      }
-    })();
-    return releaseInstancePromise;
-  };
-
-  server.on("close", () => {
-    void releaseInstanceResources(false);
+    },
+    electronParented: process.env.PI_ELECTRON_PARENTED === "1",
   });
-  server.on("error", (error) => {
-    console.error("Server error:", error);
-    void releaseInstanceResources(false)
-      .finally(() => process.exit(1));
-  });
-
-  let shuttingDown = false;
-  const shutdown = (signal: NodeJS.Signals | "stdin") => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    console.log(`[server] ${signal}, shutting down`);
-    closeInstanceStreams();
-    server.close();
-    void releaseInstanceResources(true).finally(() => process.exit(0));
-  };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => {
-    if (String(chunk).split(/\r?\n/).includes("PI_SERVER_SHUTDOWN")) shutdown("stdin");
-  });
-  if (process.env.PI_ELECTRON_PARENTED === "1") {
-    process.stdin.once("end", () => shutdown("stdin"));
-    process.stdin.once("close", () => shutdown("stdin"));
-  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -678,18 +465,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     }
     process.exitCode = 1;
   });
-}
-
-// ═══════════════════════════════════════════════════════════════════
-//  HTML TEMPLATE — 从独立文件读取
-// ═══════════════════════════════════════════════════════════════════
-
-function getDashboardHTML(ctx: ServerContext): string {
-  if (ctx.paths.HAS_BUILT_FRONTEND) {
-    return readFileSync(resolve(ctx.paths.FRONTEND_DIR, FRONTEND_ENTRY_FILE), "utf-8");
-  }
-  return readFileSync(
-    resolve(dirname(fileURLToPath(import.meta.url)), "..", "frontend", "dashboard.html"),
-    "utf-8"
-  );
 }

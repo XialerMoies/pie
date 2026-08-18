@@ -66,7 +66,7 @@ describe("root provenance registry", () => {
 
       await assert.rejects(
         () => service.authorizePath(external, "generated.json", "create", "test.unregistered-root"),
-        (error) => error instanceof ServerPermissionError && error.code === "permission_confirmation_required",
+        (error) => error instanceof ServerPermissionError && error.code === "confirmation_unavailable",
       );
     } finally {
       rmSync(parent, { recursive: true, force: true });
@@ -146,7 +146,7 @@ describe("root provenance registry", () => {
 
       await assert.rejects(
         () => service.authorizePath(readOnly, "output.txt", "write", "test.read-only-root"),
-        (error) => error instanceof ServerPermissionError && error.code === "permission_confirmation_required",
+        (error) => error instanceof ServerPermissionError && error.code === "confirmation_unavailable",
       );
     } finally {
       rmSync(parent, { recursive: true, force: true });

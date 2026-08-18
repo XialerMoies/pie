@@ -66,6 +66,19 @@ interface ChatErrorState {
   reason?: string;
   nextSteps?: string[];
   raw?: string;
+  actions?: ChatErrorAction[];
+}
+type ChatErrorAction = 'retry' | 'copy' | 'refresh' | 'settings' | 'reconnect' | 'permissions';
+interface PermissionFailurePayload {
+  code: string;
+  category: 'permission' | 'confirmation' | 'safety' | 'path' | string;
+  decision: 'deny' | 'ask' | 'block' | string;
+  message: string;
+  reason: string;
+  operation?: string;
+  target?: string;
+  recoverable: boolean;
+  suggestions: Array<{ action: 'retry' | 'reconnect' | 'open_permissions' | string; label: string }>;
 }
 
 interface ProviderKeyInfo {
@@ -403,6 +416,7 @@ interface AppChat {
   refreshReadingSettings(): void;
   resizeComposerInput(input: HTMLTextAreaElement): void;
   isBusy(): boolean;
+  reconnect?(): void;
 }
 interface AppChatState {
   getMessages(): Message[];
@@ -704,6 +718,7 @@ interface AppChatViews {
   renderSubagentDelegation(data: SubagentDelegationData): string;
   refreshSubagentDelegation(root: HTMLElement, data: SubagentDelegationData): boolean;
   renderErrorCard(error: ChatErrorState): string;
+  permissionFailureToChatError?(failure: PermissionFailurePayload): ChatErrorState;
   ChatEventNodeView: AppChatEventNodeView;
 }
 interface AppChatEventNodeView {
@@ -739,7 +754,7 @@ interface ChatSseControllerCallbacks {
   markLastMessageRendered(): void;
   renderMessages(): void;
   refreshComposer(): void;
-  setAssistantError(title: string, message: string, reason?: string, nextSteps?: string[], raw?: string): void;
+  setAssistantError(title: string, message: string, reason?: string, nextSteps?: string[], raw?: string, actions?: ChatErrorAction[]): void;
   completeSend(sessionId: string, assistantText: string): void;
   failSend(): void;
 }

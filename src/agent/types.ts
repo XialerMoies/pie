@@ -23,6 +23,35 @@ export type PermissionRuleScope = "session" | "workspace"
 export type CommandConfirmationScope = "once" | PermissionRuleScope
 export type PermissionMode = "plan" | "standard" | "dontAsk" | "yes"
 
+export type PermissionFailureCode =
+  | "permission_denied"
+  | "permission_confirmation_required"
+  | "confirmation_unavailable"
+  | "dangerous"
+  | "path_outside_root"
+  | "permission_state_unavailable"
+
+export type PermissionFailureCategory = "permission" | "confirmation" | "safety" | "path"
+export type PermissionFailureDecision = "deny" | "ask" | "block"
+export type PermissionRecoveryAction = "retry" | "reconnect" | "open_permissions"
+
+export interface PermissionFailureSuggestion {
+  action: PermissionRecoveryAction
+  label: string
+}
+
+export interface PermissionFailure {
+  code: PermissionFailureCode
+  category: PermissionFailureCategory
+  decision: PermissionFailureDecision
+  message: string
+  reason: string
+  operation?: string
+  target?: string
+  recoverable: boolean
+  suggestions: PermissionFailureSuggestion[]
+}
+
 export interface CommandConfirmationResult {
   allow: boolean
   scope?: CommandConfirmationScope
@@ -119,6 +148,7 @@ export interface ToolAuthorizationResult {
   allow: boolean
   reason?: string
   decision?: ToolExecutionDecision
+  failure?: PermissionFailure
 }
 
 export type ToolAuthorizationDecisionRequest = Omit<ToolAuthorizationRequest, "args">
@@ -349,11 +379,13 @@ export function structuredToolError(
   text: string,
   code = "tool_error",
   details?: unknown,
+  metadata?: Record<string, unknown>,
 ): AgentToolResult {
   return {
     text,
     data: null,
     diagnostics: [{ code, severity: "error", message: text, ...(details === undefined ? {} : { details }) }],
+    ...(metadata ? { metadata } : {}),
   }
 }
 
@@ -479,7 +511,7 @@ export async function authorizeToolExecution(
   decision.pathDecisions ||= []
   if (!result.allow) {
     const error = new Error(result.reason || `Tool execution denied: ${tool.name}`) as Error & { metadata?: Record<string, unknown> }
-    error.metadata = { authorization: decision }
+    error.metadata = { authorization: decision, ...(result.failure ? { permissionFailure: result.failure } : {}) }
     throw error
   }
   return decision

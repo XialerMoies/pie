@@ -1,4 +1,4 @@
-import type { RouteHandler } from "../types.js";
+import { resolveEngine, type RouteHandler } from "../types.js";
 import { existsSync, readFileSync } from "fs";
 import { parseBody } from "../parse-body.js";
 import { writePathGuardError } from "../path-guard.js";
@@ -9,13 +9,15 @@ import { hasProviderAuth } from "./auth.js";
 
 export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
-  const { runtime, paths: p } = ctx;
+  const { paths: p } = ctx;
+  const model = ctx.groups.providers.model;
+  const engine = resolveEngine(ctx);
 
   // List available models (only those with configured API key in auth.json)
   if (url === "/api/models") {
     try {
-      await runtime.syncModelProviders?.();
-      const modelRegistry = runtime.modelRegistry;
+      await model.syncModelProviders();
+      const modelRegistry = model.modelRegistry;
       const all = modelRegistry.getAvailable();
       let authData: Record<string, unknown> = {};
       try {
@@ -32,7 +34,7 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
         authData = {};
       }
       const providers = [...new Set(all.map((m: { provider: string }) => m.provider))];
-      const configuredProviders = providers.filter((provider) => hasProviderAuth(runtime, provider, authData[provider]));
+      const configuredProviders = providers.filter((provider) => hasProviderAuth(model, provider, authData[provider]));
       const filtered = configuredProviders.length === 0
         ? all.map((m: { provider: string; id: string }) => ({ provider: (m as { provider: string; id: string }).provider, id: (m as { provider: string; id: string }).id }))
         : all.filter((m: { provider: string }) => configuredProviders.includes((m as { provider: string }).provider)).map((m: { provider: string; id: string }) => ({ provider: m.provider, id: m.id }));
@@ -57,9 +59,9 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
       }
       const settingsFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "settings.json", "write", "settings.save")).path;
       const save = async () => {
-        if (typeof runtime.syncModelProviders === "function") await runtime.syncModelProviders();
-        const findModel = runtime.modelRegistry?.find;
-        if (typeof findModel === "function" && !findModel.call(runtime.modelRegistry, defaultProvider, defaultModel)) {
+        await model.syncModelProviders();
+        const findModel = model.modelRegistry?.find;
+        if (typeof findModel === "function" && !findModel.call(model.modelRegistry, defaultProvider, defaultModel)) {
           throw new Error("Default model is not available");
         }
         await updateLockedJson<Record<string, unknown>>(settingsFile, () => ({}), (settings) => {
@@ -86,15 +88,14 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
       const { provider, modelId } = await parseBody(req);
       const settingsFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "settings.json", "write", "settings.model-switch")).path;
       let found = false;
-      const switchModel = () => runtime.runWithStableSession(async () => {
-        await runtime.syncModelProviders();
-        const model = runtime.modelRegistry.find(provider, modelId);
-        if (!model) return;
+      const switchModel = () => model.runWithStableSession(async () => {
+        await model.syncModelProviders();
+        const targetModel = model.modelRegistry.find(provider, modelId);
+        if (!targetModel) return;
         found = true;
-        const session = runtime.session;
-        const priorModel = session.model;
+        const priorModel = engine.session.model;
         if (!priorModel) throw new Error("Current session has no active model");
-        await session.setModel(model);
+        await engine.setModel(provider, modelId);
         try {
           await updateLockedJson<Record<string, unknown>>(settingsFile, () => ({}), (settings) => {
             settings.defaultProvider = provider;
@@ -103,7 +104,7 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
           }, { trailingNewline: false });
         } catch (persistenceError) {
           try {
-            await session.setModel(priorModel);
+            await engine.setModel(priorModel.provider, priorModel.id);
           } catch (rollbackError) {
             throw new AggregateError(
               [persistenceError, rollbackError],

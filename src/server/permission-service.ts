@@ -46,6 +46,7 @@ import {
 } from "./permission-rule-manager.js";
 import type { WorkspacePermissionRuleStore } from "./permission-rule-store.js";
 import type { RootRegistry } from "./root-registry.js";
+import { createPermissionFailure, type PermissionFailureContext } from "./permission-failure.js";
 
 export type { PermissionAuditEntry, PermissionAuditOperation } from "./permission-audit-log.js";
 export type {
@@ -93,12 +94,14 @@ export interface ServerPathAuthorizationOptions {
 export class ServerPermissionError extends Error {
   statusCode: number;
   code: string;
+  failureContext: PermissionFailureContext;
 
-  constructor(message: string, statusCode = 403, code = "permission_denied") {
+  constructor(message: string, statusCode = 403, code = "permission_denied", failureContext: PermissionFailureContext = {}) {
     super(message);
     this.name = "ServerPermissionError";
     this.statusCode = statusCode;
     this.code = code;
+    this.failureContext = failureContext;
   }
 }
 
@@ -183,7 +186,11 @@ export class ServerPermissionService {
 
       if (decision.status === "deny" || decision.status === "ask") {
         if (decision.status === "deny") {
-          throw new ServerPermissionError(decision.reason, 403, "permission_denied");
+          throw new ServerPermissionError(decision.reason, 403, "permission_denied", {
+            operation,
+            target: guarded.path,
+            workspaceRoot: permissionRoot,
+          });
         }
         await this.confirmAskDecision(decision, guarded, source);
       }
@@ -289,10 +296,18 @@ export class ServerPermissionService {
       });
 
       if (decision.status === "deny") {
-        throw new ServerPermissionError(decision.reason, 403, "permission_denied");
+        throw new ServerPermissionError(decision.reason, 403, "permission_denied", {
+          operation,
+          target: guarded.path,
+          workspaceRoot: permissionRoot,
+        });
       }
       if (decision.status === "ask") {
-        throw new ServerPermissionError(decision.reason, 403, "permission_confirmation_required");
+        throw new ServerPermissionError(decision.reason, 403, "permission_confirmation_required", {
+          operation,
+          target: guarded.path,
+          workspaceRoot: permissionRoot,
+        });
       }
       return guarded;
     } catch (error) {
@@ -338,7 +353,13 @@ export class ServerPermissionService {
       allow: boolean,
       decision: ToolExecutionDecision,
       reason?: string,
-    ): ToolAuthorizationResult => ({ allow, ...(reason ? { reason } : {}), decision: { ...decision, request: decisionRequest } });
+      failure?: ReturnType<typeof createPermissionFailure>,
+    ): ToolAuthorizationResult => ({
+      allow,
+      ...(reason ? { reason } : {}),
+      ...(failure ? { failure } : {}),
+      decision: { ...decision, request: decisionRequest },
+    });
 
     const denyMatch = this.ruleManager?.findToolRule(request.toolName, "deny");
     const capabilityDenyMatch = mcpCapability && request.mcpCapabilities
@@ -360,7 +381,11 @@ export class ServerPermissionService {
         scope: matchedScope,
         appliedRules: [denyMatch?.rule || capabilityDenyMatch!.rule],
         pathDecisions: [],
-      }, deniedReason);
+      }, deniedReason, createPermissionFailure("permission_denied", deniedReason, {
+        operation: "execute",
+        target: request.toolName,
+        workspaceRoot: root,
+      }));
     }
 
     if (request.authorizationMode === "specialized") {
@@ -441,14 +466,18 @@ export class ServerPermissionService {
         ...baseEntry,
         decision: "deny",
         reason: "Tool permission confirmation is unavailable",
-        code: "permission_confirmation_required",
+        code: "confirmation_unavailable",
       });
       return result(false, {
         status: "deny",
         source: "confirmation",
         reason: "Tool permission confirmation is unavailable",
         pathDecisions: [],
-      }, "Tool permission confirmation is unavailable");
+      }, "Tool permission confirmation is unavailable", createPermissionFailure(
+        "confirmation_unavailable",
+        "Tool permission confirmation is unavailable",
+        { operation: "execute", target: request.toolName, workspaceRoot: root },
+      ));
     }
 
     let response: CommandConfirmationResponse;
@@ -480,7 +509,11 @@ export class ServerPermissionService {
         source: "confirmation",
         reason: "Permission confirmation failed",
         pathDecisions: [],
-      }, "Permission confirmation failed");
+      }, "Permission confirmation failed", createPermissionFailure(
+        "confirmation_unavailable",
+        "Permission confirmation failed",
+        { operation: "execute", target: request.toolName, workspaceRoot: root },
+      ));
     }
 
     const confirmed = typeof response === "boolean" ? { allow: response } : response;
@@ -496,7 +529,11 @@ export class ServerPermissionService {
         source: "confirmation",
         reason: "Tool permission confirmation denied or timed out",
         pathDecisions: [],
-      }, "Tool permission confirmation denied or timed out");
+      }, "Tool permission confirmation denied or timed out", createPermissionFailure(
+        "permission_denied",
+        "Tool permission confirmation denied or timed out",
+        { operation: "execute", target: request.toolName, workspaceRoot: root },
+      ));
     }
 
     const appliedRules = confirmed.scope === "session" || confirmed.scope === "workspace"
@@ -622,7 +659,11 @@ export class ServerPermissionService {
     source: string,
   ): Promise<void> {
     if (!this.confirmPermission) {
-      throw new ServerPermissionError(decision.reason, 403, "permission_confirmation_required");
+      throw new ServerPermissionError("Permission confirmation is unavailable", 403, "confirmation_unavailable", {
+        operation: decision.operation,
+        target: guarded.path,
+        workspaceRoot: guarded.root,
+      });
     }
 
     const request: ServerPermissionConfirmationRequest = {
@@ -650,7 +691,11 @@ export class ServerPermissionService {
         reason: `Permission confirmation failed: ${reason}`,
         code: "permission_confirmation_failed",
       });
-      throw new ServerPermissionError("Permission confirmation failed", 403, "permission_confirmation_failed");
+      throw new ServerPermissionError("Permission confirmation failed", 403, "permission_confirmation_failed", {
+        operation: decision.operation,
+        target: guarded.path,
+        workspaceRoot: guarded.root,
+      });
     }
 
     const confirmed = typeof response === "boolean"
@@ -668,7 +713,11 @@ export class ServerPermissionService {
         reason: "Permission confirmation denied or timed out",
         code: "permission_denied",
       });
-      throw new ServerPermissionError("Permission confirmation denied or timed out", 403, "permission_denied");
+      throw new ServerPermissionError("Permission confirmation denied or timed out", 403, "permission_denied", {
+        operation: decision.operation,
+        target: guarded.path,
+        workspaceRoot: guarded.root,
+      });
     }
 
     if (confirmed.scope === "session" || confirmed.scope === "workspace") {
@@ -702,7 +751,11 @@ export function writeServerPermissionError(
 ): boolean {
   if (!isServerPermissionError(error)) return false;
   res.writeHead(error.statusCode, { "Content-Type": "application/json", ...headers });
-  res.end(JSON.stringify({ error: error.message, code: error.code }));
+  res.end(JSON.stringify({
+    error: error.message,
+    code: error.code,
+    failure: createPermissionFailure(error.code, error.message, error.failureContext),
+  }));
   return true;
 }
 

@@ -13,6 +13,7 @@ import { writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { makeReq, makeRes } from "./helpers/http.mjs";
 import { mockChatCtx } from "./helpers/context.mjs";
+import { PiAgentEngineAdapter } from "../src/agent-engine/index.ts";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -106,6 +107,12 @@ describe("Attachments — prompt 内容断言", () => {
       chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" },
       sseClients: [],
       modelRegistry: {},
+      engine: new PiAgentEngineAdapter({
+        session: { model: {}, _cwd: tmpDir, prompt: async (msg) => { captured.push(msg); } },
+        currentWorkspace: tmpDir,
+        switchWorkspace: async () => {},
+        onEvent: () => () => {},
+      }),
     };
     const req = makeReq("POST", "/api/chat", {
       message: "看文件夹",

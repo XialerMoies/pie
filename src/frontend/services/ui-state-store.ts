@@ -1,8 +1,7 @@
 /**
  * UiStateStore — 前端 UI 状态统一门面
  *
- * 以全局 <script> 形式加载，挂载到 window.__uiStateStore。
- * 所有方法通过 window.__uiStateStore.xxx 访问。
+ * 通过 App.State facade 暴露，避免把可变状态挂到 window 全局。
  *
  * 原则：
  *   服务端 /api/ui-state 为权威持久化源
@@ -370,17 +369,6 @@ async function saveNow(): Promise<boolean> {
 function _notify(): void {
   for (const fn of _listeners) fn(_state);
 }
-
-// ─── 挂载到 window ────────────────────────────────────
-
-(window as any).__uiStateStore = {
-  hydrate: hydrateUiState, getState: getUiState, patchState, subscribe, saveNow,
-  isHydrated, getSnapshot, getWorkspacePath, setWorkspacePath, resetWorkspace,
-  syncTabs, updateSessionMetadata, updatePanel, setChatOpen, touchSession,
-  /** 直接引用 _state 供已有代码同步（迁移期过渡用） */
-  get _state() { return _state; },
-  get _hydrated() { return _hydrated; },
-};
 
 const app = (window as any).App || ((window as any).App = {});
 app.State = {

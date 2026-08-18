@@ -30,7 +30,7 @@ before(async () => {
   await import("../src/frontend/services/ui-state-store.ts");
 });
 
-function store() { return global.window.__uiStateStore; }
+function store() { return global.window.App.State; }
 
 describe("UiStateStore", () => {
   it("keeps workspace compatibility storage behind App.State", () => {
@@ -250,7 +250,7 @@ describe("UiStateStore", () => {
     });
 
     await store().hydrate();
-    const state = store().getState();
+    const state = store().getSnapshot();
     assert.ok(Array.isArray(state.tabs.sessions));
     assert.strictEqual(state.tabs.sessions.length, 0, "空 tabs 应保留为 []");
     assert.strictEqual(state.activeView.type, "chat");
@@ -290,7 +290,7 @@ describe("UiStateStore", () => {
     };
 
     await store().hydrate();
-    const state = store().getState();
+    const state = store().getSnapshot();
     assert.strictEqual(state.workspacePath, "/runtime-workspace");
     assert.deepStrictEqual(state.tabs.sessions, ["legacy-session"]);
     assert.strictEqual(state.panel.active, "git");
@@ -342,14 +342,14 @@ describe("UiStateStore", () => {
       return { ok: true, json: async () => ({ schemaVersion: 2, tabs: { sessions: ["sess-old"] }, activeView: { type: "session", id: "sess-old" }, workspacePath: "/old-ws" }) };
     };
     await store().hydrate();
-    assert.strictEqual(store().getState().tabs.sessions.length, 1, "原工作区应有标签");
+    assert.strictEqual(store().getSnapshot().tabs.sessions.length, 1, "原工作区应有标签");
 
     // 模拟工作区切换
     const uis = store();
     uis.resetWorkspace("/new-ws");
     await uis.saveNow();
 
-    const s = uis.getState();
+    const s = uis.getSnapshot();
     assert.strictEqual(s.tabs.sessions.length, 0, "新工作区无标签");
     assert.strictEqual(s.workspacePath, "/new-ws", "workspacePath 已更新");
     assert.strictEqual(s.activeView.type, "chat");
@@ -408,7 +408,7 @@ describe("UiStateStore", () => {
     });
 
     await store().hydrate();
-    const state = store().getState();
+    const state = store().getSnapshot();
     assert.strictEqual(state.panel.active, "chat");
     assert.strictEqual(state.panel.closed, true, "panel closed 应恢复");
     assert.strictEqual(state.panel.width, 200);

@@ -218,7 +218,8 @@ MCP 服务器配置：
               │
               ├── tsserver (TypeScript 语言服务)
               │
-              └── PI SDK (ReAct Loop) ← LLM API
+              └── AgentEngine contract
+                      └── PiAgentEngineAdapter → PI SDK (ReAct Loop) ← LLM API
                       │
                       └── MCP Client → stdio/HTTP/SSE servers
 ```
@@ -240,7 +241,7 @@ ProblemsStore ──→ Monaco diagnostics → 底部栏
 三层职责：
 
 - **Desktop** — Electron 主进程，窗口生命周期、崩溃恢复、preload 桥
-- **Agent** — `AgentRuntime` + `ToolRegistry` + 9 个自定义工具（含 str_replace_editor / file_write / agent_md）+ MCP 工具适配，封装 PI SDK
+- **Agent** — 项目自有 `AgentEngine` 契约由 `PiAgentEngineAdapter` 实现；`AgentRuntime` + `ToolRegistry` + 9 个自定义工具（含 str_replace_editor / file_write / agent_md）+ MCP 工具适配，封装 PI SDK。服务端路由、CLI 和 SSE 只消费 AgentEngine；子 Agent 与自定义 Provider 的剩余 PI 兼容边界将在 E0-b 收口。
 - **PI SDK** — 自 fork 版（v0.80.4），修了 compaction 等底层 bug，新增 max 思考档位
 
 ---
@@ -252,12 +253,16 @@ src/
 ├── server/              # HTTP 服务端 + 领域路由
 │   ├── routes/          # 9 个 handler：chat/dashboard/sessions/explorer/git/search/settings/typescript/ui-state
 │   ├── ts-server.ts     # tsserver 子进程管理
-│   └── server.ts        # 入口：HTTP server + SSE + 事件适配
+│   ├── server-bootstrap.ts # 组装分组 ServerContext
+│   ├── http-app.ts      # HTTP 安全边界、静态资源、路由和 SSE
+│   ├── server-lifecycle.ts # 关闭、清理、信号和 stdin 生命周期
+│   └── server.ts        # 组合入口
 ├── agent/               # PI 自定义层
 │   ├── runtime.ts       # AgentRuntime（session 生命周期）
 │   ├── prompts.ts       # System prompt 分片管理
 │   ├── types.ts         # AgentTool + ToolRegistry
 │   └── tools/           # 9 个自定义工具 + MCP 工具包装
+├── agent-engine/        # 自有 AgentEngine/AgentEvent/usage 契约与 PI adapter
 ├── mcp/                 # MCP 客户端
 │   ├── client.ts        # 连接管理（stdio/http/sse）
 │   ├── config.ts        # 配置发现与合并

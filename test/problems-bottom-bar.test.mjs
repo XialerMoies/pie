@@ -55,8 +55,8 @@ function setupDom() {
     getAllFiles() { return [...new Set(this._problems.map(p => p.filePath))]; },
     getProblemsForFile() { return []; },
   };
-  win.__state = { _activePanel: "" };
-  win.__tabs = { getTab: () => null, getTabs: () => [], activateTab: () => {} };
+  const legacyState = { _activePanel: "" };
+  const legacyTabs = { getTab: () => null, getTabs: () => [], activateTab: () => {} };
   global.__problemsStore = win.__problemsStore;
 
   return { win, doc };

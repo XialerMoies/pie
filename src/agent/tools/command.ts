@@ -11,7 +11,7 @@
  *
  * 适用场景：单用户桌面开发环境，非企业级多用户权限治理。
  */
-import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool, type AgentToolResult, type CommandConfirmationRequest, type CommandConfirmationResponse, type CommandConfirmationScope, type PermissionSuggestion, type ToolContext } from "../types.js"
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool, type AgentToolResult, type CommandConfirmationRequest, type CommandConfirmationResponse, type CommandConfirmationScope, type PermissionFailure, type PermissionSuggestion, type ToolContext } from "../types.js"
 import { spawn } from "child_process"
 import { existsSync } from "fs"
 import { dirname } from "path"
@@ -300,6 +300,7 @@ function commandDecisionResult(
   state: ConfirmationState,
   status: "allow" | "deny",
   reason?: string,
+  permissionFailure?: PermissionFailure,
 ): AgentToolResult {
   updateCommandAuthorization(ctx, status, state, reason)
   const data = {
@@ -311,7 +312,12 @@ function commandDecisionResult(
     exitCode: state.execution?.exitCode ?? null,
     truncated: state.execution?.truncated || false,
   }
-  if (status === "deny") return structuredToolError(text, "command_denied", { ...data, reason })
+  if (status === "deny") return structuredToolError(
+    text,
+    "command_denied",
+    { ...data, reason },
+    permissionFailure ? { permissionFailure } : undefined,
+  )
   return structuredToolResult(text, data)
 }
 
@@ -530,7 +536,24 @@ export const commandTool: AgentTool = defineAgentTool({
     const danger = isDangerousCommand(cmd, { parsed, shellDialect })
     if (danger.dangerous) {
       await maybeLogSecurityVerdictShadowDiff(cmd, { cwd: executionCwd, workspaceRoot, shellDialect })
-      return commandDecisionResult(`⛔ 危险命令已拦截: ${danger.reason}\n如需执行该命令，请在终端中手动运行。`, ctx, confirmationState, "deny", danger.reason)
+      return commandDecisionResult(
+        "⛔ 危险命令已拦截：该命令命中强制安全规则。",
+        ctx,
+        confirmationState,
+        "deny",
+        "Command matched a mandatory safety rule",
+        {
+          code: "dangerous",
+          category: "safety",
+          decision: "block",
+          message: "安全策略已阻止高风险操作。",
+          reason: "命令命中强制安全规则",
+          operation: "execute",
+          target: "高风险命令",
+          recoverable: false,
+          suggestions: [],
+        },
+      )
     }
 
     let dangerConfirmed = false

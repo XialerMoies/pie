@@ -241,6 +241,27 @@ describe("chat component views", () => {
     view.dispose();
     assert.strictEqual(host.childElementCount, 0);
   });
+
+  it("ChatErrorView renders only explicitly allowed recovery actions", () => {
+    const dangerous = win.App.ChatViews.ChatErrorView.render({
+      title: "高风险操作已拦截",
+      message: "安全策略已阻止高风险操作。",
+      actions: ["copy"],
+    });
+    const recoverable = win.App.ChatViews.ChatErrorView.render({
+      title: "权限确认不可用",
+      message: "权限确认通道不可用，操作已安全拒绝。",
+      actions: ["reconnect", "permissions", "copy"],
+    });
+
+    assert.match(dangerous, /data-chat-error-action="copy"/);
+    assert.doesNotMatch(dangerous, /data-chat-error-action="retry"/);
+    assert.doesNotMatch(dangerous, /data-chat-error-action="settings"/);
+    assert.match(recoverable, /data-chat-error-action="reconnect"/);
+    assert.match(recoverable, /data-chat-error-action="permissions"/);
+    assert.match(recoverable, />重新连接</);
+    assert.match(recoverable, />查看权限</);
+  });
 });
 
 describe("msgs() 渲染", () => {

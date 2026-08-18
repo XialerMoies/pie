@@ -8,13 +8,16 @@ import { spawn } from "node:child_process";
 import { canonicalWorkspacePath, resolveDataLayout } from "../src/data/data-layout.ts";
 import { withFileLock } from "../src/data/file-lock.ts";
 import { readUserSettings, recordOpenedWorkspace } from "../src/data/user-settings.ts";
-import { handleChat } from "../src/server/routes/chat.ts";
+import { handleChat as rawHandleChat } from "../src/server/routes/chat.ts";
 import {
   WorkspaceLockConflictError,
   WorkspaceLockCoordinator,
   acquireWorkspaceLock,
 } from "../src/server/workspace-lock.ts";
 import { makeReq, makeRes } from "./helpers/http.mjs";
+import { withServerGroups } from "./helpers/context.mjs";
+
+const handleChat = (req, res, ctx) => rawHandleChat(req, res, withServerGroups(ctx));
 
 function fixture(name) {
   const root = mkdtempSync(resolve(tmpdir(), `${name}-`));
