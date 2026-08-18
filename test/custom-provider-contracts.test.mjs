@@ -77,6 +77,8 @@ import type {
   CustomProviderDraft,
   CustomProviderListResponse,
   CustomProviderMutationInput,
+  DiscoveredModelMetadata,
+  ModelDiscoveryResult,
   ModelCostRates,
   ModelDescriptor,
   ProviderUsage,
@@ -130,6 +132,11 @@ const capabilities: CustomProviderCapabilities = {
   price: { currency: "USD", unit: "millionTokens" },
 };
 const usage: ProviderUsage = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 };
+const discoveredMetadata: DiscoveredModelMetadata = {
+  id: "model-a", contextWindow: 100, input: ["text"], cost: { input: 1 }, source: "provider",
+};
+const idOnlyDiscovery: ModelDiscoveryResult = { ids: ["model-a"] };
+const richDiscovery: ModelDiscoveryResult = { ids: ["model-a"], models: [discoveredMetadata] };
 const success: ConnectionTestResult = {
   ok: true, reachable: true, providerId: "acme", latencyMs: 5, httpStatus: 204,
   message: "ok",
@@ -144,7 +151,7 @@ const invalidDraft: CustomProviderDraft = {
     // @ts-expect-error Header values cannot be null.
     value: null }],
 };
-void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, usage, success, failure, invalidDraft];
+void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, usage, discoveredMetadata, idOnlyDiscovery, richDiscovery, success, failure, invalidDraft];
 `;
     writeFileSync(fixtureFile, source, "utf8");
     try {

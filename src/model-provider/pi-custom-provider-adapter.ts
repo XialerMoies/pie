@@ -67,6 +67,19 @@ const API_FACTORIES = {
   "pi-messages": piMessagesApi,
 } satisfies Record<ProviderProtocol, () => ProviderStreams>;
 
+// Custom model descriptors expose a boolean reasoning capability rather than
+// PI's provider-specific map. Treat an enabled reasoning model as supporting
+// the complete PI scale, including the extended xhigh/max levels.
+const CUSTOM_REASONING_LEVEL_MAP = Object.freeze({
+  off: null,
+  minimal: "minimal",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
+  max: "max",
+});
+
 const KEYLESS_COMPATIBILITY_SENTINEL_PREFIX = "my-code-agent-keyless-compatibility:";
 const AUTH_HEADER_NAMES = [
   "authorization",
@@ -202,6 +215,7 @@ function mapModels(definition: CustomProviderDefinition): readonly Model<Provide
     provider: definition.id,
     baseUrl: definition.baseUrl,
     reasoning: descriptor.reasoning,
+    ...(descriptor.reasoning ? { thinkingLevelMap: CUSTOM_REASONING_LEVEL_MAP } : {}),
     input: structuredClone(descriptor.input),
     cost: structuredClone(descriptor.cost),
     contextWindow: descriptor.contextWindow,

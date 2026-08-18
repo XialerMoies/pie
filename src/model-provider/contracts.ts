@@ -39,6 +39,28 @@ export interface ModelDescriptor {
   compatibility?: Record<string, unknown>;
 }
 
+/**
+ * Best-effort metadata returned by a provider model-list endpoint. All fields
+ * except the stable model ID are optional because the OpenAI-compatible
+ * `/models` contract only guarantees identity information.
+ */
+export interface DiscoveredModelMetadata {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+  input?: Array<"text" | "image">;
+  cost?: Partial<ModelCostRates>;
+  source?: "provider" | "catalog" | "provider+catalog";
+}
+
+/** Backwards-compatible model discovery response. */
+export interface ModelDiscoveryResult {
+  ids: string[];
+  models?: DiscoveredModelMetadata[];
+}
+
 export interface CustomProviderHeader {
   name: string;
   credentialRef: CredentialRef;

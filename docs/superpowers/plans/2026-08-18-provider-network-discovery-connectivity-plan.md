@@ -6,6 +6,8 @@
 
 **Architecture:** Keep `/api/custom-providers/test` and `/discover-models` as the public endpoints. Move endpoint candidate generation and the lightweight GET probe into `ProviderNetworkClient`; let `CustomProviderService` resolve saved credentials and strip a request-only model sentinel so the persisted provider contract remains unchanged. Update the form to send the sentinel only when the user has not entered models, and render HTTP reachability separately from transport failure.
 
+**Implementation sync (2026-08-18):** Model discovery now also returns provider metadata for context length, max completion tokens, input modalities, reasoning support, and pricing. The frontend refreshes existing model cards, uses the bundled model catalog to fill missing capabilities, keeps custom display names and manual prices, and displays context windows in `k` while persisting raw token counts.
+
 **Tech Stack:** TypeScript, Node `fetch`, Express-style route handlers, happy-dom frontend tests, Node test runner, `tsx`.
 
 ---

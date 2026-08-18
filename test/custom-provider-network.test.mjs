@@ -452,6 +452,137 @@ describe("ProviderNetworkClient isolated connection test", () => {
     }
   });
 
+  it("parses OpenRouter capability metadata and reliable USD-per-million pricing", async () => {
+    const server = await fixture((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{
+        id: "metadata-model",
+        name: "  Metadata Model  ",
+        context_length: 200_000,
+        top_provider: { max_completion_tokens: 64_000 },
+        architecture: { input_modalities: ["text", "image", "audio"] },
+        supported_parameters: ["tools", "reasoning"],
+        pricing: {
+          prompt: "0.000002",
+          completion: "0.000008",
+          input_cache_read: "0.0000005",
+          input_cache_write: 0.000003,
+        },
+      }] }));
+    });
+    try {
+      const result = await new ProviderNetworkClient().discoverModels(
+        resolvedDraft(`${server.origin}/v1/`, { provider: { modelDiscovery: "/models" } }),
+      );
+      assert.deepEqual(result, {
+        ids: ["metadata-model"],
+        models: [{
+          id: "metadata-model",
+          name: "Metadata Model",
+          contextWindow: 200_000,
+          maxTokens: 64_000,
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 3 },
+          source: "provider",
+        }],
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps a pure ID response when capability metadata is malformed or incomplete", async () => {
+    const server = await fixture((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{
+        id: "metadata-invalid",
+        name: " ",
+        context_length: "128000",
+        top_provider: { max_completion_tokens: 1.5 },
+        architecture: { input_modalities: ["audio"] },
+        supported_parameters: ["tools"],
+        pricing: { prompt: "-0.000001", completion: "unknown" },
+      }] }));
+    });
+    try {
+      assert.deepEqual(await new ProviderNetworkClient().discoverModels(
+        resolvedDraft(`${server.origin}/v1/`, { provider: { modelDiscovery: "/models" } }),
+      ), { ids: ["metadata-invalid"] });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("uses the canonical bundled catalog for prefixed IDs without copying its pricing", async () => {
+    const server = await fixture((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('{"data":[{"id":"openai/gpt-4.1-mini"}]}');
+    });
+    try {
+      const result = await new ProviderNetworkClient().discoverModels(
+        resolvedDraft(`${server.origin}/v1/`, { provider: { modelDiscovery: "/models" } }),
+      );
+      assert.equal(result.ids[0], "openai/gpt-4.1-mini");
+      assert.deepEqual(result.models, [{
+        id: "openai/gpt-4.1-mini",
+        name: "GPT-4.1 mini",
+        contextWindow: 1_047_576,
+        maxTokens: 32_768,
+        reasoning: false,
+        input: ["text", "image"],
+        source: "catalog",
+      }]);
+      assert.equal(result.models[0].cost, undefined);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps upstream metadata authoritative while filling missing bundled capabilities", async () => {
+    const server = await fixture((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{
+        id: "openai/gpt-4.1-mini",
+        name: "Gateway Mini",
+        context_length: 123_456,
+        top_provider: { max_completion_tokens: 12_345 },
+      }] }));
+    });
+    try {
+      assert.deepEqual(await new ProviderNetworkClient().discoverModels(
+        resolvedDraft(`${server.origin}/v1/`, { provider: { modelDiscovery: "/models" } }),
+      ), {
+        ids: ["openai/gpt-4.1-mini"],
+        models: [{
+          id: "openai/gpt-4.1-mini",
+          name: "Gateway Mini",
+          contextWindow: 123_456,
+          maxTokens: 12_345,
+          reasoning: false,
+          input: ["text", "image"],
+          source: "provider+catalog",
+        }],
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not guess when an unqualified ID has conflicting bundled capabilities", async () => {
+    const server = await fixture((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('{"data":[{"id":"gpt-5.6-sol"}]}');
+    });
+    try {
+      assert.deepEqual(await new ProviderNetworkClient().discoverModels(
+        resolvedDraft(`${server.origin}/v1/`, { provider: { modelDiscovery: "/models" } }),
+      ), { ids: ["gpt-5.6-sol"] });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("marks HTTP errors reachable while preserving transport failures as unreachable", async () => {
     for (const status of [404, 500]) {
       const server = await fixture((_req, res) => {

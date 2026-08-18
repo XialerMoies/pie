@@ -1206,4 +1206,42 @@ describe("chat ui state", () => {
     assert.strictEqual(env.getScrollTop(), 1000);
     assert.strictEqual(env.getLastScrollTo(), null, "immediate mode must not call smooth scroll");
   });
+
+  it("cancels a pending model picker when the user clicks outside before models load", async () => {
+    let resolveModels;
+    const models = new Promise((resolve) => { resolveModels = resolve; });
+    env.win.fetch = global.fetch = async (url) => {
+      if (String(url) === "/api/models") return { ok: true, json: async () => models };
+      return { ok: true, json: async () => ({}) };
+    };
+
+    const target = env.doc.getElementById("fi-model-btn");
+    env.win.App.ChatViews.openModelPicker({ currentTarget: target });
+    env.doc.dispatchEvent(new env.win.Event("pointerdown", { bubbles: true }));
+    resolveModels({ models: [{ provider: "custom", id: "5.6-sol" }] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(env.doc.getElementById("model-picker"), null);
+  });
+
+  it("closes the open model picker on outside pointerdown but keeps button descendants inside", async () => {
+    env.win.fetch = global.fetch = async (url) => {
+      if (String(url) === "/api/models") {
+        return { ok: true, json: async () => ({ models: [{ provider: "custom", id: "5.6-sol" }] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    const target = env.doc.getElementById("fi-model-btn");
+    const targetChild = env.doc.createElement("span");
+    target.appendChild(targetChild);
+    env.win.App.ChatViews.openModelPicker({ currentTarget: target });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(env.doc.getElementById("model-picker"));
+
+    targetChild.dispatchEvent(new env.win.Event("pointerdown", { bubbles: true }));
+    assert.ok(env.doc.getElementById("model-picker"));
+    env.doc.body.dispatchEvent(new env.win.Event("pointerdown", { bubbles: true }));
+    assert.equal(env.doc.getElementById("model-picker"), null);
+  });
 });

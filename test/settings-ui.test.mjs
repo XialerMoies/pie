@@ -396,6 +396,126 @@ describe("settings DOM boundary", () => {
     win.confirm = originalConfirm;
   });
 
+  it("prefills discovered model capabilities and pricing inside the imported model card", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    fetchImpl = async (url) => {
+      if (!String(url).endsWith("/discover-models")) return response({});
+      return response({
+        ids: ["gpt-5.6-sol"],
+        models: [{
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          contextWindow: 272000,
+          maxTokens: 128000,
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+          source: "provider+catalog",
+        }],
+      });
+    };
+    const editor = createCustomProviderEditor();
+    editor.startNew(host, 3, { template: "openai", occupiedProviderIds: new Set() });
+    setInput("#cpe-name", "New Provider");
+    setInput("#cpe-base-url", "https://api.example.test/v1");
+    setInput("#cpe-api-key", "api-key");
+    const originalConfirm = win.confirm;
+    win.confirm = () => true;
+
+    await editor.discoverModels();
+
+    const card = host.querySelector(".cpe-model-row");
+    assert.equal(card?.querySelector(".cpe-model-id")?.value, "gpt-5.6-sol");
+    assert.equal(card?.querySelector(".cpe-model-name")?.value, "GPT-5.6 Sol");
+    assert.equal(card?.querySelector(".cpe-model-context")?.value, "272");
+    assert.equal(card?.querySelector(".cpe-model-max")?.value, "128000");
+    assert.equal(card?.querySelector(".cpe-model-reasoning")?.checked, true);
+    assert.equal(card?.querySelector(".cpe-model-image")?.checked, true);
+    assert.equal(card?.querySelector(".cpe-cost-output")?.value, "30");
+    assert.match(card?.querySelector(".cpe-model-source")?.textContent ?? "", /自动|补全/);
+    assert.ok(card?.querySelector("details.cpe-model-advanced .cpe-model-compatibility"));
+    win.confirm = originalConfirm;
+  });
+
+  it("refreshes capabilities for an existing model instead of treating it as already complete", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    fetchImpl = async (url) => {
+      if (!String(url).endsWith("/discover-models")) return response({});
+      return response({
+        ids: ["gpt-5.6-sol"],
+        models: [{
+          id: "gpt-5.6-sol",
+          contextWindow: 272000,
+          maxTokens: 128000,
+          reasoning: true,
+          input: ["text", "image"],
+          source: "catalog",
+        }],
+      });
+    };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider({ models: [{
+      ...customProvider().models[0],
+      id: "gpt-5.6-sol",
+      name: "Sol",
+      contextWindow: 128000,
+      maxTokens: 8192,
+      reasoning: false,
+      input: ["text"],
+    }] }), 3);
+    const originalConfirm = win.confirm;
+    win.confirm = () => true;
+
+    await editor.discoverModels();
+
+    const card = host.querySelector(".cpe-model-row");
+    assert.equal(card?.querySelector(".cpe-model-context")?.value, "272");
+    assert.equal(card?.querySelector(".cpe-model-max")?.value, "128000");
+    assert.equal(card?.querySelector(".cpe-model-reasoning")?.checked, true);
+    assert.equal(card?.querySelector(".cpe-model-image")?.checked, true);
+    assert.match(card?.querySelector(".cpe-model-source")?.textContent ?? "", /目录/);
+    win.confirm = originalConfirm;
+  });
+
+  it("refreshes capabilities for an existing model without replacing its custom display name", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    fetchImpl = async (url) => {
+      if (!String(url).endsWith("/discover-models")) return response({});
+      return response({
+        ids: ["model-a"],
+        models: [{
+          id: "model-a",
+          name: "Remote Model A",
+          contextWindow: 200000,
+          maxTokens: 100000,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 2.5, output: 9 },
+          source: "provider",
+        }],
+      });
+    };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider(), 3);
+    const originalConfirm = win.confirm;
+    win.confirm = () => true;
+
+    await editor.discoverModels();
+
+    const card = host.querySelector(".cpe-model-row");
+    assert.equal(card?.querySelector(".cpe-model-name")?.value, "Model A");
+    assert.equal(card?.querySelector(".cpe-model-context")?.value, "200");
+    assert.equal(card?.querySelector(".cpe-model-max")?.value, "100000");
+    assert.equal(card?.querySelector(".cpe-model-reasoning")?.checked, false);
+    assert.equal(card?.querySelector(".cpe-model-image")?.checked, false);
+    assert.equal(card?.querySelector(".cpe-cost-input")?.value, "2.5");
+    assert.match(card?.querySelector(".cpe-model-source")?.textContent ?? "", /自动识别/);
+    win.confirm = originalConfirm;
+  });
+
   it("shows validation feedback when test connection fields are incomplete", async () => {
     const host = document.createElement("div");
     document.body.append(host);
@@ -1699,7 +1819,7 @@ describe("settings DOM boundary", () => {
     assert.notStrictEqual(host.querySelector('[data-field-error="models[1].maxTokens"]')?.textContent, "");
   });
 
-  it("reindexes common and advanced model error paths after removing a model", async () => {
+  it("reindexes model-card error paths after removing a model", async () => {
     const host = document.createElement("div");
     document.body.append(host);
     const paths = ["provider.models[1].id", "provider.models[1].maxTokens"];
@@ -1710,15 +1830,15 @@ describe("settings DOM boundary", () => {
     await editor.save();
     await editor.save();
     assert.ok(host.querySelector('.cpe-model-row:nth-child(2) [data-field-error="models[1].id"]'));
-    assert.ok(host.querySelector('.cpe-model-detail-row:nth-child(2) [data-field-error="models[1].maxTokens"]'));
+    assert.ok(host.querySelector('.cpe-model-row:nth-child(2) [data-field-error="models[1].maxTokens"]'));
 
     host.querySelector('.cpe-model-row:nth-child(1) [data-cpe-action="remove-model"]').click();
 
     assert.ok(host.querySelector('.cpe-model-row:nth-child(1) [data-field-error="models[0].id"]'));
-    assert.ok(host.querySelector('.cpe-model-detail-row:nth-child(1) [data-field-error="models[0].maxTokens"]'));
+    assert.ok(host.querySelector('.cpe-model-row:nth-child(1) [data-field-error="models[0].maxTokens"]'));
   });
 
-  it("opens advanced settings and focuses the exact backend compatibility error", async () => {
+  it("opens the model's advanced settings and focuses the exact backend compatibility error", async () => {
     const host = document.createElement("div");
     document.body.append(host);
     fetchImpl = async () => response({
@@ -1728,13 +1848,16 @@ describe("settings DOM boundary", () => {
     const editor = createCustomProviderEditor();
     editor.mount(host, customProvider(), 4);
 
-    const advanced = host.querySelector("details.cpe-advanced");
+    const providerAdvanced = host.querySelector("details.cpe-advanced");
+    const modelAdvanced = host.querySelector("details.cpe-model-advanced");
     const compatibility = host.querySelector('[data-field-path="models[0].compatibility"]');
-    assert.equal(advanced?.open, false);
+    assert.equal(providerAdvanced?.open, false);
+    assert.equal(modelAdvanced?.open, false);
 
     await editor.save();
 
-    assert.equal(advanced?.open, true);
+    assert.equal(providerAdvanced?.open, false);
+    assert.equal(modelAdvanced?.open, true);
     assert.equal(document.activeElement, compatibility);
     assert.equal(compatibility?.getAttribute("aria-invalid"), "true");
   });

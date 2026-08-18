@@ -258,6 +258,16 @@ interface CustomProviderModel {
   samplingParams?: Record<string, unknown>;
   compatibility?: Record<string, unknown>;
 }
+interface CustomProviderDiscoveredModel {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+  input?: Array<'text' | 'image'>;
+  cost?: Partial<CustomProviderModel['cost']>;
+  source?: 'provider' | 'catalog' | 'provider+catalog';
+}
 interface RedactedCustomProvider {
   id: string;
   name: string;
@@ -288,7 +298,7 @@ interface SettingsCustomProviderFormView {
   read(options: CustomProviderFormReadOptions): CustomProviderDraft | null;
   getRoot(): HTMLElement | null;
   captureSecrets(): string[];
-  appendDiscoveredModels(ids: readonly string[]): void;
+  appendDiscoveredModels(models: readonly CustomProviderDiscoveredModel[]): void;
   setApiKey(value: string): void;
   setModelDiscovery(value: string): void;
   toggleApiKeyVisibility(): boolean;

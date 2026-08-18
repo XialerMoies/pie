@@ -1,9 +1,13 @@
 import {
   PROVIDER_PROTOCOLS,
   type ConnectionTestResult,
+  type DiscoveredModelMetadata,
+  type ModelCostRates,
+  type ModelDiscoveryResult,
   type ProviderProtocol,
   type ResolvedCustomProviderDraft,
 } from "./contracts.js";
+import { enrichDiscoveryWithBundledCatalog } from "./bundled-model-metadata.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_DISCOVERY_BODY_BYTES = 64 * 1024;
@@ -189,7 +193,125 @@ async function readLimitedBody(response: Response, limit: number): Promise<strin
   }
 }
 
-function parseModelIds(body: string, secrets: readonly string[]): string[] {
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function positiveSafeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function inputModalities(value: unknown): Array<"text" | "image"> | undefined {
+  if (!Array.isArray(value) || !value.every(item => typeof item === "string")) return undefined;
+  const modalities: Array<"text" | "image"> = [];
+  if (value.includes("text")) modalities.push("text");
+  if (value.includes("image")) modalities.push("image");
+  return modalities.includes("text") ? modalities : undefined;
+}
+
+function supportsReasoning(value: unknown): true | undefined {
+  if (!Array.isArray(value) || !value.every(item => typeof item === "string")) return undefined;
+  return value.some(item => [
+    "reasoning",
+    "reasoning_effort",
+    "include_reasoning",
+    "thinking",
+    "enable_thinking",
+  ].includes(item)) ? true : undefined;
+}
+
+const DECIMAL_RATE = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+
+function perMillionRate(value: unknown): number | undefined {
+  let perToken: number;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0) return undefined;
+    perToken = value;
+  } else if (typeof value === "string" && DECIMAL_RATE.test(value.trim())) {
+    perToken = Number(value.trim());
+  } else return undefined;
+  const result = perToken * 1_000_000;
+  return Number.isFinite(result) && result >= 0 ? result : undefined;
+}
+
+function firstRate(pricing: Record<string, unknown>, names: readonly string[]): number | undefined {
+  for (const name of names) {
+    if (Object.hasOwn(pricing, name)) return perMillionRate(pricing[name]);
+  }
+  return undefined;
+}
+
+function modelCost(value: unknown): Partial<ModelCostRates> | undefined {
+  const pricing = record(value);
+  if (pricing === undefined) return undefined;
+  const input = firstRate(pricing, ["prompt", "input"]);
+  const output = firstRate(pricing, ["completion", "output"]);
+  // A usable pricing record needs both primary token rates. Partial or sentinel
+  // values (for example OpenRouter's negative unknown rates) are not surfaced.
+  if (input === undefined || output === undefined) return undefined;
+  const cacheRead = firstRate(pricing, ["input_cache_read", "cache_read"]);
+  const cacheWrite = firstRate(pricing, ["input_cache_write", "cache_write"]);
+  return {
+    input,
+    output,
+    ...(cacheRead === undefined ? {} : { cacheRead }),
+    ...(cacheWrite === undefined ? {} : { cacheWrite }),
+  };
+}
+
+function parseModelMetadata(entry: Record<string, unknown>, id: string): DiscoveredModelMetadata | undefined {
+  const name = nonEmptyString(entry.name);
+  const topProvider = record(entry.top_provider);
+  const contextWindow = positiveSafeInteger(
+    entry.context_length
+      ?? entry.contextWindow
+      ?? entry.context_window
+      ?? topProvider?.context_length,
+  );
+  let maxTokens = positiveSafeInteger(
+    entry.max_completion_tokens
+      ?? entry.max_output_tokens
+      ?? entry.max_tokens
+      ?? topProvider?.max_completion_tokens,
+  );
+  if (contextWindow !== undefined && maxTokens !== undefined && maxTokens > contextWindow) maxTokens = undefined;
+  const architecture = record(entry.architecture);
+  const input = inputModalities(architecture?.input_modalities);
+  const reasoning = typeof entry.reasoning === "boolean"
+    ? entry.reasoning
+    : supportsReasoning(entry.supported_parameters);
+  const cost = modelCost(entry.pricing);
+  if (
+    name === undefined
+    && contextWindow === undefined
+    && maxTokens === undefined
+    && input === undefined
+    && reasoning === undefined
+    && cost === undefined
+  ) return undefined;
+  return {
+    id,
+    ...(name === undefined ? {} : { name }),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(maxTokens === undefined ? {} : { maxTokens }),
+    ...(reasoning === undefined ? {} : { reasoning }),
+    ...(input === undefined ? {} : { input }),
+    ...(cost === undefined ? {} : { cost }),
+    source: "provider",
+  };
+}
+
+function parseModels(body: string, secrets: readonly string[]): ModelDiscoveryResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body) as unknown;
@@ -203,17 +325,23 @@ function parseModelIds(body: string, secrets: readonly string[]): string[] {
   if (!Array.isArray(data)) throw networkError("unsupported_response", secrets);
   const ids: string[] = [];
   const seen = new Set<string>();
+  const metadata = new Map<string, DiscoveredModelMetadata>();
   for (const entry of data) {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const id = (entry as { id?: unknown }).id;
-    if (typeof id !== "string" || id.trim().length === 0) continue;
-    const normalized = id.trim();
-    if (seen.has(normalized)) continue;
-    seen.add(normalized);
-    ids.push(normalized);
+    const modelEntry = record(entry);
+    if (modelEntry === undefined) continue;
+    const normalized = nonEmptyString(modelEntry.id);
+    if (normalized === undefined) continue;
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      ids.push(normalized);
+    }
+    const parsedMetadata = parseModelMetadata(modelEntry, normalized);
+    if (parsedMetadata !== undefined) {
+      metadata.set(normalized, { ...metadata.get(normalized), ...parsedMetadata, id: normalized });
+    }
   }
   if (data.length > 0 && ids.length === 0) throw networkError("unsupported_response", secrets);
-  return ids;
+  return metadata.size === 0 ? { ids } : { ids, models: [...metadata.values()] };
 }
 
 function assertSupportedProtocol(protocol: string, secrets: readonly string[]): asserts protocol is ProviderProtocol {
@@ -326,7 +454,7 @@ export class ProviderNetworkClient {
   async discoverModels(
     input: ResolvedCustomProviderDraft,
     signal?: AbortSignal,
-  ): Promise<{ ids: string[] }> {
+  ): Promise<ModelDiscoveryResult> {
     const secrets = secretsFor(input);
     assertSupportedProtocol(input.provider.protocol, secrets);
     let baseUrl: URL;
@@ -372,7 +500,7 @@ export class ProviderNetworkClient {
           throw networkError(codeForStatus(response.status), secrets);
         }
         const body = await readLimitedBody(response, MAX_DISCOVERY_BODY_BYTES);
-        return { ids: parseModelIds(body, secrets) };
+        return enrichDiscoveryWithBundledCatalog(parseModels(body, secrets), input.provider);
       }
       throw networkError("upstream", secrets);
     } catch (error) {

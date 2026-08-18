@@ -175,6 +175,33 @@ describe("custom provider service", () => {
     }
   });
 
+  it("returns enriched discovery metadata from the network client without persisting it", async () => {
+    const discovered = {
+      ids: ["rich-model"],
+      models: [{
+        id: "rich-model",
+        name: "Rich Model",
+        contextWindow: 200_000,
+        maxTokens: 64_000,
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 2, output: 8 },
+      }],
+    };
+    const env = await fixture({
+      networkClient: {
+        testConnection: async () => assert.fail("connection test was not requested"),
+        discoverModels: async () => discovered,
+      },
+    });
+    try {
+      assert.deepEqual(await env.service.discoverModels(draft()), discovered);
+      assert.equal((await env.store.readSnapshot()).revision, 0);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
   it("strips the request-only model sentinel for both network operations", async () => {
     const received = [];
     const env = await fixture({

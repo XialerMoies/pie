@@ -251,7 +251,34 @@ describe("provider settings presentation utilities", () => {
 });
 
 describe("provider settings views", () => {
-  it("separates common custom-provider fields from one closed advanced section", async () => {
+  it("shows context windows in k tokens while preserving raw token values on read", async () => {
+    const { CustomProviderFormView, ListAddAction } = await loadCustomProviderForm();
+    const host = document.createElement("div");
+    const form = new CustomProviderFormView({
+      provider: controllerCustomProvider({
+        models: [{
+          ...controllerCustomProvider().models[0],
+          contextWindow: 272000,
+        }],
+      }),
+      protocols: ["openai-responses"],
+      occupiedProviderIds: new Set(["acme"]),
+    }, ListAddAction);
+
+    form.mount(host, 4);
+
+    assert.equal(host.querySelector(".cpe-model-context")?.value, "272");
+    assert.match(host.querySelector(".cpe-model-context")?.closest("label")?.textContent ?? "", /上下文窗口 \(k\)/);
+    const draft = form.read({ showErrors: true, purpose: "save" });
+    assert.equal(draft?.models[0]?.contextWindow, 272000);
+  });
+
+  it("reserves equal label height for wrapped model capability fields", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/frontend/dashboard.css"), "utf8");
+    assert.match(css, /\.cpe-mini-field>span\{[^}]*display:flex[^}]*min-height:2\.3em[^}]*line-height:1\.15/);
+  });
+
+  it("keeps capabilities and pricing inside each model card while provider options stay advanced", async () => {
     const { CustomProviderFormView, ListAddAction } = await loadCustomProviderForm();
     const host = document.createElement("div");
     const form = new CustomProviderFormView({
@@ -268,26 +295,30 @@ describe("provider settings views", () => {
     assert.ok(advanced);
     assert.equal(host.querySelectorAll("details.cpe-advanced").length, 1);
     assert.equal(advanced.open, false);
-    for (const selector of ["#cpe-name", "#cpe-base-url", "#cpe-api-key", ".cpe-model-rows"]) {
+    for (const selector of [
+      "#cpe-name", "#cpe-base-url", "#cpe-api-key", ".cpe-model-rows",
+      ".cpe-model-context", ".cpe-model-max", ".cpe-model-reasoning", ".cpe-model-image",
+      ".cpe-cost-input", ".cpe-cost-output", ".cpe-cost-cache-read", ".cpe-cost-cache-write",
+      ".cpe-model-sampling", ".cpe-model-compatibility",
+    ]) {
       assert.ok(common.querySelector(selector), `${selector} should be common`);
       assert.equal(advanced.querySelector(selector), null, `${selector} must stay out of advanced`);
     }
     for (const selector of [
       "#cpe-id", "#cpe-protocol", ".cpe-header-rows", "#cpe-model-discovery",
-      ".cpe-model-context", ".cpe-model-max", ".cpe-model-reasoning", ".cpe-model-image",
-      ".cpe-cost-input", ".cpe-cost-output", ".cpe-cost-cache-read", ".cpe-cost-cache-write",
-      ".cpe-model-sampling", ".cpe-model-compatibility",
     ]) {
       assert.ok(advanced.querySelector(selector), `${selector} should be advanced`);
       assert.equal(common.querySelector(selector), null, `${selector} must stay out of common`);
     }
-    assert.deepEqual(
-      [...common.querySelectorAll("input")].map(input => input.id || input.className),
-      [
-        "cpe-name", "cpe-base-url", "none", "apiKey", "cpe-api-key",
-        "cpe-input cpe-model-id", "cpe-input cpe-model-name",
-      ],
-    );
+    const modelCard = common.querySelector(".cpe-model-row");
+    assert.ok(modelCard);
+    assert.ok(modelCard.querySelector(".cpe-model-id"));
+    assert.ok(modelCard.querySelector(".cpe-model-context"));
+    assert.ok(modelCard.querySelector("details.cpe-model-advanced .cpe-cost-input"));
+    assert.match(modelCard.textContent ?? "", /上下文窗口/);
+    assert.match(modelCard.textContent ?? "", /最大输出 tokens/);
+    assert.doesNotMatch(modelCard.textContent ?? "", /\bContext\b|\bMax tokens\b|\bReasoning\b|\bImage input\b/);
+    assert.equal(host.querySelector(".cpe-model-advanced-section"), null);
     assert.ok(common.querySelector('[data-cpe-action="add-model"]'));
     assert.ok(common.querySelector('[data-cpe-action="remove-model"]'));
     assert.equal(host.querySelector("#cpe-id").readOnly, true);

@@ -64,6 +64,32 @@ function safeArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function isCustomProviderRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : undefined;
+}
+
+function discoveredCost(value: unknown): CustomProviderDiscoveredModel['cost'] | undefined {
+  if (!isCustomProviderRecord(value)) return undefined;
+  const cost: NonNullable<CustomProviderDiscoveredModel['cost']> = {};
+  for (const field of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) {
+    const amount = value[field];
+    if (typeof amount === 'number' && Number.isFinite(amount) && amount >= 0) cost[field] = amount;
+  }
+  return Object.keys(cost).length > 0 ? cost : undefined;
+}
+
+function hasDiscoveredCapabilities(model: CustomProviderDiscoveredModel): boolean {
+  return model.contextWindow !== undefined
+    || model.maxTokens !== undefined
+    || model.reasoning !== undefined
+    || model.input !== undefined
+    || model.cost !== undefined;
+}
+
 export function isCustomProviderRevision(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
@@ -248,15 +274,56 @@ export class SettingsCustomProviderEditor {
         seen.add(id);
         ids.push(id);
       }
+      const discoveredById = new Map<string, CustomProviderDiscoveredModel>();
+      for (const value of safeArray((response.body as { models?: unknown }).models)) {
+        if (!isCustomProviderRecord(value) || typeof value.id !== 'string') continue;
+        const id = value.id.trim();
+        if (!id || this.redact(id, operation.secrets) !== id) continue;
+        const name = typeof value.name === 'string' && value.name.trim()
+          && this.redact(value.name.trim(), operation.secrets) === value.name.trim()
+          ? value.name.trim()
+          : undefined;
+        const input = Array.isArray(value.input) && value.input.includes('image')
+          ? ['text', 'image'] as Array<'text' | 'image'>
+          : Array.isArray(value.input) ? ['text'] as Array<'text' | 'image'> : undefined;
+        const source = value.source === 'provider' || value.source === 'catalog' || value.source === 'provider+catalog'
+          ? value.source
+          : undefined;
+        const contextWindow = positiveInteger(value.contextWindow);
+        const maxTokens = positiveInteger(value.maxTokens);
+        const cost = discoveredCost(value.cost);
+        discoveredById.set(id, {
+          id,
+          ...(name ? { name } : {}),
+          ...(contextWindow === undefined ? {} : { contextWindow }),
+          ...(maxTokens === undefined ? {} : { maxTokens }),
+          ...(typeof value.reasoning === 'boolean' ? { reasoning: value.reasoning } : {}),
+          ...(input ? { input } : {}),
+          ...(cost ? { cost } : {}),
+          ...(source ? { source } : {}),
+        });
+        if (!seen.has(id)) {
+          seen.add(id);
+          ids.push(id);
+        }
+      }
       const existing = new Set(
         [...operation.root.querySelectorAll<HTMLInputElement>('.cpe-model-id')].map(input => input.value.trim()),
       );
       const imported = ids.filter(id => !existing.has(id));
-      if (imported.length === 0) {
+      const updates = ids
+        .filter(id => existing.has(id))
+        .map(id => discoveredById.get(id))
+        .filter((model): model is CustomProviderDiscoveredModel => model !== undefined && hasDiscoveredCapabilities(model));
+      if (imported.length === 0 && updates.length === 0) {
         this.showResult(operation, '未发现新的模型 ID', false);
         return;
       }
-      if (!window.confirm(`导入 ${imported.length} 个模型 ID？\n${imported.join('\n')}`)) {
+      const prompt = [
+        imported.length > 0 ? `导入 ${imported.length} 个模型 ID：\n${imported.join('\n')}` : '',
+        updates.length > 0 ? `刷新 ${updates.length} 个已有模型的能力与费用？` : '',
+      ].filter(Boolean).join('\n\n');
+      if (!window.confirm(prompt)) {
         if (this.isCurrentQuery(operation)) this.showResult(operation, '已取消导入', false);
         return;
       }
@@ -264,8 +331,15 @@ export class SettingsCustomProviderEditor {
       if (typeof operation.draft?.modelDiscovery === 'string') {
         operation.form.setModelDiscovery(operation.draft.modelDiscovery);
       }
-      operation.form.appendDiscoveredModels(imported);
-      this.showResult(operation, `已导入 ${imported.length} 个模型 ID，保存后生效`, false);
+      operation.form.appendDiscoveredModels([
+        ...updates,
+        ...imported.map(id => discoveredById.get(id) ?? { id }),
+      ]);
+      const result = [
+        imported.length > 0 ? `已导入 ${imported.length} 个模型` : '',
+        updates.length > 0 ? `已刷新 ${updates.length} 个模型能力` : '',
+      ].filter(Boolean).join('，');
+      this.showResult(operation, `${result}，保存后生效`, false);
     } finally {
       this.finishQuery(operation);
     }

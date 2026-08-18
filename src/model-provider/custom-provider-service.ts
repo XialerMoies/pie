@@ -12,6 +12,7 @@ import {
   type CustomProviderDraft,
   type CustomProviderListResponse,
   type CustomProviderMutationInput,
+  type ModelDiscoveryResult,
   type CustomProviderSnapshot,
   type RedactedCustomProviderSnapshot,
   type ResolvedCustomProviderDraft,
@@ -311,7 +312,7 @@ export class CustomProviderService {
     );
   }
 
-  async discoverModels(draft: CustomProviderDraft, signal?: AbortSignal): Promise<{ ids: string[] }> {
+  async discoverModels(draft: CustomProviderDraft, signal?: AbortSignal): Promise<ModelDiscoveryResult> {
     return this.#networkClient.discoverModels(
       await this.#resolveNetworkDraft(draft, { allowNetworkSentinel: true }),
       signal,

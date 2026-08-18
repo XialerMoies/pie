@@ -25,6 +25,7 @@ const CUSTOM_FORBIDDEN_HEADERS = new Set([
   'upgrade',
 ]);
 const CUSTOM_ADVANCED_JSON_MAX_BYTES = 16 * 1024;
+const TOKENS_PER_CONTEXT_K = 1000;
 function formElement<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -64,11 +65,20 @@ function emptyCustomProviderModel(id = ''): CustomProviderFormModel {
   };
 }
 
-function isEmptyModelPlaceholder(commonRow: HTMLElement, detailRow: HTMLElement): boolean {
-  return !commonRow.querySelector<HTMLInputElement>('.cpe-model-id')?.value.trim()
-    && !commonRow.querySelector<HTMLInputElement>('.cpe-model-name')?.value.trim()
-    && Number(detailRow.querySelector<HTMLInputElement>('.cpe-model-context')?.value ?? '') === 128000
-    && Number(detailRow.querySelector<HTMLInputElement>('.cpe-model-max')?.value ?? '') === 8192;
+function contextWindowDisplayValue(value: number): string {
+  return String(value / TOKENS_PER_CONTEXT_K);
+}
+
+function contextWindowTokenValue(value: string): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.round(parsed * TOKENS_PER_CONTEXT_K) : Number.NaN;
+}
+
+function isEmptyModelPlaceholder(modelRow: HTMLElement): boolean {
+  return !modelRow.querySelector<HTMLInputElement>('.cpe-model-id')?.value.trim()
+    && !modelRow.querySelector<HTMLInputElement>('.cpe-model-name')?.value.trim()
+    && contextWindowTokenValue(modelRow.querySelector<HTMLInputElement>('.cpe-model-context')?.value ?? '') === 128000
+    && Number(modelRow.querySelector<HTMLInputElement>('.cpe-model-max')?.value ?? '') === 8192;
 }
 
 function isFiniteJsonValue(value: unknown): boolean {
@@ -138,9 +148,8 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       this.apiKeyField(provider),
     );
     const modelRows = formElement('div', 'cpe-model-rows');
-    const modelDetails = formElement('div', 'cpe-model-detail-rows');
     for (const model of provider?.models ?? [emptyCustomProviderModel()]) {
-      this.appendModelPair(modelRows, modelDetails, model);
+      this.appendModelRow(modelRows, model);
     }
     common.append(this.modelsField(modelRows));
 
@@ -154,9 +163,6 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       this.field('模型发现路径', formInput('cpe-model-discovery', 'cpe-input', provider?.modelDiscovery ?? '')),
       this.headersField(provider?.headers ?? []),
     );
-    const modelAdvanced = formElement('section', 'cpe-section cpe-model-advanced-section');
-    modelAdvanced.append(formElement('div', 'cpe-section-title', '模型能力与费用'), modelDetails);
-    advancedBody.append(modelAdvanced);
     advanced.append(advancedBody);
     form.append(common, advanced);
     root.append(form);
@@ -276,14 +282,11 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       header.remove !== true || !activeHeaderNames.has(header.name.toLowerCase())
     ));
 
-    const commonRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-row')];
-    const detailRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-detail-row')];
-    const hasEmptyModelPlaceholder = commonRows.length === 1
-      && detailRows.length === 1
-      && isEmptyModelPlaceholder(commonRows[0], detailRows[0]);
+    const modelRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-row')];
+    const hasEmptyModelPlaceholder = modelRows.length === 1
+      && isEmptyModelPlaceholder(modelRows[0]);
     if (
-      commonRows.length === 0
-      || commonRows.length !== detailRows.length
+      modelRows.length === 0
       || ((options.purpose === 'test' || options.purpose === 'discover') && hasEmptyModelPlaceholder)
     ) {
       if (options.purpose === 'test' || options.purpose === 'discover') {
@@ -306,14 +309,13 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     const modelIds = new Set<string>();
     const modelNames = new Set<string>();
     const models: CustomProviderFormModel[] = [];
-    for (let index = 0; index < commonRows.length; index += 1) {
-      const commonRow = commonRows[index];
-      const detailRow = detailRows[index];
+    for (let index = 0; index < modelRows.length; index += 1) {
+      const modelRow = modelRows[index];
       const field = (name: string) => `models[${index}].${name}`;
-      const modelId = commonRow.querySelector<HTMLInputElement>('.cpe-model-id')?.value.trim() ?? '';
-      const modelName = commonRow.querySelector<HTMLInputElement>('.cpe-model-name')?.value.trim() ?? '';
-      const contextWindow = Number(detailRow.querySelector<HTMLInputElement>('.cpe-model-context')?.value ?? '');
-      const maxTokens = Number(detailRow.querySelector<HTMLInputElement>('.cpe-model-max')?.value ?? '');
+      const modelId = modelRow.querySelector<HTMLInputElement>('.cpe-model-id')?.value.trim() ?? '';
+      const modelName = modelRow.querySelector<HTMLInputElement>('.cpe-model-name')?.value.trim() ?? '';
+      const contextWindow = contextWindowTokenValue(modelRow.querySelector<HTMLInputElement>('.cpe-model-context')?.value ?? '');
+      const maxTokens = Number(modelRow.querySelector<HTMLInputElement>('.cpe-model-max')?.value ?? '');
       if (!modelId) fail(field('id'), '请输入 Model ID');
       else if (modelIds.has(modelId)) fail(field('id'), 'Model ID 重复');
       else modelIds.add(modelId);
@@ -321,10 +323,10 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       if (!modelName) fail(field('name'), '请输入模型名称');
       else if (modelNames.has(normalizedName)) fail(field('name'), '模型名称重复');
       else modelNames.add(normalizedName);
-      if (!Number.isInteger(contextWindow) || contextWindow <= 0) fail(field('contextWindow'), 'Context 必须是正整数');
-      if (!Number.isInteger(maxTokens) || maxTokens <= 0) fail(field('maxTokens'), 'Max tokens 必须是正整数');
+      if (!Number.isInteger(contextWindow) || contextWindow <= 0) fail(field('contextWindow'), '上下文窗口必须是正整数');
+      if (!Number.isInteger(maxTokens) || maxTokens <= 0) fail(field('maxTokens'), '最大输出 tokens 必须是正整数');
       else if (Number.isInteger(contextWindow) && contextWindow > 0 && maxTokens > contextWindow) {
-        fail(field('maxTokens'), 'Max tokens 不能超过 Context');
+        fail(field('maxTokens'), '最大输出 tokens 不能超过上下文窗口');
       }
 
       const costFields = [
@@ -335,7 +337,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       ] as const;
       const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
       for (const [costField, selector] of costFields) {
-        const amount = Number(detailRow.querySelector<HTMLInputElement>(selector)?.value ?? '');
+        const amount = Number(modelRow.querySelector<HTMLInputElement>(selector)?.value ?? '');
         if (!Number.isFinite(amount) || amount < 0) fail(field(`cost.${costField}`), '费用必须是非负数');
         else cost[costField] = amount;
       }
@@ -347,7 +349,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
         ['compatibility', '.cpe-model-compatibility', 'Compatibility JSON'],
       ] as const) {
         try {
-          const parsed = readJsonObject(detailRow.querySelector(selector), label);
+          const parsed = readJsonObject(modelRow.querySelector(selector), label);
           if (advancedField === 'samplingParams') samplingParams = parsed;
           else compatibility = parsed;
         } catch (error) {
@@ -359,8 +361,8 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
         name: modelName,
         contextWindow,
         maxTokens,
-        reasoning: detailRow.querySelector<HTMLInputElement>('.cpe-model-reasoning')?.checked ?? false,
-        input: detailRow.querySelector<HTMLInputElement>('.cpe-model-image')?.checked ? ['text', 'image'] : ['text'],
+        reasoning: modelRow.querySelector<HTMLInputElement>('.cpe-model-reasoning')?.checked ?? false,
+        input: modelRow.querySelector<HTMLInputElement>('.cpe-model-image')?.checked ? ['text', 'image'] : ['text'],
         cost,
         ...(samplingParams ? { samplingParams } : {}),
         ...(compatibility ? { compatibility } : {}),
@@ -398,20 +400,77 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     ].filter((secret): secret is string => typeof secret === 'string' && secret.length > 0);
   }
 
-  appendDiscoveredModels(ids: readonly string[]): void {
+  appendDiscoveredModels(discoveredModels: readonly CustomProviderDiscoveredModel[]): void {
     if (!this.root) return;
-    const commonRows = this.root.querySelector<HTMLElement>('.cpe-model-rows');
-    const detailRows = this.root.querySelector<HTMLElement>('.cpe-model-detail-rows');
-    if (!commonRows || !detailRows) return;
-    const currentCommonRows = [...commonRows.querySelectorAll<HTMLElement>('.cpe-model-row')];
-    const currentDetailRows = [...detailRows.querySelectorAll<HTMLElement>('.cpe-model-detail-row')];
-    if (currentCommonRows.length === 1 && currentDetailRows.length === 1
-      && isEmptyModelPlaceholder(currentCommonRows[0], currentDetailRows[0])) {
-      currentCommonRows[0].remove();
-      currentDetailRows[0].remove();
+    const rows = this.root.querySelector<HTMLElement>('.cpe-model-rows');
+    if (!rows) return;
+    const currentRows = [...rows.querySelectorAll<HTMLElement>('.cpe-model-row')];
+    if (currentRows.length === 1 && isEmptyModelPlaceholder(currentRows[0])) {
+      currentRows[0].remove();
     }
-    for (const id of ids) this.appendModelPair(commonRows, detailRows, emptyCustomProviderModel(id));
+    for (const discovered of discoveredModels) {
+      const existing = [...rows.querySelectorAll<HTMLElement>('.cpe-model-row')].find(row => (
+        row.querySelector<HTMLInputElement>('.cpe-model-id')?.value.trim() === discovered.id
+      ));
+      if (existing) {
+        this.applyDiscoveredModel(existing, discovered);
+        continue;
+      }
+      const contextWindow = discovered.contextWindow ?? 128000;
+      const maxTokens = Math.min(discovered.maxTokens ?? 8192, contextWindow);
+      this.appendModelRow(rows, {
+        id: discovered.id,
+        name: discovered.name ?? discovered.id,
+        contextWindow,
+        maxTokens,
+        reasoning: discovered.reasoning ?? false,
+        input: discovered.input?.includes('image') ? ['text', 'image'] : ['text'],
+        cost: {
+          input: discovered.cost?.input ?? 0,
+          output: discovered.cost?.output ?? 0,
+          cacheRead: discovered.cost?.cacheRead ?? 0,
+          cacheWrite: discovered.cost?.cacheWrite ?? 0,
+        },
+      }, discovered.source);
+    }
     this.refreshDynamicMetadata();
+  }
+
+  private applyDiscoveredModel(row: HTMLElement, discovered: CustomProviderDiscoveredModel): void {
+    const name = row.querySelector<HTMLInputElement>('.cpe-model-name');
+    if (discovered.name && name && (!name.value.trim() || name.value.trim() === discovered.id)) {
+      name.value = discovered.name;
+    }
+    const context = row.querySelector<HTMLInputElement>('.cpe-model-context');
+    const max = row.querySelector<HTMLInputElement>('.cpe-model-max');
+    if (context && discovered.contextWindow !== undefined) context.value = contextWindowDisplayValue(discovered.contextWindow);
+    if (max && discovered.maxTokens !== undefined) max.value = String(discovered.maxTokens);
+    if (context && max) {
+      const contextValue = contextWindowTokenValue(context.value);
+      const maxValue = Number(max.value);
+      if (Number.isSafeInteger(contextValue) && contextValue > 0 && maxValue > contextValue) {
+        max.value = String(contextValue);
+      }
+    }
+    const reasoning = row.querySelector<HTMLInputElement>('.cpe-model-reasoning');
+    if (reasoning && discovered.reasoning !== undefined) reasoning.checked = discovered.reasoning;
+    const image = row.querySelector<HTMLInputElement>('.cpe-model-image');
+    if (image && discovered.input !== undefined) image.checked = discovered.input.includes('image');
+    for (const [field, selector] of [
+      ['input', '.cpe-cost-input'],
+      ['output', '.cpe-cost-output'],
+      ['cacheRead', '.cpe-cost-cache-read'],
+      ['cacheWrite', '.cpe-cost-cache-write'],
+    ] as const) {
+      const value = discovered.cost?.[field];
+      const control = row.querySelector<HTMLInputElement>(selector);
+      if (control && value !== undefined) control.value = String(value);
+    }
+    if (discovered.source) {
+      const source = row.querySelector<HTMLElement>('.cpe-model-source') ?? formElement('div', 'cpe-model-source');
+      source.textContent = this.discoveredSourceLabel(discovered.source);
+      if (!source.isConnected) row.querySelector('.cpe-model-main-error')?.after(source);
+    }
   }
 
   setApiKey(value: string): void {
@@ -500,7 +559,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     const control = controls.find(candidate => candidate.dataset.fieldPath === normalized);
     if (control) {
       control.setAttribute('aria-invalid', 'true');
-      const advanced = control.closest<HTMLDetailsElement>('details.cpe-advanced');
+      const advanced = control.closest<HTMLDetailsElement>('details.cpe-advanced, details.cpe-model-advanced');
       if (advanced) advanced.open = true;
     }
     const target = [...(this.root?.querySelectorAll<HTMLElement>('[data-field-error]') ?? [])]
@@ -509,8 +568,14 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       target.hidden = false;
       target.textContent = message;
     } else {
-      const row = control?.closest<HTMLElement>('.cpe-header-row, .cpe-model-row, .cpe-model-detail-row');
-      const rowError = row?.querySelector<HTMLElement>('.cpe-header-error, .cpe-model-error');
+      const row = control?.closest<HTMLElement>('.cpe-header-row, .cpe-model-row');
+      const rowError = row?.classList.contains('cpe-model-row')
+        ? control?.closest('.cpe-model-main')
+          ? row.querySelector<HTMLElement>('.cpe-model-main-error')
+          : control?.closest('.cpe-model-advanced')
+            ? row.querySelector<HTMLElement>('.cpe-model-advanced-error')
+            : row.querySelector<HTMLElement>('.cpe-model-capability-error')
+        : row?.querySelector<HTMLElement>('.cpe-header-error');
       if (rowError) {
         rowError.dataset.fieldError = normalized;
         rowError.hidden = false;
@@ -686,9 +751,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     const add = this.listAddAction.create({
       label: '添加模型',
       onActivate: () => {
-        const details = this.root?.querySelector<HTMLElement>('.cpe-model-detail-rows');
-        if (!details) return;
-        this.appendModelPair(rows, details, emptyCustomProviderModel());
+        this.appendModelRow(rows, emptyCustomProviderModel());
         this.refreshDynamicMetadata();
       },
     });
@@ -697,7 +760,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     return section;
   }
 
-  private appendModelPair(commonRows: HTMLElement, detailRows: HTMLElement, model: CustomProviderFormModel): void {
+  private appendModelRow(rows: HTMLElement, model: CustomProviderFormModel, source?: CustomProviderDiscoveredModel['source']): void {
     const key = String(this.modelSequence++);
     const row = formElement('div', 'cpe-model-row');
     row.dataset.modelKey = key;
@@ -710,29 +773,43 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     remove.title = '删除模型';
     remove.setAttribute('aria-label', '删除模型');
     main.append(id, name, remove);
-    row.append(main, formElement('span', 'cpe-field-error cpe-model-error'));
-    commonRows.append(row);
-
-    const detail = formElement('div', 'cpe-model-detail-row');
-    detail.dataset.modelKey = key;
+    row.append(main, formElement('span', 'cpe-field-error cpe-model-error cpe-model-main-error'));
+    if (source) {
+      row.append(formElement('div', 'cpe-model-source', this.discoveredSourceLabel(source)));
+    }
     const limits = formElement('div', 'cpe-model-grid');
     limits.append(
-      this.miniField('Context', 'cpe-model-context', String(model.contextWindow), 'number'),
-      this.miniField('Max tokens', 'cpe-model-max', String(model.maxTokens), 'number'),
-      this.checkboxField('Reasoning', 'cpe-model-reasoning', model.reasoning),
-      this.checkboxField('Image input', 'cpe-model-image', model.input.includes('image')),
+      this.miniField('上下文窗口 (k)', 'cpe-model-context', contextWindowDisplayValue(model.contextWindow), 'number'),
+      this.miniField('最大输出 tokens', 'cpe-model-max', String(model.maxTokens), 'number'),
+      this.checkboxField('推理', 'cpe-model-reasoning', model.reasoning),
+      this.checkboxField('图片输入', 'cpe-model-image', model.input.includes('image')),
     );
-    const advanced = formElement('div', 'cpe-advanced-grid');
-    advanced.append(
-      this.miniField('Input USD / 1M', 'cpe-cost-input', String(model.cost.input), 'number'),
-      this.miniField('Output USD / 1M', 'cpe-cost-output', String(model.cost.output), 'number'),
-      this.miniField('Cache read USD / 1M', 'cpe-cost-cache-read', String(model.cost.cacheRead), 'number'),
-      this.miniField('Cache write USD / 1M', 'cpe-cost-cache-write', String(model.cost.cacheWrite), 'number'),
+    const advanced = formElement('details', 'cpe-model-advanced');
+    advanced.append(formElement('summary', undefined, '费用与高级参数'));
+    const advancedGrid = formElement('div', 'cpe-advanced-grid');
+    advancedGrid.append(
+      this.miniField('输入 USD / 1M', 'cpe-cost-input', String(model.cost.input), 'number'),
+      this.miniField('输出 USD / 1M', 'cpe-cost-output', String(model.cost.output), 'number'),
+      this.miniField('缓存读取 USD / 1M', 'cpe-cost-cache-read', String(model.cost.cacheRead), 'number'),
+      this.miniField('缓存写入 USD / 1M', 'cpe-cost-cache-write', String(model.cost.cacheWrite), 'number'),
       this.jsonField('Sampling JSON', 'cpe-model-sampling', model.samplingParams),
       this.jsonField('Compatibility JSON', 'cpe-model-compatibility', model.compatibility),
     );
-    detail.append(limits, advanced, formElement('span', 'cpe-field-error cpe-model-error'));
-    detailRows.append(detail);
+    advanced.append(advancedGrid, formElement('span', 'cpe-field-error cpe-model-error cpe-model-advanced-error'));
+    row.append(
+      limits,
+      formElement('span', 'cpe-field-error cpe-model-error cpe-model-capability-error'),
+      advanced,
+    );
+    rows.append(row);
+  }
+
+  private discoveredSourceLabel(source: NonNullable<CustomProviderDiscoveredModel['source']>): string {
+    return source === 'provider'
+      ? '能力与费用已从模型接口自动识别'
+      : source === 'provider+catalog'
+        ? '能力由模型接口与目录共同补全'
+        : '能力已从模型目录自动补全';
   }
 
   private miniField(labelText: string, className: string, value: string, type: string): HTMLElement {
@@ -787,9 +864,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       this.refreshDynamicMetadata();
     } else if (action === 'remove-model') {
       const row = target.closest<HTMLElement>('.cpe-model-row');
-      const key = row?.dataset.modelKey;
       row?.remove();
-      if (key) this.root?.querySelector<HTMLElement>(`.cpe-model-detail-row[data-model-key="${key}"]`)?.remove();
       this.refreshDynamicMetadata();
     }
   }
@@ -864,8 +939,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       }
     });
 
-    const commonRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-row')];
-    const detailRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-detail-row')];
+    const modelRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-row')];
     const detailFields: Array<[string, string]> = [
       ['.cpe-model-context', 'contextWindow'],
       ['.cpe-model-max', 'maxTokens'],
@@ -878,7 +952,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       ['.cpe-model-sampling', 'samplingParams'],
       ['.cpe-model-compatibility', 'compatibility'],
     ];
-    commonRows.forEach((row, index) => {
+    modelRows.forEach((row, index) => {
       const number = index + 1;
       const id = row.querySelector<HTMLElement>('.cpe-model-id');
       const name = row.querySelector<HTMLElement>('.cpe-model-name');
@@ -890,17 +964,14 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
         name.dataset.fieldPath = `models[${index}].name`;
         name.setAttribute('aria-label', `模型 ${number} name`);
       }
-      this.reindexModelError(row.querySelector<HTMLElement>('.cpe-model-error'), index);
+      row.querySelectorAll<HTMLElement>('.cpe-model-error').forEach(error => this.reindexModelError(error, index));
       const remove = row.querySelector<HTMLButtonElement>('[data-cpe-action="remove-model"]');
       if (remove) {
         remove.title = `删除模型 ${number}`;
         remove.setAttribute('aria-label', `删除模型 ${number}`);
       }
-      const detail = detailRows[index];
-      if (!detail) return;
-      this.reindexModelError(detail.querySelector<HTMLElement>('.cpe-model-error'), index);
       for (const [selector, field] of detailFields) {
-        const control = detail.querySelector<HTMLElement>(selector);
+        const control = row.querySelector<HTMLElement>(selector);
         if (!control) continue;
         control.dataset.fieldPath = `models[${index}].${field}`;
         control.setAttribute('aria-label', `模型 ${number} ${field}`);

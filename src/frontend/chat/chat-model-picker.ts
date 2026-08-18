@@ -20,6 +20,9 @@ const { chat: modelPickerChat, chatState: modelPickerChatState } = chatModelPick
 class ChatModelPickerView {
   private picker: HTMLElement | null = null;
   private outsideClick: ((event: MouseEvent) => void) | null = null;
+  private openGeneration = 0;
+  private pendingTarget: HTMLElement | null = null;
+  private anchorTarget: HTMLElement | null = null;
 
   open(event: MouseEvent): void {
     const existing = $('model-picker');
@@ -29,30 +32,54 @@ class ChatModelPickerView {
       return;
     }
 
+    // A previous request may still be waiting for /api/models. Treat opening
+    // again as a toggle and cancel that request before starting a new one.
+    if (this.pendingTarget) {
+      this.close();
+      return;
+    }
+
     const target = (event.currentTarget as HTMLElement | null) || $('fi-model-btn');
     if (!target) return;
+    const generation = ++this.openGeneration;
+    this.pendingTarget = target;
+    this.anchorTarget = target;
+    this.outsideClick = (outsideEvent: MouseEvent) => {
+      const node = outsideEvent.target as Node | null;
+      if (this.picker?.contains(node) || this.anchorTarget?.contains(node)) return;
+      this.close();
+    };
+    document.addEventListener('pointerdown', this.outsideClick, true);
     fetch('/api/models').then(response => response.json()).then((data: { models?: ChatPickerModel[] }) => {
+      if (generation !== this.openGeneration || !this.pendingTarget) return;
       if (!data.models || !data.models.length) {
         toast('没有可用模型');
+        this.close();
         return;
       }
-      this.render(data.models, target);
+      this.render(data.models, target, generation);
     }).catch((error) => {
+      if (generation !== this.openGeneration) return;
       console.error('[model picker]', error);
       toast('加载模型列表失败');
+      this.close();
     });
   }
 
   close(): void {
     this.picker?.remove();
     this.picker = null;
+    this.pendingTarget = null;
+    this.anchorTarget = null;
+    this.openGeneration += 1;
     if (this.outsideClick) {
-      document.removeEventListener('click', this.outsideClick, true);
+      document.removeEventListener('pointerdown', this.outsideClick, true);
       this.outsideClick = null;
     }
   }
 
-  private render(models: ChatPickerModel[], target: HTMLElement): void {
+  private render(models: ChatPickerModel[], target: HTMLElement, generation: number): void {
+    if (generation !== this.openGeneration || this.pendingTarget !== target) return;
     const rect = target.getBoundingClientRect();
     const picker = document.createElement('div');
     picker.id = 'model-picker';
@@ -79,12 +106,7 @@ class ChatModelPickerView {
     modelPickerChat?.mountThinkingControl?.(picker);
     document.body.appendChild(picker);
     this.picker = picker;
-    this.outsideClick = (event: MouseEvent) => {
-      if (!picker.contains(event.target as Node) && event.target !== target) this.close();
-    };
-    setTimeout(() => {
-      if (this.outsideClick) document.addEventListener('click', this.outsideClick, true);
-    }, 0);
+    this.pendingTarget = null;
   }
 
   private appendModel(list: HTMLElement, provider: string, model: ChatPickerModel): void {

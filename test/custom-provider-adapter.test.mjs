@@ -727,6 +727,17 @@ function expectedModel(input, provider) {
     provider: provider.id,
     baseUrl: provider.baseUrl,
     reasoning: input.reasoning,
+    ...(input.reasoning ? {
+      thinkingLevelMap: {
+        off: null,
+        minimal: "minimal",
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: "xhigh",
+        max: "max",
+      },
+    } : {}),
     input: input.input,
     cost: input.cost,
     contextWindow: input.contextWindow,
@@ -926,6 +937,23 @@ describe("PiCustomProviderAdapter", () => {
       assert.equal(provider.baseUrl, input.baseUrl)
       assert.deepEqual(provider.getModels(), [expectedModel(input.models[0], input)])
     }
+  })
+
+  it("exposes extended thinking levels for reasoning custom models", () => {
+    const adapter = new PiCustomProviderAdapter()
+    const prepared = adapter.prepare(definition({
+      models: [model({ id: "5.6-sol", name: "5.6-sol", reasoning: true })],
+    }), secrets())
+
+    assert.deepEqual(prepared.models[0].thinkingLevelMap, {
+      off: null,
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    })
   })
 
   it("rejects Google as a typed unsupported custom protocol", () => {
