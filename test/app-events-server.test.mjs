@@ -249,6 +249,16 @@ describe("AppEventHub", () => {
     assert.deepStrictEqual(await pending, { allow: false });
   });
 
+  it("includes request correlation on a connected SSE frame", () => {
+    const hub = new AppEventHub();
+    const request = makeRequest();
+    const response = makeResponse();
+    openAppEventStream(request, response, hub, {}, { requestId: "req-1", traceId: "trace-1" });
+    assert.deepStrictEqual(response.writes, [
+      'data: {"type":"connected","revision":0,"requestId":"req-1","traceId":"trace-1"}\n\n',
+    ]);
+  });
+
   it("fails a pending permission confirmation closed when a later publish evicts its client", async () => {
     const hub = new AppEventHub();
     const response = makeResponse();

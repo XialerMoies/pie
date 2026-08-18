@@ -290,6 +290,23 @@ describe("Chat SSE", () => {
     assert.deepStrictEqual(confirmed, { allow: false });
   });
 
+  it("SSE disconnect cancels command confirmations bound to that response", async () => {
+    const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" };
+    const ctx = {
+      runtime: { session: { model: {} }, currentWorkspace: "", switchWorkspace: async () => {}, onEvent: () => () => {} },
+      paths: { APP_ROOT: ROOT },
+      chatStream,
+      sseClients: [],
+    };
+    const sseRes = makeResWithEvents();
+    const sseReq = makeReq("GET", "/api/chat/stream");
+    await handleChat(sseReq, sseRes, ctx);
+
+    const pending = createCommandConfirmCallback(chatStream)("echo disconnect", "需要确认");
+    sseReq.emitClose();
+    assert.deepStrictEqual(await pending, { allow: false });
+  });
+
   it("command confirm preserves workspace scope from POST", async () => {
     const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" };
     const ctx = {

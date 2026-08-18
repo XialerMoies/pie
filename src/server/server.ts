@@ -9,7 +9,7 @@
  */
 import { initAgent, type AgentRuntime } from "../agent/index.js";
 import { createServer, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from "http";
-import { resolve, dirname } from "path";
+import { resolve, dirname, join } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from "fs";
 import { dispatchRoute } from "./routes/index.js";
@@ -66,6 +66,7 @@ import { CustomProviderRuntimeCoordinator } from "../model-provider/runtime-coor
 import { ProviderReferenceChecker } from "../model-provider/provider-reference-checker.js";
 import { CustomProviderService } from "../model-provider/custom-provider-service.js";
 import { FileProviderReferenceMutationLock } from "../model-provider/provider-reference-lock.js";
+import { createRequestContext, safeRequestUrl, StructuredLogger } from "./observability.js";
 
 import { attachSessionEvents, recordUserNoteBlock } from "./agent-event-router.js";
 export { attachSessionEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
@@ -75,6 +76,7 @@ export function openAppEventStream(
   res: ServerResponse,
   appEvents: AppEventHub,
   cors: OutgoingHttpHeaders,
+  correlation?: { requestId: string; traceId: string },
 ): void {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -82,7 +84,11 @@ export function openAppEventStream(
     Connection: "keep-alive",
     ...cors,
   });
-  res.write(`data: ${JSON.stringify({ type: "connected", revision: appEvents.revision() })}\n\n`);
+  res.write(`data: ${JSON.stringify({
+    type: "connected",
+    revision: appEvents.revision(),
+    ...(correlation ?? {}),
+  })}\n\n`);
   appEvents.addClient(res);
   req.on("close", () => {
     appEvents.removeClient(res);
@@ -143,6 +149,15 @@ async function releaseActiveWorkspaceLock(): Promise<void> {
 
 // ─── 启动 Pi ──────────────────────────────────────────────────────
 async function main() {
+  const startedAt = Date.now();
+  const logger = new StructuredLogger({
+    filePath: join(STARTUP.layout.instanceRoot, "server.log.jsonl"),
+  });
+  const observability = {
+    logger,
+    appVersion: process.env.npm_package_version || "0.1.0",
+    startedAt,
+  };
   mark("server_start");
   console.log("Starting Pi server...");
 
@@ -321,6 +336,7 @@ async function main() {
     workspaceLock,
     customProviderService,
     providerReferenceLock,
+    observability,
     rootRegistry,
     recordUserNote: (note) => recordUserNoteBlock(runtime, chatStream, note, {
       authorizeSessionWrite: (sessionFile, source) => {
@@ -411,6 +427,27 @@ async function main() {
   // ─── HTTP 服务器 ─────────────────────────────────────────────
   const server = createServer(async (req, res) => {
     const url = req.url ?? "/";
+    const requestContext = createRequestContext(req);
+    const requestStartedAt = Date.now();
+    (req as IncomingMessage & { requestContext?: typeof requestContext }).requestContext = requestContext;
+    res.setHeader("X-Request-Id", requestContext.requestId);
+    res.setHeader("X-Trace-Id", requestContext.traceId);
+    logger.info("http.request.start", { method: req.method, url: safeRequestUrl(url) }, requestContext);
+    res.once("finish", () => {
+      logger.info("http.request.finish", {
+        method: req.method,
+        url: safeRequestUrl(url),
+        status: res.statusCode,
+        durationMs: Math.max(0, Date.now() - requestStartedAt),
+      }, requestContext);
+    });
+    res.once("close", () => {
+      if (!res.writableEnded) logger.warn("http.request.aborted", {
+        method: req.method,
+        url: safeRequestUrl(url),
+        durationMs: Math.max(0, Date.now() - requestStartedAt),
+      }, requestContext);
+    });
     const cors = { "Access-Control-Allow-Origin": "*" };
     installSecurityHeaders(req, res, ctx.security);
 
@@ -492,13 +529,28 @@ async function main() {
 
     // SSE: 文件变更事件
     if (url === "/api/events" && req.method === "GET") {
-      openAppEventStream(req, res, appEvents, cors);
+      openAppEventStream(req, res, appEvents, cors, requestContext);
       return;
     }
 
     // 领域路由分发
-    const handled = await dispatchRoute(req, res, ctx);
-    if (handled) return;
+    try {
+      const handled = await dispatchRoute(req, res, ctx);
+      if (handled) return;
+    } catch (error) {
+      logger.error("http.request.error", {
+        method: req.method,
+        url: safeRequestUrl(url),
+        error: error instanceof Error ? error.message : String(error),
+      }, requestContext);
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: "Internal server error", requestId: requestContext.requestId }));
+      } else {
+        try { res.end(); } catch {}
+      }
+      return;
+    }
 
     // 404
     res.writeHead(404);
@@ -551,6 +603,7 @@ async function main() {
       } catch (error) {
         console.error("Failed to flush permission audit:", error);
       }
+      await logger.flush();
       try {
         await openedWorkspaceRecordTail;
       } catch (error) {

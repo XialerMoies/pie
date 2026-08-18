@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { withFileLock, type FileLockOptions } from "./file-lock.js";
+import { createJsonBackup, readJsonBackup } from "./backup-store.js";
 
 export interface LockedJsonStoreOptions {
   lock?: FileLockOptions;
@@ -24,8 +25,12 @@ async function readJson<T>(
   try {
     return JSON.parse(await readFile(filePath, "utf8")) as T;
   } catch (error: any) {
-    if (error?.code === "ENOENT" || recoverInvalidJson && error instanceof SyntaxError) {
+    if (error?.code === "ENOENT") {
       return fallbackValue(fallback);
+    }
+    if (recoverInvalidJson && error instanceof SyntaxError) {
+      const backup = await readJsonBackup<T>(filePath);
+      return backup ?? fallbackValue(fallback);
     }
     throw error;
   }
@@ -63,6 +68,7 @@ export async function updateLockedJson<T>(
       }
     }
 
+    await createJsonBackup(filePath, updated);
     return updated;
   });
 }

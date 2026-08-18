@@ -280,6 +280,9 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
     else writeChatStreamBaseline(chatStream, res);
     req.on("close", () => {
       console.log(`[chat] SSE disconnected`);
+      // A disconnected browser can no longer answer a command confirmation.
+      // Remove its waiters immediately instead of keeping them until timeout.
+      cancelCommandConfirmationsForResponse(res);
       if (chatStream.response === res) chatStream.response = null;
     });
     return true;

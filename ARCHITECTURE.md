@@ -148,7 +148,11 @@ The normal gates are:
 npm run typecheck
 npm test
 npm run build
+npm run release:check  # typecheck + test + build + smoke + packaged Electron E2E
 ```
 
 Focused security suites are useful during development but do not replace the
-full release gate or packaged desktop E2E.
+full release gate or packaged desktop E2E. The server also emits structured
+request/trace-correlated JSONL records and exposes an authenticated,
+redacted `/api/diagnostics` export. JSON persistence uses atomic replacement
+and a last-known-good `.bak` recovery path where the caller enables recovery.

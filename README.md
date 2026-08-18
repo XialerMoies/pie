@@ -152,7 +152,14 @@ npm run dist:portable
 npm test            # 全量 1534 项测试（unit + routes + workspace-lock + frontend）
 npm run test:build  # 构建验证 + smoke test
 npm run typecheck   # TypeScript 类型检查
+npm run release:check # 正式发布门禁：typecheck + test + build + smoke + packaged Electron E2E
 ```
+
+`release:check` 按顺序执行所有发布门禁，任一项失败都会立即停止：类型检查、全量测试、生产构建、构建 smoke，以及目录打包后的 Electron E2E。发布桌面版本前应使用该命令，而不是只运行 `npm test`。
+
+真实供应商矩阵使用 `npm run test:provider:live` 执行，凭据只从环境变量读取，不写入配置或诊断日志。先设置 `PROVIDER_MATRIX_FILE`，文件格式为 `{ "providers": [{ "id": "openai", "protocol": "openai-responses", "baseUrl": "https://api.openai.com/v1", "apiKeyEnv": "OPENAI_API_KEY" }] }`；未设置时测试会明确跳过。设置该变量后，`release:check` 会自动把真实供应商矩阵加入发布门禁。
+
+服务端会在当前实例目录写入结构化 JSONL 日志；带桌面认证访问 `/api/diagnostics` 可导出经过脱敏和大小限制的诊断 JSON。持久化 JSON 使用原子替换，并在成功写入后保留 `.bak`；主文件损坏时，启用恢复策略的读取会优先使用最后一个有效备份。
 
 | 套件 | 数量 | 覆盖 |
 |------|------|------|
