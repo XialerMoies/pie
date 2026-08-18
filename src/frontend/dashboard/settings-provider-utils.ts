@@ -27,18 +27,6 @@ function deriveProviderId(name: string, existingIds: Iterable<string>): string {
   return `${baseId}-${suffix}`;
 }
 
-function deriveOpenAiDiscoveryPath(baseUrl: string): string | null {
-  try {
-    const parsed = new URL(baseUrl);
-    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) return null;
-
-    const basePath = parsed.pathname.replace(/\/+$/, "");
-    return `${basePath}/models`;
-  } catch {
-    return null;
-  }
-}
-
 function providerHost(baseUrl: string): string {
   try {
     return new URL(baseUrl).hostname;
@@ -66,7 +54,6 @@ function identity(providerId: string, name: string, isCustom: boolean): Provider
 
 export const ProviderSettingsUtils = Object.freeze({
   deriveProviderId,
-  deriveOpenAiDiscoveryPath,
   providerHost,
   identity,
 });

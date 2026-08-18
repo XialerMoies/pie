@@ -63,12 +63,12 @@ function deleteInput(value: unknown): CustomProviderDeleteInput {
   return { expectedRevision: value.expectedRevision as number };
 }
 
-function networkDraftInput(value: unknown, options: { allowDiscoverySentinel?: boolean } = {}) {
+function networkDraftInput(value: unknown, options: { allowNetworkSentinel?: boolean } = {}) {
   if (!isRecord(value)) throw new CustomProviderInvalidRequestError();
   const unknown = Object.keys(value).find((key) => key !== "provider");
   if (unknown) throw new CustomProviderInvalidRequestError("request");
   const draft = validateCustomProviderDraft(value.provider);
-  if (options.allowDiscoverySentinel && isDiscoverySentinelOnly(draft.models)) return draft;
+  if (options.allowNetworkSentinel && isDiscoverySentinelOnly(draft.models)) return draft;
   return rejectDiscoverySentinel(draft);
 }
 
@@ -281,7 +281,7 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
     if (route.kind === "test" || route.kind === "discover") {
       const lifecycle = createRequestLifecycleScope(req, res);
       try {
-        const draft = networkDraftInput(await parseBody(req), { allowDiscoverySentinel: route.kind === "discover" });
+        const draft = networkDraftInput(await parseBody(req), { allowNetworkSentinel: true });
         await authorizeStoredCredentialsIfNeeded(ctx, draft);
         const result = route.kind === "test"
           ? await service.testConnection(draft, lifecycle.signal)

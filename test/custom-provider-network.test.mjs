@@ -1,5 +1,4 @@
 import { once } from "node:events";
-import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -64,96 +63,95 @@ async function captureError(operation) {
   assert.fail("expected operation to fail");
 }
 
-function runStrictAbortLifecycleProbe() {
-  const moduleUrl = new URL("../src/model-provider/provider-network-client.ts", import.meta.url).href;
-  const input = resolvedDraft("https://api.example.test/v1/");
-  const source = `
-    import assert from "node:assert/strict";
-    const { ProviderNetworkClient } = await import(${JSON.stringify(moduleUrl)});
-    const input = ${JSON.stringify(input)};
-    const abortSecret = "abort-reason-sensitive-fixture";
-    let unhandledRejections = 0;
-    process.on("unhandledRejection", () => { unhandledRejections += 1; });
-
-    function assertStable(value, code) {
-      const serialized = JSON.stringify(value);
-      assert.equal(value.code, code);
-      assert.equal(serialized.includes(abortSecret), false);
-      assert.equal(serialized.includes(input.secrets.apiKey), false);
-      assert.equal(serialized.includes(input.secrets.headers["X-Tenant"]), false);
-    }
-
-    {
-      const controller = new AbortController();
-      controller.abort(new Error(abortSecret));
-      let fetchCalls = 0;
-      const client = new ProviderNetworkClient({
-        fetch: async (_url, init) => {
-          fetchCalls += 1;
-          throw init.signal.reason;
-        },
-      });
-      let error;
-      try {
-        await client.discoverModels(input, controller.signal);
-      } catch (caught) {
-        error = caught;
-      }
-      assertStable(error, "aborted");
-      assert.equal(fetchCalls, 1);
-    }
-
-    for (const cancellation of ["caller", "timeout"]) {
-      let rejectRuntime;
-      const runtimePromise = new Promise((_resolve, reject) => { rejectRuntime = reject; });
-      const controller = new AbortController();
-      const client = new ProviderNetworkClient({
-        timeoutMs: cancellation === "timeout" ? 20 : 1_000,
-        runtimeFactory: () => runtimePromise,
-      });
-      const pending = client.testConnection(input, controller.signal);
-      if (cancellation === "caller") controller.abort(new Error(abortSecret));
-      let guard;
-      const result = await Promise.race([
-        pending,
-        new Promise((_resolve, reject) => {
-          guard = setTimeout(() => reject(new Error(cancellation + " did not settle")), 500);
-        }),
-      ]);
-      clearTimeout(guard);
-      assertStable(result, cancellation === "caller" ? "aborted" : "timeout");
-      rejectRuntime(new Error(abortSecret));
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-
-    let runtimeCalls = 0;
-    const controller = new AbortController();
-    controller.abort(new Error(abortSecret));
-    const result = await new ProviderNetworkClient({
-      runtimeFactory: async () => {
-        runtimeCalls += 1;
-        throw new Error("runtime must not start");
-      },
-    }).testConnection(input, controller.signal);
-    assertStable(result, "aborted");
-    assert.equal(runtimeCalls, 0);
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(unhandledRejections, 0);
-    console.log(JSON.stringify({ code: result.code, runtimeCalls, unhandledRejections }));
-  `;
-  return spawnSync(process.execPath, [
-    "--unhandled-rejections=strict",
-    "--import", "tsx",
-    "--input-type=module",
-    "--eval", source,
-  ], {
-    cwd: new URL("..", import.meta.url),
-    encoding: "utf8",
-    timeout: 10_000,
-  });
-}
-
 describe("ProviderNetworkClient model discovery", () => {
+  it("automatically tries /v1/models then /models when no discovery path is configured", async () => {
+    const requests = [];
+    const server = await fixture((req, res) => {
+      requests.push(req.url);
+      if (req.url === "/v1/models") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      assert.equal(req.url, "/models");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: " model-a " }, { id: "model-b" }, { id: "model-a" }] }));
+    });
+    try {
+      const draft = resolvedDraft(`${server.origin}/`, { provider: { modelDiscovery: undefined } });
+      assert.deepEqual(await new ProviderNetworkClient().discoverModels(draft), { ids: ["model-a", "model-b"] });
+      assert.deepEqual(requests, ["/v1/models", "/models"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("derives versioned and compatibility-path candidates without leaving the provider origin", async () => {
+    const cases = [
+      { basePath: "/v4", expected: ["/v4/models"] },
+      { basePath: "/api/anthropic", expected: ["/api/anthropic/v1/models", "/api/anthropic/models", "/v1/models"] },
+    ];
+    for (const testCase of cases) {
+      const requests = [];
+      const server = await fixture((req, res) => {
+        requests.push(req.url);
+        if (req.url === testCase.expected.at(-1)) {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end('{"data":[{"id":"derived-model"}]}');
+          return;
+        }
+        res.writeHead(404);
+        res.end();
+      });
+      try {
+        const draft = resolvedDraft(`${server.origin}${testCase.basePath}`, {
+          provider: { modelDiscovery: undefined },
+        });
+        assert.deepEqual(await new ProviderNetworkClient().discoverModels(draft), { ids: ["derived-model"] });
+        assert.deepEqual(requests, testCase.expected);
+        assert.ok(requests.every(path => path.startsWith("/")));
+      } finally {
+        await server.close();
+      }
+    }
+  });
+
+  it("uses protocol authentication headers and lets custom headers override defaults", async () => {
+    for (const [protocol, defaultHeader] of [
+      ["anthropic-messages", "x-api-key"],
+      ["azure-openai-responses", "api-key"],
+    ]) {
+      let received;
+      const server = await fixture((req, res) => {
+        received = req.headers;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"data":[{"id":"header-model"}]}');
+      });
+      try {
+        const draft = resolvedDraft(`${server.origin}/v1`, {
+          provider: {
+            protocol,
+            modelDiscovery: undefined,
+            headers: ["X-Tenant", defaultHeader],
+          },
+          secrets: {
+            apiKey: "protocol-key",
+            headers: {
+              "X-Tenant": "tenant-value",
+              [defaultHeader]: "custom-auth-value",
+            },
+          },
+        });
+        assert.deepEqual(await new ProviderNetworkClient().discoverModels(draft), { ids: ["header-model"] });
+        assert.equal(received[defaultHeader], "custom-auth-value");
+        assert.equal(received["x-tenant"], "tenant-value");
+        assert.equal(received.authorization, undefined);
+      } finally {
+        await server.close();
+      }
+    }
+  });
+
   it("runs only when explicitly called and parses unique non-empty OpenAI model IDs", async () => {
     let requests = 0;
     const server = await fixture((req, res) => {
@@ -430,18 +428,61 @@ describe("ProviderNetworkClient model discovery", () => {
 });
 
 describe("ProviderNetworkClient isolated connection test", () => {
-  it("observes pre-cancelled and late-settling operations without unhandled rejections", () => {
-    const child = runStrictAbortLifecycleProbe();
-
-    assert.equal(child.status, 0, `${child.stdout}\n${child.stderr}`);
-    assert.deepEqual(JSON.parse(child.stdout.trim()), {
-      code: "aborted",
-      runtimeCalls: 0,
-      unhandledRejections: 0,
+  it("probes a provider with GET without a model or runtime and reports HTTP reachability", async () => {
+    let request;
+    const server = await fixture((req, res) => {
+      request = { method: req.method, path: req.url, authorization: req.headers.authorization };
+      res.writeHead(401);
+      res.end();
     });
+    try {
+      const result = await new ProviderNetworkClient().testConnection(resolvedDraft(`${server.origin}/v1`, {
+        provider: { models: [], modelDiscovery: undefined },
+        modelId: undefined,
+      }));
+      assert.deepEqual(
+        { ok: result.ok, reachable: result.reachable, httpStatus: result.httpStatus, code: result.code },
+        { ok: false, reachable: true, httpStatus: 401, code: "authentication" },
+      );
+      assert.equal(request.method, "GET");
+      assert.equal(request.path, "/v1");
+      assert.equal(request.authorization, "Bearer api-key-network-fixture");
+    } finally {
+      await server.close();
+    }
   });
 
-  it("rejects every redirect status without forwarding credentials to another origin", async () => {
+  it("marks HTTP errors reachable while preserving transport failures as unreachable", async () => {
+    for (const status of [404, 500]) {
+      const server = await fixture((_req, res) => {
+        res.writeHead(status);
+        res.end();
+      });
+      try {
+        const result = await new ProviderNetworkClient().testConnection(
+          resolvedDraft(`${server.origin}/v1`, { modelId: undefined }),
+        );
+        assert.equal(result.ok, false);
+        assert.equal(result.reachable, true);
+        assert.equal(result.httpStatus, status);
+        assert.equal(result.code, "upstream");
+      } finally {
+        await server.close();
+      }
+    }
+
+    const result = await new ProviderNetworkClient({
+      fetch: async () => {
+        throw new TypeError("fetch failed", { cause: Object.assign(new Error("dns"), { code: "ENOTFOUND" }) });
+      },
+    }).testConnection(resolvedDraft("https://api.example.test/v1", { modelId: undefined }));
+    assert.equal(result.ok, false);
+    assert.equal(result.reachable, false);
+    assert.equal(result.code, "dns");
+    assert.equal(result.httpStatus, undefined);
+  });
+
+  it("reports redirects as reachable without forwarding credentials", async () => {
     for (const status of [301, 302, 303, 307, 308]) {
       const forwarded = [];
       const target = await fixture((req, res) => {
@@ -457,7 +498,9 @@ describe("ProviderNetworkClient isolated connection test", () => {
       });
       try {
         const result = await new ProviderNetworkClient().testConnection(resolvedDraft(`${source.origin}/v1`));
-        assert.equal(result.ok, false, `status ${status} must fail`);
+        assert.equal(result.ok, false, `status ${status} must not be considered an OK response`);
+        assert.equal(result.reachable, true);
+        assert.equal(result.httpStatus, status);
         assert.equal(result.code, "upstream");
         assert.deepEqual(forwarded, [], `status ${status} forwarded credentials cross-origin`);
       } finally {
@@ -467,174 +510,41 @@ describe("ProviderNetworkClient isolated connection test", () => {
     }
   });
 
-  it("uses the request-local manual-redirect transport for all six custom protocols", async () => {
-    const originalFetch = globalThis.fetch;
+  it("uses a manual GET probe for all six custom protocols", async () => {
     const fetchCalls = [];
-    const runtime = {
-      getModel: (providerId, modelId) => ({ provider: providerId, id: modelId }),
-      async completeSimple(_selectedModel, _context, options) {
-        assert.equal(typeof options.fetch, "function");
-        try {
-          await options.fetch("https://api.example.test/v1/request", { method: "POST" });
-        } catch (error) {
-          return {
-            stopReason: "error",
-            errorMessage: error.message,
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          };
-        }
-        assert.fail("redirect transport must reject");
-      },
-    };
     const client = new ProviderNetworkClient({
       fetch: async (input, init) => {
-        fetchCalls.push({ url: new Request(input, init).url, redirect: init?.redirect });
-        return new Response(null, { status: 307, headers: { location: "https://other.example.test/" } });
+        fetchCalls.push({ url: new Request(input, init).url, method: init?.method, redirect: init?.redirect });
+        return new Response(null, { status: 204 });
       },
-      runtimeFactory: async () => runtime,
-      adapterFactory: () => ({
-        prepare: (definition) => ({ providerId: definition.id, models: definition.models }),
-        replaceRuntimeProviders: async () => {},
-        toProviderUsage: (usage) => usage,
-      }),
     });
 
     for (const protocol of PROVIDER_PROTOCOLS) {
       const result = await client.testConnection(resolvedDraft("https://api.example.test/v1/", {
         provider: { protocol },
       }));
-      assert.equal(result.ok, false, protocol);
-      assert.equal(result.code, "upstream", protocol);
+      assert.equal(result.ok, true, protocol);
+      assert.equal(result.reachable, true, protocol);
     }
 
-    assert.equal(globalThis.fetch, originalFetch);
     assert.equal(fetchCalls.length, PROVIDER_PROTOCOLS.length);
+    assert.deepEqual(fetchCalls.map((entry) => entry.method), PROVIDER_PROTOCOLS.map(() => "GET"));
     assert.deepEqual(fetchCalls.map((entry) => entry.redirect), PROVIDER_PROTOCOLS.map(() => "manual"));
   });
 
-  it("runs the default PI runtime and adapter against an isolated local provider", async () => {
-    let requestBody;
-    const server = await fixture(async (req, res) => {
-      assert.equal(req.url, "/v1/chat/completions");
-      assert.equal(req.headers.authorization, "Bearer api-key-network-fixture");
-      assert.equal(req.headers["x-tenant"], "header-network-fixture");
-      const chunks = [];
-      for await (const chunk of req) chunks.push(chunk);
-      requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      res.writeHead(200, { "content-type": "text/event-stream" });
-      res.write('data: {"id":"test","object":"chat.completion.chunk","created":1,"model":"model-a","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}\n\n');
-      res.write('data: {"id":"test","object":"chat.completion.chunk","created":1,"model":"model-a","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":1}}}\n\n');
-      res.end("data: [DONE]\n\n");
-    });
-    try {
-      const result = await new ProviderNetworkClient().testConnection(resolvedDraft(`${server.origin}/v1`));
-      assert.deepEqual(result, {
-        ok: true,
-        providerId: "acme",
-        modelId: "model-a",
-        latencyMs: result.latencyMs,
-        usage: { input: 3, output: 2, cacheRead: 1, cacheWrite: 0, reasoning: 0 },
-      });
-      assert.ok(result.latencyMs >= 0);
-      assert.equal(requestBody.model, "model-a");
-      assert.equal(requestBody.messages.length, 1);
-      assert.equal(requestBody.messages[0].role, "user");
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("registers only the in-memory draft, selects its explicit model, and normalizes usage", async () => {
-    const events = [];
-    const currentRuntime = { setModel() { assert.fail("current runtime must not be changed"); } };
-    const store = { commit() { assert.fail("connection test must not persist"); } };
-    void currentRuntime;
-    void store;
-    const isolatedRuntime = {
-      getModel(providerId, modelId) {
-        events.push(["getModel", providerId, modelId]);
-        return { provider: providerId, id: modelId };
-      },
-      async completeSimple(selectedModel, context, options) {
-        events.push(["completeSimple", selectedModel, context, options.signal.aborted]);
-        return {
-          provider: selectedModel.provider,
-          model: selectedModel.id,
-          stopReason: "stop",
-          usage: { input: 3, output: 2, cacheRead: 1, cacheWrite: 0, reasoning: 4 },
-        };
-      },
-    };
-    const adapter = {
-      prepare(definition, secrets) {
-        events.push(["prepare", definition.id, secrets.apiKey, secrets.headers["X-Tenant"]]);
-        return { providerId: definition.id, models: definition.models };
-      },
-      async replaceRuntimeProviders(runtime, prepared) {
-        events.push(["replace", runtime, prepared.map((entry) => entry.providerId)]);
-      },
-      toProviderUsage(usage) {
-        return {
-          input: usage.input,
-          output: usage.output,
-          cacheRead: usage.cacheRead,
-          cacheWrite: usage.cacheWrite,
-          reasoning: usage.reasoning,
-        };
-      },
-    };
-    const client = new ProviderNetworkClient({
-      runtimeFactory: async (options) => {
-        assert.equal(options.modelsPath, null);
-        assert.equal(options.refreshOnCreate, false);
-        assert.equal(options.credentials?.constructor.name, "InMemoryCredentialStore");
-        return isolatedRuntime;
-      },
-      adapterFactory: () => adapter,
-    });
-
-    const result = await client.testConnection(resolvedDraft("https://api.example.test/v1/"));
-
-    assert.equal(result.ok, true);
-    assert.equal(result.providerId, "acme");
-    assert.equal(result.modelId, "model-a");
-    assert.ok(result.latencyMs >= 0);
-    assert.deepEqual(result.usage, { input: 3, output: 2, cacheRead: 1, cacheWrite: 0, reasoning: 4 });
-    assert.deepEqual(events[0], ["prepare", "acme", "api-key-network-fixture", "header-network-fixture"]);
-    assert.equal(events[1][0], "replace");
-    assert.strictEqual(events[1][1], isolatedRuntime);
-    assert.deepEqual(events[1][2], ["acme"]);
-    assert.deepEqual(events[2], ["getModel", "acme", "model-a"]);
-    assert.equal(events[3][0], "completeSimple");
-    assert.deepEqual(events[3][1], { provider: "acme", id: "model-a" });
-    assert.equal(events[3][2].messages.length, 1);
-    assert.equal(events[3][2].messages[0].role, "user");
-    assert.equal(events[3][3], false);
-  });
-
-  it("returns a stable redacted failure without raw response details", async () => {
+  it("returns a stable redacted transport failure without raw response details", async () => {
     const apiKey = "api-key-network-fixture";
     const headerValue = "header-network-fixture";
     const client = new ProviderNetworkClient({
-      runtimeFactory: async () => ({
-        getModel: () => ({ provider: "acme", id: "model-a" }),
-        async completeSimple() {
-          throw Object.assign(new Error(`401 request exposed ${apiKey} ${headerValue}`), {
-            response: { headers: { authorization: apiKey }, body: "full body" },
-          });
-        },
-      }),
-      adapterFactory: () => ({
-        prepare: (definition) => ({ providerId: definition.id, models: definition.models }),
-        replaceRuntimeProviders: async () => {},
-        toProviderUsage: (usage) => usage,
-      }),
+      fetch: async () => {
+        throw new Error(`401 request exposed ${apiKey} ${headerValue}`);
+      },
     });
 
     const result = await client.testConnection(resolvedDraft("https://api.example.test/v1/"));
     assert.deepEqual(
-      { ok: result.ok, providerId: result.providerId, modelId: result.modelId, code: result.code },
-      { ok: false, providerId: "acme", modelId: "model-a", code: "authentication" },
+      { ok: result.ok, reachable: result.reachable, providerId: result.providerId, code: result.code },
+      { ok: false, reachable: false, providerId: "acme", code: "authentication" },
     );
     assert.equal(result.message.includes(apiKey), false);
     assert.equal(result.message.includes(headerValue), false);
@@ -642,11 +552,10 @@ describe("ProviderNetworkClient isolated connection test", () => {
     assert.equal(JSON.stringify(result).includes("full body"), false);
   });
 
-  it("times out while runtime creation is unresolved", async () => {
+  it("times out while the probe fetch is unresolved", async () => {
     const client = new ProviderNetworkClient({
       timeoutMs: 25,
-      runtimeFactory: () => new Promise(() => {}),
-      adapterFactory: () => assert.fail("adapter must not be created after timeout"),
+      fetch: () => new Promise(() => {}),
     });
     const started = Date.now();
 
@@ -660,23 +569,14 @@ describe("ProviderNetworkClient isolated connection test", () => {
     assert.ok(Date.now() - started < 400);
   });
 
-  it("does not continue a delayed runtime pipeline after timeout or caller abort", async () => {
+  it("settles promptly when a delayed probe is cancelled", async () => {
     for (const cancellation of ["timeout", "caller"]) {
-      let resolveRuntime;
-      const events = [];
-      const runtimePromise = new Promise((resolve) => { resolveRuntime = resolve; });
+      let resolveFetch;
+      const fetchPromise = new Promise((resolve) => { resolveFetch = resolve; });
       const controller = new AbortController();
       const client = new ProviderNetworkClient({
         timeoutMs: cancellation === "timeout" ? 20 : 1_000,
-        runtimeFactory: () => runtimePromise,
-        adapterFactory: () => {
-          events.push("adapter");
-          return {
-            prepare: () => { events.push("prepare"); },
-            replaceRuntimeProviders: async () => { events.push("replace"); },
-            toProviderUsage: (usage) => usage,
-          };
-        },
+        fetch: () => fetchPromise,
       });
       const pending = client.testConnection(
         resolvedDraft("https://api.example.test/v1/"),
@@ -690,12 +590,8 @@ describe("ProviderNetworkClient isolated connection test", () => {
       ]);
       assert.equal(result.ok, false);
       assert.equal(result.code, cancellation === "timeout" ? "timeout" : "aborted");
-      resolveRuntime({
-        getModel: () => { events.push("getModel"); },
-        completeSimple: async () => { events.push("completeSimple"); },
-      });
+      resolveFetch(new Response(null, { status: 204 }));
       await new Promise((resolve) => setImmediate(resolve));
-      assert.deepEqual(events, []);
     }
   });
 });

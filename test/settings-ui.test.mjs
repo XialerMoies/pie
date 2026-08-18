@@ -1810,7 +1810,7 @@ describe("settings DOM boundary", () => {
     win.confirm = originalConfirm;
   });
 
-  it("derives OpenAI discovery path and sends a request-only sentinel when no models exist", async () => {
+  it("leaves discovery path automatic and sends a request-only sentinel when no models exist", async () => {
     const host = document.createElement("div");
     document.body.append(host);
     const discoveryDrafts = [];
@@ -1823,7 +1823,7 @@ describe("settings DOM boundary", () => {
     editor.mount(host, customProvider({
       modelDiscovery: undefined,
       models: [],
-      protocol: "openai-completions",
+      protocol: "openai-responses",
       baseUrl: "https://api.example.test/v1/",
     }), 2);
     const originalConfirm = win.confirm;
@@ -1832,7 +1832,7 @@ describe("settings DOM boundary", () => {
     await editor.discoverModels();
 
     assert.equal(discoveryDrafts.length, 1);
-    assert.strictEqual(discoveryDrafts[0].modelDiscovery, "/v1/models");
+    assert.strictEqual(discoveryDrafts[0].modelDiscovery, undefined);
     assert.deepStrictEqual(discoveryDrafts[0].models, [
       {
         id: "__model_discovery__",
@@ -1845,8 +1845,45 @@ describe("settings DOM boundary", () => {
       },
     ]);
     assert.deepStrictEqual([...host.querySelectorAll(".cpe-model-id")].map((input) => input.value), ["discovered-a"]);
-    assert.strictEqual(host.querySelector("#cpe-model-discovery")?.value, "/v1/models");
+    assert.strictEqual(host.querySelector("#cpe-model-discovery")?.value, "");
     win.confirm = originalConfirm;
+  });
+
+  it("tests an empty-model draft with a lightweight probe and reports reachable HTTP errors", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const testDrafts = [];
+    fetchImpl = async (url, init = {}) => {
+      if (!String(url).endsWith("/test")) return response({});
+      testDrafts.push(JSON.parse(init.body).provider);
+      return response({
+        ok: false,
+        reachable: true,
+        httpStatus: 401,
+        code: "authentication",
+        message: "Provider is reachable but authentication failed",
+        latencyMs: 12,
+      });
+    };
+    const editor = createCustomProviderEditor();
+    editor.mount(host, customProvider({ models: [], modelDiscovery: undefined }), 2);
+
+    await editor.test();
+
+    assert.equal(testDrafts.length, 1);
+    assert.strictEqual(testDrafts[0].modelDiscovery, undefined);
+    assert.deepStrictEqual(testDrafts[0].models, [{
+      id: "__model_discovery__",
+      name: "Model discovery placeholder",
+      contextWindow: 1,
+      maxTokens: 1,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }]);
+    const result = host.querySelector(".cpe-result");
+    assert.ok(result?.textContent.includes("服务可达"));
+    assert.equal(result?.classList.contains("error"), false);
   });
 
   it("rejects discovered model IDs that contain captured secrets before confirmation and import", async () => {

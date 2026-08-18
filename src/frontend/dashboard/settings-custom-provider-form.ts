@@ -190,12 +190,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     const modelDiscovery = value('#cpe-model-discovery');
     const protocol = this.root.querySelector<HTMLSelectElement>('#cpe-protocol')?.value ?? '';
     const authMode = this.root.querySelector<HTMLInputElement>('input[name="cpe-auth-mode"]:checked')?.value ?? '';
-    const derivedModelDiscovery = options.purpose === 'discover'
-      && protocol === 'openai-completions'
-      && !modelDiscovery
-      ? ProviderSettingsUtils.deriveOpenAiDiscoveryPath(baseUrl)
-      : null;
-    const effectiveModelDiscovery = modelDiscovery || derivedModelDiscovery || '';
+    const effectiveModelDiscovery = modelDiscovery;
     let valid = true;
     const fail = (field: string, message: string) => {
       valid = false;
@@ -277,7 +272,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     const commonRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-row')];
     const detailRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-detail-row')];
     if (commonRows.length === 0 || commonRows.length !== detailRows.length) {
-      if (options.purpose === 'discover' && effectiveModelDiscovery) {
+      if (options.purpose === 'test' || options.purpose === 'discover') {
         const apiKeyValue = value('#cpe-api-key');
         return {
           id,
@@ -288,7 +283,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
           ...(authMode === 'apiKey' && apiKeyValue ? { apiKey: apiKeyValue } : {}),
           headers: finalHeaders,
           models: [MODEL_DISCOVERY_SENTINEL],
-          modelDiscovery: effectiveModelDiscovery,
+          ...(effectiveModelDiscovery ? { modelDiscovery: effectiveModelDiscovery } : {}),
         };
       }
       if (showErrors) this.setFieldError('models', '至少添加一个模型', false);

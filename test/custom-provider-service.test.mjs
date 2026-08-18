@@ -175,6 +175,39 @@ describe("custom provider service", () => {
     }
   });
 
+  it("strips the request-only model sentinel for both network operations", async () => {
+    const received = [];
+    const env = await fixture({
+      networkClient: {
+        async testConnection(input) {
+          received.push(["test", input]);
+          return { ok: true, reachable: true, providerId: input.provider.id, latencyMs: 1, httpStatus: 204, message: "ok" };
+        },
+        async discoverModels(input) {
+          received.push(["discover", input]);
+          return { ids: ["discovered-model"] };
+        },
+      },
+    });
+    try {
+      const requestDraft = draft({
+        models: [model("__model_discovery__", "Model discovery placeholder")],
+        modelDiscovery: undefined,
+      });
+      await env.service.testConnection(requestDraft);
+      await env.service.discoverModels(requestDraft);
+
+      assert.equal(received.length, 2);
+      for (const [, input] of received) {
+        assert.deepEqual(input.provider.models, []);
+        assert.equal(input.modelId, undefined);
+      }
+      assert.equal((await env.store.readSnapshot()).revision, 0);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
   it("rejects URL userinfo before service network operations or persistence", async () => {
     let networkCalls = 0;
     const env = await fixture({

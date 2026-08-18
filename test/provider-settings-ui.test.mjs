@@ -210,17 +210,6 @@ describe("provider settings presentation utilities", () => {
     );
   });
 
-  it("derives OpenAI model discovery paths from safe HTTP URLs", async () => {
-    const { deriveOpenAiDiscoveryPath } = await loadUtils();
-
-    assert.equal(deriveOpenAiDiscoveryPath("https://api.example.test/v1"), "/v1/models");
-    assert.equal(deriveOpenAiDiscoveryPath("https://api.example.test/v1/"), "/v1/models");
-    assert.equal(deriveOpenAiDiscoveryPath("https://api.example.test/"), "/models");
-    assert.equal(deriveOpenAiDiscoveryPath("not a url"), null);
-    assert.equal(deriveOpenAiDiscoveryPath("ftp://api.example.test/v1"), null);
-    assert.equal(deriveOpenAiDiscoveryPath("https://user:secret@api.example.test/v1"), null);
-  });
-
   it("uses official icons and derives custom provider initials", async () => {
     const source = readFileSync(resolve("src/frontend/dashboard/settings-provider-utils.ts"), "utf8");
     assert.match(source, /interface\s+ProviderIdentityDescriptor\s*\{/);

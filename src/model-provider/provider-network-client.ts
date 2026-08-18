@@ -1,20 +1,15 @@
-import { InMemoryCredentialStore, type FetchFunction } from "@earendil-works/pi-ai";
-import { ModelRuntime } from "@xiamol/pi-coding-agent";
-
 import {
   PROVIDER_PROTOCOLS,
   type ConnectionTestResult,
-  type CustomProviderDefinition,
   type ProviderProtocol,
   type ResolvedCustomProviderDraft,
 } from "./contracts.js";
-import { PiCustomProviderAdapter } from "./pi-custom-provider-adapter.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_DISCOVERY_BODY_BYTES = 64 * 1024;
 const REDACTED = "[redacted]";
 
-type ConnectionErrorCode = Extract<ConnectionTestResult, { ok: false }>["code"];
+type ConnectionErrorCode = NonNullable<ConnectionTestResult["code"]>;
 export type ProviderNetworkErrorCode = ConnectionErrorCode | "unsupported_response";
 
 export class ProviderNetworkError extends Error {
@@ -27,26 +22,9 @@ export class ProviderNetworkError extends Error {
   }
 }
 
-interface RuntimeForConnection {
-  getModel(providerId: string, modelId: string): ReturnType<ModelRuntime["getModel"]>;
-  completeSimple: ModelRuntime["completeSimple"];
-}
-
-interface AdapterForConnection {
-  prepare: PiCustomProviderAdapter["prepare"];
-  replaceRuntimeProviders: PiCustomProviderAdapter["replaceRuntimeProviders"];
-  toProviderUsage: PiCustomProviderAdapter["toProviderUsage"];
-}
-
 export interface ProviderNetworkClientOptions {
   timeoutMs?: number;
   fetch?: typeof globalThis.fetch;
-  runtimeFactory?: (options: {
-    credentials: InMemoryCredentialStore;
-    modelsPath: null;
-    refreshOnCreate: false;
-  }) => Promise<RuntimeForConnection>;
-  adapterFactory?: () => AdapterForConnection;
 }
 
 interface AbortScope {
@@ -86,7 +64,7 @@ function nestedCode(error: unknown): string | undefined {
   return undefined;
 }
 
-function codeForStatus(status: number): ProviderNetworkErrorCode {
+function codeForStatus(status: number): ConnectionErrorCode {
   if (status === 401 || status === 403) return "authentication";
   if (status === 429) return "rate_limit";
   return "upstream";
@@ -103,6 +81,14 @@ function stableMessage(code: ProviderNetworkErrorCode): string {
     case "unsupported_response": return "Provider returned an unsupported response";
     case "upstream": return "Provider request failed";
   }
+}
+
+function probeMessage(status: number): string {
+  if (status >= 200 && status < 300) return "Provider responded successfully";
+  if (status === 401 || status === 403) return "Provider is reachable but authentication failed";
+  if (status === 404 || status === 405) return "Provider is reachable but the endpoint was not found";
+  if (status === 429) return "Provider is reachable but rate limited the request";
+  return `Provider is reachable but returned HTTP ${status}`;
 }
 
 function classifyError(error: unknown, scope: AbortScope): ProviderNetworkErrorCode {
@@ -168,12 +154,14 @@ function createAbortScope(callerSignal: AbortSignal | undefined, timeoutMs: numb
 }
 
 function discoveryHeaders(input: ResolvedCustomProviderDraft): Headers {
-  const headers = new Headers(input.secrets.headers);
+  const headers = new Headers();
   const apiKey = input.secrets.apiKey;
-  if (input.provider.authMode !== "apiKey" || apiKey === undefined) return headers;
-  if (input.provider.protocol === "anthropic-messages") headers.set("x-api-key", apiKey);
-  else if (input.provider.protocol === "azure-openai-responses") headers.set("api-key", apiKey);
-  else headers.set("authorization", `Bearer ${apiKey}`);
+  if (input.provider.authMode === "apiKey" && apiKey !== undefined) {
+    if (input.provider.protocol === "anthropic-messages") headers.set("x-api-key", apiKey);
+    else if (input.provider.protocol === "azure-openai-responses") headers.set("api-key", apiKey);
+    else headers.set("authorization", `Bearer ${apiKey}`);
+  }
+  for (const [name, value] of Object.entries(input.secrets.headers)) headers.set(name, value);
   return headers;
 }
 
@@ -234,18 +222,6 @@ function assertSupportedProtocol(protocol: string, secrets: readonly string[]): 
   }
 }
 
-function connectionDefinition(input: ResolvedCustomProviderDraft): CustomProviderDefinition {
-  const { headers, modelDiscovery: _modelDiscovery, ...provider } = input.provider;
-  return {
-    ...provider,
-    ...(provider.authMode === "apiKey" ? { apiKeyRef: "credential:network-api-key" as const } : {}),
-    headers: headers.map((name, index) => ({
-      name,
-      credentialRef: `credential:network-header-${index}` as const,
-    })),
-  };
-}
-
 function throwIfAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
   throw signal.reason instanceof Error
@@ -270,35 +246,74 @@ function raceWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T
   });
 }
 
-function connectionFetch(
-  fetchImplementation: FetchFunction,
-  baseUrl: string,
-  secrets: readonly string[],
-): FetchFunction {
-  const origin = new URL(baseUrl).origin;
-  return async (input, init) => {
-    let request: Request;
-    try {
-      request = new Request(input, { ...init, redirect: "manual" });
-      if (new URL(request.url).origin !== origin) throw networkError("upstream", secrets);
-    } catch (error) {
-      if (error instanceof ProviderNetworkError) throw error;
-      throw networkError("upstream", secrets);
-    }
-    const response = await fetchImplementation(request, { redirect: "manual" });
-    if (response.status >= 300 && response.status < 400) {
-      await response.body?.cancel();
-      throw networkError("upstream", secrets);
-    }
-    return response;
-  };
+const MODEL_COMPATIBILITY_SUFFIXES = [
+  "/api/claudecode",
+  "/api/anthropic",
+  "/apps/anthropic",
+  "/api/coding",
+  "/claudecode",
+  "/anthropic",
+  "/step_plan",
+  "/coding",
+  "/claude",
+] as const;
+
+function appendPath(baseUrl: URL, suffix: string): URL {
+  const result = new URL(baseUrl.href);
+  result.search = "";
+  result.hash = "";
+  const basePath = result.pathname.replace(/\/+$/, "");
+  result.pathname = `${basePath}${suffix}` || suffix;
+  return result;
+}
+
+function rootWithPath(baseUrl: URL, pathname: string): URL {
+  const result = new URL(baseUrl.href);
+  result.search = "";
+  result.hash = "";
+  result.pathname = pathname || "/";
+  return result;
+}
+
+function modelDiscoveryCandidates(baseUrlValue: string, explicitPath?: string): URL[] {
+  const baseUrl = new URL(baseUrlValue);
+  if (typeof explicitPath === "string" && explicitPath.trim().length > 0) {
+    return [new URL(explicitPath, baseUrl)];
+  }
+
+  const pathname = baseUrl.pathname.replace(/\/+$/, "");
+  const candidates: URL[] = [];
+  const lastSegment = pathname.split("/").at(-1) ?? "";
+  const versioned = /^v\d+$/.test(lastSegment);
+  if (versioned) {
+    candidates.push(appendPath(baseUrl, "/models"));
+    if (lastSegment !== "v1") candidates.push(appendPath(baseUrl, "/v1/models"));
+  } else {
+    candidates.push(appendPath(baseUrl, "/v1/models"));
+    candidates.push(appendPath(baseUrl, "/models"));
+  }
+
+  const compatibilitySuffix = MODEL_COMPATIBILITY_SUFFIXES.find((suffix) => pathname.endsWith(suffix));
+  if (compatibilitySuffix) {
+    const rootPath = pathname.slice(0, -compatibilitySuffix.length).replace(/\/+$/, "");
+    candidates.push(rootWithPath(baseUrl, `${rootPath}/v1/models`));
+    candidates.push(rootWithPath(baseUrl, `${rootPath}/models`));
+  }
+
+  const unique: URL[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const key = candidate.href;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(candidate);
+  }
+  return unique;
 }
 
 export class ProviderNetworkClient {
   readonly timeoutMs: number;
   readonly #fetch: typeof globalThis.fetch;
-  readonly #runtimeFactory: NonNullable<ProviderNetworkClientOptions["runtimeFactory"]>;
-  readonly #adapterFactory: NonNullable<ProviderNetworkClientOptions["adapterFactory"]>;
 
   constructor(options: ProviderNetworkClientOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -306,8 +321,6 @@ export class ProviderNetworkClient {
       throw new TypeError("timeoutMs must be a positive finite number");
     }
     this.#fetch = options.fetch ?? globalThis.fetch;
-    this.#runtimeFactory = options.runtimeFactory ?? ((runtimeOptions) => ModelRuntime.create(runtimeOptions));
-    this.#adapterFactory = options.adapterFactory ?? (() => new PiCustomProviderAdapter());
   }
 
   async discoverModels(
@@ -317,47 +330,51 @@ export class ProviderNetworkClient {
     const secrets = secretsFor(input);
     assertSupportedProtocol(input.provider.protocol, secrets);
     let baseUrl: URL;
-    let discoveryUrl: URL;
+    let discoveryUrls: URL[];
     try {
       baseUrl = new URL(input.provider.baseUrl);
-      discoveryUrl = new URL(input.provider.modelDiscovery ?? "", baseUrl);
+      discoveryUrls = modelDiscoveryCandidates(input.provider.baseUrl, input.provider.modelDiscovery);
     } catch {
       throw networkError("unsupported_response", secrets);
     }
-    if ((baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") || discoveryUrl.origin !== baseUrl.origin) {
-      throw networkError("unsupported_response", secrets);
-    }
-    if (typeof input.provider.modelDiscovery !== "string" || input.provider.modelDiscovery.length === 0) {
+    if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") {
       throw networkError("unsupported_response", secrets);
     }
 
     const scope = createAbortScope(signal, this.timeoutMs);
     try {
-      let response: Response;
-      try {
-        response = await this.#fetch(discoveryUrl, {
-          method: "GET",
-          headers: discoveryHeaders(input),
-          redirect: "manual",
-          signal: scope.signal,
-        });
-      } catch (error) {
-        if (error instanceof ProviderNetworkError) throw error;
-        const code = classifyError(error, scope);
-        throw networkError(code, secrets);
-      }
+      for (const discoveryUrl of discoveryUrls) {
+        if (discoveryUrl.origin !== baseUrl.origin) throw networkError("unsupported_response", secrets);
+        let response: Response;
+        try {
+          response = await raceWithAbort(this.#fetch(discoveryUrl, {
+            method: "GET",
+            headers: discoveryHeaders(input),
+            redirect: "manual",
+            signal: scope.signal,
+          }), scope.signal);
+        } catch (error) {
+          if (error instanceof ProviderNetworkError) throw error;
+          const code = classifyError(error, scope);
+          throw networkError(code, secrets);
+        }
 
-      if (response.status >= 300 && response.status < 400) {
-        await response.body?.cancel();
-        throw networkError("upstream", secrets);
+        if (response.status >= 300 && response.status < 400) {
+          await response.body?.cancel();
+          throw networkError("upstream", secrets);
+        }
+        if (response.status === 404 || response.status === 405) {
+          await response.body?.cancel();
+          continue;
+        }
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw networkError(codeForStatus(response.status), secrets);
+        }
+        const body = await readLimitedBody(response, MAX_DISCOVERY_BODY_BYTES);
+        return { ids: parseModelIds(body, secrets) };
       }
-      if (!response.ok) {
-        await response.body?.cancel();
-        const code = codeForStatus(response.status);
-        throw networkError(code, secrets);
-      }
-      const body = await readLimitedBody(response, MAX_DISCOVERY_BODY_BYTES);
-      return { ids: parseModelIds(body, secrets) };
+      throw networkError("upstream", secrets);
     } catch (error) {
       if (error instanceof ProviderNetworkError) {
         throw new ProviderNetworkError(
@@ -377,59 +394,44 @@ export class ProviderNetworkClient {
     signal?: AbortSignal,
   ): Promise<ConnectionTestResult> {
     const providerId = input.provider.id;
-    const modelId = input.modelId ?? input.provider.models[0]?.id;
     const secrets = secretsFor(input);
     const scope = createAbortScope(signal, this.timeoutMs);
     const started = performance.now();
     try {
-      const operation = (async (): Promise<ConnectionTestResult> => {
-        throwIfAborted(scope.signal);
-        assertSupportedProtocol(input.provider.protocol, secrets);
-        if (modelId === undefined) throw networkError("unsupported_response", secrets);
-        const runtime = await this.#runtimeFactory({
-          credentials: new InMemoryCredentialStore(),
-          modelsPath: null,
-          refreshOnCreate: false,
-        });
-        throwIfAborted(scope.signal);
-        const adapter = this.#adapterFactory();
-        const prepared = adapter.prepare(connectionDefinition(input), input.secrets);
-        throwIfAborted(scope.signal);
-        await adapter.replaceRuntimeProviders(runtime as ModelRuntime, [prepared]);
-        throwIfAborted(scope.signal);
-        const selectedModel = runtime.getModel(providerId, modelId);
-        if (selectedModel === undefined) throw networkError("upstream", secrets);
-        const response = await runtime.completeSimple(
-          selectedModel,
-          { messages: [{ role: "user", content: "ping", timestamp: Date.now() }] },
-          {
-            signal: scope.signal,
-            fetch: connectionFetch(this.#fetch, input.provider.baseUrl, secrets),
-            maxRetries: 0,
-          },
-        );
-        throwIfAborted(scope.signal);
-        if (response.stopReason === "error" || response.stopReason === "aborted") {
-          const error = new Error(response.errorMessage ?? response.stopReason);
-          if (response.stopReason === "aborted") (error as Error & { code?: string }).code = "ABORT_ERR";
-          throw error;
-        }
-        return {
-          ok: true,
-          providerId,
-          modelId,
-          latencyMs: Math.max(0, Math.round(performance.now() - started)),
-          usage: adapter.toProviderUsage(response.usage),
-        };
-      })();
-      return await raceWithAbort(operation, scope.signal);
+      throwIfAborted(scope.signal);
+      assertSupportedProtocol(input.provider.protocol, secrets);
+      const baseUrl = new URL(input.provider.baseUrl);
+      if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") {
+        throw networkError("unsupported_response", secrets);
+      }
+      const response = await raceWithAbort(this.#fetch(baseUrl, {
+        method: "GET",
+        headers: discoveryHeaders(input),
+        redirect: "manual",
+        signal: scope.signal,
+      }), scope.signal);
+      throwIfAborted(scope.signal);
+      const latencyMs = Math.max(0, Math.round(performance.now() - started));
+      const httpStatus = response.status;
+      await response.body?.cancel();
+      const code = response.ok ? undefined : codeForStatus(httpStatus);
+      return {
+        ok: response.ok,
+        reachable: true,
+        providerId,
+        latencyMs,
+        httpStatus,
+        ...(code === undefined ? {} : { code }),
+        message: probeMessage(httpStatus),
+      };
     } catch (error) {
       const code = error instanceof ProviderNetworkError ? error.code : classifyError(error, scope);
       const connectionCode = code === "unsupported_response" ? "upstream" : code;
       return {
         ok: false,
+        reachable: false,
         providerId,
-        ...(modelId === undefined ? {} : { modelId }),
+        latencyMs: Math.max(0, Math.round(performance.now() - started)),
         code: connectionCode,
         message: redact(stableMessage(connectionCode), secrets),
       };

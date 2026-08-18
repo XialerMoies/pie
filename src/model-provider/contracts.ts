@@ -138,21 +138,15 @@ export interface CustomProviderCapabilities {
   price: { currency: "USD"; unit: "millionTokens" };
 }
 
-export type ConnectionTestResult =
-  | {
-    ok: true;
-    providerId: string;
-    modelId: string;
-    latencyMs: number;
-    usage: ProviderUsage;
-  }
-  | {
-    ok: false;
-    providerId: string;
-    modelId?: string;
-    code: "dns" | "timeout" | "tls" | "authentication" | "rate_limit" | "upstream" | "aborted";
-    message: string;
-  };
+export interface ConnectionTestResult {
+  ok: boolean;
+  reachable: boolean;
+  providerId: string;
+  latencyMs: number;
+  httpStatus?: number;
+  code?: "dns" | "timeout" | "tls" | "authentication" | "rate_limit" | "upstream" | "aborted";
+  message: string;
+}
 
 const PROTOCOL_SET = new Set<string>(PROVIDER_PROTOCOLS);
 const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;

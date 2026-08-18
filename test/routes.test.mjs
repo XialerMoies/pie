@@ -1431,7 +1431,7 @@ describe("custom provider settings routes", () => {
     assert.equal(JSON.stringify(parseJSON(listed.body)).includes("credential:"), false);
   });
 
-  it("tests a custom provider through the real route, PI adapter, and native provider", { timeout: 15_000 }, async () => {
+  it("tests a custom provider through the real route with a lightweight HTTP probe", { timeout: 15_000 }, async () => {
     const fixture = await startFakeModelProvider("openai-responses", {
       modelId: "model-a",
       requireTools: false,
@@ -1448,15 +1448,14 @@ describe("custom provider settings routes", () => {
       }, ctx);
 
       assert.equal(result.status, 200);
-      assert.deepEqual(parseJSON(result.body), {
-        ok: true,
-        providerId: "acme",
-        modelId: "model-a",
-        latencyMs: parseJSON(result.body).latencyMs,
-        usage: { input: 7, output: 5, cacheRead: 3, cacheWrite: 2, reasoning: 1 },
-      });
+      const body = parseJSON(result.body);
+      assert.equal(body.ok, false);
+      assert.equal(body.reachable, true);
+      assert.equal(body.httpStatus, 405);
+      assert.equal(body.code, "upstream");
+      assert.equal(typeof body.latencyMs, "number");
       assert.equal(fixture.requests.length, 1);
-      assert.equal(fixture.requests[0].body.tools, undefined);
+      assert.equal(fixture.requests[0].method, "GET");
       assert.equal(fixture.requests[0].headers.authorization, `Bearer ${apiSecret}`);
       assert.equal(fixture.requests[0].headers["x-tenant"], headerSecret);
       assert.equal(result.body.includes(apiSecret), false);
@@ -1857,8 +1856,10 @@ describe("custom provider settings routes", () => {
         networkInputs.push(["test", input]);
         return {
           ok: false,
+          reachable: true,
           providerId: input.provider.id,
-          modelId: input.modelId,
+          latencyMs: 1,
+          httpStatus: 401,
           code: "authentication",
           message: "Provider authentication failed",
         };
@@ -1922,7 +1923,6 @@ describe("custom provider settings routes", () => {
     for (const [, input] of networkInputs.slice(-2)) {
       assert.equal(input.secrets.apiKey, apiSecret);
       assert.equal(input.secrets.headers["X-Tenant"], headerSecret);
-      assert.equal(input.modelId, "model-a");
       assert.equal(input.provider.modelDiscovery, "../models");
     }
 
@@ -1939,14 +1939,20 @@ describe("custom provider settings routes", () => {
       }],
       modelDiscovery: "/v1/models",
     };
+    const testedWithSentinel = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
+      provider: sentinelDraft,
+    }, ctx);
+    assert.equal(testedWithSentinel.status, 200);
+    assert.equal(parseJSON(testedWithSentinel.body).reachable, true);
     const discoveredWithSentinel = await callHandler(handleSettings, "POST", "/api/custom-providers/discover-models", {
       provider: sentinelDraft,
     }, ctx);
     assert.equal(discoveredWithSentinel.status, 200);
     assert.deepEqual(parseJSON(discoveredWithSentinel.body), { ids: ["discovered-a"] });
-    const [, sentinelInput] = networkInputs.at(-1);
-    assert.deepEqual(sentinelInput.provider.models, []);
-    assert.equal(sentinelInput.provider.modelDiscovery, "/v1/models");
+    for (const [, sentinelInput] of networkInputs.slice(-2)) {
+      assert.deepEqual(sentinelInput.provider.models, []);
+      assert.equal(sentinelInput.provider.modelDiscovery, "/v1/models");
+    }
 
     const rejectedSentinelSave = await callHandler(handleSettings, "POST", "/api/custom-providers", {
       expectedRevision: 1,
@@ -1968,14 +1974,14 @@ describe("custom provider settings routes", () => {
       code: "invalid_request",
       fieldPath: "provider.apiKey",
     });
-    assert.equal(networkInputs.length, 4);
+    assert.equal(networkInputs.length, 5);
 
     const explicitlyCleared = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
       provider: { ...draftWithoutSecrets, apiKey: null },
     }, ctx);
     assert.equal(explicitlyCleared.status, 400);
     assert.equal(parseJSON(explicitlyCleared.body).fieldPath, "provider.apiKey");
-    assert.equal(networkInputs.length, 4);
+    assert.equal(networkInputs.length, 5);
 
     const missingSecondHeader = await callHandler(handleSettings, "POST", "/api/custom-providers/test", {
       provider: {
@@ -1992,7 +1998,7 @@ describe("custom provider settings routes", () => {
     }, ctx);
     assert.equal(missingSecondHeader.status, 400);
     assert.equal(parseJSON(missingSecondHeader.body).fieldPath, "provider.headers[1].value");
-    assert.equal(networkInputs.length, 4);
+    assert.equal(networkInputs.length, 5);
     assert.equal((await store.readSnapshot()).revision, 1);
     assert.equal(commits, 1);
   });

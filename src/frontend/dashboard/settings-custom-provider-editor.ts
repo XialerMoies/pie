@@ -194,7 +194,7 @@ export class SettingsCustomProviderEditor {
       });
       if (!this.isCurrentQuery(operation) || response.aborted) return;
       const body = response.body as Record<string, unknown>;
-      if (!response.ok || body.ok === false) {
+      if (!response.ok || body.reachable !== true) {
         const code = typeof body.code === 'string' ? body.code : 'failed';
         const message = typeof body.message === 'string'
           ? body.message
@@ -202,9 +202,22 @@ export class SettingsCustomProviderEditor {
         this.showResult(operation, `${code}: ${message}`, true);
         return;
       }
-      const modelId = typeof body.modelId === 'string' ? body.modelId : '';
       const latency = typeof body.latencyMs === 'number' ? ` · ${body.latencyMs} ms` : '';
-      this.showResult(operation, `连接成功${modelId ? ` · ${modelId}` : ''}${latency}`, false);
+      if (body.ok === true) {
+        this.showResult(operation, `连接成功${latency}`, false);
+        return;
+      }
+      const status = typeof body.httpStatus === 'number' ? body.httpStatus : undefined;
+      const detail = status === 401 || status === 403
+        ? '鉴权失败'
+        : status === 404 || status === 405
+          ? '地址路径可能不正确'
+          : status === 429
+            ? '请求被限流'
+            : status !== undefined && status >= 500
+              ? '上游服务异常'
+              : '服务返回了非成功状态';
+      this.showResult(operation, `服务可达，但${detail}${status === undefined ? '' : `（HTTP ${status}）`}${latency}`, false);
     } finally {
       this.finishQuery(operation);
     }

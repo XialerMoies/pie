@@ -245,10 +245,10 @@ export class CustomProviderService {
 
   async #resolveNetworkDraft(
     draft: CustomProviderDraft,
-    options: { allowDiscoverySentinel?: boolean } = {},
+    options: { allowNetworkSentinel?: boolean } = {},
   ): Promise<ResolvedCustomProviderDraft> {
     const validated = validateCustomProviderDraft(draft);
-    const models = options.allowDiscoverySentinel
+    const models = options.allowNetworkSentinel
       && validated.models.length === 1
       && validated.models[0]?.id === MODEL_DISCOVERY_SENTINEL_ID
       ? []
@@ -305,12 +305,15 @@ export class CustomProviderService {
   }
 
   async testConnection(draft: CustomProviderDraft, signal?: AbortSignal): Promise<ConnectionTestResult> {
-    return this.#networkClient.testConnection(await this.#resolveNetworkDraft(draft), signal);
+    return this.#networkClient.testConnection(
+      await this.#resolveNetworkDraft(draft, { allowNetworkSentinel: true }),
+      signal,
+    );
   }
 
   async discoverModels(draft: CustomProviderDraft, signal?: AbortSignal): Promise<{ ids: string[] }> {
     return this.#networkClient.discoverModels(
-      await this.#resolveNetworkDraft(draft, { allowDiscoverySentinel: true }),
+      await this.#resolveNetworkDraft(draft, { allowNetworkSentinel: true }),
       signal,
     );
   }

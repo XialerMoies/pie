@@ -131,10 +131,12 @@ const capabilities: CustomProviderCapabilities = {
 };
 const usage: ProviderUsage = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 };
 const success: ConnectionTestResult = {
-  ok: true, providerId: "acme", modelId: "model-a", latencyMs: 5, usage,
+  ok: true, reachable: true, providerId: "acme", latencyMs: 5, httpStatus: 204,
+  message: "ok",
 };
 const failure: ConnectionTestResult = {
-  ok: false, providerId: "acme", code: "authentication", message: "denied",
+  ok: false, reachable: true, providerId: "acme", latencyMs: 6, httpStatus: 401,
+  code: "authentication", message: "denied",
 };
 const invalidDraft: CustomProviderDraft = {
   ...draft,
@@ -142,7 +144,7 @@ const invalidDraft: CustomProviderDraft = {
     // @ts-expect-error Header values cannot be null.
     value: null }],
 };
-void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, success, failure, invalidDraft];
+void [mutation, deletion, revisionFreeDraft, list, resolved, capabilities, usage, success, failure, invalidDraft];
 `;
     writeFileSync(fixtureFile, source, "utf8");
     try {
