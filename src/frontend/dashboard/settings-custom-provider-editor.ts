@@ -184,7 +184,7 @@ export class SettingsCustomProviderEditor {
   async test(): Promise<void> {
     if (this.mutationOperation || this.queryOperation?.action === 'test') return;
     this.form?.clearFeedback();
-    const draft = this.form?.read({ showErrors: false, purpose: 'test' }) ?? null;
+    const draft = this.form?.read({ showErrors: true, purpose: 'test' }) ?? null;
     if (!draft) return;
     const operation = this.beginQuery('test', draft);
     if (!operation) return;
@@ -226,7 +226,7 @@ export class SettingsCustomProviderEditor {
   async discoverModels(): Promise<void> {
     if (this.mutationOperation || this.queryOperation?.action === 'discover') return;
     this.form?.clearFeedback();
-    const draft = this.form?.read({ showErrors: false, purpose: 'discover' }) ?? null;
+    const draft = this.form?.read({ showErrors: true, purpose: 'discover' }) ?? null;
     if (!draft) return;
     const operation = this.beginQuery('discover', draft);
     if (!operation) return;

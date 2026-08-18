@@ -64,6 +64,13 @@ function emptyCustomProviderModel(id = ''): CustomProviderFormModel {
   };
 }
 
+function isEmptyModelPlaceholder(commonRow: HTMLElement, detailRow: HTMLElement): boolean {
+  return !commonRow.querySelector<HTMLInputElement>('.cpe-model-id')?.value.trim()
+    && !commonRow.querySelector<HTMLInputElement>('.cpe-model-name')?.value.trim()
+    && Number(detailRow.querySelector<HTMLInputElement>('.cpe-model-context')?.value ?? '') === 128000
+    && Number(detailRow.querySelector<HTMLInputElement>('.cpe-model-max')?.value ?? '') === 8192;
+}
+
 function isFiniteJsonValue(value: unknown): boolean {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
   if (typeof value === 'number') return Number.isFinite(value);
@@ -271,7 +278,14 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
 
     const commonRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-row')];
     const detailRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-detail-row')];
-    if (commonRows.length === 0 || commonRows.length !== detailRows.length) {
+    const hasEmptyModelPlaceholder = commonRows.length === 1
+      && detailRows.length === 1
+      && isEmptyModelPlaceholder(commonRows[0], detailRows[0]);
+    if (
+      commonRows.length === 0
+      || commonRows.length !== detailRows.length
+      || ((options.purpose === 'test' || options.purpose === 'discover') && hasEmptyModelPlaceholder)
+    ) {
       if (options.purpose === 'test' || options.purpose === 'discover') {
         const apiKeyValue = value('#cpe-api-key');
         return {
@@ -389,6 +403,13 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     const commonRows = this.root.querySelector<HTMLElement>('.cpe-model-rows');
     const detailRows = this.root.querySelector<HTMLElement>('.cpe-model-detail-rows');
     if (!commonRows || !detailRows) return;
+    const currentCommonRows = [...commonRows.querySelectorAll<HTMLElement>('.cpe-model-row')];
+    const currentDetailRows = [...detailRows.querySelectorAll<HTMLElement>('.cpe-model-detail-row')];
+    if (currentCommonRows.length === 1 && currentDetailRows.length === 1
+      && isEmptyModelPlaceholder(currentCommonRows[0], currentDetailRows[0])) {
+      currentCommonRows[0].remove();
+      currentDetailRows[0].remove();
+    }
     for (const id of ids) this.appendModelPair(commonRows, detailRows, emptyCustomProviderModel(id));
     this.refreshDynamicMetadata();
   }

@@ -355,6 +355,68 @@ describe("settings DOM boundary", () => {
     assert.match(host.querySelector('[data-field-error="authMode"]')?.textContent ?? "", /选择/);
   });
 
+  it("tests and discovers from a new provider before a model is entered", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const requests = [];
+    fetchImpl = async (url, init = {}) => {
+      if (String(url).endsWith("/test")) {
+        requests.push(["test", JSON.parse(init.body).provider]);
+        return response({ ok: true, reachable: true, providerId: "new-provider", latencyMs: 4, httpStatus: 204, message: "ok" });
+      }
+      if (String(url).endsWith("/discover-models")) {
+        requests.push(["discover", JSON.parse(init.body).provider]);
+        return response({ ids: ["new-model"] });
+      }
+      return response({});
+    };
+    const editor = createCustomProviderEditor();
+    editor.startNew(host, 3, { template: "openai", occupiedProviderIds: new Set() });
+    setInput("#cpe-name", "New Provider");
+    setInput("#cpe-base-url", "https://api.example.test/v1");
+    setInput("#cpe-api-key", "api-key");
+    const originalConfirm = win.confirm;
+    win.confirm = () => true;
+
+    await editor.test();
+    assert.equal(requests[0]?.[0], "test");
+    assert.deepEqual(requests[0]?.[1].models, [{
+      id: "__model_discovery__",
+      name: "Model discovery placeholder",
+      contextWindow: 1,
+      maxTokens: 1,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }]);
+
+    await editor.discoverModels();
+    assert.equal(requests[1]?.[0], "discover");
+    assert.deepEqual([...host.querySelectorAll(".cpe-model-id")].map((input) => input.value), ["new-model"]);
+    win.confirm = originalConfirm;
+  });
+
+  it("shows validation feedback when test connection fields are incomplete", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    let requests = 0;
+    fetchImpl = async () => {
+      requests += 1;
+      return response({});
+    };
+    const editor = createCustomProviderEditor();
+    editor.startNew(host, 3, { template: "other", occupiedProviderIds: new Set() });
+    setInput("#cpe-name", "New Provider");
+    setInput("#cpe-base-url", "https://api.example.test/v1");
+    setInput("#cpe-api-key", "api-key");
+
+    await editor.test();
+
+    assert.equal(requests, 0);
+    assert.match(host.querySelector('[data-field-error="protocol"]')?.textContent ?? "", /协议/);
+    assert.match(host.querySelector('[data-field-error="authMode"]')?.textContent ?? "", /认证/);
+  });
+
   it("uses capabilities as the protocol option source and excludes unsupported protocols", async () => {
     fetchImpl = async (url) => {
       if (String(url) === "/api/auth") return response({ providers: [] });
