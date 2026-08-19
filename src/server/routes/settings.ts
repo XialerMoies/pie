@@ -10,8 +10,10 @@ import { handlePreferenceSettings } from "./settings/preferences.js";
 import { handleStorageSettings } from "./settings/storage.js";
 import { handleSubagentSettings } from "./settings/subagents.js";
 import { handleThinkingSettings } from "./settings/thinking.js";
+import { handleSkillSettings } from "./settings/skills.js";
 
 const handlers: RouteHandler[] = [
+  handleSkillSettings,
   handleSubagentSettings,
   handleStorageSettings,
   handlePreferenceSettings,

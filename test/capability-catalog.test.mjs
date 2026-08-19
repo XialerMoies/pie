@@ -48,14 +48,20 @@ describe("capability catalog source facts", () => {
 });
 
 describe("capability catalog generator", () => {
-  it("builds deterministic code-derived facts without Task 1 or Task 2 behavior", async () => {
+  it("builds deterministic code-derived facts with a static skills contract", async () => {
     const first = await buildCapabilityCatalog();
     const second = await buildCapabilityCatalog();
     assert.strictEqual(serializeCapabilityCatalog(first), serializeCapabilityCatalog(second));
     assert.strictEqual(first.schemaVersion, 1);
     assert.strictEqual(first.generatedAt, "deterministic");
-    assert.deepStrictEqual(first.skills, []);
-    assert.strictEqual(first.sources.skills, "task-1-pending");
+    assert.deepStrictEqual(first.skills, {
+      schemaVersion: 1,
+      runtimeSource: "src/agent/skills/skill-service.ts",
+      roots: ["<PI_USER_CONFIG>/skills", "<workspace-root>/agent/skills"],
+      summaryFields: ["id", "name", "description", "source", "path", "trust", "enabled", "parse", "declaredTools"],
+    });
+    assert.strictEqual(first.sources.skills, "src/agent/skills/skill-service.ts");
+    assert.doesNotMatch(serializeCapabilityCatalog(first), /SKILL\.md body/i);
     assert.ok(first.tools.some((tool) => tool.name === "command" && tool.source === "src/agent/tools/command.ts"));
     assert.ok(first.events.engine.includes("turn.cancelled"));
     assert.ok(first.events.application.includes("permission.confirm"));

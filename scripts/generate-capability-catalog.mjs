@@ -194,7 +194,12 @@ export async function buildCapabilityCatalog() {
     },
     routes: await collectRoutes(),
     permissionModes: [...PERMISSION_MODES],
-    skills: [],
+    skills: {
+      schemaVersion: 1,
+      runtimeSource: "src/agent/skills/skill-service.ts",
+      roots: ["<PI_USER_CONFIG>/skills", "<workspace-root>/agent/skills"],
+      summaryFields: ["id", "name", "description", "source", "path", "trust", "enabled", "parse", "declaredTools"],
+    },
     sources: {
       tools: "src/agent/tools/index.ts",
       spawnPoints: "src/**/*.ts|js|mjs,scripts/**/*.js|mjs",
@@ -202,7 +207,7 @@ export async function buildCapabilityCatalog() {
       applicationEvents: "src/server/app-events.ts",
       routes: "src/server/routes/**/*.ts",
       permissionModes: "src/server/permission-mode.ts",
-      skills: "task-1-pending",
+      skills: "src/agent/skills/skill-service.ts",
     },
   };
 }

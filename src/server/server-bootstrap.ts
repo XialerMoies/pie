@@ -12,6 +12,7 @@ export function createServerContext(
       chatStream: flat.chatStream,
       appEvents: flat.appEvents,
       recordUserNote: flat.recordUserNote,
+      skillService: flat.skillService,
     },
     security: {
       config: flat.security,
@@ -45,6 +46,7 @@ export function createServerContext(
     chatStream: { enumerable: true, get: () => groups.core.chatStream },
     appEvents: { enumerable: true, get: () => groups.core.appEvents },
     recordUserNote: { enumerable: true, get: () => groups.core.recordUserNote },
+    skillService: { enumerable: true, get: () => groups.core.skillService },
     security: { enumerable: true, get: () => groups.security.config },
     permissionService: { enumerable: true, get: () => groups.security.permissionService },
     rootRegistry: { enumerable: true, get: () => groups.security.rootRegistry },

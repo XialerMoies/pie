@@ -59,6 +59,7 @@ function openSettingsModal(): void {
           <div class="ms-item" data-st="general">通用</div>
           <div class="ms-item" data-st="subagents">子 Agent</div>
           <div class="ms-item" data-st="permissions">权限</div>
+          <div class="ms-item" data-st="skills">技能</div>
           <div class="ms-item" data-st="about">关于</div>
         </div>
         <div class="modal-content" id="mc-settings"></div>
@@ -73,6 +74,7 @@ function openSettingsModal(): void {
 function closeSettingsModal(): void {
   if (settingsActiveTab === 'permissions') settingsPermissions?.unmount?.();
   if (settingsActiveTab === 'model') settingsComponents.providers.unmount();
+  if (settingsActiveTab === 'skills') settingsComponents.skills.unmount();
   $('settings-modal')?.remove();
 }
 
@@ -81,6 +83,7 @@ function switchSettingsModal(tab: string): void {
   settingsActiveTab = tab;
   if (previousTab === 'permissions' && tab !== 'permissions') settingsPermissions?.unmount?.();
   if (previousTab === 'model' && tab !== 'model') settingsComponents.providers.unmount();
+  if (previousTab === 'skills' && tab !== 'skills') settingsComponents.skills.unmount();
   document.querySelectorAll('.ms-item').forEach(element => {
     element.classList.toggle('on', (element as HTMLElement).dataset.st === tab);
   });
@@ -99,6 +102,8 @@ function switchSettingsModal(tab: string): void {
     sc.innerHTML = '<div id="settings-permissions-root"></div>';
     const root = $('settings-permissions-root');
     if (root && typeof settingsPermissions?.mount === 'function') settingsPermissions.mount(root);
+  } else if (tab === 'skills') {
+    settingsComponents.skills.mount(sc);
   } else if (tab === 'about') {
     sc.innerHTML = `
       <h3 class="s-title">关于</h3>

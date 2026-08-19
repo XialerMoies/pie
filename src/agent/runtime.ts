@@ -14,6 +14,8 @@ import type { SessionPermissionState, ToolContext } from "./types.js"
 import { applySessionPermissionSuggestions, normalizePermissionPath, resetSessionPermissionState } from "./permissions.js"
 import { wsDir } from "../server/routes/session-dir.js"
 import { calculateContextUsageSnapshot, type ContextUsageSnapshot } from "./context-usage.js"
+import type { SkillService } from "./skills/skill-service.js"
+import { formatSkillPrompt } from "./skills/skill-prompt.js"
 
 import { setCurrentRuntime as _setGlobalRuntime, getCurrentRuntime as _getGlobalRuntime } from "./globals.js";
 // 重导出供 tools 使用，实际实现在 globals.ts（零依赖，防循环）
@@ -44,6 +46,7 @@ export interface RuntimeConfig {
   getSubagentLimits?: ToolContext["getSubagentLimits"]
   delegateTasks?: ToolContext["delegateTasks"]
   syncModelProviders?: (runtime: ModelRuntime) => Promise<number>
+  skillService?: SkillService
 }
 
 type RuntimeToolExtraContext = Pick<
@@ -319,7 +322,7 @@ export class AgentRuntime {
   /** 强制刷新 system prompt（从 sections 重新 resolve 并注入 session） */
   async refreshSystemPrompt(): Promise<void> {
     const { resolveSystemPrompt } = await import("./prompts.js")
-    const newPrompt = resolveSystemPrompt()
+    const newPrompt = await this._buildSystemPrompt(this.currentWorkspace)
     try {
       // 更新 resource loader 的 append prompt
       const loader = (this.session as any)._resourceLoader
@@ -331,6 +334,20 @@ export class AgentRuntime {
       console.log(`[runtime] ✅ System prompt refreshed`)
     } catch (e) {
       console.log(`[runtime] refreshSystemPrompt error: ${e}`)
+    }
+  }
+
+  private async _buildSystemPrompt(cwd: string): Promise<string> {
+    const base = resolveSystemPrompt()
+    const service = this.config.skillService
+    if (!service) return base
+    try {
+      const input = await service.promptInput(resolve(cwd, "agent", "skills"))
+      const skillPrompt = formatSkillPrompt(input)
+      return [base, skillPrompt].filter(Boolean).join("\n\n")
+    } catch (error) {
+      console.warn(`[runtime] Skill prompt unavailable; continuing without skills: ${error instanceof Error ? error.message : String(error)}`)
+      return base
     }
   }
 
@@ -540,7 +557,7 @@ export class AgentRuntime {
     await this.config.syncModelProviders?.(this.modelRuntime)
     this.modelRegistry = new ModelRegistry(this.modelRuntime)
 
-    const systemPrompt = resolveSystemPrompt()
+    const systemPrompt = await this._buildSystemPrompt(cwd)
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir,

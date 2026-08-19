@@ -705,6 +705,28 @@ textarea.cpe-input{resize:vertical;line-height:1.45}
 .s-section{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--bd);font-size:.8rem}
 .s-label{color:var(--ts);font-size:.75rem}
 .s-value{font-family:var(--fm);color:var(--tx);font-size:.78rem}
+.skills-settings{display:flex;flex-direction:column;gap:12px}
+.skills-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.skills-list{display:flex;flex-direction:column;border-top:1px solid var(--bd)}
+.skills-group{display:flex;flex-direction:column}
+.skills-group-title{margin:14px 0 0;padding:0 0 7px;color:var(--ts);font-size:.68rem;font-weight:600;letter-spacing:.04em}
+.skills-group-list{display:flex;flex-direction:column;border-top:1px solid var(--bd)}
+.skill-item{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:8px 16px;padding:12px 0;border-bottom:1px solid var(--bd)}
+.skill-main{display:flex;min-width:0;flex-direction:column;gap:7px}
+.skill-copy{display:flex;min-width:0;flex-direction:column;gap:3px}
+.skill-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tx);font-size:.78rem}
+.skill-description{color:var(--tm);font-size:.69rem;line-height:1.4}
+.skill-badges,.skill-actions{display:flex;align-items:center;flex-wrap:wrap;gap:5px}
+.skill-actions{justify-content:flex-end}
+.skill-badge{padding:2px 6px;border:1px solid var(--bd);border-radius:4px;color:var(--ts);font-size:.61rem}
+.skill-badge.warning{color:var(--am);border-color:rgba(245,158,11,.4)}
+.skills-action{min-height:27px;padding:0 8px;border:1px solid var(--bd);border-radius:5px;background:var(--bc);color:var(--ts);font-size:.68rem;cursor:pointer;white-space:nowrap}
+.skills-action:hover:not(:disabled){border-color:var(--am);color:var(--am)}
+.skills-action:disabled{opacity:.45;cursor:not-allowed}
+.skills-action.danger{color:var(--rs);border-color:rgba(248,113,113,.45)}
+.skill-diagnostic{grid-column:1/-1;color:var(--rs);font-size:.65rem;line-height:1.4}
+.skills-empty{padding:24px 4px;color:var(--tm);font-size:.72rem}
+@media(max-width:760px){.skill-item{grid-template-columns:1fr}.skill-actions{justify-content:flex-start}}
 
 /* ─── 通用设置控件 ─── */
 .gs-group{display:flex;flex-direction:column;gap:2px}

@@ -18,9 +18,11 @@ const expectedModules = [
   "subagents.ts",
   "thinking.ts",
   "layout.ts",
+  "skills.ts",
 ];
 
 const expectedHandlers = [
+  "handleSkillSettings",
   "handleSubagentSettings",
   "handleStorageSettings",
   "handlePreferenceSettings",

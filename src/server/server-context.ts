@@ -13,6 +13,7 @@ import type { TsserverManager } from "./ts-server.js";
 import type { ServerObservability } from "./observability.js";
 import type { StartupPathsSnapshot } from "./startup-paths.js";
 import type { ModelRegistry, ModelRuntime } from "@xiamol/pi-coding-agent";
+import type { SkillService } from "../agent/skills/skill-service.js";
 
 export interface ServerCoreContext {
   engine: AgentEngine;
@@ -20,6 +21,7 @@ export interface ServerCoreContext {
   chatStream: ChatStreamState;
   appEvents: AppEventHub;
   recordUserNote?: (note: { noteId: string; message: string; mode: "steer" | "followUp" }) => void;
+  skillService?: SkillService;
 }
 
 export interface ServerSecurityContext {

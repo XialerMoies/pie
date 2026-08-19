@@ -115,7 +115,7 @@ export class PiAgentEngineAdapter implements AgentEngine {
     const onAbort = () => { void this.cancel(this.#activeTurnId); };
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
-      await (this.#runtime.runWithStableSession ?? (async (operation: () => Promise<void>) => operation()))(async () => {
+      await (this.#runtime.runWithStableSession ?? (async (operation: () => Promise<void>) => operation())).call(this.#runtime, async () => {
         await this.#runtime.session.prompt(input.message);
       });
     } catch (error) {
@@ -136,11 +136,11 @@ export class PiAgentEngineAdapter implements AgentEngine {
   }
 
   async steer(text: string): Promise<void> {
-    await (this.#runtime.runWithStableSession ?? (async (operation: () => Promise<void>) => operation()))(async () => { await this.#runtime.session.steer(text); });
+    await (this.#runtime.runWithStableSession ?? (async (operation: () => Promise<void>) => operation())).call(this.#runtime, async () => { await this.#runtime.session.steer(text); });
   }
 
   async followUp(text: string): Promise<void> {
-    await (this.#runtime.runWithStableSession ?? (async (operation: () => Promise<void>) => operation()))(async () => { await this.#runtime.session.followUp(text); });
+    await (this.#runtime.runWithStableSession ?? (async (operation: () => Promise<void>) => operation())).call(this.#runtime, async () => { await this.#runtime.session.followUp(text); });
   }
 
   async cancel(turnId?: string): Promise<boolean> {

@@ -150,6 +150,7 @@ const REQUIRED_BUNDLE_ENTRIES = [
   "gen/dashboard/settings-provider-model.js",
   "gen/dashboard/settings-custom-subagents.js",
   "gen/dashboard/settings-storage.js",
+  "gen/dashboard/settings-skills.js",
   "gen/dashboard/dashboard-settings.js",
 ];
 const bundleOrder = [
@@ -210,6 +211,7 @@ const bundleOrder = [
   "gen/dashboard/settings-provider-model.js",
   "gen/dashboard/settings-custom-subagents.js",
   "gen/dashboard/settings-storage.js",
+  "gen/dashboard/settings-skills.js",
   "gen/dashboard/dashboard-settings.js",
 ];
 
@@ -226,6 +228,7 @@ const settingsOwnerBundleIndexes = [
   "gen/dashboard/settings-provider-model.js",
   "gen/dashboard/settings-custom-subagents.js",
   "gen/dashboard/settings-storage.js",
+  "gen/dashboard/settings-skills.js",
 ].map(entry => bundleOrder.indexOf(entry));
 const settingsBundleIndex = bundleOrder.indexOf("gen/dashboard/dashboard-settings.js");
 const listAddActionBundleIndex = bundleOrder.indexOf("gen/ui/list-add-action.js");

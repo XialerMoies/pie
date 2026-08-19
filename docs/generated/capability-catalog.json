@@ -1260,6 +1260,27 @@
       "category": "sessions"
     },
     {
+      "method": "ANY",
+      "path": "/api/settings/skills*",
+      "handler": "handleSkillSettings",
+      "source": "src/server/routes/settings/skills.ts",
+      "category": "settings"
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/skills/rescan",
+      "handler": "handleSkillSettings",
+      "source": "src/server/routes/settings/skills.ts",
+      "category": "settings"
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/skills",
+      "handler": "handleSkillSettings",
+      "source": "src/server/routes/settings/skills.ts",
+      "category": "settings"
+    },
+    {
       "method": "POST",
       "path": "/api/settings",
       "handler": "handleModelSettings",
@@ -1476,7 +1497,25 @@
     "dontAsk",
     "yes"
   ],
-  "skills": [],
+  "skills": {
+    "schemaVersion": 1,
+    "runtimeSource": "src/agent/skills/skill-service.ts",
+    "roots": [
+      "<PI_USER_CONFIG>/skills",
+      "<workspace-root>/agent/skills"
+    ],
+    "summaryFields": [
+      "id",
+      "name",
+      "description",
+      "source",
+      "path",
+      "trust",
+      "enabled",
+      "parse",
+      "declaredTools"
+    ]
+  },
   "sources": {
     "tools": "src/agent/tools/index.ts",
     "spawnPoints": "src/**/*.ts|js|mjs,scripts/**/*.js|mjs",
@@ -1484,6 +1523,6 @@
     "applicationEvents": "src/server/app-events.ts",
     "routes": "src/server/routes/**/*.ts",
     "permissionModes": "src/server/permission-mode.ts",
-    "skills": "task-1-pending"
+    "skills": "src/agent/skills/skill-service.ts"
   }
 }

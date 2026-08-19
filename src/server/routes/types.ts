@@ -16,6 +16,7 @@ import type { CustomProviderService } from "../../model-provider/custom-provider
 import type { ProviderReferenceMutationLock } from "../../model-provider/provider-reference-lock.js";
 import type { ServerObservability } from "../observability.js";
 import type { ServerContextGroups } from "../server-context.js";
+import type { SkillService } from "../../agent/skills/skill-service.js";
 
 // ─── Trace Event 类型 ────────────────────────────────────
 
@@ -88,6 +89,7 @@ export interface ServerContext {
   customProviderService?: CustomProviderService;
   providerReferenceLock?: ProviderReferenceMutationLock;
   observability?: ServerObservability;
+  skillService?: SkillService;
   paths: {
     APP_ROOT: string;
     DATA_DIR: string;

@@ -64,6 +64,8 @@ import { createServerContext } from "./server-bootstrap.js";
 import { createHttpApp, openAppEventStream } from "./http-app.js";
 export { openAppEventStream } from "./http-app.js";
 import { createServerLifecycle } from "./server-lifecycle.js";
+import { SkillService } from "../agent/skills/skill-service.js";
+import { toolRegistry } from "../agent/tools/index.js";
 
 import { attachEngineEvents, recordUserNoteBlock } from "./agent-event-router.js";
 export { attachEngineEvents, attachSessionEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
@@ -233,6 +235,12 @@ async function main() {
     referenceChecker: providerReferenceChecker,
     referenceLock: providerReferenceLock,
   });
+  const skillService = new SkillService({
+    userRoot: join(PI_CONFIG_DIR, "skills"),
+    workspaceRoot: () => join(runtime?.currentWorkspace || STARTUP.workspace, "agent", "skills"),
+    statePath: join(PI_CONFIG_DIR, "skill-state.json"),
+    knownTools: new Set(toolRegistry.getAll().map((tool) => tool.name)),
+  });
 
   ({ runtime, engine } = await initAgentHost({
     agentDir: PI_CONFIG_DIR,
@@ -266,6 +274,7 @@ async function main() {
       };
     },
     delegateTasks: subagentBridge.runtimeConfig.delegateTasks,
+    skillService,
   }));
 
   subagentHost = createRuntimeSubagentHost({
@@ -315,6 +324,7 @@ async function main() {
     customProviderService,
     providerReferenceLock,
     observability,
+    skillService,
     tsServer,
     rootRegistry,
     recordUserNote: (note) => recordUserNoteBlock(runtime, chatStream, note, {

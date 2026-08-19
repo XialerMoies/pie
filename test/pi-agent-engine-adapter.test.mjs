@@ -121,6 +121,20 @@ describe("PiAgentEngineAdapter", () => {
     ]);
   });
 
+  it("preserves the runtime receiver for prompt steering and follow-up", async () => {
+    const runtime = createRuntime();
+    const receivers = [];
+    runtime.runWithStableSession = async function (operation) {
+      receivers.push(this);
+      return operation();
+    };
+    const engine = adapter(runtime);
+    await engine.prompt({ message: "receiver check" });
+    await engine.steer("steer check");
+    await engine.followUp("follow-up check");
+    assert.deepEqual(receivers, [runtime, runtime, runtime]);
+  });
+
   it("pairs compaction usage and ignores stale session events", () => {
     const runtime = createRuntime();
     const engine = adapter(runtime);

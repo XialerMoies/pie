@@ -600,11 +600,28 @@ interface SettingsStorageApi {
   confirmMigration(): Promise<void>;
   chooseDataRoot(): Promise<void>;
 }
+interface SkillSettingsSummary {
+  id: string;
+  name: string;
+  description: string;
+  source: 'user' | 'workspace';
+  path: string;
+  trust: 'trusted' | 'untrusted';
+  enabled: boolean;
+  parse: 'valid' | 'invalid';
+  declaredTools: string[];
+  diagnostic?: { code: string; message: string };
+}
+interface SettingsSkillsApi {
+  mount(container: HTMLElement): void;
+  unmount(): void;
+}
 interface AppSettingsComponents {
   general: SettingsGeneralApi;
   providers: SettingsProviderModelApi;
   subagents: SettingsCustomSubagentApi;
   storage: SettingsStorageApi;
+  skills: SettingsSkillsApi;
 }
 // ─── TabBehavior / TabStoreAPI ──────────────────────
 /** Options 透传至 _applySessionMessages，控制会话激活后的副作用 */
