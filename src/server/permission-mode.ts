@@ -5,6 +5,8 @@ export interface PermissionModeController {
   set(mode: PermissionMode): PermissionMode
 }
 
+export const PERMISSION_MODES = ["standard", "plan", "dontAsk", "yes"] as const satisfies readonly PermissionMode[]
+
 export function createPermissionModeController(
   initial: PermissionMode = "standard",
   onChange?: (mode: PermissionMode) => void,
@@ -21,5 +23,5 @@ export function createPermissionModeController(
 }
 
 export function isPermissionMode(value: unknown): value is PermissionMode {
-  return value === "plan" || value === "standard" || value === "dontAsk" || value === "yes"
+  return PERMISSION_MODES.includes(value as PermissionMode)
 }

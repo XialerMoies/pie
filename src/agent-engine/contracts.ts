@@ -137,7 +137,7 @@ export interface AgentEngine {
   dispose(): Promise<void> | void;
 }
 
-const EVENT_TYPES = new Set<EngineEvent["type"]>([
+export const ENGINE_EVENT_TYPES = [
   "engine.ready",
   "session.changed",
   "turn.started",
@@ -156,7 +156,9 @@ const EVENT_TYPES = new Set<EngineEvent["type"]>([
   "compaction.failed",
   "queue.updated",
   "diagnostic",
-]);
+] as const satisfies readonly EngineEvent["type"][];
+
+const EVENT_TYPES = new Set<EngineEvent["type"]>(ENGINE_EVENT_TYPES);
 
 function nonNegativeNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;

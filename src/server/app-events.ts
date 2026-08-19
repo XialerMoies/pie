@@ -1,11 +1,14 @@
 import type { ServerResponse } from "http";
 
-export type AppEventType =
-  | "dashboard.changed"
-  | "usage.changed"
-  | "mcp.changed"
-  | "explorer.changed"
-  | "permission.confirm";
+export const APP_EVENT_TYPES = [
+  "dashboard.changed",
+  "usage.changed",
+  "mcp.changed",
+  "explorer.changed",
+  "permission.confirm",
+] as const;
+
+export type AppEventType = typeof APP_EVENT_TYPES[number];
 
 export interface AppEvent<T = unknown> {
   type: AppEventType;

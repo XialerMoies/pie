@@ -1,0 +1,1489 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "deterministic",
+  "generator": "scripts/generate-capability-catalog.mjs",
+  "tools": [
+    {
+      "name": "command",
+      "description": "执行 shell 命令，支持流式实时 stdout/stderr。Windows 未显式配置 shell 时默认使用 cmd.exe；明显 POSIX 的 pwd/ls/cat/mkdir -p/bash -lc 命令会自动走 Git Bash（如已安装）。readOnly=true 时仅可执行查看命令。安全测试时也要原样调用本工具；危险命令由工具内置安全层返回拦截或确认信息，不要在调用前改写或自然语言拒绝。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "要执行的命令"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "工作目录（可选）"
+          },
+          "timeout": {
+            "type": "number",
+            "description": "超时（毫秒，默认 300000）"
+          },
+          "readOnly": {
+            "type": "boolean",
+            "description": "只读模式，true 时仅允许只读命令"
+          }
+        },
+        "required": [
+          "command"
+        ]
+      },
+      "capabilities": {
+        "readOnly": false,
+        "destructive": true,
+        "riskLevel": "high",
+        "needsPermission": false,
+        "workspaceBounded": false
+      },
+      "source": "src/agent/tools/command.ts"
+    },
+    {
+      "name": "delegate_tasks",
+      "description": "Delegate 1 to 30 read-only analysis tasks to isolated in-process subagents and return one structured batch result. Host settings may apply lower task and concurrency limits.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 30,
+            "items": {
+              "type": "object",
+              "properties": {
+                "profile": {
+                  "type": "string",
+                  "enum": [
+                    "general",
+                    "explorer",
+                    "reviewer",
+                    "planner"
+                  ]
+                },
+                "agentId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Optional configured Agent id from the host settings."
+                },
+                "prompt": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "focusPaths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "deliverable": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "model": {
+                  "type": "object",
+                  "properties": {
+                    "provider": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "provider",
+                    "id"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "profile",
+                "prompt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "defaultModel": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "minLength": 1
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "provider",
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "timeoutSeconds": {
+            "type": "number",
+            "minimum": 30,
+            "maximum": 3600,
+            "default": 300
+          },
+          "maxTurns": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
+          },
+          "maxToolCalls": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 50
+          },
+          "maxConcurrent": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 30,
+            "default": 2
+          }
+        },
+        "required": [
+          "tasks"
+        ]
+      },
+      "capabilities": {
+        "readOnly": false,
+        "destructive": false,
+        "riskLevel": "high",
+        "needsPermission": false,
+        "workspaceBounded": true
+      },
+      "source": "src/agent/tools/delegate-tasks.ts"
+    },
+    {
+      "name": "explorer_list",
+      "description": "列出目录内容，返回结构化的文件和文件夹列表。比 bash ls 更好用：自动过滤 node_modules/.git、目录排前面、显示完整相对路径。配合 file_read / search 使用：用这个看目录结构，用 search 找代码，用 file_read 读内容。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "要列出的子目录路径（相对工作区根目录，不传或空字符串则列出根目录）"
+          },
+          "filter": {
+            "type": "boolean",
+            "description": "是否启用过滤（隐藏文件、node_modules、.gitignore 匹配的目录，默认 true）"
+          }
+        }
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": true
+      },
+      "source": "src/agent/tools/explorer-list.ts"
+    },
+    {
+      "name": "file_outline",
+      "description": "查看代码文件的结构目录——列出所有函数、类型、接口、方法的签名及其行号。比直接 file_read 更省 token：先看结构，再决定读哪一段。配合 file_read 使用。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "文件路径（相对工作区的路径）"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": true
+      },
+      "source": "src/agent/tools/file-outline.ts"
+    },
+    {
+      "name": "file_read",
+      "description": "读取文件内容。支持指定行范围、自动截断大文件。比 bash cat 更安全：大文件不会刷爆上下文，二进制文件不会输出乱码，显示行号方便引用。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "文件路径（相对工作区的路径）"
+          },
+          "startLine": {
+            "type": "number",
+            "description": "起始行号（从 1 开始，默认 1）"
+          },
+          "maxLines": {
+            "type": "number",
+            "description": "最大返回行数（默认 200，超过的部分会被截断并提示）"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": true
+      },
+      "source": "src/agent/tools/file-read.ts"
+    },
+    {
+      "name": "file_write",
+      "description": "创建新文件或覆写已有文件。会完全覆盖目标文件内容，使用前请确认。修改已有文件请优先用 str_replace_editor（精确替换），避免整文件覆写。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "文件路径（相对 workspace 或绝对路径）"
+          },
+          "content": {
+            "type": "string",
+            "description": "文件完整内容"
+          }
+        },
+        "required": [
+          "file_path",
+          "content"
+        ]
+      },
+      "capabilities": {
+        "readOnly": false,
+        "destructive": true,
+        "riskLevel": "high",
+        "needsPermission": false,
+        "workspaceBounded": true
+      },
+      "source": "src/agent/tools/file-write.ts"
+    },
+    {
+      "name": "git-status",
+      "description": "查看当前 Git 仓库的状态，包括已修改的文件、暂存区、未跟踪的文件、分支信息",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": true
+      },
+      "source": "src/agent/tools/git-status.ts"
+    },
+    {
+      "name": "git_log",
+      "description": "查看 Git 提交历史。配合 git-status 使用：git-status 看当前状态，git-log 看历史记录。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "description": "查看最近多少条提交（默认 10，最多 50）"
+          }
+        }
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": true
+      },
+      "source": "src/agent/tools/git-log.ts"
+    },
+    {
+      "name": "read_memory",
+      "description": "读取一条全局记忆的完整内容。全局记忆记录用户偏好、习惯、项目无关的知识。name 是记忆文件名（不含 .md）。使用前先看 prompt 中的 MEMORY.md 索引了解有哪些记忆可用。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "记忆名称，如 'user-profile'（不含 .md 后缀）"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": false
+      },
+      "source": "src/agent/tools/memory.ts"
+    },
+    {
+      "name": "search",
+      "description": "在项目中搜索代码。支持两种模式：filename（按文件名匹配）和 text（全文搜索）。比 bash grep 更好用：返回结构化结果（文件名+行号+匹配文本），自动跳过二进制文件、node_modules、.git 等无关目录。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "搜索关键词"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "filename",
+              "text"
+            ],
+            "description": "搜索模式：filename 按文件名匹配，text 全文搜索（默认 text）"
+          },
+          "caseSensitive": {
+            "type": "boolean",
+            "description": "是否区分大小写（默认 false）"
+          },
+          "maxResults": {
+            "type": "number",
+            "description": "最大返回结果数（默认 20，避免刷爆上下文）"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": true
+      },
+      "source": "src/agent/tools/search.ts"
+    },
+    {
+      "name": "str_replace_editor",
+      "description": "精确文件编辑工具。仅编辑已有文件，两种模式：\n1. file_path + old_string + new_string → 在已有文件中精确替换\n2. file_path + edits: [{old_string, new_string, replace_all?}] → 批量替换\n\n创建新文件请使用 file_write。\nold_string 匹配会自动处理弯引号 → 直引号归一，以及 HTML 转义反转义。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "文件路径（相对 workspace 或绝对路径）"
+          },
+          "old_string": {
+            "type": "string",
+            "description": "要替换的非空文本"
+          },
+          "new_string": {
+            "type": "string",
+            "description": "替换后的文本"
+          },
+          "replace_all": {
+            "type": "boolean",
+            "description": "替换所有匹配（默认 false）"
+          },
+          "edits": {
+            "type": "array",
+            "description": "批量编辑。每项：{ old_string, new_string, replace_all? }",
+            "items": {
+              "type": "object",
+              "properties": {
+                "old_string": {
+                  "type": "string"
+                },
+                "new_string": {
+                  "type": "string"
+                },
+                "replace_all": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "old_string",
+                "new_string"
+              ]
+            }
+          }
+        },
+        "required": [
+          "file_path"
+        ]
+      },
+      "capabilities": {
+        "readOnly": false,
+        "destructive": true,
+        "riskLevel": "high",
+        "needsPermission": false,
+        "workspaceBounded": true
+      },
+      "source": "src/agent/tools/str-replace-editor.ts"
+    },
+    {
+      "name": "web-fetch",
+      "description": "抓取指定 URL 的网页内容并转为可读文本。用于查看文档、网页、API 响应等",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "要抓取的完整 URL（含 https://）"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "medium",
+        "needsPermission": false,
+        "workspaceBounded": false
+      },
+      "source": "src/agent/tools/web-fetch.ts"
+    },
+    {
+      "name": "web-search",
+      "description": "搜索互联网获取最新信息。适用于查询新闻、技术文档、实时数据、百科知识等",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "搜索关键词"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "medium",
+        "needsPermission": false,
+        "workspaceBounded": false
+      },
+      "source": "src/agent/tools/web-search.ts"
+    },
+    {
+      "name": "write_agent_md",
+      "description": "更新项目级记忆（AGENT.md）。记录项目配置（构建/测试/部署方式）、代码风格偏好、重要架构决策等。每次对话开始时 AI 自动读取此文件。适合记录：'用 pnpm'、'测试用 vitest'、'测试放 __tests__ 目录'、'用单引号'、'数据库用 SQLite' 等。每次写入会覆盖全部内容。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "AGENT.md 完整内容。建议按类别分组，用 markdown 标题分隔不同主题。"
+          }
+        },
+        "required": [
+          "content"
+        ]
+      },
+      "capabilities": {
+        "readOnly": false,
+        "destructive": false,
+        "riskLevel": "medium",
+        "needsPermission": false,
+        "workspaceBounded": true
+      },
+      "source": "src/agent/tools/agent-md.ts"
+    },
+    {
+      "name": "write_memory",
+      "description": "写入或更新一条全局记忆。全局记忆记录用户编码偏好、说话风格、习惯等跨项目通用的信息。name 是记忆名称（不含 .md），content 是完整 markdown 内容（建议含标题）。写入后自动刷新系统 prompt，当前对话可见。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "记忆名称，如 'user-profile'（不含 .md 后缀）。建议用短横线连接的英文。"
+          },
+          "content": {
+            "type": "string",
+            "description": "完整 markdown 内容。第一行建议用 # 标题简要概括本条记忆。"
+          }
+        },
+        "required": [
+          "name",
+          "content"
+        ]
+      },
+      "capabilities": {
+        "readOnly": false,
+        "destructive": false,
+        "riskLevel": "medium",
+        "needsPermission": false,
+        "workspaceBounded": false
+      },
+      "source": "src/agent/tools/memory.ts"
+    }
+  ],
+  "spawnPoints": [
+    {
+      "file": "scripts/build-frontend.mjs",
+      "line": 21,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/build-frontend.mjs",
+      "line": 22,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/clean.mjs",
+      "line": 19,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/clean.mjs",
+      "line": 25,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/clean.mjs",
+      "line": 41,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/clean.mjs",
+      "line": 47,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/clean.mjs",
+      "line": 53,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dev.mjs",
+      "line": 68,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dev.mjs",
+      "line": 71,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dev.mjs",
+      "line": 78,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dev.mjs",
+      "line": 122,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dev.mjs",
+      "line": 170,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dev.mjs",
+      "line": 204,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dev.mjs",
+      "line": 264,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dev.mjs",
+      "line": 280,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dev.mjs",
+      "line": 362,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dev.mjs",
+      "line": 397,
+      "api": "execSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/release-check.mjs",
+      "line": 17,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-parallel.mjs",
+      "line": 36,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "src/agent/tools/command.ts",
+      "line": 468,
+      "api": "spawn",
+      "category": "user-command",
+      "owner": "agent-tools"
+    },
+    {
+      "file": "src/agent/tools/command.ts",
+      "line": 469,
+      "api": "spawn",
+      "category": "user-command",
+      "owner": "agent-tools"
+    },
+    {
+      "file": "src/electron/cli-terminal.ts",
+      "line": 137,
+      "api": "spawn",
+      "category": "electron",
+      "owner": "electron"
+    },
+    {
+      "file": "src/electron/server-binding.ts",
+      "line": 168,
+      "api": "execFileSync",
+      "category": "internal-server",
+      "owner": "electron"
+    },
+    {
+      "file": "src/electron/server-binding.ts",
+      "line": 197,
+      "api": "spawn",
+      "category": "internal-server",
+      "owner": "electron"
+    },
+    {
+      "file": "src/server/routes/git.ts",
+      "line": 29,
+      "api": "execFileSync",
+      "category": "other",
+      "owner": "unassigned"
+    },
+    {
+      "file": "src/server/ts-server.ts",
+      "line": 66,
+      "api": "fork",
+      "category": "tsserver",
+      "owner": "server"
+    },
+    {
+      "file": "src/server/ts-server.ts",
+      "line": 128,
+      "api": "child_process.send",
+      "category": "tsserver",
+      "owner": "server"
+    },
+    {
+      "file": "src/server/ts-server.ts",
+      "line": 149,
+      "api": "child_process.send",
+      "category": "tsserver",
+      "owner": "server"
+    }
+  ],
+  "events": {
+    "engine": [
+      "compaction.completed",
+      "compaction.failed",
+      "compaction.started",
+      "content.delta",
+      "diagnostic",
+      "engine.ready",
+      "queue.updated",
+      "session.changed",
+      "thinking.delta",
+      "tool.completed",
+      "tool.failed",
+      "tool.started",
+      "tool.updated",
+      "turn.cancelled",
+      "turn.completed",
+      "turn.failed",
+      "turn.started",
+      "usage.updated"
+    ],
+    "application": [
+      "dashboard.changed",
+      "explorer.changed",
+      "mcp.changed",
+      "permission.confirm",
+      "usage.changed"
+    ]
+  },
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/auth/reveal",
+      "handler": "handleAuthSettings",
+      "source": "src/server/routes/settings/auth.ts",
+      "category": "auth"
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth",
+      "handler": "handleAuthSettings",
+      "source": "src/server/routes/settings/auth.ts",
+      "category": "auth"
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth",
+      "handler": "handleAuthSettings",
+      "source": "src/server/routes/settings/auth.ts",
+      "category": "auth"
+    },
+    {
+      "method": "GET",
+      "path": "/api/bootstrap",
+      "handler": "handleDashboard",
+      "source": "src/server/routes/dashboard.ts",
+      "category": "bootstrap"
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/bootstrap",
+      "handler": "handleDashboard",
+      "source": "src/server/routes/dashboard.ts",
+      "category": "bootstrap"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chat/abort",
+      "handler": "handleChat",
+      "source": "src/server/routes/chat.ts",
+      "category": "chat"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chat/command-confirm",
+      "handler": "handleChat",
+      "source": "src/server/routes/chat.ts",
+      "category": "chat"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chat/note",
+      "handler": "handleChat",
+      "source": "src/server/routes/chat.ts",
+      "category": "chat"
+    },
+    {
+      "method": "ANY",
+      "path": "/api/chat/stream",
+      "handler": "handleChat",
+      "source": "src/server/routes/chat.ts",
+      "category": "chat"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chat",
+      "handler": "handleChat",
+      "source": "src/server/routes/chat.ts",
+      "category": "chat"
+    },
+    {
+      "method": "POST",
+      "path": "/api/clear",
+      "handler": "handleChat",
+      "source": "src/server/routes/chat.ts",
+      "category": "clear"
+    },
+    {
+      "method": "POST",
+      "path": "/api/compact",
+      "handler": "handleDashboard",
+      "source": "src/server/routes/dashboard.ts",
+      "category": "compact"
+    },
+    {
+      "method": "DELETE",
+      "pathPattern": "/api/custom-providers/:providerId",
+      "handler": "handleCustomProviderSettings",
+      "source": "src/server/routes/settings/custom-providers.ts",
+      "category": "custom-providers"
+    },
+    {
+      "method": "PUT",
+      "pathPattern": "/api/custom-providers/:providerId",
+      "handler": "handleCustomProviderSettings",
+      "source": "src/server/routes/settings/custom-providers.ts",
+      "category": "custom-providers"
+    },
+    {
+      "method": "GET",
+      "path": "/api/custom-providers/capabilities",
+      "handler": "handleCustomProviderSettings",
+      "source": "src/server/routes/settings/custom-providers.ts",
+      "category": "custom-providers"
+    },
+    {
+      "method": "POST",
+      "path": "/api/custom-providers/discover-models",
+      "handler": "handleCustomProviderSettings",
+      "source": "src/server/routes/settings/custom-providers.ts",
+      "category": "custom-providers"
+    },
+    {
+      "method": "POST",
+      "path": "/api/custom-providers/reveal",
+      "handler": "handleCustomProviderSettings",
+      "source": "src/server/routes/settings/custom-providers.ts",
+      "category": "custom-providers"
+    },
+    {
+      "method": "POST",
+      "path": "/api/custom-providers/test",
+      "handler": "handleCustomProviderSettings",
+      "source": "src/server/routes/settings/custom-providers.ts",
+      "category": "custom-providers"
+    },
+    {
+      "method": "GET",
+      "path": "/api/custom-providers",
+      "handler": "handleCustomProviderSettings",
+      "source": "src/server/routes/settings/custom-providers.ts",
+      "category": "custom-providers"
+    },
+    {
+      "method": "POST",
+      "path": "/api/custom-providers",
+      "handler": "handleCustomProviderSettings",
+      "source": "src/server/routes/settings/custom-providers.ts",
+      "category": "custom-providers"
+    },
+    {
+      "method": "ANY",
+      "path": "/api/dashboard",
+      "handler": "handleDashboard",
+      "source": "src/server/routes/dashboard.ts",
+      "category": "dashboard"
+    },
+    {
+      "method": "GET",
+      "path": "/api/explorer*",
+      "handler": "handleExplorer",
+      "source": "src/server/routes/explorer.ts",
+      "category": "explorer"
+    },
+    {
+      "method": "POST",
+      "path": "/api/file/delete*",
+      "handler": "handleExplorer",
+      "source": "src/server/routes/explorer.ts",
+      "category": "file"
+    },
+    {
+      "method": "POST",
+      "path": "/api/file/move*",
+      "handler": "handleExplorer",
+      "source": "src/server/routes/explorer.ts",
+      "category": "file"
+    },
+    {
+      "method": "POST",
+      "path": "/api/file/new*",
+      "handler": "handleExplorer",
+      "source": "src/server/routes/explorer.ts",
+      "category": "file"
+    },
+    {
+      "method": "GET",
+      "path": "/api/file/raw*",
+      "handler": "handleExplorer",
+      "source": "src/server/routes/explorer.ts",
+      "category": "file"
+    },
+    {
+      "method": "GET",
+      "path": "/api/file/read*",
+      "handler": "handleExplorer",
+      "source": "src/server/routes/explorer.ts",
+      "category": "file"
+    },
+    {
+      "method": "POST",
+      "path": "/api/file/rename*",
+      "handler": "handleExplorer",
+      "source": "src/server/routes/explorer.ts",
+      "category": "file"
+    },
+    {
+      "method": "POST",
+      "path": "/api/file/write*",
+      "handler": "handleExplorer",
+      "source": "src/server/routes/explorer.ts",
+      "category": "file"
+    },
+    {
+      "method": "ANY",
+      "path": "/api/git/*",
+      "handler": "handleGit",
+      "source": "src/server/routes/git.ts",
+      "category": "git"
+    },
+    {
+      "method": "POST",
+      "path": "/api/git/commit*",
+      "handler": "handleGit",
+      "source": "src/server/routes/git.ts",
+      "category": "git"
+    },
+    {
+      "method": "ANY",
+      "path": "/api/git/diff*",
+      "handler": "handleGit",
+      "source": "src/server/routes/git.ts",
+      "category": "git"
+    },
+    {
+      "method": "ANY",
+      "path": "/api/git/log*",
+      "handler": "handleGit",
+      "source": "src/server/routes/git.ts",
+      "category": "git"
+    },
+    {
+      "method": "POST",
+      "path": "/api/git/pull*",
+      "handler": "handleGit",
+      "source": "src/server/routes/git.ts",
+      "category": "git"
+    },
+    {
+      "method": "POST",
+      "path": "/api/git/push*",
+      "handler": "handleGit",
+      "source": "src/server/routes/git.ts",
+      "category": "git"
+    },
+    {
+      "method": "ANY",
+      "path": "/api/git/status*",
+      "handler": "handleGit",
+      "source": "src/server/routes/git.ts",
+      "category": "git"
+    },
+    {
+      "method": "POST",
+      "path": "/api/layout-config",
+      "handler": "handleLayoutSettings",
+      "source": "src/server/routes/settings/layout.ts",
+      "category": "layout-config"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mcp/catalog",
+      "handler": "handleDashboardMcp",
+      "source": "src/server/routes/dashboard-mcp.ts",
+      "category": "mcp"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mcp/install/custom",
+      "handler": "handleDashboardMcp",
+      "source": "src/server/routes/dashboard-mcp.ts",
+      "category": "mcp"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mcp/install",
+      "handler": "handleDashboardMcp",
+      "source": "src/server/routes/dashboard-mcp.ts",
+      "category": "mcp"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mcp/servers/*",
+      "handler": "handleDashboardMcp",
+      "source": "src/server/routes/dashboard-mcp.ts",
+      "category": "mcp"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mcp/servers",
+      "handler": "handleDashboardMcp",
+      "source": "src/server/routes/dashboard-mcp.ts",
+      "category": "mcp"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mcp/uninstall",
+      "handler": "handleDashboardMcp",
+      "source": "src/server/routes/dashboard-mcp.ts",
+      "category": "mcp"
+    },
+    {
+      "method": "POST",
+      "path": "/api/model/switch",
+      "handler": "handleModelSettings",
+      "source": "src/server/routes/settings/models.ts",
+      "category": "model"
+    },
+    {
+      "method": "ANY",
+      "path": "/api/models",
+      "handler": "handleModelSettings",
+      "source": "src/server/routes/settings/models.ts",
+      "category": "models"
+    },
+    {
+      "method": "ANY",
+      "path": "/api/paths",
+      "handler": "handleDashboard",
+      "source": "src/server/routes/dashboard.ts",
+      "category": "paths"
+    },
+    {
+      "method": "GET",
+      "path": "/api/permissions/audit*",
+      "handler": "handlePermissions",
+      "source": "src/server/routes/permissions.ts",
+      "category": "permissions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/permissions/confirm",
+      "handler": "handlePermissions",
+      "source": "src/server/routes/permissions.ts",
+      "category": "permissions"
+    },
+    {
+      "method": "GET",
+      "path": "/api/permissions/mode",
+      "handler": "handlePermissions",
+      "source": "src/server/routes/permissions.ts",
+      "category": "permissions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/permissions/mode",
+      "handler": "handlePermissions",
+      "source": "src/server/routes/permissions.ts",
+      "category": "permissions"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/permissions/rules*",
+      "handler": "handlePermissions",
+      "source": "src/server/routes/permissions.ts",
+      "category": "permissions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/permissions/rules/clear",
+      "handler": "handlePermissions",
+      "source": "src/server/routes/permissions.ts",
+      "category": "permissions"
+    },
+    {
+      "method": "GET",
+      "path": "/api/permissions/rules",
+      "handler": "handlePermissions",
+      "source": "src/server/routes/permissions.ts",
+      "category": "permissions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/permissions/rules",
+      "handler": "handlePermissions",
+      "source": "src/server/routes/permissions.ts",
+      "category": "permissions"
+    },
+    {
+      "method": "GET",
+      "path": "/api/preferences",
+      "handler": "handlePreferenceSettings",
+      "source": "src/server/routes/settings/preferences.ts",
+      "category": "preferences"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/preferences",
+      "handler": "handlePreferenceSettings",
+      "source": "src/server/routes/settings/preferences.ts",
+      "category": "preferences"
+    },
+    {
+      "method": "GET",
+      "path": "/api/search*",
+      "handler": "handleSearch",
+      "source": "src/server/routes/search.ts",
+      "category": "search"
+    },
+    {
+      "method": "POST",
+      "path": "/api/search/conversations",
+      "handler": "handleSearch",
+      "source": "src/server/routes/search.ts",
+      "category": "search"
+    },
+    {
+      "method": "POST",
+      "path": "/api/search/replace",
+      "handler": "handleSearch",
+      "source": "src/server/routes/search.ts",
+      "category": "search"
+    },
+    {
+      "method": "POST",
+      "path": "/api/search",
+      "handler": "handleSearch",
+      "source": "src/server/routes/search.ts",
+      "category": "search"
+    },
+    {
+      "method": "GET",
+      "path": "/api/sessions*",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "sessions"
+    },
+    {
+      "method": "GET",
+      "path": "/api/sessions/*",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/activate",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/branch",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/delete",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/migrate",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/new",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/pin",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/rename",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/save",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "sessions"
+    },
+    {
+      "method": "GET",
+      "path": "/api/sessions",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings",
+      "handler": "handleModelSettings",
+      "source": "src/server/routes/settings/models.ts",
+      "category": "settings"
+    },
+    {
+      "method": "GET",
+      "path": "/api/storage-location",
+      "handler": "handleStorageSettings",
+      "source": "src/server/routes/settings/storage.ts",
+      "category": "storage-location"
+    },
+    {
+      "method": "POST",
+      "path": "/api/storage-location",
+      "handler": "handleStorageSettings",
+      "source": "src/server/routes/settings/storage.ts",
+      "category": "storage-location"
+    },
+    {
+      "method": "POST",
+      "path": "/api/storage-migration/confirm",
+      "handler": "handleStorageSettings",
+      "source": "src/server/routes/settings/storage.ts",
+      "category": "storage-migration"
+    },
+    {
+      "method": "GET",
+      "path": "/api/storage-migration/preview",
+      "handler": "handleStorageSettings",
+      "source": "src/server/routes/settings/storage.ts",
+      "category": "storage-migration"
+    },
+    {
+      "method": "GET",
+      "path": "/api/subagents",
+      "handler": "handleSubagentSettings",
+      "source": "src/server/routes/settings/subagents.ts",
+      "category": "subagents"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/subagents",
+      "handler": "handleSubagentSettings",
+      "source": "src/server/routes/settings/subagents.ts",
+      "category": "subagents"
+    },
+    {
+      "method": "GET",
+      "path": "/api/thinking-level",
+      "handler": "handleThinkingSettings",
+      "source": "src/server/routes/settings/thinking.ts",
+      "category": "thinking-level"
+    },
+    {
+      "method": "POST",
+      "path": "/api/thinking-level",
+      "handler": "handleThinkingSettings",
+      "source": "src/server/routes/settings/thinking.ts",
+      "category": "thinking-level"
+    },
+    {
+      "method": "ANY",
+      "path": "/api/token-usage",
+      "handler": "handleDashboard",
+      "source": "src/server/routes/dashboard.ts",
+      "category": "token-usage"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/*",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/apply-code-action",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/change",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/close",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/code-actions",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/completionDetails",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/completions",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/definition",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ts/diagnostics*",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/format",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/open",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/organize-imports",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/quickinfo",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ts/references",
+      "handler": "handleTypeScript",
+      "source": "src/server/routes/typescript.ts",
+      "category": "ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ui-state*",
+      "handler": "handleUiState",
+      "source": "src/server/routes/ui-state.ts",
+      "category": "ui-state"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/ui-state",
+      "handler": "handleUiState",
+      "source": "src/server/routes/ui-state.ts",
+      "category": "ui-state"
+    },
+    {
+      "method": "ANY",
+      "path": "/api/usage/current",
+      "handler": "handleDashboard",
+      "source": "src/server/routes/dashboard.ts",
+      "category": "usage"
+    },
+    {
+      "method": "ANY",
+      "path": "/api/usage/summary",
+      "handler": "handleDashboard",
+      "source": "src/server/routes/dashboard.ts",
+      "category": "usage"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/switch",
+      "handler": "handleChat",
+      "source": "src/server/routes/chat.ts",
+      "category": "workspace"
+    },
+    {
+      "method": "ANY",
+      "path": "/layout-config.json",
+      "handler": "handleDashboard",
+      "source": "src/server/routes/dashboard.ts",
+      "category": "layout"
+    }
+  ],
+  "permissionModes": [
+    "standard",
+    "plan",
+    "dontAsk",
+    "yes"
+  ],
+  "skills": [],
+  "sources": {
+    "tools": "src/agent/tools/index.ts",
+    "spawnPoints": "src/**/*.ts|js|mjs,scripts/**/*.js|mjs",
+    "engineEvents": "src/agent-engine/contracts.ts",
+    "applicationEvents": "src/server/app-events.ts",
+    "routes": "src/server/routes/**/*.ts",
+    "permissionModes": "src/server/permission-mode.ts",
+    "skills": "task-1-pending"
+  }
+}
