@@ -1,4 +1,4 @@
-import { defineAgentTool, structuredToolResult, type AgentTool } from "../types.js"
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool } from "../types.js"
 import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
 export const gitLogTool: AgentTool = defineAgentTool({
@@ -29,7 +29,14 @@ export const gitLogTool: AgentTool = defineAgentTool({
         : `获取 Git 日志失败：${data.message || data.error || res.status}`
     }
 
-    const entries = data.entries || []
+    if (!data || typeof data !== "object" || !Array.isArray(data.entries)) {
+      return structuredToolError("获取 Git 日志失败：工具结果不完整（缺少提交条目）", "git_log_incomplete", {
+        status: res.status,
+        returnedFields: data && typeof data === "object" ? Object.keys(data) : [],
+      })
+    }
+
+    const entries = data.entries
     if (entries.length === 0) return "没有提交记录。"
 
     const lines: string[] = []

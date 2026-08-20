@@ -22,6 +22,12 @@ export const gitStatusTool: AgentTool = defineAgentTool({
         : `Git 操作失败：${data.message || data.error || `HTTP ${res.status}`}`
       return structuredToolError(hint, data.error === "not_a_repo" ? "not_a_git_repository" : "git_status_failed", { status: res.status, error: data.error })
     }
+    if (!data || typeof data !== "object" || !Array.isArray(data.entries)) {
+      return structuredToolError("Git 操作失败：工具结果不完整（缺少状态条目）", "git_status_incomplete", {
+        status: res.status,
+        returnedFields: data && typeof data === "object" ? Object.keys(data) : [],
+      })
+    }
     // 构建 LLM 友好的摘要
     const lines: string[] = []
     if (data.gitRoot) lines.push(`Git 根目录：${data.gitRoot}`)

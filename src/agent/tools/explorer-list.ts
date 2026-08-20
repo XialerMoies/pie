@@ -33,7 +33,17 @@ export const explorerListTool: AgentTool = defineAgentTool({
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
     if (!res.ok || data.error) return structuredToolError(`列出目录失败：${data.error || data.message || res.status}`, "explorer_failed", { path: subPath, status: res.status })
 
-    const items = data.items || []
+    // A path echo without items is not an empty directory result. Fail closed
+    // so callers cannot report directory facts that were never returned.
+    if (!data || typeof data !== "object" || !Array.isArray(data.items)) {
+      return structuredToolError(`列出目录失败：工具结果不完整（缺少目录项）`, "explorer_incomplete", {
+        path: subPath,
+        status: res.status,
+        returnedFields: data && typeof data === "object" ? Object.keys(data) : [],
+      })
+    }
+
+    const items = data.items
     const counts = { directories: items.filter((i: any) => i.isDir).length, files: items.filter((i: any) => !i.isDir).length }
     if (items.length === 0) return structuredToolResult(`目录"${subPath || "/"}"为空。`, { ...data, path: subPath || ".", filter, items, counts })
 

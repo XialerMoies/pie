@@ -608,7 +608,11 @@ export class AgentRuntime {
       cwd,
       sessionManager: this.sessionManager,
       customTools,
-      excludeTools: ["bash", "edit", "write"],
+      // Evidence and file access must go through the governed custom tools.
+      // PI's built-in read/grep/find/ls do not emit our structured trace payloads.
+      noTools: "builtin",
+      // Keep the built-ins out of the registry too, so they cannot be re-enabled later.
+      excludeTools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
     })
 
     toolTrace.bindSource(session)

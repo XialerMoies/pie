@@ -31,9 +31,17 @@ export const fileOutlineTool: AgentTool = defineAgentTool({
       return structuredToolError(text, data.error === "Access denied" ? "path_access_denied" : "file_outline_failed", { path, status: res.status })
     }
 
+    if (!data || typeof data !== "object" || (!Array.isArray(data.symbols) && data.error !== "binary")) {
+      return structuredToolError(`读取失败：工具结果不完整（缺少文件结构）`, "file_outline_incomplete", {
+        path,
+        status: res.status,
+        returnedFields: data && typeof data === "object" ? Object.keys(data) : [],
+      })
+    }
+
     if (data.error === "binary") return structuredToolResult(`[二进制文件] ${path}，无法提取结构。`, { ...data, path, symbols: [], total: 0 }, [{ code: "binary_file", severity: "warning", message: "The file is binary and has no source outline" }])
 
-    const symbols = data.symbols || []
+    const symbols = data.symbols
     if (symbols.length === 0) return structuredToolResult(`📄 ${path}\n（没有识别到函数/类型定义，或文件为空）`, { ...data, path, symbols, total: 0 })
 
     const lines: string[] = []

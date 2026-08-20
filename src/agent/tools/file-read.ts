@@ -44,6 +44,17 @@ export const fileReadTool: AgentTool = defineAgentTool({
       return structuredToolError(text, data.error === "Access denied" ? "path_access_denied" : "file_read_failed", { path, status: res.status })
     }
 
+    // Never turn a path-only/partial API response into an empty successful read.
+    // The caller must receive an explicit failure so it cannot treat the request
+    // echo as evidence about the file.
+    if (!data || typeof data !== "object" || (data.encoding !== "base64" && typeof data.content !== "string")) {
+      return structuredToolError(`读取失败：工具结果不完整（缺少文件内容）`, "file_read_incomplete", {
+        path,
+        status: res.status,
+        returnedFields: data && typeof data === "object" ? Object.keys(data) : [],
+      })
+    }
+
     // 二进制文件
     if (data.encoding === "base64") {
       const sizeKB = (data.size / 1024).toFixed(1)

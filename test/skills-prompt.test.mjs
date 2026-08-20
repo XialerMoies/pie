@@ -35,6 +35,17 @@ describe("skill prompt", () => {
     assert.doesNotMatch(prompt, /fingerprint|confirmedAt/);
   });
 
+  it("injects a hard evidence gate for verification skills", () => {
+    const prompt = formatSkillPrompt({
+      summaries: [summary("checkpoint-a-verification", true)],
+      bodies: new Map([["checkpoint-a-verification", "# Verification"]]),
+    });
+    assert.match(prompt, /Evidence hard gate/i);
+    assert.match(prompt, /invocation input|input echo/i);
+    assert.match(prompt, /path alone proves nothing/i);
+    assert.match(prompt, /未验证/);
+  });
+
   it("binds runtime prompt assembly to the session cwd skill root", async () => {
     const cwd = join(tmpdir(), "runtime-skill-workspace");
     const roots = [];

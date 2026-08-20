@@ -36,4 +36,11 @@ describe("AgentEngine server and CLI wiring", () => {
     assert.match(cli, /engine\.prompt/);
     assert.doesNotMatch(cli, /initAgent|session\.subscribe|session\.prompt/);
   });
+
+  it("disables PI built-in tools so evidence reads use governed custom tools", () => {
+    const runtime = source("src/agent/runtime.ts");
+    assert.match(runtime, /noTools:\s*["']builtin["']/);
+    assert.match(runtime, /customTools,/);
+    assert.match(runtime, /excludeTools:\s*\[\s*["']read["']\s*,\s*["']bash["']\s*,\s*["']edit["']\s*,\s*["']write["']\s*,\s*["']grep["']\s*,\s*["']find["']\s*,\s*["']ls["']/);
+  });
 });

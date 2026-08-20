@@ -50,7 +50,15 @@ export const searchTool: AgentTool = defineAgentTool({
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
     if (!res.ok || data.error) return structuredToolError(`搜索失败：${data.error || data.message || res.status}`, "search_failed", { query, status: res.status })
 
-    if (!data.results || data.results.length === 0) {
+    if (!data || typeof data !== "object" || !Array.isArray(data.results)) {
+      return structuredToolError(`搜索失败：工具结果不完整（缺少搜索结果）`, "search_incomplete", {
+        query,
+        status: res.status,
+        returnedFields: data && typeof data === "object" ? Object.keys(data) : [],
+      })
+    }
+
+    if (data.results.length === 0) {
       const text = type === "filename" ? `没有找到文件名包含"${query}"的文件。` : `没有找到内容包含"${query}"的文件（已忽略二进制文件、node_modules、.git 等目录）。`
       return structuredToolResult(text, { ...data, query, type, caseSensitive, maxResults, results: [], total: 0, truncated: Boolean(data.truncated) })
     }

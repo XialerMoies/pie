@@ -218,6 +218,24 @@ describe("tool execution authorization gateway", () => {
   });
 });
 
+describe("read tool payload integrity", () => {
+  it("rejects path-only API envelopes across local inspection tools", async () => {
+    mockBody = { path: "src/index.ts" };
+
+    const outline = await fileOutlineTool.execute({ path: "src/index.ts" }, ctx());
+    assert.equal(outline.diagnostics?.[0]?.code, "file_outline_incomplete");
+
+    const search = await searchTool.execute({ query: "needle" }, ctx());
+    assert.equal(search.diagnostics?.[0]?.code, "search_incomplete");
+
+    const status = await gitStatusTool.execute({}, ctx());
+    assert.equal(status.diagnostics?.[0]?.code, "git_status_incomplete");
+
+    const log = await gitLogTool.execute({}, ctx());
+    assert.equal(log.diagnostics?.[0]?.code, "git_log_incomplete");
+  });
+});
+
 describe("file_read tool", () => {
   it("空路径返回友好提示", async () => {
     const r = await fileReadTool.execute({ path: "" }, ctx());
@@ -250,6 +268,13 @@ describe("file_read tool", () => {
     const r = await fileReadTool.execute({ path: "f.ts", startLine: -5 }, ctx());
     assert.ok(lastRequest?.url.includes("path=f.ts"));
     assert.ok(toolText(r).includes("line1"));
+  });
+
+  it("API 只回显路径时拒绝伪造文件读取成功", async () => {
+    mockBody = { path: "f.ts" };
+    const r = await fileReadTool.execute({ path: "f.ts" }, ctx());
+    assert.match(toolText(r), /结果不完整|读取失败/);
+    assert.equal(r.diagnostics?.[0]?.code, "file_read_incomplete");
   });
 });
 
@@ -286,6 +311,13 @@ describe("explorer_list tool", () => {
     mockBody = { error: "internal error" };
     const r = await explorerListTool.execute({}, ctx());
     assert.ok(toolText(r).includes("列出目录失败"), "错误友好提示");
+  });
+
+  it("API 只回显路径时拒绝伪造目录为空", async () => {
+    mockBody = { path: "src" };
+    const r = await explorerListTool.execute({ path: "src" }, ctx());
+    assert.match(toolText(r), /结果不完整|列出目录失败/);
+    assert.equal(r.diagnostics?.[0]?.code, "explorer_incomplete");
   });
 });
 
