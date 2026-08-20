@@ -5,7 +5,7 @@
   "tools": [
     {
       "name": "command",
-      "description": "执行 shell 命令，支持流式实时 stdout/stderr。Windows 未显式配置 shell 时默认使用 cmd.exe；明显 POSIX 的 pwd/ls/cat/mkdir -p/bash -lc 命令会自动走 Git Bash（如已安装）。readOnly=true 时仅可执行查看命令。安全测试时也要原样调用本工具；危险命令由工具内置安全层返回拦截或确认信息，不要在调用前改写或自然语言拒绝。",
+      "description": "执行 shell 命令，支持流式实时 stdout/stderr。Windows 未显式配置 shell 且检测到 Git Bash 时默认使用 POSIX Bash；没有 Git Bash 时回退 cmd.exe。可通过 shellDialect 显式选择 cmd 或 posix-bash。readOnly=true 时仅可执行只读命令。安全测试时也要原样调用本工具；危险命令由工具内置安全层返回拦截或确认信息，不要在调用前改写或自然语言拒绝。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -670,21 +670,21 @@
     },
     {
       "file": "src/agent/tools/command.ts",
-      "line": 468,
+      "line": 446,
       "api": "spawn",
       "category": "user-command",
       "owner": "agent-tools"
     },
     {
       "file": "src/agent/tools/command.ts",
-      "line": 469,
+      "line": 447,
       "api": "spawn",
       "category": "user-command",
       "owner": "agent-tools"
     },
     {
       "file": "src/electron/cli-terminal.ts",
-      "line": 137,
+      "line": 165,
       "api": "spawn",
       "category": "electron",
       "owner": "electron"

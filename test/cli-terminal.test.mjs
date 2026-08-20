@@ -98,6 +98,42 @@ describe("CLI terminal launch", () => {
     assert.doesNotMatch(commandText, /(?:^|\s)tsx(?:\s|$)/);
   });
 
+  it("opens Windows Terminal with the Git Bash profile when both are available", () => {
+    const workspace = "C:\\Users\\user\\project";
+    const launch = buildCliTerminalLaunch({
+      platform: "win32",
+      appRoot: "C:\\Program Files\\My Code Agent\\resources\\app.asar",
+      workspace,
+      dataRoot: "D:\\Agent Data",
+      electronExecutable: "C:\\Program Files\\My Code Agent\\MyCodeAgent.exe",
+      isPackaged: true,
+      env: {},
+      windowsTerminalPath: "C:\\Windows\\System32\\wt.exe",
+      bashPath: "C:\\Program Files\\Git\\bin\\bash.exe",
+    });
+
+    assert.strictEqual(launch.command, "C:\\Windows\\System32\\wt.exe");
+    assert.deepStrictEqual(launch.args.slice(0, 4), ["new-tab", "--startingDirectory", workspace, "C:\\Program Files\\Git\\bin\\bash.exe"]);
+    assert.ok(launch.args.includes("-lc"));
+    assert.match(launch.args.at(-1), /exec bash -i/);
+    assert.ok(!launch.args.at(-1).includes(workspace));
+    assert.strictEqual(launch.options.cwd, workspace);
+  });
+
+  it("falls back to cmd when Git Bash or Windows Terminal is unavailable", () => {
+    const launch = buildCliTerminalLaunch({
+      platform: "win32",
+      appRoot: "C:\\App",
+      workspace: "C:\\Workspace",
+      dataRoot: "C:\\Data",
+      electronExecutable: "C:\\App\\Agent.exe",
+      isPackaged: true,
+      env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+    });
+
+    assert.strictEqual(launch.command, "C:\\Windows\\System32\\cmd.exe");
+  });
+
   it("quotes the macOS workspace, environment, executable, loader, and entry in Terminal", () => {
     const workspace = "/Users/o'connor/project; echo untrusted";
     const dataRoot = "/Users/o'connor/Agent Data";

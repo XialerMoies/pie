@@ -13,7 +13,7 @@ import { initEngine } from "../agent/index.js";
 import { createInterface } from "readline";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { shellDialectFromEnv } from "../agent/tools/command/shell-parser.js";
+import { preferredShellDialect } from "../agent/tools/command/shell-parser.js";
 import { resolveCliRuntimePaths } from "./cli-startup.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -36,7 +36,7 @@ async function main() {
     sessionsDirForWorkspace: CLI_PATHS.sessionsDirForWorkspace,
     authFile: CLI_PATHS.authFile,
     modelsFile: CLI_PATHS.modelsFile,
-    shellDialect: shellDialectFromEnv(),
+    shellDialect: preferredShellDialect(),
   });
 
   console.log(`使用模型: ${engine.session.model?.provider ?? "?"} / ${engine.session.model?.id ?? "?"}`);

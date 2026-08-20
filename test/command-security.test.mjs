@@ -52,7 +52,7 @@ import {
   parseCommandForSecurityWithTreeSitterAsync,
   securityParseResultsDifferForShadow,
 } from "../src/agent/tools/command/security-parser.ts"
-import { parseShellCommand, tokensWithoutRedirects } from "../src/agent/tools/command/shell-parser.ts"
+import { parseShellCommand, preferredShellDialect, tokensWithoutRedirects } from "../src/agent/tools/command/shell-parser.ts"
 import { applySessionPermissionSuggestions, createSessionPermissionState } from "../src/agent/permissions.ts"
 
 function tempWorkspace() {
@@ -1880,7 +1880,7 @@ describe("commandTool.execute 安全拦截", () => {
     }
   })
 
-  it("Windows 未显式配置 shell 时应为明显 POSIX 命令自动选择 Git Bash", async () => {
+  it("Windows 未显式配置 shell 时默认使用 Git Bash，并保留显式 cmd 覆盖", async () => {
     if (process.platform !== "win32") return
     const bashPath = configuredBashPath()
     if (!bashPath) return
@@ -1893,6 +1893,7 @@ describe("commandTool.execute 安全拦截", () => {
           equal(shellDialectForCommand("mkdir -p data"), "posix-bash")
           equal(shellDialectForCommand("cat data/out.txt"), "posix-bash")
           equal(shellDialectForCommand('bash -lc "echo hi > data/bash.txt"'), "posix-bash")
+          equal(preferredShellDialect(), "posix-bash")
           equal(shellDialectForCommand("echo hello > data/out.txt"), "cmd")
           equal(shellDialectForCommand("mkdir -p data", { shellDialect: "cmd" }), "cmd")
 
@@ -1930,6 +1931,15 @@ describe("commandTool.execute 安全拦截", () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  it("Windows 找不到 Git Bash 时应保留 cmd 回退", async () => {
+    if (process.platform !== "win32") return
+    await withEnvVar("MY_CODE_AGENT_SHELL_DIALECT", undefined, async () => {
+      await withEnvVar("MY_CODE_AGENT_BASH_PATH", "C:\\missing-git-bash\\bash.exe", async () => {
+        equal(shellDialectForCommand("ls"), "cmd")
+      })
+    })
   })
 
   it("Windows cmd bare cd should execute as cwd display", async () => {

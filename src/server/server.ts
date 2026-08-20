@@ -16,7 +16,7 @@ import { cancelCommandConfirmationsForResponse, createCommandConfirmCallback } f
 import type { ChatStreamState } from "./routes/types.js";
 import { TsserverManager } from "./ts-server.js";
 import { mark, logTiming } from "./timing.js";
-import { shellDialectFromEnv } from "../agent/tools/command/shell-parser.js";
+import { preferredShellDialect } from "../agent/tools/command/shell-parser.js";
 import { createSessionPermissionState } from "../agent/permissions.js";
 import {
   cleanupStaleInstanceDirectories,
@@ -251,7 +251,7 @@ async function main() {
     modelsFile: STARTUP.layout.modelsFile,
     syncModelProviders: modelRuntime => customProviderService.syncRuntime(modelRuntime),
     getPermissionMode: () => permissionMode.get(),
-    shellDialect: shellDialectFromEnv(),
+    shellDialect: preferredShellDialect(),
     confirmCommand: createCommandConfirmCallback(chatStream),
     desktopApiToken: security.token,
     sessionPermissionState,

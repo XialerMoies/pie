@@ -1,6 +1,6 @@
 # Task 1：可信技能系统 MVP 设计
 
-> 状态：待实施
+> 状态：已完成
 > 日期：2026-08-19
 > 范围：第一阶段 Task 1
 
@@ -153,6 +153,29 @@ tools 只是技能声明的现有工具名列表：
 每个技能最多返回一个主状态和可读诊断：invalid_frontmatter、name_mismatch、empty_description、unknown_tool、untrusted、disabled、content_changed、state_corrupt、path_rejected、overridden。
 
 诊断可以进入设置页和结构化日志，但技能正文、状态文件中的敏感值和完整路径不应无必要地写入日志。
+
+## 管理与验证
+
+人工安装时，把技能文件放到以下任一位置：
+
+```text
+<PI_USER_CONFIG>/skills/<skill-id>/SKILL.md
+<workspace-root>/agent/skills/<skill-id>/SKILL.md
+```
+
+然后在“设置 → 技能”中执行“重新扫描 → 信任 → 启用”。禁用或取消信任后，技能正文不再进入 Agent 上下文；修改 `SKILL.md` 会使内容指纹变化，必须重新信任。删除操作会删除对应技能目录，并有二次确认。
+
+验证 Agent 是否实际读取技能时，可以在测试技能正文中定义一个唯一、无副作用的输出标记，再明确要求 Agent 执行该技能的验证动作。工作区技能 `skill-verification` 已用 `SKILL_PROBE_7E42A` 完成一次真实验证，确认启用后的正文进入了当前工作区的 Agent 上下文。该标记只用于验收，不是产品内置协议。
+
+技能是提示说明，不是可执行插件。它不能注册新工具、扩大现有工具集合，也不能绕过 `permissionMode`、路径授权、命令确认或危险命令强制拦截。
+
+## 实现记录
+
+- `SkillService` 负责扫描、状态合并、信任/启用管理、删除和正文加载；`<PI_USER_CONFIG>/skill-state.json` 损坏时整体 fail-closed。
+- 设置页已接入查看、重新扫描、信任、取消信任、启用、禁用和删除操作。
+- 静态 `capability-catalog.json` 只保存确定性的技能 schema、目录根和运行时来源；实际安装摘要由运行时生成。
+- 系统提示词列出技能摘要，只为解析有效、指纹未变化、已信任且已启用的技能附加正文，并按会话工作区绑定技能根目录。
+- `c67fb50` 修复了 `PiAgentEngineAdapter` 调用 runtime 会话方法时丢失接收者的问题，避免技能验证请求在 `engine.prompt()` 前因 `_enqueueSessionTransition` 未绑定而失败。
 
 ## 测试策略
 

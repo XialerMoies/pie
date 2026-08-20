@@ -1,6 +1,6 @@
 # Task 0：生成式能力目录设计
 
-> 状态：待实施
+> 状态：已完成
 > 日期：2026-08-19
 > 范围：第一阶段 Task 0
 
@@ -23,7 +23,7 @@ Task 0 包含：
 - API 路由的稳定字面量、方法、handler 和来源文件；
 - spawn 点及其粗粒度类别、来源文件和行号；
 - 权限模式；
-- 空的技能 catalog 和待接入来源标记；
+- 技能 catalog 的静态 schema、目录根和运行时来源标记；
 - 确定性 JSON 生成；
 - `--check` 同步检查；
 - Windows CI 门禁。
@@ -96,7 +96,7 @@ scripts/generate-capability-catalog.mjs
   },
   "routes": [],
   "permissionModes": [],
-  "skills": [],
+  "skills": {},
   "sources": {}
 }
 ```
@@ -171,13 +171,31 @@ yes
 
 ### skills
 
-Task 1 尚未实现技能系统，因此固定输出：
+Task 1 已实现运行时技能系统。提交版 catalog 仍不扫描用户或工作区实际安装的技能，只输出确定性的静态契约：
 
 ```json
-"skills": []
+"skills": {
+  "schemaVersion": 1,
+  "runtimeSource": "src/agent/skills/skill-service.ts",
+  "roots": [
+    "<PI_USER_CONFIG>/skills",
+    "<workspace-root>/agent/skills"
+  ],
+  "summaryFields": [
+    "id",
+    "name",
+    "description",
+    "source",
+    "path",
+    "trust",
+    "enabled",
+    "parse",
+    "declaredTools"
+  ]
+}
 ```
 
-并在 `sources.skills` 标记 `task-1-pending`。Task 0 不扫描或加载 `SKILL.md` 正文。
+`sources.skills` 指向 `src/agent/skills/skill-service.ts`。实际技能摘要由 Task 1 的运行时 `SkillService` 提供；Task 0 不扫描或加载 `SKILL.md` 正文，也不把本机安装状态写入生成文件。
 
 ## 确定性规则
 
@@ -211,7 +229,7 @@ CI 失败时表示代码事实与已提交 catalog 不同步；开发者显式�
 
 1. 同一 commit 在同一依赖环境下重复生成得到字节级相同 JSON。
 2. 工具、事件、路由、权限模式和 spawn 点均有可追溯来源。
-3. `skills` 为空但 schema 已存在，Task 1 可以直接消费。
+3. `skills` 记录静态 schema、目录根和运行时来源，但不包含本机安装数据或技能正文。
 4. `capabilities:check` 能检测手工修改或代码漂移。
 5. 生成过程不启动 server、Electron、Provider 网络请求或 MCP 连接。
 6. 现有 typecheck、unit、routes、frontend 和 release gate 不回归。

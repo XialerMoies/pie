@@ -13,7 +13,6 @@
  */
 import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool, type AgentToolResult, type CommandConfirmationRequest, type CommandConfirmationResponse, type CommandConfirmationScope, type PermissionFailure, type PermissionSuggestion, type ToolContext } from "../types.js"
 import { spawn } from "child_process"
-import { existsSync } from "fs"
 import { dirname } from "path"
 import { StringDecoder } from "string_decoder"
 import { TextDecoder } from "util"
@@ -24,8 +23,9 @@ import type { SecurityParseResult, ShellDialect } from "./command/security-ast.j
 import { parseShellCommand, shellDialectFromEnv, tokensWithoutRedirects } from "./command/shell-parser.js"
 import { isPureFileOperation, isRegularGitOperation } from "./command/pure-file-op.js"
 import { baseCommandName, isDangerousCommand, type DangerResult } from "./command/dangerous-command.js"
+import { resolveBashExecutable } from "./command/shell-runtime.js"
 
-export { isDangerousCommand }
+export { isDangerousCommand, resolveBashExecutable }
 
 const MAX_OUTPUT = 100 * 1024 // 100KB 总输出上限
 const COMMAND_TIMEOUT = 300_000 // 5 分钟
@@ -40,28 +40,6 @@ export function isReadOnlyCommand(cmd: string): boolean {
 // ─── 通用函数 ───────────────────────────────────────────
 
 function isWindows(): boolean { return process.platform === "win32" }
-
-function stripOuterQuotes(value: string): string {
-  const trimmed = value.trim()
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1)
-  }
-  return trimmed
-}
-
-export function resolveBashExecutable(): string | undefined {
-  const configured = stripOuterQuotes(process.env.MY_CODE_AGENT_BASH_PATH ?? "")
-  if (configured) return existsSync(configured) ? configured : undefined
-  if (!isWindows()) return process.env.SHELL || "bash"
-
-  const candidates = [
-    "C:\\Program Files\\Git\\bin\\bash.exe",
-    "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
-    "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
-    "C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe",
-  ]
-  return candidates.find((candidate) => existsSync(candidate))
-}
 
 function commandExecutionEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env }
@@ -501,7 +479,7 @@ async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: Tool
 
 export const commandTool: AgentTool = defineAgentTool({
   name: "command",
-  description: "执行 shell 命令，支持流式实时 stdout/stderr。Windows 未显式配置 shell 时默认使用 cmd.exe；明显 POSIX 的 pwd/ls/cat/mkdir -p/bash -lc 命令会自动走 Git Bash（如已安装）。readOnly=true 时仅可执行查看命令。安全测试时也要原样调用本工具；危险命令由工具内置安全层返回拦截或确认信息，不要在调用前改写或自然语言拒绝。",
+  description: "执行 shell 命令，支持流式实时 stdout/stderr。Windows 未显式配置 shell 且检测到 Git Bash 时默认使用 POSIX Bash；没有 Git Bash 时回退 cmd.exe。可通过 shellDialect 显式选择 cmd 或 posix-bash。readOnly=true 时仅可执行只读命令。安全测试时也要原样调用本工具；危险命令由工具内置安全层返回拦截或确认信息，不要在调用前改写或自然语言拒绝。",
   parameters: {
     type: "object",
     properties: {

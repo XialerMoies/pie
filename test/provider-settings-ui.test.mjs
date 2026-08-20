@@ -598,6 +598,12 @@ describe("provider settings views", () => {
     assert.equal(custom.querySelector(".provider-identity-name")?.textContent, unsafeName);
   });
 
+  it("keeps the Anthropic provider icon orange in dark mode", () => {
+    const icon = readFileSync(resolve("src/frontend/icons/providers/anthropic.svg"), "utf8");
+    assert.match(icon, /fill=\"#f97316\"/i);
+    assert.doesNotMatch(icon, /fill=\"currentColor\"/i);
+  });
+
   it("renders the official editor as a callback-driven DOM view", async () => {
     const { OfficialProviderEditorView } = await loadViews();
     const host = document.createElement("div");

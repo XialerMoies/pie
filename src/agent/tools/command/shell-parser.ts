@@ -1,4 +1,5 @@
 import type { ShellDialect } from "../../types.js"
+import { resolveBashExecutable } from "./shell-runtime.js"
 
 export type ShellSegmentOperator = "pipe" | "and" | "or" | "sequence" | "background"
 
@@ -61,6 +62,13 @@ export function shellDialectFromEnv(): ShellDialect | undefined {
   if (raw === "posix" || raw === "bash" || raw === "posix-bash" || raw === "git-bash") return "posix-bash"
   if (raw === "powershell" || raw === "pwsh" || raw === "pwsh.exe" || raw === "powershell.exe") return "powershell"
   return undefined
+}
+
+export function preferredShellDialect(): ShellDialect {
+  const configured = shellDialectFromEnv()
+  if (configured) return configured
+  if (process.platform === "win32" && resolveBashExecutable()) return "posix-bash"
+  return process.platform === "win32" ? "cmd" : "posix-bash"
 }
 
 function shouldTreatBackslashAsEscape(inSingle: boolean, windowsShell: boolean): boolean {

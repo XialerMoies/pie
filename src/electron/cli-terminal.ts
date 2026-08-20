@@ -1,6 +1,8 @@
 import { spawn as spawnChild } from "node:child_process";
+import { existsSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveBashExecutable } from "../agent/tools/command/shell-runtime.js";
 
 export interface CliTerminalLaunchInput {
   platform: NodeJS.Platform;
@@ -10,6 +12,8 @@ export interface CliTerminalLaunchInput {
   electronExecutable: string;
   isPackaged: boolean;
   env: NodeJS.ProcessEnv;
+  windowsTerminalPath?: string;
+  bashPath?: string;
 }
 
 export interface CliTerminalLaunch {
@@ -45,6 +49,16 @@ function quotePosixShellArg(value: string): string {
 function assertAbsolute(name: string, value: string, platform: NodeJS.Platform): void {
   const pathApi = platform === "win32" ? win32 : posix;
   if (!pathApi.isAbsolute(value)) throw new Error(`${name} must be absolute`);
+}
+
+function resolveWindowsTerminalExecutable(environment: NodeJS.ProcessEnv, configured?: string): string | undefined {
+  if (configured) return configured;
+  const explicit = environment.MY_CODE_AGENT_WINDOWS_TERMINAL_PATH?.trim();
+  if (explicit && existsSync(explicit)) return explicit;
+  const localAppData = environment.LOCALAPPDATA;
+  if (!localAppData) return undefined;
+  const alias = win32.join(localAppData, "Microsoft", "WindowsApps", "wt.exe");
+  return existsSync(alias) ? alias : undefined;
 }
 
 export function buildCliTerminalLaunch(input: CliTerminalLaunchInput): CliTerminalLaunch {
@@ -90,6 +104,20 @@ export function buildCliTerminalLaunch(input: CliTerminalLaunchInput): CliTermin
     env.MY_CODE_AGENT_CLI_EXECUTABLE = input.electronExecutable;
     env.MY_CODE_AGENT_CLI_ENTRY = entry;
     if (loader) env.MY_CODE_AGENT_CLI_LOADER = loader;
+    const bash = input.bashPath || resolveBashExecutable(input.env);
+    const windowsTerminal = resolveWindowsTerminalExecutable(input.env, input.windowsTerminalPath);
+    if (bash && windowsTerminal) {
+      env.MY_CODE_AGENT_BASH_PATH ||= bash;
+      env.MY_CODE_AGENT_SHELL_DIALECT ||= "posix-bash";
+      const invocation = loader
+        ? '"$MY_CODE_AGENT_CLI_EXECUTABLE" --import "$MY_CODE_AGENT_CLI_LOADER" "$MY_CODE_AGENT_CLI_ENTRY" --cli'
+        : '"$MY_CODE_AGENT_CLI_EXECUTABLE" "$MY_CODE_AGENT_CLI_ENTRY" --cli';
+      return {
+        command: windowsTerminal,
+        args: ["new-tab", "--startingDirectory", input.workspace, bash, "-lc", `${invocation}; exec bash -i`],
+        options: { ...baseOptions, windowsHide: true },
+      };
+    }
     const invocation = loader
       ? '"%MY_CODE_AGENT_CLI_EXECUTABLE%" --import "%MY_CODE_AGENT_CLI_LOADER%" "%MY_CODE_AGENT_CLI_ENTRY%" --cli'
       : '"%MY_CODE_AGENT_CLI_EXECUTABLE%" "%MY_CODE_AGENT_CLI_ENTRY%" --cli';

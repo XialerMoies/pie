@@ -1,8 +1,10 @@
 # Task 0 Capability Catalog Implementation Plan
 
+> 状态：已完成（以下步骤保留为实施计划历史记录）
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Generate a deterministic, code-derived capability catalog covering tools, spawn points, events, API routes, permission modes, and an empty Task 1 skill seam, with a CI synchronization gate.
+**Goal:** Generate a deterministic, code-derived capability catalog covering tools, spawn points, events, API routes, permission modes, and the static Task 1 skill contract seam, with a CI synchronization gate.
 
 **Architecture:** Export three small runtime fact constants, then use one mixed generator script: runtime imports for structured tool/event/mode facts and constrained text scanning for route/spawn facts. The generated JSON is committed and checked byte-for-byte with `--check`; no AST framework, runtime plugin system, skill implementation, or environment governance is introduced.
 
@@ -174,8 +176,13 @@ describe("capability catalog generator", () => {
     assert.strictEqual(serializeCapabilityCatalog(first), serializeCapabilityCatalog(second));
     assert.strictEqual(first.schemaVersion, 1);
     assert.strictEqual(first.generatedAt, "deterministic");
-    assert.deepStrictEqual(first.skills, []);
-    assert.strictEqual(first.sources.skills, "task-1-pending");
+    assert.equal(first.skills.schemaVersion, 1);
+    assert.equal(first.skills.runtimeSource, "src/agent/skills/skill-service.ts");
+    assert.deepStrictEqual(first.skills.roots, [
+      "<PI_USER_CONFIG>/skills",
+      "<workspace-root>/agent/skills",
+    ]);
+    assert.strictEqual(first.sources.skills, "src/agent/skills/skill-service.ts");
     assert.ok(first.tools.some((tool) => tool.name === "command" && tool.source === "src/agent/tools/command.ts"));
     assert.ok(first.events.engine.includes("turn.cancelled"));
     assert.ok(first.events.application.includes("permission.confirm"));
@@ -394,7 +401,12 @@ export async function buildCapabilityCatalog() {
     },
     routes: await collectRoutes(),
     permissionModes: [...PERMISSION_MODES],
-    skills: [],
+    skills: {
+      schemaVersion: 1,
+      runtimeSource: "src/agent/skills/skill-service.ts",
+      roots: ["<PI_USER_CONFIG>/skills", "<workspace-root>/agent/skills"],
+      summaryFields: ["id", "name", "description", "source", "path", "trust", "enabled", "parse", "declaredTools"],
+    },
     sources: {
       tools: "src/agent/tools/index.ts",
       spawnPoints: "src/**/*.ts|js|mjs,scripts/**/*.js|mjs",
@@ -402,7 +414,7 @@ export async function buildCapabilityCatalog() {
       applicationEvents: "src/server/app-events.ts",
       routes: "src/server/routes/**/*.ts",
       permissionModes: "src/server/permission-mode.ts",
-      skills: "task-1-pending",
+      skills: "src/agent/skills/skill-service.ts",
     },
   };
 }
@@ -509,7 +521,7 @@ Inspect:
 git diff --cached -- docs/generated/capability-catalog.json package.json
 ```
 
-Expected: deterministic JSON only; `skills` is empty and `sources.skills` is `task-1-pending`.
+Expected: deterministic JSON only; `skills` contains the static Task 1 schema and `sources.skills` is `src/agent/skills/skill-service.ts`.
 
 - [ ] **Step 5: Verify mismatch detection without modifying the committed file**
 
@@ -576,7 +588,7 @@ In `docs/任务清单.md`, replace the Task 0 heading and completion block with 
 ```markdown
 ### Task 0：生成式能力目录（已完成）
 
-代码事实通过 `scripts/generate-capability-catalog.mjs` 生成到 `docs/generated/capability-catalog.json`；`npm run capabilities:check` 和 Windows CI 检查同步。目录覆盖工具、spawn 点、事件、API 路由、权限模式，并为 Task 1 保留空的技能 catalog 接缝。
+代码事实通过 `scripts/generate-capability-catalog.mjs` 生成到 `docs/generated/capability-catalog.json`；`npm run capabilities:check` 和 Windows CI 检查同步。目录覆盖工具、spawn 点、事件、API 路由、权限模式，并为 Task 1 保留静态技能 schema、目录根和运行时来源接缝。
 ```
 
 Keep the existing goal, scope exclusions, and rationale; do not add test counts or catalog item counts.
