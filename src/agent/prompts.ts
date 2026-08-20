@@ -6,14 +6,13 @@
  *
  * 当前实现：同步加载缓存的 sections。后续可扩展为按需刷新。
  */
-import { readFileSync, existsSync, readdirSync } from "fs";
+import { readFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { getCurrentRuntime } from "./globals.js";
+import { readOrRebuildMemoryIndex, resolveMemoryRoot, type MemoryMetadata } from "./memory-store.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(__dirname, "..", "..");
-const MEMORY_DIR = resolve(APP_ROOT, "data", "pi", "memory");
-const MEMORY_INDEX = resolve(MEMORY_DIR, "MEMORY.md");
 
 export interface PromptSection {
   key: string;
@@ -161,8 +160,10 @@ defineSection("memory_management", `## 记忆管理
 
 你可以用以下工具管理记忆：
 - write_agent_md — 更新项目级记忆（AGENT.md），适合记录项目配置、架构决策
-- read_memory — 读取一条全局记忆（编码偏好、说话风格等）
-- write_memory — 写入/更新一条全局记忆
+- read_memory / list_memory — 按需读取用户级或工作区级长期记忆
+- write_memory — 写入/更新一条用户级或工作区级长期记忆
+- delete_memory — 删除一条长期记忆
+- set_memory_enabled — 禁用或启用记忆，不删除正文
 
 当以下情况发生时，应该主动更新记忆：
 - 发现项目的构建/测试/部署方式（如"用 pnpm"、"测试用 vitest"）
@@ -263,10 +264,26 @@ DANGEROUS_uncachedSystemPromptSection("agent_md", () => {
 
 DANGEROUS_uncachedSystemPromptSection("global_memory", () => {
   try {
-    if (!existsSync(MEMORY_DIR)) return "";
-    const indexContent = readFileSync(MEMORY_INDEX, "utf-8");
-    if (!indexContent.trim()) return "";
-    return `# 全局记忆\n\n${indexContent}\n\n你可以用 read_memory / write_memory 工具读取或更新这些记忆。`;
+    const runtime = getCurrentRuntime();
+    const userRoot = runtime?.config?.userMemoryRoot;
+    const workspace = runtime?.currentWorkspace;
+    if (!userRoot && !workspace) return "";
+    const userEntries = userRoot ? readOrRebuildMemoryIndex(userRoot, "user").entries : [];
+    const workspaceRoot = workspace ? resolveMemoryRoot({
+      scope: "workspace",
+      workspaceMemoryRoot: runtime?.config?.workspaceMemoryRoot,
+      workspace,
+    }) : undefined;
+    const workspaceEntries = workspaceRoot ? readOrRebuildMemoryIndex(workspaceRoot, "workspace").entries : [];
+    const merged = new Map<string, MemoryMetadata>();
+    for (const entry of userEntries) if (entry.enabled) merged.set(entry.name, entry);
+    for (const entry of workspaceEntries) if (entry.enabled) merged.set(entry.name, entry);
+    if (merged.size === 0) return "";
+    const indexContent = [...merged.values()]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((entry) => `- [${entry.name}](${entry.name}.md) — ${entry.summary || "无摘要"}（${entry.scope}，${entry.updatedAt}）`)
+      .join("\n");
+    return `# 长期记忆索引\n\n${indexContent}\n\n你可以用 read_memory / write_memory / list_memory 工具读取或更新这些记忆。`;
   } catch {
     return "";
   }

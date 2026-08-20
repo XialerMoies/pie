@@ -11,7 +11,7 @@
  */
 import { initEngine } from "../agent/index.js";
 import { createInterface } from "readline";
-import { resolve, dirname } from "path";
+import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { preferredShellDialect } from "../agent/tools/command/shell-parser.js";
 import { resolveCliRuntimePaths } from "./cli-startup.js";
@@ -32,6 +32,7 @@ async function main() {
   const engine = await initEngine({
     agentDir: CLI_PATHS.agentDir,
     cwd: CLI_PATHS.cwd,
+    userMemoryRoot: join(CLI_PATHS.agentDir, "memory"),
     sessionsDir: CLI_PATHS.sessionsDir,
     sessionsDirForWorkspace: CLI_PATHS.sessionsDirForWorkspace,
     authFile: CLI_PATHS.authFile,

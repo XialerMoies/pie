@@ -29,6 +29,8 @@ export interface RuntimeConfig {
   sessionsDirForWorkspace?: (workspace: string) => string
   authFile: string
   modelsFile: string
+  userMemoryRoot?: string
+  workspaceMemoryRoot?: string
   /** 权限模式：由宿主设置，传递给工具执行上下文 */
   permissionMode?: ToolContext["permissionMode"]
   getPermissionMode?: ToolContext["getPermissionMode"]
@@ -51,6 +53,8 @@ export interface RuntimeConfig {
 
 type RuntimeToolExtraContext = Pick<
   ToolContext,
+  | "userMemoryRoot"
+  | "workspaceMemoryRoot"
   | "permissionMode"
   | "getPermissionMode"
   | "confirmCommand"
@@ -71,8 +75,10 @@ type RuntimeToolExtraContext = Pick<
 
 export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraContext | undefined {
   const permissionState = config.sessionPermissionState
-  if (!config.permissionMode && !config.getPermissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken && !config.validateSubagentModel && !config.getSubagentDefinitions && !config.getSubagentLimits && !config.delegateTasks) return undefined
+  if (!config.userMemoryRoot && !config.workspaceMemoryRoot && !config.permissionMode && !config.getPermissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken && !config.validateSubagentModel && !config.getSubagentDefinitions && !config.getSubagentLimits && !config.delegateTasks) return undefined
   return {
+    userMemoryRoot: config.userMemoryRoot,
+    workspaceMemoryRoot: config.workspaceMemoryRoot,
     permissionMode: config.permissionMode,
     getPermissionMode: config.getPermissionMode,
     confirmCommand: config.confirmCommand,

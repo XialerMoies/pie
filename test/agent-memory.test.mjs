@@ -15,11 +15,23 @@ import { tmpdir } from "node:os";
 
 // ── 工具导入 ──────────────────────────────────────────────
 import { writeAgentMdTool } from "../src/agent/tools/agent-md.ts";
-import { readMemoryTool, writeMemoryTool, validMemoryName } from "../src/agent/tools/memory.ts";
+import {
+  readMemoryTool,
+  writeMemoryTool,
+  listMemoryTool,
+  deleteMemoryTool,
+  setMemoryEnabledTool,
+  validMemoryName,
+} from "../src/agent/tools/memory.ts";
 
 // ── 模拟运行时（无副作用，仅验证工具）─────────────────────
 function toolCtx(overrides = {}) {
-  return { toolCallId: "call-1", workspace: "/tmp/test-workspace", ...overrides };
+  return {
+    toolCallId: "call-1",
+    workspace: "/tmp/test-workspace",
+    userMemoryRoot: resolve(tmpdir(), "my-code-agent-memory-tests"),
+    ...overrides,
+  };
 }
 
 // ===================================================================
@@ -191,6 +203,56 @@ describe("memory name validation", () => {
   });
 });
 
+describe("scoped memory roots", () => {
+  it("resolves the injected user root by default", async () => {
+    const { resolveMemoryRoot } = await import("../src/agent/memory-store.ts");
+    assert.strictEqual(
+      resolveMemoryRoot({ scope: "user", userMemoryRoot: resolve(tmpdir(), "user-memory") }),
+      resolve(tmpdir(), "user-memory"),
+    );
+  });
+
+  it("resolves workspace memory under agent/memory", async () => {
+    const { resolveMemoryRoot } = await import("../src/agent/memory-store.ts");
+    const workspace = resolve(tmpdir(), "scoped-workspace");
+    assert.strictEqual(
+      resolveMemoryRoot({ scope: "workspace", workspace }),
+      resolve(workspace, "agent", "memory"),
+    );
+  });
+
+  it("rejects workspace scope without a workspace", async () => {
+    const { resolveMemoryRoot } = await import("../src/agent/memory-store.ts");
+    assert.throws(
+      () => resolveMemoryRoot({ scope: "workspace" }),
+      /workspace.*required/i,
+    );
+  });
+
+  it("migrates legacy Markdown without overwriting the new user memory", async () => {
+    const { migrateLegacyMemory, readOrRebuildMemoryIndex } = await import("../src/agent/memory-store.ts");
+    const root = mkdtempSync(resolve(tmpdir(), "memory-migration-"));
+    const legacy = resolve(root, "legacy");
+    const user = resolve(root, "user");
+    mkdirSync(legacy, { recursive: true });
+    mkdirSync(user, { recursive: true });
+    writeFileSync(resolve(legacy, "old.md"), "# Old");
+    writeFileSync(resolve(legacy, "conflict.md"), "# Legacy conflict");
+    writeFileSync(resolve(user, "conflict.md"), "# New conflict");
+    try {
+      const first = migrateLegacyMemory(legacy, user);
+      assert.deepStrictEqual(first.migrated, ["old"]);
+      assert.deepStrictEqual(first.conflicts, ["conflict"]);
+      assert.strictEqual(readFileSync(resolve(user, "old.md"), "utf8"), "# Old");
+      assert.strictEqual(readFileSync(resolve(user, "conflict.md"), "utf8"), "# New conflict");
+      const index = readOrRebuildMemoryIndex(user, "user");
+      assert.deepStrictEqual(index.entries.map((entry) => entry.name).sort(), ["conflict", "old"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 // ===================================================================
 // 3. switchWorkspace / _doOpenSession 失败回滚
 // ===================================================================
@@ -247,6 +309,52 @@ describe("agent memory authorization", () => {
     assert.ok(result.text.includes("permission denied for test"));
     assert.ok(target);
     assert.strictEqual(existsSync(target), false);
+  });
+});
+
+describe("scoped memory management", () => {
+  it("writes and reads a workspace memory without touching the user root", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "memory-scope-"));
+    const workspace = resolve(root, "workspace");
+    const userRoot = resolve(root, "user-memory");
+    try {
+      const ctx = toolCtx({ workspace, userMemoryRoot: userRoot });
+      const writeResult = await writeMemoryTool.execute(
+        { name: "project-style", content: "# Project style", scope: "workspace" },
+        ctx,
+      );
+      assert.ok(writeResult.text.includes("已更新"));
+      assert.strictEqual(readFileSync(resolve(workspace, "agent", "memory", "project-style.md"), "utf8"), "# Project style");
+      assert.strictEqual(existsSync(resolve(userRoot, "project-style.md")), false);
+      const readResult = await readMemoryTool.execute({ name: "project-style", scope: "workspace" }, ctx);
+      assert.strictEqual(readResult.text, "# Project style");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lists, disables, and deletes a memory", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "memory-manage-"));
+    try {
+      const ctx = toolCtx({ userMemoryRoot: root });
+      await writeMemoryTool.execute({ name: "managed", content: "# Managed" }, ctx);
+      const listed = await listMemoryTool.execute({}, ctx);
+      assert.ok(listed.text.includes("managed"));
+      await setMemoryEnabledTool.execute({ name: "managed", enabled: false }, ctx);
+      assert.ok(!readFileSync(resolve(root, "MEMORY.md"), "utf8").includes("managed"));
+      await deleteMemoryTool.execute({ name: "managed" }, ctx);
+      assert.strictEqual(existsSync(resolve(root, "managed.md")), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects workspace operations without a workspace", async () => {
+    const result = await writeMemoryTool.execute(
+      { name: "project", content: "# Project", scope: "workspace" },
+      toolCtx({ workspace: undefined }),
+    );
+    assert.match(result.text, /workspace.*required/i);
   });
 });
 

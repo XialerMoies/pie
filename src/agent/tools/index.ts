@@ -25,7 +25,7 @@ import { webSearchTool, setSearchBackend, getSearchBackend } from "./web-search.
 import { webFetchTool } from "./web-fetch.js"
 import { commandTool } from "./command.js"
 import { writeAgentMdTool } from "./agent-md.js"
-import { readMemoryTool, writeMemoryTool } from "./memory.js"
+import { readMemoryTool, writeMemoryTool, listMemoryTool, deleteMemoryTool, setMemoryEnabledTool } from "./memory.js"
 import { strReplaceEditorTool } from "./str-replace-editor.js"
 import { fileWriteTool } from "./file-write.js"
 import { delegateTasksTool } from "./delegate-tasks.js"
@@ -53,6 +53,9 @@ toolRegistry.register(commandTool)
 toolRegistry.register(writeAgentMdTool)
 toolRegistry.register(readMemoryTool)
 toolRegistry.register(writeMemoryTool)
+toolRegistry.register(listMemoryTool)
+toolRegistry.register(deleteMemoryTool)
+toolRegistry.register(setMemoryEnabledTool)
 toolRegistry.register(strReplaceEditorTool)
 toolRegistry.register(fileWriteTool)
 toolRegistry.register(delegateTasksTool)
@@ -64,6 +67,8 @@ export function registerTool(
 }
 
 type ExtraCtx = {
+  userMemoryRoot?: ToolContext["userMemoryRoot"]
+  workspaceMemoryRoot?: ToolContext["workspaceMemoryRoot"]
   permissionMode?: ToolContext["permissionMode"]
   getPermissionMode?: ToolContext["getPermissionMode"]
   confirmCommand?: ToolContext["confirmCommand"]

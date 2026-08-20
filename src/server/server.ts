@@ -245,6 +245,7 @@ async function main() {
   ({ runtime, engine } = await initAgentHost({
     agentDir: PI_CONFIG_DIR,
     cwd: STARTUP.workspace,
+    userMemoryRoot: join(PI_CONFIG_DIR, "memory"),
     sessionsDir: SESSIONS_DIR,
     sessionsDirForWorkspace: (workspace) => workspaceDataPaths(DATA_DIR, workspace).sessionsDir,
     authFile: STARTUP.layout.authFile,

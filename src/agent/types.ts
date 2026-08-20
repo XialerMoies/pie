@@ -293,6 +293,9 @@ export interface ToolContext {
   cwd: string
   sessionId: string
   workspace?: string  // 当前 workspace 路径，用于工具 API 调用
+  /** Host-owned long-lived memory roots. Tool arguments can only choose scope. */
+  userMemoryRoot?: string
+  workspaceMemoryRoot?: string
   toolCallId?: string
   /** 宿主提供的协作式中止信号 */
   signal?: AbortSignal
@@ -552,6 +555,8 @@ export function defineAgentTool(tool: AgentTool): AgentTool {
 }
 
 export interface ToolExecutionExtraContext {
+  userMemoryRoot?: ToolContext["userMemoryRoot"]
+  workspaceMemoryRoot?: ToolContext["workspaceMemoryRoot"]
   permissionMode?: ToolContext["permissionMode"]
   getPermissionMode?: ToolContext["getPermissionMode"]
   confirmCommand?: ToolContext["confirmCommand"]

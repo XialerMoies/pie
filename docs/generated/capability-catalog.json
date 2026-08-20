@@ -164,6 +164,37 @@
       "source": "src/agent/tools/delegate-tasks.ts"
     },
     {
+      "name": "delete_memory",
+      "description": "删除一条长期记忆正文和索引条目。此操作必须由用户明确要求。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "workspace"
+            ],
+            "description": "记忆作用域；默认 user。"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "capabilities": {
+        "readOnly": false,
+        "destructive": true,
+        "riskLevel": "medium",
+        "needsPermission": false,
+        "workspaceBounded": false
+      },
+      "source": "src/agent/tools/memory.ts"
+    },
+    {
       "name": "explorer_list",
       "description": "列出目录内容，返回结构化的文件和文件夹列表。比 bash ls 更好用：自动过滤 node_modules/.git、目录排前面、显示完整相对路径。配合 file_read / search 使用：用这个看目录结构，用 search 找代码，用 file_read 读内容。",
       "parameters": {
@@ -311,14 +342,47 @@
       "source": "src/agent/tools/git-log.ts"
     },
     {
+      "name": "list_memory",
+      "description": "列出作用域中的长期记忆摘要，不读取全部正文。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "workspace"
+            ],
+            "description": "记忆作用域；默认 user。"
+          }
+        }
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": false
+      },
+      "source": "src/agent/tools/memory.ts"
+    },
+    {
       "name": "read_memory",
-      "description": "读取一条全局记忆的完整内容。全局记忆记录用户偏好、习惯、项目无关的知识。name 是记忆文件名（不含 .md）。使用前先看 prompt 中的 MEMORY.md 索引了解有哪些记忆可用。",
+      "description": "读取一条长期记忆。默认用户级；项目特定记忆使用 scope=workspace。",
       "parameters": {
         "type": "object",
         "properties": {
           "name": {
             "type": "string",
-            "description": "记忆名称，如 'user-profile'（不含 .md 后缀）"
+            "description": "记忆名称（不含 .md）"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "workspace"
+            ],
+            "description": "记忆作用域；默认 user。"
           }
         },
         "required": [
@@ -373,6 +437,41 @@
         "workspaceBounded": true
       },
       "source": "src/agent/tools/search.ts"
+    },
+    {
+      "name": "set_memory_enabled",
+      "description": "启用或禁用一条长期记忆。禁用只影响索引和 prompt，不删除正文。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "workspace"
+            ],
+            "description": "记忆作用域；默认 user。"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "enabled"
+        ]
+      },
+      "capabilities": {
+        "readOnly": false,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": false
+      },
+      "source": "src/agent/tools/memory.ts"
     },
     {
       "name": "str_replace_editor",
@@ -506,17 +605,33 @@
     },
     {
       "name": "write_memory",
-      "description": "写入或更新一条全局记忆。全局记忆记录用户编码偏好、说话风格、习惯等跨项目通用的信息。name 是记忆名称（不含 .md），content 是完整 markdown 内容（建议含标题）。写入后自动刷新系统 prompt，当前对话可见。",
+      "description": "写入或更新一条长期记忆。默认用户级；项目特定内容使用 scope=workspace。只有用户明确要求或确认后才调用。",
       "parameters": {
         "type": "object",
         "properties": {
           "name": {
             "type": "string",
-            "description": "记忆名称，如 'user-profile'（不含 .md 后缀）。建议用短横线连接的英文。"
+            "description": "记忆名称（不含 .md）"
           },
           "content": {
             "type": "string",
-            "description": "完整 markdown 内容。第一行建议用 # 标题简要概括本条记忆。"
+            "description": "完整 markdown 内容"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "workspace"
+            ],
+            "description": "记忆作用域；默认 user。"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "user",
+              "agent-confirmed"
+            ],
+            "description": "记忆来源"
           }
         },
         "required": [

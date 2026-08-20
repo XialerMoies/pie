@@ -7,6 +7,9 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 
 // 每个测试组重新 import 获得干净的 sectionCache
 async function freshPrompts() {
@@ -16,6 +19,32 @@ async function freshPrompts() {
 }
 
 describe("prompts", () => {
+  it("injects merged memory summaries and omits memory bodies", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "prompt-memory-"));
+    const user = join(root, "user");
+    const workspace = join(root, "workspace");
+    mkdirSync(user, { recursive: true });
+    mkdirSync(join(workspace, "agent", "memory"), { recursive: true });
+    writeFileSync(join(user, "preference.md"), "# User preference\nSECRET_USER_BODY");
+    writeFileSync(join(workspace, "agent", "memory", "preference.md"), "# Workspace preference\nSECRET_WORKSPACE_BODY");
+    writeFileSync(join(user, "memory-index.json"), JSON.stringify({ schemaVersion: 1, entries: [{ id: "u", name: "preference", scope: "user", source: "user", createdAt: "2026-01-01", updatedAt: "2026-01-01", enabled: true, traceId: "u", summary: "User summary" }] }));
+    writeFileSync(join(workspace, "agent", "memory", "memory-index.json"), JSON.stringify({ schemaVersion: 1, entries: [{ id: "w", name: "preference", scope: "workspace", source: "user", createdAt: "2026-01-01", updatedAt: "2026-01-02", enabled: true, traceId: "w", summary: "Workspace summary" }] }));
+    try {
+      const { setCurrentRuntime } = await import("../src/agent/globals.ts");
+      setCurrentRuntime({ config: { userMemoryRoot: user }, currentWorkspace: workspace });
+      const mod = await freshPrompts();
+      const result = mod.resolveSystemPrompt();
+      assert.ok(result.includes("Workspace summary"));
+      assert.ok(!result.includes("User summary"));
+      assert.ok(!result.includes("SECRET_WORKSPACE_BODY"));
+      assert.ok(!result.includes("SECRET_USER_BODY"));
+    } finally {
+      const { setCurrentRuntime } = await import("../src/agent/globals.ts");
+      setCurrentRuntime(null);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   describe("defineSection / resolveSystemPrompt", () => {
     it("注册 section 后 resolve 应包含其内容", async () => {
       const mod = await freshPrompts();
