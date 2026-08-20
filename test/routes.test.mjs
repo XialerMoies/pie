@@ -3232,6 +3232,12 @@ describe("search conversations route", () => {
 });
 
 describe("git routes", () => {
+  it("constructs Git child processes with the user command environment policy", () => {
+    const source = readFileSync(resolve(ROOT, "src/server/routes/git.ts"), "utf8")
+    assert.match(source, /createUserCommandEnv/)
+    assert.match(source, /env:\s*createUserCommandEnv\(/)
+  })
+
   it("GET /api/git/status 返回状态（正确根目录）", async () => {
     const ctx = mockContext();
     const { status, body } = await callHandler(handleGit, "GET", `/api/git/status?root=${encodeURIComponent(ROOT)}`, undefined, ctx);

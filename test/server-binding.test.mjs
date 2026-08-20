@@ -561,6 +561,65 @@ describe("server bindings", () => {
     await started;
   });
 
+  it("uses the internal server environment policy and redacts provider diagnostics", async () => {
+    const stdout = [];
+    const stderr = [];
+    const harness = makeHarness({
+      spec: {
+        token: "new-desktop-token",
+        env: {
+          PRESERVED_ENV: "yes",
+          OPENAI_API_KEY: "provider-secret",
+          MY_CODE_AGENT_DESKTOP_TOKEN: "old-desktop-token",
+        },
+      },
+      deps: {
+        writeStdout: (text) => stdout.push(text),
+        writeStderr: (text) => stderr.push(text),
+      },
+    });
+    const started = harness.binding.start();
+    const env = harness.spawns[0].options.env;
+    assert.equal(env.PRESERVED_ENV, "yes");
+    assert.equal(env.OPENAI_API_KEY, "provider-secret");
+    assert.equal(env.MY_CODE_AGENT_DESKTOP_TOKEN, "new-desktop-token");
+    assert.equal(env.PI_DESKTOP_SESSIONS, harness.spec.layout.sessionsDir);
+    assert.notStrictEqual(env, harness.spec.env);
+
+    harness.child.stdout.write("provider-secret\nSERVER_PORT:4575\n");
+    harness.child.stderr.write("authorization=provider-secret\n");
+    assert.equal(await started, 4575);
+    assert.ok(stdout.join("").includes("[redacted]"));
+    assert.ok(stderr.join("").includes("[redacted]"));
+    assert.ok(!stdout.join("").includes("provider-secret"));
+    assert.ok(!stderr.join("").includes("provider-secret"));
+  });
+
+  it("redacts secrets from startup failures while retaining diagnostics", async () => {
+    const stdout = [];
+    const stderr = [];
+    const harness = makeHarness({
+      spec: { token: "failure-token", env: { OPENAI_API_KEY: "provider-secret" } },
+      deps: {
+        writeStdout: (text) => stdout.push(text),
+        writeStderr: (text) => stderr.push(text),
+      },
+    });
+    const started = harness.binding.start();
+    harness.child.stdout.write("spawn provider-secret diagnostics\n");
+    harness.child.stderr.write("stderr remains useful\n");
+    harness.child.emit("error", new Error("spawn failed provider-secret"));
+
+    await assert.rejects(started, (error) => {
+      assert.match(error.message, /spawn failed/);
+      assert.match(error.message, /stderr remains useful/);
+      assert.ok(!error.message.includes("provider-secret"));
+      return true;
+    });
+    assert.ok(!stdout.join("").includes("provider-secret"));
+    assert.ok(!stderr.join("").includes("provider-secret"));
+  });
+
   it("drives shutdown through a real Node child stdin and exit event", async () => {
     const spec = makeSpec();
     const script = [

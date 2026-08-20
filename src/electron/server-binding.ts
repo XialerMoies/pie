@@ -8,6 +8,11 @@ import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 
 import type { DataLayout } from "../data/data-layout.js";
+import {
+  createInternalServerEnv,
+  getProviderSecretValues,
+  sanitizeProcessOutput,
+} from "../process/env-policy.js";
 
 export type ServerBindingState = "starting" | "ready" | "stopping" | "failed" | "stopped";
 
@@ -203,6 +208,7 @@ export function createOwnedServerBinding(
   const forceKillGraceTimeoutMs = dependencies.forceKillGraceTimeoutMs ?? 2_000;
   const writeStdout = dependencies.writeStdout || ((text: string) => process.stdout.write(`[pi-server] ${text}`));
   const writeStderr = dependencies.writeStderr || ((text: string) => process.stderr.write(`[pi-server:err] ${text}`));
+  const knownSecrets = [spec.token, ...getProviderSecretValues(spec.env)];
 
   interface ActiveRun {
     child: ChildProcess;
@@ -262,7 +268,11 @@ export function createOwnedServerBinding(
   };
 
   function errorText(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
+    return sanitizeProcessOutput(error, knownSecrets);
+  }
+
+  function safeError(error: unknown): Error {
+    return new Error(errorText(error));
   }
 
   function notifyUnexpectedExit(event: OwnedServerExit): void {
@@ -379,20 +389,20 @@ export function createOwnedServerBinding(
     if (activeRun !== run) return;
     const wasReady = run.ready;
     cleanupRun(run);
-    const diagnosticError = new Error(`${error.message}\n${run.stdout}${run.stderr}`);
+    const diagnosticError = new Error(`${errorText(error)}\n${run.stdout}${run.stderr}`);
 
     if (!run.startSettled) settleStartFailure(run, diagnosticError);
 
     const stopping = stopAttempt?.child === run.child ? stopAttempt : null;
     if (stopping) {
-      finishStopFailure(stopping, new Error(`Pi server error while stopping: ${error.message}`));
+      finishStopFailure(stopping, new Error(`Pi server error while stopping: ${errorText(error)}`));
       return;
     }
 
     port = 0;
     state = "failed";
     if (wasReady && !run.terminationRequested) {
-      notifyUnexpectedExit({ code: null, signal: null, error });
+      notifyUnexpectedExit({ code: null, signal: null, error: safeError(error) });
     }
   }
 
@@ -406,21 +416,16 @@ export function createOwnedServerBinding(
       ? join(spec.appRoot, "dist", "server", "server.js")
       : join(spec.appRoot, "src", "server", "server.ts");
     const args = spec.isPackaged ? [script] : ["--import", "tsx", script];
-    const env: NodeJS.ProcessEnv = {
-      ...spec.env,
-      PI_DESKTOP_DATA: spec.dataRoot,
-      PI_DESKTOP_CONFIG: spec.layout.userRoot,
-      PI_DESKTOP_SESSIONS: spec.layout.sessionsDir,
-      PI_WORKSPACE: spec.workspace,
-      PI_DATA_ROOT: spec.dataRoot,
-      PI_INSTANCE_ID: spec.instanceId,
-      PI_USER_CONFIG: spec.layout.userRoot,
-      PI_WORKSPACE_DATA: spec.layout.workspaceRoot,
-      PI_INSTANCE_DATA: spec.layout.instanceRoot,
-      MY_CODE_AGENT_DESKTOP_TOKEN: spec.token,
-      PI_ELECTRON_PARENTED: "1",
-      ELECTRON_RUN_AS_NODE: "1",
-    };
+    const env = createInternalServerEnv(spec.env, {
+      token: spec.token,
+      workspace: spec.workspace,
+      dataRoot: spec.dataRoot,
+      instanceId: spec.instanceId,
+      userRoot: spec.layout.userRoot,
+      sessionsDir: spec.layout.sessionsDir,
+      workspaceData: spec.layout.workspaceRoot,
+      instanceData: spec.layout.instanceRoot,
+    });
     return {
       script,
       args,
@@ -492,22 +497,22 @@ export function createOwnedServerBinding(
 
       run.onStdout = (chunk) => {
         const text = chunk.toString();
-        writeStdout(text);
+        writeStdout(sanitizeProcessOutput(text, knownSecrets));
         if (run.startSettled) return;
-        run.stdout += text;
-        const match = run.stdout.match(/SERVER_PORT:(\d+)/);
-        if (!match) return;
+        run.stdout += sanitizeProcessOutput(text, knownSecrets);
+        const portMatch = run.stdout.match(/SERVER_PORT:(\d+)/);
+        if (!portMatch) return;
         run.ready = true;
         run.startSettled = true;
         clearRunTimer(run);
-        port = Number(match[1]);
+        port = Number(portMatch[1]);
         state = "ready";
         resolveStart(port);
       };
       run.onStderr = (chunk) => {
         const text = chunk.toString();
-        writeStderr(text);
-        if (!run.startSettled) run.stderr += text;
+        writeStderr(sanitizeProcessOutput(text, knownSecrets));
+        if (!run.startSettled) run.stderr += sanitizeProcessOutput(text, knownSecrets);
       };
       run.onExit = (code, signal) => handleRunExit(run, code, signal);
       run.onError = (error) => handleRunError(run, error);

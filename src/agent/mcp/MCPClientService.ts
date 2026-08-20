@@ -25,6 +25,7 @@ import { loadMcpConfig, getEnabledServers, type McpLoadResult } from "./config.j
 import { TrustStore, hashServerCommand } from "./trust-store.js"
 import { createMcpToolAdapter } from "./MCPToolAdapter.js"
 import type { McpServerConfig, McpServerStatus, McpConnectionState } from "./types.js"
+import { createMcpProcessEnv, sanitizeProcessOutput } from "../../process/env-policy.js"
 
 // ─── 常量 ──────────────────────────────────────────
 
@@ -189,7 +190,7 @@ export async function connectAllWithReport(
       tools.push(...toolList)
     } catch (err) {
       complete = false
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = sanitizeProcessOutput(err, Object.values(source.config.env ?? {}))
       console.log(`[mcp] server 连接失败: ${source.name}: ${msg}`)
     }
   }
@@ -265,7 +266,7 @@ async function connectServer(
       console.log(`[mcp] ⏭ 忽略过期 server 错误: ${name} (gen=${gen}, current=${_mcpGen})`)
       return []
     }
-    _setStatus(name, "error", err instanceof Error ? err.message : String(err), config)
+    _setStatus(name, "error", sanitizeProcessOutput(err, Object.values(config.env ?? {})), config)
     throw err
   }
 }
@@ -277,7 +278,7 @@ function createTransport(config: McpServerConfig): import("@modelcontextprotocol
     return new StdioClientTransport({
       command: config.command!,
       args: config.args ?? [],
-      env: config.env,
+      env: createMcpProcessEnv(process.env, config.env),
       ...(config.cwd ? { cwd: config.cwd } : {}),
     })
   }

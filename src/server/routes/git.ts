@@ -20,8 +20,24 @@ import {
 } from "./git-core.js";
 import { writePathGuardError } from "./path-guard.js";
 import { authorizeRoutePath, writeServerPermissionError } from "../permission-service.js";
+import {
+  createUserCommandEnv,
+  getProviderSecretValues,
+  sanitizeProcessOutput,
+} from "../../process/env-policy.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
+const knownGitSecrets = [
+  ...getProviderSecretValues(process.env),
+  process.env.MY_CODE_AGENT_DESKTOP_TOKEN,
+].filter((value): value is string => Boolean(value));
+
+function gitErrorMessage(error: unknown, fallback: string): string {
+  const candidate = error && typeof error === "object" && "stderr" in error
+    ? (error as { stderr?: unknown }).stderr
+    : undefined;
+  return sanitizeProcessOutput(candidate || error, knownGitSecrets) || fallback;
+}
 
 export { findGitRoot } from "./git-core.js";
 
@@ -30,6 +46,7 @@ function git(args: string[], cwd: string, timeout = 10000): string {
     cwd,
     encoding: "utf-8",
     timeout,
+    env: createUserCommandEnv({ hostEnv: process.env, platform: process.platform }),
     stdio: ["pipe", "pipe", "pipe"],
   });
 }
@@ -188,8 +205,7 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, message: "推送成功" }));
       } catch (pushErr: unknown) {
-        const msg = pushErr instanceof Error ? pushErr.message : String(pushErr);
-        const errMsg = (pushErr as any).stderr?.toString() || msg || "推送失败";
+        const errMsg = gitErrorMessage(pushErr, "推送失败");
         res.writeHead(200, { ...cors });
         res.end(JSON.stringify({ error: "push_error", message: errMsg }));
       }
@@ -211,8 +227,7 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, message: "拉取成功" }));
       } catch (pullErr: unknown) {
-        const msg = pullErr instanceof Error ? pullErr.message : String(pullErr);
-        const errMsg = (pullErr as any).stderr?.toString() || msg || "拉取失败";
+        const errMsg = gitErrorMessage(pullErr, "拉取失败");
         res.writeHead(200, { ...cors });
         res.end(JSON.stringify({ error: "pull_error", message: errMsg }));
       }
@@ -221,8 +236,9 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
   } catch (e: unknown) {
     if (writeServerPermissionError(res, cors, e)) return true;
     if (writePathGuardError(res, cors, e)) return true;
+    const message = sanitizeProcessOutput(e, knownGitSecrets);
     res.writeHead(200, { ...cors });
-    res.end(JSON.stringify({ error: (e as Error).message?.includes("not a git repository") ? "not_a_repo" : "git_error", message: (e as Error).message }));
+    res.end(JSON.stringify({ error: message.includes("not a git repository") ? "not_a_repo" : "git_error", message }));
     return true;
   }
 

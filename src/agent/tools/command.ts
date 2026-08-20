@@ -13,7 +13,6 @@
  */
 import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool, type AgentToolResult, type CommandConfirmationRequest, type CommandConfirmationResponse, type CommandConfirmationScope, type PermissionFailure, type PermissionSuggestion, type ToolContext } from "../types.js"
 import { spawn } from "child_process"
-import { dirname } from "path"
 import { StringDecoder } from "string_decoder"
 import { TextDecoder } from "util"
 import { validateCommandPaths } from "./command/path-validation.js"
@@ -24,12 +23,12 @@ import { parseShellCommand, shellDialectFromEnv, tokensWithoutRedirects } from "
 import { isPureFileOperation, isRegularGitOperation } from "./command/pure-file-op.js"
 import { baseCommandName, isDangerousCommand, type DangerResult } from "./command/dangerous-command.js"
 import { resolveBashExecutable } from "./command/shell-runtime.js"
+import { createUserCommandEnv, sanitizeProcessOutput } from "../../process/env-policy.js"
 
 export { isDangerousCommand, resolveBashExecutable }
 
 const MAX_OUTPUT = 100 * 1024 // 100KB 总输出上限
 const COMMAND_TIMEOUT = 300_000 // 5 分钟
-const DESKTOP_TOKEN_ENV = "MY_CODE_AGENT_DESKTOP_TOKEN"
 
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
 
@@ -42,21 +41,11 @@ export function isReadOnlyCommand(cmd: string): boolean {
 function isWindows(): boolean { return process.platform === "win32" }
 
 function commandExecutionEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env }
-  delete env[DESKTOP_TOKEN_ENV]
-
-  if (!isWindows()) return env
-
-  const bashExecutable = resolveBashExecutable()
-  if (!bashExecutable) return env
-
-  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "Path"
-  const currentPath = env[pathKey] ?? ""
-  const bashDir = dirname(bashExecutable)
-  const pathParts = currentPath.split(";").filter(Boolean)
-  const hasBashDir = pathParts.some((part) => part.toLowerCase() === bashDir.toLowerCase())
-  if (!hasBashDir) env[pathKey] = [bashDir, ...pathParts].join(";")
-  return env
+  return createUserCommandEnv({
+    hostEnv: process.env,
+    platform: process.platform,
+    bashExecutable: isWindows() ? resolveBashExecutable() : undefined,
+  })
 }
 
 function decodeCommandChunk(data: Buffer, decoder: StringDecoder): string {
@@ -221,7 +210,7 @@ async function maybeLogSecurityVerdictShadowDiff(
   const diff = await commandSecurityVerdictShadowDiff(command, options)
   if (!diff) return
   console.debug("[command-security] Tree-sitter verdict shadow diff", {
-    command,
+    command: sanitizeProcessOutput(command),
     legacy: normalizeVerdictsForShadow(diff.legacy),
     treeSitter: normalizeVerdictsForShadow(diff.treeSitter),
   })

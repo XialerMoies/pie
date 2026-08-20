@@ -81,6 +81,7 @@ function spawnCategory(file) {
   if (file.includes("/agent/mcp/")) return "mcp";
   if (file.includes("subagent")) return "subagent";
   if (file === "src/server/ts-server.ts") return "tsserver";
+  if (file.startsWith("src/server/")) return "server";
   if (file === "src/electron/server-binding.ts") return "internal-server";
   if (file.startsWith("src/electron/")) return "electron";
   if (file.startsWith("scripts/")) return "build-or-test";
@@ -91,7 +92,7 @@ function spawnOwner(category) {
   if (category === "user-command") return "agent-tools";
   if (category === "mcp") return "mcp-client";
   if (category === "subagent") return "subagent-host";
-  if (category === "tsserver") return "server";
+  if (category === "tsserver" || category === "server") return "server";
   if (category === "internal-server" || category === "electron") return "electron";
   if (category === "build-or-test") return "tooling";
   return "unassigned";
@@ -130,8 +131,26 @@ async function collectSpawnPoints() {
         points.push({ file, line: lineNumber(source, match.index), api: "child_process.send", category: "tsserver", owner: "server" });
       }
     }
+    if (file === "src/agent/mcp/MCPClientService.ts") {
+      const match = source.match(/\bnew\s+StdioClientTransport\s*\(/);
+      if (match) {
+        points.push({
+          file,
+          line: lineNumber(source, match.index),
+          api: "StdioClientTransport",
+          category: "mcp",
+          owner: "mcp-client",
+          indirect: true,
+        });
+      }
+    }
   }
-  return sortBy(uniqueBy(points, (point) => `${point.file}:${point.line}:${point.api}`), (point) => `${point.file}:${String(point.line).padStart(6, "0")}:${point.api}`);
+  const unique = uniqueBy(points, (point) => `${point.file}:${point.line}:${point.api}`);
+  const unassigned = unique.filter((point) => point.owner === "unassigned");
+  if (unassigned.length > 0) {
+    throw new Error(`Spawn points missing owner: ${unassigned.map((point) => `${point.file}:${point.line}`).join(", ")}`);
+  }
+  return sortBy(unique, (point) => `${point.file}:${String(point.line).padStart(6, "0")}:${point.api}`);
 }
 
 function methodsOnLine(line) {

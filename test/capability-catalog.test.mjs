@@ -68,6 +68,19 @@ describe("capability catalog generator", () => {
     assert.ok(first.routes.some((route) => route.path === "/api/chat" && route.method === "POST"));
     assert.ok(first.routes.some((route) => route.pathPattern === "/api/custom-providers/:providerId"));
     assert.ok(first.spawnPoints.some((point) => point.file === "src/agent/tools/command.ts" && point.category === "user-command"));
+    assert.ok(first.spawnPoints.some((point) =>
+      point.file === "src/agent/mcp/MCPClientService.ts"
+      && point.api === "StdioClientTransport"
+      && point.category === "mcp"
+      && point.owner === "mcp-client"
+      && point.indirect === true
+    ));
+    assert.ok(first.spawnPoints.some((point) =>
+      point.file === "src/server/routes/git.ts"
+      && point.category === "server"
+      && point.owner === "server"
+    ));
+    assert.ok(first.spawnPoints.every((point) => point.owner && point.owner !== "unassigned"));
     assert.ok(first.spawnPoints.some((point) => point.file === "src/server/ts-server.ts" && point.category === "tsserver"));
     assert.deepStrictEqual(first.permissionModes, ["standard", "plan", "dontAsk", "yes"]);
   });

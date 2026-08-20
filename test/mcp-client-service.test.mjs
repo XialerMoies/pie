@@ -11,7 +11,7 @@
  */
 import { describe, it, before, after, afterEach } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -169,6 +169,13 @@ describe("基础行为", () => {
 
   it("getServersStatus 初始返回空", () => {
     assert.strictEqual(service.getServersStatus().length, 0);
+  });
+
+  it("stdio transport uses the explicit MCP environment policy", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/agent/mcp/MCPClientService.ts"), "utf8");
+    assert.match(source, /createMcpProcessEnv/);
+    assert.match(source, /env:\s*createMcpProcessEnv\(process\.env, config\.env\)/);
+    assert.doesNotMatch(source, /env:\s*config\.env/);
   });
 
   it("隔离 listener 和 getter 对嵌套 snapshot 的修改", () => {
@@ -395,6 +402,37 @@ describe("已信任但连接失败", () => {
       assert.strictEqual(statuses[0].state, "error");
       assert.ok(statuses[0].error, "应有错误信息");
     } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("连接错误和状态错误不会泄漏 MCP 配置凭据", async () => {
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "mcp-svc-"));
+    const originalConnect = Client.prototype.connect;
+    const originalLog = console.log;
+    const logs = [];
+    try {
+      writeConfig(tmpDir, {
+        "secret-srv": {
+          command: "mock-secret-server",
+          env: { TOKEN: "configured-secret" },
+        },
+      });
+      withTrust(tmpDir);
+      const { loadMcpConfig } = await import("../src/agent/mcp/config.ts");
+      const cfg = loadMcpConfig({ projectRoot: tmpDir }).servers[0];
+      await addTrustForConfig(tmpDir, "secret-srv", cfg.config);
+      Client.prototype.connect = () => Promise.reject(new Error("transport failed configured-secret"));
+      console.log = (...args) => logs.push(args.join(" "));
+
+      await service.connectAll(tmpDir);
+
+      assert.ok(logs.length > 0);
+      assert.ok(logs.every((line) => !line.includes("configured-secret")), logs);
+      assert.ok(!service.getServersStatus()[0].error?.includes("configured-secret"));
+    } finally {
+      console.log = originalLog;
+      Client.prototype.connect = originalConnect;
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });

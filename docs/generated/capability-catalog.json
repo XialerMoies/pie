@@ -669,64 +669,72 @@
       "owner": "tooling"
     },
     {
+      "file": "src/agent/mcp/MCPClientService.ts",
+      "line": 278,
+      "api": "StdioClientTransport",
+      "category": "mcp",
+      "owner": "mcp-client",
+      "indirect": true
+    },
+    {
       "file": "src/agent/tools/command.ts",
-      "line": 446,
+      "line": 435,
       "api": "spawn",
       "category": "user-command",
       "owner": "agent-tools"
     },
     {
       "file": "src/agent/tools/command.ts",
-      "line": 447,
+      "line": 436,
       "api": "spawn",
       "category": "user-command",
       "owner": "agent-tools"
     },
     {
       "file": "src/electron/cli-terminal.ts",
-      "line": 165,
+      "line": 164,
       "api": "spawn",
       "category": "electron",
       "owner": "electron"
     },
     {
       "file": "src/electron/server-binding.ts",
-      "line": 168,
+      "line": 173,
       "api": "execFileSync",
       "category": "internal-server",
       "owner": "electron"
     },
     {
       "file": "src/electron/server-binding.ts",
-      "line": 197,
+      "line": 202,
       "api": "spawn",
       "category": "internal-server",
       "owner": "electron"
     },
     {
       "file": "src/server/routes/git.ts",
-      "line": 29,
+      "line": 45,
       "api": "execFileSync",
-      "category": "other",
-      "owner": "unassigned"
+      "category": "server",
+      "owner": "server"
     },
     {
       "file": "src/server/ts-server.ts",
-      "line": 66,
+      "line": 79,
       "api": "fork",
       "category": "tsserver",
       "owner": "server"
     },
     {
       "file": "src/server/ts-server.ts",
-      "line": 128,
+      "line": 135,
       "api": "child_process.send",
       "category": "tsserver",
       "owner": "server"
     },
     {
       "file": "src/server/ts-server.ts",
-      "line": 149,
+      "line": 158,
       "api": "child_process.send",
       "category": "tsserver",
       "owner": "server"

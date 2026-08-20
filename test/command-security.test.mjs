@@ -1991,6 +1991,25 @@ describe("commandTool.execute 安全拦截", () => {
     }
   })
 
+  it("preserves user provider variables while removing desktop runtime variables", async () => {
+    const { commandTool } = await import("../src/agent/tools/command.ts")
+    const { root, workspace } = tempWorkspace()
+    try {
+      await withEnvVar("OPENAI_API_KEY", "user-provider-secret", async () => {
+        await withEnvVar("PI_INSTANCE_ID", "internal-instance-secret", async () => {
+          const result = await commandTool.execute(
+            { command: "node -e \"process.stdout.write([process.env.OPENAI_API_KEY || 'missing', process.env.PI_INSTANCE_ID || 'missing'].join('|'))\"" },
+            { cwd: workspace, workspace, sessionId: "", permissionMode: "dontAsk" },
+          )
+          ok(result.text.includes("user-provider-secret|missing"), result)
+          ok(!result.text.includes("internal-instance-secret"), result)
+        })
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it("Windows cmd mode should warn that set MY_CODE_AGENT only affects child cmd", async () => {
     if (process.platform !== "win32") return
     const { root, workspace } = tempWorkspace()

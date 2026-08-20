@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveBashExecutable } from "../agent/tools/command/shell-runtime.js";
+import { createUserCommandEnv, sanitizeProcessOutput } from "../process/env-policy.js";
 
 export interface CliTerminalLaunchInput {
   platform: NodeJS.Platform;
@@ -87,12 +88,10 @@ export function buildCliTerminalLaunch(input: CliTerminalLaunchInput): CliTermin
   const runtimeArgs = loader
     ? ["--import", loader, entry, "--cli"]
     : [entry, "--cli"];
-  const env: NodeJS.ProcessEnv = {
-    ...input.env,
-    ELECTRON_RUN_AS_NODE: "1",
-    PI_WORKSPACE: input.workspace,
-    PI_DATA_ROOT: input.dataRoot,
-  };
+  const env = createUserCommandEnv({ hostEnv: input.env, platform: input.platform });
+  env.ELECTRON_RUN_AS_NODE = "1";
+  env.PI_WORKSPACE = input.workspace;
+  env.PI_DATA_ROOT = input.dataRoot;
   const baseOptions = {
     cwd: input.workspace,
     env,
@@ -165,7 +164,7 @@ export function launchCliTerminal(
     spawnChild(command, [...args], options)
   ));
   const reportError = dependencies.reportError || ((error) => {
-    console.error("Failed to launch CLI terminal:", error);
+    console.error("Failed to launch CLI terminal:", sanitizeProcessOutput(error));
   });
 
   try {

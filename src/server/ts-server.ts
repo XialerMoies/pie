@@ -14,6 +14,7 @@
  */
 import { fork, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
+import { createTsserverEnv, sanitizeProcessOutput } from "../process/env-policy.js";
 
 // ─── 类型 ───────────────────────────────────────────────────────
 
@@ -39,6 +40,18 @@ interface TsserverEvent {
 }
 
 type TsserverMessage = TsserverResponse | TsserverEvent;
+
+export function createTsserverSpawnOptions(projectRoot: string, tsLibDir: string): {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  stdio: ["pipe", "pipe", "pipe", "ipc"];
+} {
+  return {
+    cwd: projectRoot,
+    env: createTsserverEnv(process.env, tsLibDir),
+    stdio: ["pipe", "pipe", "pipe", "ipc"],
+  };
+}
 
 // ─── TsserverManager ────────────────────────────────────────────
 
@@ -68,16 +81,9 @@ export class TsserverManager {
           "--noGetErrOnInitialProjectUpdate",
           "--disableAutomaticTypingAcquisition",
           "--useInferredProjectPerProjectRoot",
-        ], {
-          cwd: projectRoot,
-          env: {
-            ...process.env,
-            TS_INTERNAL: tsLibDir,
-          },
-          stdio: ["pipe", "pipe", "pipe", "ipc"],
-        });
+        ], createTsserverSpawnOptions(projectRoot, tsLibDir));
       } catch (err) {
-        reject(new Error(`Failed to fork tsserver: ${err}`));
+        reject(new Error(`Failed to fork tsserver: ${sanitizeProcessOutput(err)}`));
         return;
       }
 
@@ -93,7 +99,7 @@ export class TsserverManager {
 
       // stderr 日志（stdout 在 IPC 模式下仅用于日志，不用于协议）
       proc.stderr?.on("data", (chunk: Buffer) => {
-        console.error("[tsserver:err]", chunk.toString());
+        console.error("[tsserver:err]", sanitizeProcessOutput(chunk.toString()));
       });
 
       proc.on("exit", (code) => {
@@ -105,8 +111,9 @@ export class TsserverManager {
       });
 
       proc.on("error", (err) => {
-        console.error("[tsserver] error:", err);
-        reject(err);
+        const safeError = new Error(sanitizeProcessOutput(err));
+        console.error("[tsserver] error:", safeError.message);
+        reject(safeError);
       });
 
       // 等待 tsserver 就绪
@@ -135,7 +142,9 @@ export class TsserverManager {
       const pending = this.pending.get(msg.request_seq);
       if (pending) {
         this.pending.delete(msg.request_seq);
-        msg.success ? pending.resolve(msg.body) : pending.reject(new Error(msg.message || "tsserver error"));
+        msg.success
+          ? pending.resolve(msg.body)
+          : pending.reject(new Error(sanitizeProcessOutput(msg.message || "tsserver error")));
       }
     } else if (msg.type === "event") {
       this.onEvent?.(msg);
@@ -173,7 +182,7 @@ export class TsserverManager {
         },
       });
     } catch (e) {
-      console.error("[tsserver] init failed:", e);
+      console.error("[tsserver] init failed:", sanitizeProcessOutput(e));
     }
   }
 
