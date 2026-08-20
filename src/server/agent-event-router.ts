@@ -316,17 +316,19 @@ export function emitBlock(
   options?: SessionPersistenceOptions,
 ): void {
   const idx = chatStream.blocks.findIndex(b => b.blockId === block.blockId);
+  let emittedBlock = block;
   if (idx >= 0) {
     // B-5：更新已存在的 block 时保留初始 seq，避免在事件流中"移动位置"（顺序漂移）。
     // 只有首次创建才分配新 seq；后续 text/thinking/tool 更新都不改变位置。
-    chatStream.blocks[idx] = { ...block, seq: chatStream.blocks[idx].seq };
+    emittedBlock = { ...block, seq: chatStream.blocks[idx].seq };
+    chatStream.blocks[idx] = emittedBlock;
   } else {
-    chatStream.blocks.push(block);
+    chatStream.blocks.push(emittedBlock);
   }
   if (options?.persist !== false) {
-    persistBlockEvent(runtime, block, options);
+    persistBlockEvent(runtime, emittedBlock, options);
   }
-  writeChatEvent(chatStream, { type: "block", block });
+  writeChatEvent(chatStream, { type: "block", block: emittedBlock });
 }
 
 export function recordUserNoteBlock(

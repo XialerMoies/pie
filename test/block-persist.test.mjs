@@ -130,6 +130,40 @@ describe("block persistence lifecycle", () => {
     assert.strictEqual(chatStream.blockSeq, 2);
   });
 
+  it("SSE assistant block updates keep the initial seq", () => {
+    const writes = [];
+    const runtime = mockRuntime("", { flushed: true });
+    const chatStream = {
+      turnId: "turn-1",
+      blocks: [],
+      blockSeq: 0,
+      response: { write(chunk) { writes.push(String(chunk)); return true; } },
+    };
+    let callback = null;
+    runtime.onEvent = (handler) => { callback = handler; return () => {}; };
+    runtime.emit = (event) => callback(event);
+    attachSessionEvents(runtime, chatStream);
+
+    const content = [{ type: "text", text: "首段" }];
+    runtime.emit({ type: "message_update", turnId: "turn-1", message: { role: "assistant", content }, assistantMessageEvent: {
+      type: "text_delta", contentIndex: 0, delta: "首段",
+    }});
+    runtime.emit({ type: "message_update", turnId: "turn-1", message: { role: "assistant", content: [{ type: "text", text: "首段追加" }] }, assistantMessageEvent: {
+      type: "text_delta", contentIndex: 0, delta: "追加",
+    }});
+
+    const blockEvents = writes
+      .map((chunk) => {
+        const marker = chunk.indexOf("data: ");
+        return marker >= 0 ? JSON.parse(chunk.slice(marker + 6).trim()) : null;
+      })
+      .filter((event) => event?.type === "block" && event.block?.blockId === "m1:text-0");
+    assert.strictEqual(blockEvents.length, 2);
+    assert.strictEqual(blockEvents[0].block.seq, 1);
+    assert.strictEqual(blockEvents[1].block.seq, 1,
+      "更新事件必须复用首次创建序号，避免实时节点漂移");
+  });
+
   it("B-5: 验收——thinking/text 独立 + tool 合并 + seq 稳定 + 末尾正文", () => {
     const dir = mkdtempSync(resolve(tmpdir(), "block-b5accept-"));
     const sessionFile = resolve(dir, "session.jsonl");
