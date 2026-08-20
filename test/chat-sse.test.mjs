@@ -61,6 +61,28 @@ describe("Chat SSE", () => {
     assert.strictEqual(chatStream.response, null, "close 后 response 应被清空");
   });
 
+  it("首次 SSE 连接会回放连接建立前已产生的终止事件", async () => {
+    const chatStream = {
+      textBuffer: "",
+      thinkingBuffer: "",
+      response: null,
+      currentWorkspace: "",
+      eventSeq: 1,
+      eventHistory: [{ id: 1, data: 'id: 1\ndata: {"type":"error","message":"prompt failed"}\n\n' }],
+    };
+    const ctx = {
+      runtime: { session: { model: {} }, currentWorkspace: "", switchWorkspace: async () => {}, onEvent: () => () => {} },
+      paths: { APP_ROOT: ROOT },
+      chatStream,
+      sseClients: [],
+    };
+    const res = makeResWithEvents();
+    await handleChat(makeReq("GET", "/api/chat/stream"), res, ctx);
+    assert.match(res._body, /"type":"stream_ready"/);
+    assert.match(res._body, /"type":"error"/);
+    assert.match(res._body, /prompt failed/);
+  });
+
   it("POST /api/chat 清空 buffer", async () => {
     const chatStream = { textBuffer: "旧数据", thinkingBuffer: "", response: null, currentWorkspace: "" };
     const ctx = {

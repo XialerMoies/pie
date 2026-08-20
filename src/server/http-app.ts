@@ -16,6 +16,7 @@ import { contentTypeForStaticAsset, resolveStaticAssetPath } from "./static-asse
 import { createRequestContext, safeRequestUrl, type StructuredLogger } from "./observability.js";
 
 const FRONTEND_ENTRY_FILE = "dashboard.html";
+const INTERNAL_TOOL_HEADER = "x-my-code-agent-internal-tool";
 
 export function openAppEventStream(
   req: IncomingMessage,
@@ -121,7 +122,11 @@ export function createHttpApp(options: HttpAppOptions) {
     }
 
     try {
-      if (await dispatchRoute(req, res, ctx)) return;
+      const internalToolRequest = req.headers[INTERNAL_TOOL_HEADER] === "1";
+      const routeContext = internalToolRequest
+        ? Object.assign(Object.create(ctx), { internalToolRequest: true }) as ServerContext
+        : ctx;
+      if (await dispatchRoute(req, res, routeContext)) return;
     } catch (error) {
       logger.error("http.request.error", {
         method: req.method, url: safeRequestUrl(url), error: error instanceof Error ? error.message : String(error),

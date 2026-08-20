@@ -36,7 +36,7 @@ const INVALID_INSTANCE_GRACE_MS = 24 * 60 * 60 * 1000;
 
 export function createDesktopSecurityConfig(token?: string, instanceId?: string): DesktopSecurityConfig {
   const configuredToken = token === undefined ? process.env[DESKTOP_TOKEN_ENV] : token;
-  const cookieName = instanceId
+  const cookieName = instanceId && !process.env.VITE_DEV_PORT
     ? `mca_token_${createHash("sha256").update(instanceId).digest("hex").slice(0, 16)}`
     : DEFAULT_COOKIE_NAME;
   return {

@@ -259,6 +259,226 @@ describe("block persistence lifecycle", () => {
 });
 
 describe("block persistence compatibility snapshots", () => {
+  it("closes an indexed text input before opening the next text node", () => {
+    let callback = null;
+    const runtime = {
+      session: { sessionFile: undefined, sessionManager: { flushed: true, getSessionId: () => "session-1" } },
+      onEvent(handler) { callback = handler; return () => {}; },
+      emit(event) { callback(event); },
+    };
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write() { return true; }, end() {} }, currentWorkspace: "", turnId: "turn-1",
+      emittedTraces: new Set(), blocks: [], blockSeq: 0, textSegments: [],
+    };
+    attachSessionEvents(runtime, chatStream);
+
+    const update = (content, assistantMessageEvent) => runtime.emit({
+      type: "message_update",
+      turnId: "turn-1",
+      message: { role: "assistant", content },
+      assistantMessageEvent,
+    });
+    const content = [{ type: "text", text: "" }];
+    runtime.emit({ type: "message_start", turnId: "turn-1", message: { role: "assistant", content } });
+    update(content, { type: "text_start", contentIndex: 0 });
+    content[0].text = "第一段";
+    update(content, { type: "text_delta", contentIndex: 0, delta: "第一段" });
+    update(content, { type: "text_end", contentIndex: 0 });
+
+    // 关闭后的迟到 delta 不得再次写入已关闭的正文节点。
+    content[0].text = "第一段迟到追加";
+    update(content, { type: "text_delta", contentIndex: 0, delta: "迟到追加" });
+
+    // 关闭后即使换了 contentIndex，也必须等待 text_start，不能凭 delta 偷开新节点。
+    update(content, { type: "text_delta", contentIndex: 1, delta: "无 start 的新节点" });
+
+    // 只有新的 text_start 才能开启新的正文输入节点，即使 contentIndex 相同。
+    content[0].text = "";
+    update(content, { type: "text_start", contentIndex: 0 });
+    content[0].text = "第二段";
+    update(content, { type: "text_delta", contentIndex: 0, delta: "第二段" });
+
+    const textBlocks = chatStream.blocks.filter((block) => block.type === "text");
+    assert.strictEqual(textBlocks.length, 2, "正文应拆成两个线性节点");
+    assert.strictEqual(textBlocks[0].text, "第一段");
+    assert.strictEqual(textBlocks[1].text, "第二段");
+    assert.notStrictEqual(textBlocks[0].blockId, textBlocks[1].blockId, "新正文节点必须有新的 blockId");
+  });
+
+  it("closes an indexed thinking input before opening the next thinking node", () => {
+    let callback = null;
+    const runtime = {
+      session: { sessionFile: undefined, sessionManager: { flushed: true, getSessionId: () => "session-1" } },
+      onEvent(handler) { callback = handler; return () => {}; },
+      emit(event) { callback(event); },
+    };
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write() { return true; }, end() {} }, currentWorkspace: "", turnId: "turn-1",
+      emittedTraces: new Set(), blocks: [], blockSeq: 0, textSegments: [],
+    };
+    attachSessionEvents(runtime, chatStream);
+
+    const update = (content, assistantMessageEvent) => runtime.emit({
+      type: "message_update",
+      turnId: "turn-1",
+      message: { role: "assistant", content },
+      assistantMessageEvent,
+    });
+    const content = [{ type: "thinking", thinking: "" }];
+    runtime.emit({ type: "message_start", turnId: "turn-1", message: { role: "assistant", content } });
+    update(content, { type: "thinking_start", contentIndex: 0 });
+    content[0].thinking = "第一段思考";
+    update(content, { type: "thinking_delta", contentIndex: 0, delta: "第一段思考" });
+    update(content, { type: "thinking_end", contentIndex: 0, content: "第一段思考" });
+
+    // thinking_end 后该节点立即 done，不再显示进行中。
+    const ended = chatStream.blocks.find((block) => block.type === "thinking");
+    assert.strictEqual(ended?.status, "done", "thinking_end 应立即把节点标 done");
+
+    // 关闭后的迟到 delta 不得再次写入已关闭的思考节点。
+    content[0].thinking = "第一段思考迟到追加";
+    update(content, { type: "thinking_delta", contentIndex: 0, delta: "迟到追加" });
+
+    // 关闭后即使换了 contentIndex，也必须等待 thinking_start，不能凭 delta 偷开新节点。
+    update(content, { type: "thinking_delta", contentIndex: 1, delta: "无 start 的新节点" });
+
+    // 只有新的 thinking_start 才能开启新的思考输入节点，即使 contentIndex 相同。
+    content[0].thinking = "";
+    update(content, { type: "thinking_start", contentIndex: 0 });
+    content[0].thinking = "第二段思考";
+    update(content, { type: "thinking_delta", contentIndex: 0, delta: "第二段思考" });
+
+    const thinkingBlocks = chatStream.blocks.filter((block) => block.type === "thinking");
+    assert.strictEqual(thinkingBlocks.length, 2, "思考应拆成两个线性节点");
+    assert.strictEqual(thinkingBlocks[0].text, "第一段思考");
+    assert.strictEqual(thinkingBlocks[1].text, "第二段思考");
+    assert.strictEqual(thinkingBlocks[1].status, "streaming", "第二段思考尚未 end，保持 streaming");
+    assert.notStrictEqual(thinkingBlocks[0].blockId, thinkingBlocks[1].blockId, "新思考节点必须有新的 blockId");
+  });
+
+  it("marks the previous thinking node done when a new start arrives without end", () => {
+    let callback = null;
+    const runtime = {
+      session: { sessionFile: undefined, sessionManager: { flushed: true, getSessionId: () => "session-1" } },
+      onEvent(handler) { callback = handler; return () => {}; },
+      emit(event) { callback(event); },
+    };
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write() { return true; }, end() {} }, currentWorkspace: "", turnId: "turn-1",
+      emittedTraces: new Set(), blocks: [], blockSeq: 0, textSegments: [],
+    };
+    attachSessionEvents(runtime, chatStream);
+
+    const update = (content, assistantMessageEvent) => runtime.emit({
+      type: "message_update",
+      turnId: "turn-1",
+      message: { role: "assistant", content },
+      assistantMessageEvent,
+    });
+    const content = [{ type: "thinking", thinking: "" }];
+    runtime.emit({ type: "message_start", turnId: "turn-1", message: { role: "assistant", content } });
+
+    // LLM 未发 thinking_end，直接开新 thinking_start（同 contentIndex）。
+    update(content, { type: "thinking_start", contentIndex: 0 });
+    content[0].thinking = "第一段思考";
+    update(content, { type: "thinking_delta", contentIndex: 0, delta: "第一段思考" });
+    content[0].thinking = "";
+    update(content, { type: "thinking_start", contentIndex: 0 });
+    content[0].thinking = "第二段思考";
+    update(content, { type: "thinking_delta", contentIndex: 0, delta: "第二段思考" });
+
+    const thinkingBlocks = chatStream.blocks.filter((block) => block.type === "thinking");
+    assert.strictEqual(thinkingBlocks.length, 2, "两个 thinking_start 生成两个线性节点");
+    assert.strictEqual(thinkingBlocks[0].status, "done", "缺 end 时新 start 也必须把旧节点标 done");
+    assert.strictEqual(thinkingBlocks[0].text, "第一段思考");
+    assert.strictEqual(thinkingBlocks[1].status, "streaming", "第二段思考仍进行中");
+    assert.notStrictEqual(thinkingBlocks[0].blockId, thinkingBlocks[1].blockId, "新旧思考节点 blockId 不同");
+  });
+
+  it("opens separate text nodes when a new start arrives without text_end", () => {
+    let callback = null;
+    const runtime = {
+      session: { sessionFile: undefined, sessionManager: { flushed: true, getSessionId: () => "session-1" } },
+      onEvent(handler) { callback = handler; return () => {}; },
+      emit(event) { callback(event); },
+    };
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write() { return true; }, end() {} }, currentWorkspace: "", turnId: "turn-1",
+      emittedTraces: new Set(), blocks: [], blockSeq: 0, textSegments: [],
+    };
+    attachSessionEvents(runtime, chatStream);
+
+    const update = (content, assistantMessageEvent) => runtime.emit({
+      type: "message_update",
+      turnId: "turn-1",
+      message: { role: "assistant", content },
+      assistantMessageEvent,
+    });
+    const content = [{ type: "text", text: "" }];
+    runtime.emit({ type: "message_start", turnId: "turn-1", message: { role: "assistant", content } });
+
+    // LLM 未发 text_end，直接开新 text_start（同 contentIndex）。
+    update(content, { type: "text_start", contentIndex: 0 });
+    content[0].text = "第一段";
+    update(content, { type: "text_delta", contentIndex: 0, delta: "第一段" });
+    content[0].text = "";
+    update(content, { type: "text_start", contentIndex: 0 });
+    content[0].text = "第二段";
+    update(content, { type: "text_delta", contentIndex: 0, delta: "第二段" });
+
+    const textBlocks = chatStream.blocks.filter((block) => block.type === "text");
+    assert.strictEqual(textBlocks.length, 2, "两个 text_start 生成两个线性节点，不互相覆盖");
+    assert.strictEqual(textBlocks[0].text, "第一段");
+    assert.strictEqual(textBlocks[1].text, "第二段");
+    assert.notStrictEqual(textBlocks[0].blockId, textBlocks[1].blockId, "新旧正文节点 blockId 不同");
+  });
+
+  it("cuts off thinking input when text arrives and vice versa", () => {
+    let callback = null;
+    const runtime = {
+      session: { sessionFile: undefined, sessionManager: { flushed: true, getSessionId: () => "session-1" } },
+      onEvent(handler) { callback = handler; return () => {}; },
+      emit(event) { callback(event); },
+    };
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write() { return true; }, end() {} }, currentWorkspace: "", turnId: "turn-1",
+      emittedTraces: new Set(), blocks: [], blockSeq: 0, textSegments: [],
+    };
+    attachSessionEvents(runtime, chatStream);
+
+    const update = (content, assistantMessageEvent) => runtime.emit({
+      type: "message_update",
+      turnId: "turn-1",
+      message: { role: "assistant", content },
+      assistantMessageEvent,
+    });
+    const content = [{ type: "thinking", thinking: "" }, { type: "text", text: "" }];
+    runtime.emit({ type: "message_start", turnId: "turn-1", message: { role: "assistant", content } });
+
+    // 思考输入流中正文出现——思考输入被切断，正文开新节点。
+    update(content, { type: "thinking_start", contentIndex: 0 });
+    content[0].thinking = "思考";
+    update(content, { type: "thinking_delta", contentIndex: 0, delta: "思考" });
+    content[1].text = "正文";
+    update(content, { type: "text_delta", contentIndex: 1, delta: "正文" });
+
+    // 正文到达后迟到的思考 delta 被拒绝（思考节点已被切断且无 thinking_start）。
+    content[0].thinking = "思考迟到";
+    update(content, { type: "thinking_delta", contentIndex: 0, delta: "迟到思考" });
+
+    const thinkingBlocks = chatStream.blocks.filter((block) => block.type === "thinking");
+    const textBlocks = chatStream.blocks.filter((block) => block.type === "text");
+    assert.strictEqual(thinkingBlocks.length, 1, "思考保持单个节点");
+    assert.strictEqual(thinkingBlocks[0].text, "思考", "正文到达后迟到的思考 delta 被拒绝");
+    assert.strictEqual(textBlocks.length, 1, "正文独立成节点");
+    assert.strictEqual(textBlocks[0].text, "正文");
+  });
+
   it("reuses the indexed text block after an unindexed compatibility snapshot", () => {
     let callback = null;
     const runtime = {
@@ -287,5 +507,71 @@ describe("block persistence compatibility snapshots", () => {
     assert.strictEqual(textBlocks.length, 1, "mixed snapshots must not create duplicate text blocks");
     assert.strictEqual(textBlocks[0].blockId, "m1:text-0");
     assert.strictEqual(textBlocks[0].text, "same text");
+  });
+
+  it("falls back to a valid blockId when a delta omits contentIndex", () => {
+    let callback = null;
+    const runtime = {
+      session: { sessionFile: undefined, sessionManager: { flushed: true, getSessionId: () => "session-1" } },
+      onEvent(handler) { callback = handler; return () => {}; },
+      emit(event) { callback(event); },
+    };
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write() { return true }, end() {} }, currentWorkspace: "", turnId: "turn-1",
+      emittedTraces: new Set(), blocks: [], blockSeq: 0, textSegments: [],
+    };
+    attachSessionEvents(runtime, chatStream);
+
+    const update = (content, assistantMessageEvent) => runtime.emit({
+      type: "message_update",
+      turnId: "turn-1",
+      message: { role: "assistant", content },
+      assistantMessageEvent,
+    });
+    const content = [{ type: "text", text: "无 contentIndex 正文" }];
+    runtime.emit({ type: "message_start", turnId: "turn-1", message: { role: "assistant", content } });
+    update(content, { type: "text_delta" }); // 无 contentIndex
+
+    const textBlocks = chatStream.blocks.filter((block) => block.type === "text");
+    assert.strictEqual(textBlocks.length, 1, "应生成一个正文节点");
+    assert.doesNotMatch(textBlocks[0].blockId, /text--/, "blockId 不得含非法 -1 索引（text--1）");
+  });
+
+  it("closes both open inputs before the compatibility path creates nodes", () => {
+    let callback = null;
+    const runtime = {
+      session: { sessionFile: undefined, sessionManager: { flushed: true, getSessionId: () => "session-1" } },
+      onEvent(handler) { callback = handler; return () => {}; },
+      emit(event) { callback(event); },
+    };
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write() { return true }, end() {} }, currentWorkspace: "", turnId: "turn-1",
+      emittedTraces: new Set(), blocks: [], blockSeq: 0, textSegments: [],
+    };
+    attachSessionEvents(runtime, chatStream);
+
+    const update = (content, assistantMessageEvent) => runtime.emit({
+      type: "message_update",
+      turnId: "turn-1",
+      message: { role: "assistant", content },
+      assistantMessageEvent,
+    });
+    const content = [{ type: "text", text: "" }, { type: "thinking", thinking: "" }];
+    runtime.emit({ type: "message_start", turnId: "turn-1", message: { role: "assistant", content } });
+
+    // 先开启 thinking 和 text 两个输入（indexed 路径）。
+    update(content, { type: "thinking_start", contentIndex: 0 });
+    content[0].thinking = "思考";
+    update(content, { type: "thinking_delta", contentIndex: 0, delta: "思考" });
+    update(content, { type: "text_start", contentIndex: 1 });
+    content[1].text = "正文";
+    update(content, { type: "text_delta", contentIndex: 1, delta: "正文" });
+
+    // 一个非 text/thinking 事件走兼容路径——必须先关闭两个 active 输入。
+    update(content, { type: "step" });
+    assert.strictEqual(chatStream.activeTextInput?.open, false, "兼容路径必须关闭 text 输入");
+    assert.strictEqual(chatStream.activeThinkingInput?.open, false, "兼容路径必须关闭 thinking 输入");
   });
 });

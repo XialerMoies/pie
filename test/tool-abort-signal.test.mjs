@@ -2,9 +2,13 @@ import { afterEach, describe, it } from "node:test";
 import assert from "node:assert";
 
 import { agentToolToPIToolDefinition } from "../src/agent/types.ts";
+import { explorerListTool } from "../src/agent/tools/explorer-list.ts";
+import { fileOutlineTool } from "../src/agent/tools/file-outline.ts";
+import { fileReadTool } from "../src/agent/tools/file-read.ts";
 import { gitLogTool } from "../src/agent/tools/git-log.ts";
 import { gitStatusTool } from "../src/agent/tools/git-status.ts";
-import { localApiFetch } from "../src/agent/tools/local-api.ts";
+import { localApiFetch, setLocalApiToken } from "../src/agent/tools/local-api.ts";
+import { setCurrentRuntime } from "../src/agent/globals.ts";
 import { searchTool } from "../src/agent/tools/search.ts";
 
 const originalFetch = globalThis.fetch;
@@ -12,8 +16,79 @@ const originalServerPort = process.env.SERVER_PORT;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  setCurrentRuntime(null);
+  setLocalApiToken(undefined);
   if (originalServerPort === undefined) delete process.env.SERVER_PORT;
   else process.env.SERVER_PORT = originalServerPort;
+});
+
+it("uses the active runtime token when a reduced tool context omits it", async () => {
+  process.env.SERVER_PORT = "3099";
+  let receivedInit;
+  globalThis.fetch = async (_url, init = {}) => {
+    receivedInit = init;
+    return { ok: true, status: 200 };
+  };
+  setCurrentRuntime({ config: { desktopApiToken: "runtime-token" } });
+  await localApiFetch("http://127.0.0.1:3099/api/file/read", toolContext(undefined));
+  assert.strictEqual(new Headers(receivedInit.headers).get("x-my-code-agent-token"), "runtime-token");
+});
+
+it("uses the current server token instead of a stale callback token", async () => {
+  process.env.SERVER_PORT = "3099";
+  let receivedInit;
+  globalThis.fetch = async (_url, init = {}) => {
+    receivedInit = init;
+    return { ok: true, status: 200 };
+  };
+  setLocalApiToken("current-server-token");
+  await localApiFetch("http://127.0.0.1:3099/api/file/read", {
+    ...toolContext(undefined),
+    desktopApiToken: "stale-callback-token",
+  });
+  assert.strictEqual(new Headers(receivedInit.headers).get("x-my-code-agent-token"), "current-server-token");
+});
+
+it("uses the current server token for every local API tool", async () => {
+  process.env.SERVER_PORT = "3099";
+  const receivedTokens = [];
+  globalThis.fetch = async (url, init = {}) => {
+    receivedTokens.push({
+      path: new URL(url).pathname,
+      token: new Headers(init.headers).get("x-my-code-agent-token"),
+    });
+    const path = new URL(url).pathname;
+    if (path === "/api/file/read") {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ content: "", size: 0, mtime: "", symbols: [], total: 0 }),
+      };
+    }
+    if (path === "/api/explorer") return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    if (path === "/api/search") return { ok: true, status: 200, json: async () => ({ results: [], total: 0 }) };
+    if (path === "/api/git/status") return { ok: true, status: 200, json: async () => ({ entries: [], total: 0 }) };
+    if (path === "/api/git/log") return { ok: true, status: 200, json: async () => ({ entries: [] }) };
+    throw new Error(`unexpected local API path: ${path}`);
+  };
+
+  setLocalApiToken("current-server-token");
+  const ctx = { ...toolContext(undefined), desktopApiToken: "stale-callback-token" };
+  await fileReadTool.execute({ path: "README.md" }, ctx);
+  await fileOutlineTool.execute({ path: "README.md" }, ctx);
+  await explorerListTool.execute({}, ctx);
+  await searchTool.execute({ query: "needle" }, ctx);
+  await gitStatusTool.execute({}, ctx);
+  await gitLogTool.execute({}, ctx);
+
+  assert.deepStrictEqual(receivedTokens, [
+    { path: "/api/file/read", token: "current-server-token" },
+    { path: "/api/file/read", token: "current-server-token" },
+    { path: "/api/explorer", token: "current-server-token" },
+    { path: "/api/search", token: "current-server-token" },
+    { path: "/api/git/status", token: "current-server-token" },
+    { path: "/api/git/log", token: "current-server-token" },
+  ]);
 });
 
 function readOnlyTool(execute) {

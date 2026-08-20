@@ -89,6 +89,8 @@ export interface ServerPermissionServiceOptions {
 
 export interface ServerPathAuthorizationOptions {
   suggestedDirectory?: string;
+  /** Authenticated Agent read callbacks must not wait for a desktop confirmation UI. */
+  internalToolRequest?: boolean;
 }
 
 export class ServerPermissionError extends Error {
@@ -160,6 +162,24 @@ export class ServerPermissionService {
       const authorizedRoot = this.authorizedRoot(root);
       const guarded = guardPathWithinRoot(authorizedRoot, target, operation);
       const permissionRoot = this.workspaceRootProvider?.() || guarded.root;
+      const internalWorkspaceRead = options.internalToolRequest === true
+        && operation === "read"
+        && normalizePermissionPath(guarded.root) === normalizePermissionPath(permissionRoot);
+      if (internalWorkspaceRead) {
+        const denyDecision = evaluatePathPermission(guarded.path, operation, {
+          workspaceRoot: guarded.root,
+          allowedWorkingRoots: [guarded.root],
+          alwaysDenyRules: this.sessionPermissionState?.alwaysDenyRules,
+        });
+        if (denyDecision.status === "deny") {
+          throw new ServerPermissionError(denyDecision.reason, 403, "permission_denied", {
+            operation,
+            target: guarded.path,
+            workspaceRoot: permissionRoot,
+          });
+        }
+        return guarded;
+      }
       const evaluatedDecision = evaluatePathPermission(guarded.path, operation, {
         workspaceRoot: permissionRoot,
         allowedWorkingRoots: this.allowedRoots(permissionRoot, guarded.root, operation),
@@ -760,7 +780,7 @@ export function writeServerPermissionError(
 }
 
 export async function authorizeRoutePath(
-  ctx: { permissionService?: ServerPermissionService; rootRegistry?: RootRegistry },
+  ctx: { permissionService?: ServerPermissionService; rootRegistry?: RootRegistry; internalToolRequest?: boolean },
   root: string,
   target: string,
   operation: PathPermissionOperation,
@@ -768,7 +788,9 @@ export async function authorizeRoutePath(
 ): Promise<GuardedPath> {
   const effectiveRoot = ctx.rootRegistry?.resolveRegisteredRoot(root)?.path || root;
   return ctx.permissionService
-    ? ctx.permissionService.authorizePath(effectiveRoot, target, operation, source)
+    ? ctx.permissionService.authorizePath(effectiveRoot, target, operation, source, {
+        internalToolRequest: ctx.internalToolRequest,
+      })
     : guardPathWithinRoot(effectiveRoot, target, operation);
 }
 

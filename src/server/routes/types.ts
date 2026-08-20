@@ -30,6 +30,14 @@ export interface ChatStreamEventFrame {
   data: string;
 }
 
+export interface ChatTextInputState {
+  key: string;
+  blockId: string;
+  open: boolean;
+  /** Legacy providers may omit text_start after a message/tool boundary. */
+  implicitStartAllowed?: boolean;
+}
+
 // ─── Assistant Block 协议 ─────────────────────────────────
 
 /** 在 assistant 气泡内线性排列的内容块，按 seq 排序 */
@@ -69,6 +77,14 @@ export interface ChatStreamState {
   /** B-5：当前 turn 内 assistant message 序号。每次 message_start（assistant）递增，
    *  用于 blockId 前缀避免工具前后不同 message 的 contentIndex 冲突。 */
   messageSeq?: number;
+  /** Current text node input state; closed nodes reject later deltas. */
+  activeTextInput?: ChatTextInputState;
+  /** Generation counters keep repeated content indexes unique. */
+  textBlockGenerations?: Record<string, number>;
+  /** Current thinking node input state; closed nodes reject later deltas. */
+  activeThinkingInput?: ChatTextInputState;
+  /** Generation counters keep repeated thinking content indexes unique. */
+  thinkingBlockGenerations?: Record<string, number>;
   /** SSE event sequence and bounded replay window for reconnecting clients. */
   eventSeq: number;
   eventHistory: ChatStreamEventFrame[];
@@ -90,6 +106,8 @@ export interface ServerContext {
   providerReferenceLock?: ProviderReferenceMutationLock;
   observability?: ServerObservability;
   skillService?: SkillService;
+  /** True only for authenticated in-process Agent tool callbacks. */
+  internalToolRequest?: boolean;
   paths: {
     APP_ROOT: string;
     DATA_DIR: string;

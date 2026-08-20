@@ -277,8 +277,18 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
     }
     chatStream.response = res;
     console.log(`[chat] SSE connected`);
-    if (reconnecting) replayChatEvents(chatStream, res, lastEventId as string);
-    else writeChatStreamBaseline(chatStream, res);
+    if (reconnecting) {
+      replayChatEvents(chatStream, res, lastEventId as string);
+    } else {
+      writeChatStreamBaseline(chatStream, res);
+      // The prompt can fail before the browser's first SSE request arrives.
+      // Replay only a buffered terminal event. Replaying the whole history on
+      // a fresh connection would duplicate already-rendered deltas/blocks.
+      const lastEvent = chatStream.eventHistory?.at(-1);
+      if (lastEvent && /"type":"(?:error|done|cancelled)"/.test(lastEvent.data)) {
+        try { res.write(lastEvent.data); } catch { /* Client disconnected during setup. */ }
+      }
+    }
     req.on("close", () => {
       console.log(`[chat] SSE disconnected`);
       // A disconnected browser can no longer answer a command confirmation.

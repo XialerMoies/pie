@@ -213,6 +213,7 @@ function toast(msg: string, type?: 'info' | 'error' | 'success'): void {
 // ═══════════════════════════════════════════════════════════════════
 
 let _bootstrapPromise: Promise<void> | null = null;
+let _apiFetchRecoveryInstalled = false;
 let _dashboardRefreshInFlight: Promise<void> | null = null;
 let _dashboardRefreshQueued = false;
 const BOOTSTRAP_RETRY_DELAYS_MS = [100, 200, 400, 800, 1200, 2000, 3000, 4000, 5000, 6000, 6000];
@@ -242,6 +243,35 @@ async function fetchBootstrap(token: string): Promise<Response> {
   }
 }
 
+function apiRequestUrl(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.pathname;
+  return input.url;
+}
+
+function installApiFetchRecovery(): void {
+  if (_apiFetchRecoveryInstalled) return;
+  const fetchImpl = window.fetch || globalThis.fetch;
+  if (typeof fetchImpl !== 'function') return;
+  _apiFetchRecoveryInstalled = true;
+  const rawFetch = fetchImpl.bind(window);
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const response = await rawFetch(input, init);
+    const url = apiRequestUrl(input);
+    if (!url.startsWith('/api/') || url === '/api/bootstrap' || (response.status !== 401 && response.status !== 403)) {
+      return response;
+    }
+
+    _bootstrapPromise = null;
+    try {
+      await bootstrapApi();
+    } catch {
+      return response;
+    }
+    return rawFetch(input, init);
+  };
+}
+
 export function bootstrapApi(): Promise<void> {
   if (!_bootstrapPromise) {
     _bootstrapPromise = (async () => {
@@ -250,6 +280,7 @@ export function bootstrapApi(): Promise<void> {
       const token = await api.getDesktopSessionToken();
       if (!token) throw new Error('Desktop session token is unavailable');
       const response = await fetchBootstrap(token);
+      installApiFetchRecovery();
       const body = await response.json().catch(() => null) as {
         startup?: { workspace?: unknown };
       } | null;

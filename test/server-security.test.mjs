@@ -95,6 +95,18 @@ describe("server desktop security", () => {
     ).ok, true);
   });
 
+  it("uses the stable cookie name for the Vite development server", () => {
+    const previous = process.env.VITE_DEV_PORT;
+    try {
+      process.env.VITE_DEV_PORT = "5173";
+      const config = createDesktopSecurityConfig("dev-token", "restarted-instance");
+      assert.strictEqual(config.cookieName, "mca_token");
+    } finally {
+      if (previous === undefined) delete process.env.VITE_DEV_PORT;
+      else process.env.VITE_DEV_PORT = previous;
+    }
+  });
+
   it("requires a desktop token for sensitive read API requests", () => {
     const sensitiveCases = [
       "/api/file/read?root=/repo&path=README.md",

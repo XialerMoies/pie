@@ -155,9 +155,13 @@ class ChatSseControllerView {
     const permissionFailure = block.metadata?.permissionFailure;
     if (permissionFailure && typeof permissionFailure === 'object') {
       const failure = permissionFailureToChatError(permissionFailure as PermissionFailurePayload);
+      this.finalizeOpenBlocks(last, failure.reason || failure.message);
+      last.streaming = false;
+      last._rv = (last._rv || 0) + 1;
       this.callbacks.setAssistantError(failure.title, failure.message, failure.reason, failure.nextSteps, failure.raw, failure.actions);
       this.dependencies.chatState.setBusy(false);
       this.dependencies.chatStream.close();
+      this.callbacks.renderMessages();
       this.callbacks.refreshComposer();
       this.callbacks.failSend();
     }
@@ -195,12 +199,30 @@ class ChatSseControllerView {
     sb('ms');
   }
 
+  private finalizeOpenBlocks(last: any, reason: string): void {
+    if (!last?.blocks?.length) return;
+    let changed = false;
+    last.blocks = last.blocks.map((block: any) => {
+      if (block.type === 'thinking' && block.status === 'streaming') {
+        changed = true;
+        return { ...block, status: 'done' };
+      }
+      if ((block.type === 'tool' || block.type === 'tool_use' || block.type === 'step') && block.status === 'running') {
+        changed = true;
+        return { ...block, status: 'error', error: block.error || reason };
+      }
+      return block;
+    });
+    if (changed) last._rv = (last._rv || 0) + 1;
+  }
+
   private handleFailedTerminal(last: any, data: ChatSseEvent): void {
     if (!last) return;
     if (data.turnId && !last.turnId) last.turnId = data.turnId;
     if (typeof data.text === 'string') last.content = data.text;
     if (Array.isArray(data.blocks)) last.blocks = data.blocks;
     const reason = data.error || data.message || 'Agent turn failed';
+    this.finalizeOpenBlocks(last, reason);
     this.callbacks.setAssistantError(
       '回复失败',
       '当前回复未能完成。请查看错误详情后重试。',
@@ -219,6 +241,7 @@ class ChatSseControllerView {
   private handleCancelled(last: any, data: ChatSseEvent): void {
     if (last) {
       if (data.turnId && !last.turnId) last.turnId = data.turnId;
+      this.finalizeOpenBlocks(last, '本轮已取消');
       last.streaming = false;
       last.error = undefined;
       last._rv = (last._rv || 0) + 1;
@@ -236,6 +259,12 @@ class ChatSseControllerView {
   private handleBusinessError(data: ChatSseEvent): void {
     if (data.failure) {
       const failure = permissionFailureToChatError(data.failure);
+      const last = this.dependencies.chatState.getMessages().at(-1);
+      this.finalizeOpenBlocks(last, failure.reason || failure.message);
+      if (last) {
+        last.streaming = false;
+        last._rv = (last._rv || 0) + 1;
+      }
       this.callbacks.setAssistantError(failure.title, failure.message, failure.reason, failure.nextSteps, failure.raw, failure.actions);
       this.dependencies.chatState.setBusy(false);
       this.dependencies.chatStream.close();
@@ -246,6 +275,7 @@ class ChatSseControllerView {
       return;
     }
     const reason = data.text || data.message || '未知错误';
+    this.finalizeOpenBlocks(this.dependencies.chatState.getMessages().at(-1), reason);
     this.callbacks.setAssistantError(
       '发生了错误',
       '当前回复未能完成。请先查看错误详情，再决定是否重试。',

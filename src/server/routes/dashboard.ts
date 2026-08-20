@@ -15,9 +15,8 @@ import { workspaceDataPaths } from "./session-dir.js";
 
 function activeWorkspaceStorage(ctx: ServerContext): { sessionsDir: string; usageIndexFile: string } {
   const { paths } = ctx;
-  const engine = resolveEngine(ctx);
   if (paths.STARTUP?.dataRoot) {
-    const workspace = engine.session.workspace || paths.STARTUP.workspace || paths.APP_ROOT;
+    const workspace = ctx.runtime.currentWorkspace || paths.STARTUP.workspace || paths.APP_ROOT;
     const workspacePaths = workspaceDataPaths(paths.DATA_DIR, workspace);
     return {
       sessionsDir: workspacePaths.sessionsDir,
@@ -60,33 +59,39 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
     return true;
   }
 
-  try {
-    await ctx.runtime.waitForSessionReady?.();
-  } catch {
-    res.writeHead(503, { "Content-Type": "application/json", ...cors, "Retry-After": "1" });
-    res.end(JSON.stringify({ ok: false, code: "SESSION_NOT_READY" }));
-    return true;
+  const sessionDependent = url === "/api/dashboard"
+    || url === "/api/token-usage"
+    || url === "/api/usage/current"
+    || (url === "/api/compact" && method === "POST");
+  if (sessionDependent) {
+    try {
+      await ctx.runtime.waitForSessionReady?.();
+    } catch {
+      res.writeHead(503, { "Content-Type": "application/json", ...cors, "Retry-After": "1" });
+      res.end(JSON.stringify({ ok: false, code: "SESSION_NOT_READY" }));
+      return true;
+    }
   }
-  const session = engine.session;
+  const session = sessionDependent ? engine.session : undefined;
 
   // Dashboard data
   if (url === "/api/dashboard") {
     const workspaceStorage = activeWorkspaceStorage(ctx);
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
     res.end(JSON.stringify({
-      modelProvider: session.model?.provider ?? "N/A",
-      modelId: session.model?.id ?? "N/A",
-      modelContextWindow: session.model?.capabilities.contextWindow.status === "known" ? session.model.capabilities.contextWindow.value : "N/A",
-      modelMaxTokens: session.model?.capabilities.maxOutputTokens.status === "known" ? session.model.capabilities.maxOutputTokens.value : "N/A",
-      thinkingLevel: session.thinkingLevel ?? "off",
+      modelProvider: session!.model?.provider ?? "N/A",
+      modelId: session!.model?.id ?? "N/A",
+      modelContextWindow: session!.model?.capabilities.contextWindow.status === "known" ? session!.model.capabilities.contextWindow.value : "N/A",
+      modelMaxTokens: session!.model?.capabilities.maxOutputTokens.status === "known" ? session!.model.capabilities.maxOutputTokens.value : "N/A",
+      thinkingLevel: session!.thinkingLevel ?? "off",
       runtime: process.uptime(),
-      messagesCount: session.messagesCount ?? 0,
-      isIdle: !session.isStreaming,
-      tools: session.tools ?? [],
-      activeTools: session.tools ?? [],
+      messagesCount: session!.messagesCount ?? 0,
+      isIdle: !session!.isStreaming,
+      tools: session!.tools ?? [],
+      activeTools: session!.tools ?? [],
       dataDir: p.DATA_DIR,
       sessionsDir: workspaceStorage.sessionsDir,
-      sessionId: session.id,
+      sessionId: session!.id,
       _debug: { sessionsDir: workspaceStorage.sessionsDir, cwd: process.cwd(), appRoot: p.APP_ROOT },
     }));
     return true;
@@ -99,7 +104,7 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
     cu = readContextUsage(engine);
     const engineStats = engine.getSessionStats();
     if (engineStats) stats = { tokens: engineStats.usage, cost: engineStats.usage.cost.status === "known" ? engineStats.usage.cost.amount : null };
-    const provider = session.model?.provider ?? "unknown";
+    const provider = session!.model?.provider ?? "unknown";
     const out: { contextUsage: typeof cu; sessionStats: typeof stats; provider: string } = { contextUsage: null, sessionStats: null, provider };
     if (cu) out.contextUsage = serializeContextUsage(cu);
     if (stats) out.sessionStats = { tokens: stats.tokens ?? null, cost: stats.cost ?? null };
@@ -130,13 +135,13 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
     const hitRate = totalInput > 0
       ? Math.round(tokens.cacheRead / totalInput * 100)
       : 0;
-    const sessionId = session.id;
-    const isCompacting = session.isCompacting;
+    const sessionId = session!.id;
+    const isCompacting = session!.isCompacting;
     const compactCount = engineStats?.compactCount ?? 0;
     const lastCompactionAt = engineStats?.lastCompactionAt ?? null;
     const lastCompactionSummary = engineStats?.lastCompactionSummary ?? null;
 
-    const provider = session.model?.provider ?? "unknown";
+    const provider = session!.model?.provider ?? "unknown";
 
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
     res.end(JSON.stringify({
@@ -150,7 +155,7 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
       compactCount,
       lastCompactionAt,
       lastCompactionSummary,
-      isStreaming: session.isStreaming,
+      isStreaming: session!.isStreaming,
       isCompacting,
     }));
     return true;
@@ -254,12 +259,12 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
   if (url === "/api/compact" && method === "POST") {
     return (async (): Promise<boolean> => {
       try {
-        if (session.isStreaming) {
+        if (session!.isStreaming) {
           res.writeHead(409, { "Content-Type": "application/json", ...cors });
           res.end(JSON.stringify({ ok: false, error: "Please wait for the current response to finish before compacting." }));
           return true;
         }
-        if (session.isCompacting) {
+        if (session!.isCompacting) {
           res.writeHead(409, { "Content-Type": "application/json", ...cors });
           res.end(JSON.stringify({ ok: false, error: "Compaction is already in progress." }));
           return true;

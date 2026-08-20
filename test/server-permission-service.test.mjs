@@ -547,6 +547,63 @@ describe("server permission service", () => {
     }
   });
 
+  it("does not block authenticated internal workspace reads on desktop confirmation", async () => {
+    const parent = makeTempRoot("server-perm-internal-read-");
+    try {
+      const workspace = resolve(parent, "workspace");
+      mkdirSync(resolve(workspace, "agent", "skills"), { recursive: true });
+      const state = createSessionPermissionState();
+      state.alwaysAskRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${workspace}\\**)`,
+        match: "wildcard",
+      });
+      const service = new ServerPermissionService({
+        sessionPermissionState: state,
+        workspaceRootProvider: () => workspace,
+        confirmPermission: async () => {
+          throw new Error("internal tool read must not wait for desktop confirmation");
+        },
+      });
+
+      const guarded = await service.authorizePath(
+        workspace,
+        "agent/skills",
+        "read",
+        "explorer.list",
+        { internalToolRequest: true },
+      );
+      assert.strictEqual(guarded.path, resolve(workspace, "agent", "skills"));
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps explicit deny rules effective for internal workspace reads", async () => {
+    const parent = makeTempRoot("server-perm-internal-read-deny-");
+    try {
+      const workspace = resolve(parent, "workspace");
+      mkdirSync(resolve(workspace, "agent", "skills"), { recursive: true });
+      const state = createSessionPermissionState();
+      state.alwaysDenyRules.session.push({
+        toolName: "Read",
+        ruleContent: `Read(${workspace}\\**)`,
+        match: "wildcard",
+      });
+      const service = new ServerPermissionService({
+        sessionPermissionState: state,
+        workspaceRootProvider: () => workspace,
+      });
+
+      await assert.rejects(
+        () => service.authorizePath(workspace, "agent/skills", "read", "explorer.list", { internalToolRequest: true }),
+        (error) => error instanceof ServerPermissionError && error.code === "permission_denied",
+      );
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   it("confirms a sensitive external read once per session", async () => {
     const parent = makeTempRoot("server-perm-sensitive-read-");
     try {

@@ -526,6 +526,69 @@ describe("chat ui state", () => {
     assert.strictEqual(last.error?.reason, "provider failed");
   });
 
+  it("business error events stop the streaming assistant state", () => {
+    const streams = [];
+    class MockEventSource {
+      constructor() {
+        this.closed = false;
+        this.onmessage = null;
+        this.onerror = null;
+        attachEventListeners(this);
+        streams.push(this);
+      }
+      close() { this.closed = true; }
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "触发请求错误";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    streams[0].onmessage({
+      data: JSON.stringify({ type: "error", message: "fetch failed" }),
+    });
+
+    const last = env.win.App.ChatState.getMessages().at(-1);
+    assert.strictEqual(env.win.App.ChatState.isBusy(), false);
+    assert.strictEqual(streams[0].closed, true);
+    assert.strictEqual(last.streaming, false);
+    assert.strictEqual(last.error?.reason, "fetch failed");
+  });
+
+  it("business errors finalize tool blocks that were still running", () => {
+    const streams = [];
+    class MockEventSource {
+      constructor() {
+        this.closed = false;
+        this.onmessage = null;
+        this.onerror = null;
+        attachEventListeners(this);
+        streams.push(this);
+      }
+      close() { this.closed = true; }
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "工具执行后断开";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    streams[0].onmessage({
+      data: JSON.stringify({
+        type: "block",
+        block: { type: "tool", name: "file_read", status: "running", blockId: "tool-1", seq: 1 },
+      }),
+    });
+    streams[0].onmessage({
+      data: JSON.stringify({ type: "error", message: "fetch failed" }),
+    });
+
+    const last = env.win.App.ChatState.getMessages().at(-1);
+    assert.strictEqual(last.streaming, false);
+    assert.strictEqual(last.blocks[0].status, "error");
+    assert.strictEqual(last.blocks[0].error, "fetch failed");
+  });
+
   it("cancelled terminal events stop busy state without completing successfully", () => {
     const streams = [];
     class MockEventSource {
@@ -598,6 +661,7 @@ describe("chat ui state", () => {
     const last = env.win.App.ChatState.getMessages().at(-1);
     assert.strictEqual(env.win.App.ChatState.isBusy(), false);
     assert.strictEqual(streams[0].closed, true);
+    assert.strictEqual(last.streaming, false);
     assert.strictEqual(last.error?.title, "高风险操作已拦截");
     assert.deepStrictEqual(last.error?.actions, ["copy"]);
   });

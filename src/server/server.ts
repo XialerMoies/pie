@@ -66,6 +66,7 @@ export { openAppEventStream } from "./http-app.js";
 import { createServerLifecycle } from "./server-lifecycle.js";
 import { SkillService } from "../agent/skills/skill-service.js";
 import { toolRegistry } from "../agent/tools/index.js";
+import { setLocalApiToken } from "../agent/tools/local-api.js";
 
 import { attachEngineEvents, recordUserNoteBlock } from "./agent-event-router.js";
 export { attachEngineEvents, attachSessionEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
@@ -187,7 +188,10 @@ async function main() {
   let engine: AgentEngine;
   let subagentHost: SubagentDelegationHost;
   const subagentBridge = createSubagentDelegationBridge();
+  // createDesktopSecurityConfig keeps the Vite cookie name stable across hot
+  // reloads while retaining instance isolation for packaged windows.
   const security = createDesktopSecurityConfig(undefined, STARTUP.instanceId);
+  setLocalApiToken(security.token);
   clearDesktopSessionTokenEnv();
   const rootRegistry = new RootRegistry();
   const permissionService = new ServerPermissionService({

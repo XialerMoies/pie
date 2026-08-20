@@ -49,7 +49,7 @@ describe("route implementation cleanup", () => {
 });
 
 describe("dashboard MCP route ownership", () => {
-  it("delegates MCP routes after session readiness to a focused module", () => {
+  it("delegates MCP routes without forcing session readiness", () => {
     const dashboardPath = resolve(ROOT, "src/server/routes/dashboard.ts");
     const mcpPath = resolve(ROOT, "src/server/routes/dashboard-mcp.ts");
     const pathUtilsPath = resolve(ROOT, "src/server/routes/route-path-utils.ts");
@@ -58,11 +58,10 @@ describe("dashboard MCP route ownership", () => {
 
     const dashboardSource = readFileSync(dashboardPath, "utf8");
     const mcpSource = readFileSync(mcpPath, "utf8");
-    const readinessIndex = dashboardSource.indexOf("waitForSessionReady");
     const delegationIndex = dashboardSource.indexOf("handleDashboardMcp(");
 
     assert.match(dashboardSource, /from "\.\/dashboard-mcp\.js"/);
-    assert.ok(readinessIndex >= 0 && delegationIndex > readinessIndex, "MCP delegation must remain behind session readiness");
+    assert.ok(delegationIndex >= 0, "MCP delegation must remain in the dashboard dispatcher");
     assert.doesNotMatch(dashboardSource, /\/api\/mcp\//);
     assert.doesNotMatch(dashboardSource, /\b(?:TrustStore|MCP_CATALOG|updateMcpConfigFile|publishMcpChanged)\b/);
     assert.match(dashboardSource, /from "\.\/route-path-utils\.js"/);
@@ -340,6 +339,20 @@ describe("dashboard routes", () => {
     const { status, body } = await request;
     assert.strictEqual(status, 200);
     assert.strictEqual(parseJSON(body).modelId, "test-model");
+  });
+
+  it("does not wait for a session transition before serving session-independent routes", async () => {
+    const runtime = mockRuntime({
+      waitForSessionReady: () => new Promise(() => {}),
+    });
+    const request = callHandler(handleDashboard, "GET", "/api/mcp/catalog", undefined, mockContext({ runtime }));
+    const result = await Promise.race([
+      request,
+      new Promise((resolve) => setTimeout(() => resolve("timeout"), 100)),
+    ]);
+    assert.notStrictEqual(result, "timeout", "session-independent routes must not inherit session transition waits");
+    assert.strictEqual(result.status, 200);
+    assert.ok(Array.isArray(parseJSON(result.body)));
   });
 
   it("GET /api/dashboard 返回 200 JSON", async () => {
