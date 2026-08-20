@@ -30,7 +30,7 @@ export function createServerContext(
       model: {
         get modelRuntime() { return flat.runtime.modelRuntime; },
         get modelRegistry() { return flat.runtime.modelRegistry; },
-        syncModelProviders: () => flat.runtime.syncModelProviders(),
+        syncModelProviders: (options) => flat.runtime.syncModelProviders(options),
         runWithStableSession: (operation) => flat.runtime.runWithStableSession(operation),
       },
     },

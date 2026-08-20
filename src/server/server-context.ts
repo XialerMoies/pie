@@ -58,7 +58,7 @@ export interface ServerProviderContext {
 export interface ModelProviderContext {
   readonly modelRuntime: ModelRuntime;
   readonly modelRegistry: ModelRegistry;
-  syncModelProviders(): Promise<number>;
+  syncModelProviders(options?: { waitForIdle?: boolean }): Promise<number>;
   runWithStableSession<T>(operation: () => Promise<T>): Promise<T>;
 }
 

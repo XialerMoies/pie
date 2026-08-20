@@ -144,11 +144,17 @@ export class AgentRuntime {
   private _eventSubscriptions: SessionEventSubscription[] = []
   private _workspaceChangeSubscriptions = new Set<WorkspaceChangeCallback>()
   private _transitionTail: Promise<void> = Promise.resolve()
+  /** True only while a public session transition is actually swapping the session
+   *  (switch/open/create). Prompt turns queue behind the tail too, but they don't
+   *  replace the session, so waitForSessionReady must not wait for a whole turn. */
+  private _sessionSwitching = false
   private _pendingOpens = new Map<string, Promise<void>>()
   private _modelProviderSync?: Promise<number>
   private _modelProviderSyncGeneration = 0
   private _modelProviderSyncStarted = false
   private _modelProviderSyncWake?: Promise<number>
+  /** 当前 in-flight provider sync 是否等待 streaming idle（read-only 查询不等待）。 */
+  private _modelProviderSyncIdleWait?: boolean
 
   private constructor() {}
 
@@ -158,8 +164,14 @@ export class AgentRuntime {
     return this._session
   }
 
-  /** 等待当前 session 切换完成，再返回可用 session；切换失败时保持 fail-closed。 */
+  /** 等待当前 session 切换完成，再返回可用 session；切换失败时保持 fail-closed。
+   *
+   *  注意：_transitionTail 同时被 engine.prompt 的 runWithStableSession 占用（整个
+   *  turn）。等待完整 tail 会让 /api/dashboard 等 session 读取路由在长 tool 执行期间
+   *  一直挂起，侧边栏/设置页因此卡在加载中。这里只在真正替换 session 的切换进行中时
+   *  才等待；prompt 期间的 session 对象已可用，直接返回。 */
   async waitForSessionReady(): Promise<AgentSession> {
+    if (!this._sessionSwitching) return this.session
     await (this._transitionTail ?? Promise.resolve())
     return this.session
   }
@@ -173,11 +185,15 @@ export class AgentRuntime {
     return calculateContextUsageSnapshot(this.session)
   }
 
-  syncModelProviders(): Promise<number> {
+  syncModelProviders(options?: { waitForIdle?: boolean }): Promise<number> {
     const sync = this.config.syncModelProviders
     if (!sync) return Promise.resolve(0)
+    // 读模型列表等只读查询不应等待 streaming turn 结束，否则长 tool 执行期间
+    // 设置页模型/子Agent 标签页、模型选择器会一直卡在加载中。切换模型等需要
+    // 稳定 session 的调用保持默认 waitForIdle: true。
+    const waitForIdle = options?.waitForIdle !== false
     this._modelProviderSyncGeneration = (this._modelProviderSyncGeneration ?? 0) + 1
-    if (this._modelProviderSync) {
+    if (this._modelProviderSync && this._modelProviderSyncIdleWait === waitForIdle) {
       if (this._modelProviderSyncStarted) {
         try {
           this._modelProviderSyncWake = sync(this.modelRuntime)
@@ -189,7 +205,7 @@ export class AgentRuntime {
     }
 
     const operation = Promise.resolve().then(async () => {
-      if (this._session?.isStreaming) await this._session.waitForIdle()
+      if (waitForIdle && this._session?.isStreaming) await this._session.waitForIdle()
       const session = this._session
       const activeModel = session?.model
       let revision = 0
@@ -219,9 +235,11 @@ export class AgentRuntime {
         this._modelProviderSync = undefined
         this._modelProviderSyncStarted = false
         this._modelProviderSyncWake = undefined
+        this._modelProviderSyncIdleWait = undefined
       }
     })
     this._modelProviderSync = pending
+    this._modelProviderSyncIdleWait = waitForIdle
     return pending
   }
 
@@ -493,16 +511,21 @@ export class AgentRuntime {
     sessionFile?: string,
     forceNew?: boolean,
   ): Promise<void> {
-    const recoveryPoint = await this._saveAndDispose(keepMcp)
-    this.currentWorkspace = workspace
+    this._sessionSwitching = true
     try {
-      await this._initSession(workspace, sessionFile, forceNew)
-    } catch (error) {
-      await this._restoreSession(recoveryPoint)
-      throw error
+      const recoveryPoint = await this._saveAndDispose(keepMcp)
+      this.currentWorkspace = workspace
+      try {
+        await this._initSession(workspace, sessionFile, forceNew)
+      } catch (error) {
+        await this._restoreSession(recoveryPoint)
+        throw error
+      }
+      this._rebindEvents()
+      if (recoveryPoint.workspace !== workspace) this._notifyWorkspaceChange(workspace)
+    } finally {
+      this._sessionSwitching = false
     }
-    this._rebindEvents()
-    if (recoveryPoint.workspace !== workspace) this._notifyWorkspaceChange(workspace)
   }
 
   private _notifyWorkspaceChange(workspace: string): void {

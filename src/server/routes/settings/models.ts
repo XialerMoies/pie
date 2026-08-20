@@ -16,7 +16,9 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
   // List available models (only those with configured API key in auth.json)
   if (url === "/api/models") {
     try {
-      await model.syncModelProviders();
+      // 只读模型列表：不等待 streaming turn 结束，避免长 tool 执行期间设置页/
+      // 模型选择器一直卡在加载中。provider 注册本身不依赖 session idle。
+      await model.syncModelProviders({ waitForIdle: false });
       const modelRegistry = model.modelRegistry;
       const all = modelRegistry.getAvailable();
       let authData: Record<string, unknown> = {};
