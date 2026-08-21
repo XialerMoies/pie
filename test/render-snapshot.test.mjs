@@ -106,6 +106,7 @@ before(async () => {
   await import(`../src/frontend/chat/chat-subagent-views.ts?t=${ts}`);
   await import(`../src/frontend/chat/chat-event-node.ts?t=${ts}`);
   await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
+  await import(`../src/frontend/chat/chat-sse-controller.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-layout.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/layout-tabs.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/layout-panel.ts?t=${ts}`);
@@ -113,6 +114,52 @@ before(async () => {
 }, 10000); // 10s timeout
 
 describe("chat component views", () => {
+  it("renders tool OUT in the live SSE path before terminal replay", () => {
+    state.M = [{ role: "assistant", streaming: true, blocks: [] }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    let handlers;
+    win.App.ChatStream = win.App.ChatStream || {
+      setHandlers: () => false,
+      isCurrent: () => true,
+      close: () => {},
+    };
+    const originalSetHandlers = win.App.ChatStream.setHandlers;
+    const originalIsCurrent = win.App.ChatStream.isCurrent;
+    const originalClose = win.App.ChatStream.close;
+    win.App.ChatStream.setHandlers = (_generation, nextHandlers) => { handlers = nextHandlers; return true; };
+    win.App.ChatStream.isCurrent = () => true;
+    win.App.ChatStream.close = () => {};
+    try {
+      const controller = win.App.ChatViews.createSseController({
+        scheduleMessagesRender: () => {},
+        updateUI: () => {},
+        markLastMessageRendered: () => {},
+        renderMessages: () => {},
+        refreshComposer: () => {},
+        setAssistantError: () => {},
+        completeSend: () => {},
+        failSend: () => {},
+      });
+      assert.strictEqual(controller.bind(1), true);
+      const running = {
+        type: "tool", status: "running", name: "command", toolCallId: "call-render-live",
+        blockId: "tool-call-render-live", seq: 1, input: { command: "long" },
+      };
+      handlers.onMessage({ data: JSON.stringify({ type: "block", block: running }) });
+      assert.ok(panel.textContent.includes("IN"));
+      assert.ok(!panel.textContent.includes("OUT"), "工具运行中尚无结果时不应提前显示 OUT");
+
+      handlers.onMessage({ data: JSON.stringify({ type: "block", block: { ...running, status: "success", output: "finished live" } }) });
+      assert.ok(panel.textContent.includes("OUT"), "工具完成帧到达后应立即显示 OUT");
+      assert.ok(panel.textContent.includes("finished live"));
+    } finally {
+      win.App.ChatStream.setHandlers = originalSetHandlers;
+      win.App.ChatStream.isCurrent = originalIsCurrent;
+      win.App.ChatStream.close = originalClose;
+    }
+  });
+
   it("FileDiffView preserves its root across updates and removes it on dispose", () => {
     const host = doc.createElement("div");
     const view = new win.App.ChatViews.FileDiffView({

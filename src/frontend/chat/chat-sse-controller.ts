@@ -153,9 +153,14 @@ class ChatSseControllerView {
   }
 
   private handleBlock(last: any, block: any): void {
-    if (!last?.streaming || !block) return;
+    if (!last || !block) return;
     if (!last.blocks) last.blocks = [];
     const index = last.blocks.findIndex((item: any) => item.blockId === block.blockId);
+    // A terminal frame can race with the final tool completion frame. Keep
+    // accepting updates for an already-mounted block so the live DOM receives
+    // OUT instead of requiring a replay/refresh. Never create a new block after
+    // the assistant has become terminal.
+    if (!last.streaming && index < 0) return;
     if (index >= 0) last.blocks[index] = block;
     else last.blocks.push(block);
     last._rv = (last._rv || 0) + 1;

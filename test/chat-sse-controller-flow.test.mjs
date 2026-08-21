@@ -126,4 +126,35 @@ describe("chat SSE controller event flow", () => {
     assert.strictEqual(scheduledRenders, 0);
     assert.strictEqual(fullRenders, 0);
   });
+
+  it("keeps a late tool completion block after the terminal boundary so OUT is rendered live", () => {
+    reset();
+    const controller = global.window.App.ChatViews.createSseController({
+      scheduleMessagesRender: () => { scheduledRenders += 1; },
+      updateUI: () => {},
+      markLastMessageRendered: () => { markedRendered += 1; },
+      renderMessages: () => { fullRenders += 1; },
+      refreshComposer: () => {},
+      setAssistantError: () => {},
+      completeSend: () => {},
+      failSend: () => {},
+    });
+
+    assert.strictEqual(controller.bind(9), true);
+    const running = {
+      type: "tool", status: "running", name: "command", toolCallId: "call-live",
+      blockId: "tool-call-live", seq: 1, input: { command: "long-command" },
+    };
+    const completed = { ...running, status: "success", output: "finished" };
+    handlers.onMessage({ data: JSON.stringify({ type: "block", block: running }) });
+    handlers.onMessage({ data: JSON.stringify({ type: "done", text: "", blocks: [running] }) });
+    assert.strictEqual(messages[0].streaming, false);
+
+    handlers.onMessage({ data: JSON.stringify({ type: "block", block: completed }) });
+
+    assert.deepStrictEqual(updateCalls, ["tool-call-live", "tool-call-live"]);
+    assert.strictEqual(messages[0].blocks[0].output, "finished");
+    assert.strictEqual(scheduledRenders, 0);
+    assert.strictEqual(fullRenders, 0);
+  });
 });

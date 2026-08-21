@@ -74,6 +74,17 @@ function lastAssistantMessage(event: Record<string, unknown>): Record<string, un
   return [...messages].reverse().map(record).find((message) => message?.role === "assistant");
 }
 
+function toolResultText(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") return value;
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? String(value) : serialized;
+  } catch {
+    return String(value);
+  }
+}
+
 function contentPhase(type: unknown): "start" | "delta" | "end" | undefined {
   if (type === "text_start" || type === "thinking_start") return "start";
   if (type === "text_end" || type === "thinking_end") return "end";
@@ -142,6 +153,7 @@ export function mapPiEvent(raw: unknown, context: PiEventContext): PiEventMappin
       name: String(event?.toolName ?? "unknown"),
       ...(record(event?.metadata) ? { metadata: record(event?.metadata) } : {}),
     };
+    const output = toolResultText(event?.result);
     return event?.isError === true
       ? {
           events: [{
@@ -155,7 +167,7 @@ export function mapPiEvent(raw: unknown, context: PiEventContext): PiEventMappin
           events: [{
             ...common,
             type: "tool.completed",
-            ...(typeof event?.result === "string" ? { output: event.result } : {}),
+            ...(output === undefined ? {} : { output }),
           }],
           recognized: true,
         };

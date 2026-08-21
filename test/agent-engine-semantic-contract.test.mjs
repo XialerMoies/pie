@@ -26,6 +26,30 @@ function stream() {
 }
 
 describe("AgentEngine lifecycle semantics", () => {
+  it("keeps a serializable tool result in the normalized completion event", () => {
+    const mapped = mapPiEvent({
+      type: "tool_execution_end",
+      toolCallId: "call-structured-result",
+      toolName: "search",
+      result: { matches: ["a.ts"], count: 1 },
+      isError: false,
+    }, {
+      base: { version: 1, sessionId: "session-1", turnId: "turn-structured-result", seq: 1, timestamp: 1 },
+    });
+
+    assert.deepEqual(mapped.events[0], {
+      version: 1,
+      type: "tool.completed",
+      sessionId: "session-1",
+      turnId: "turn-structured-result",
+      seq: 1,
+      timestamp: 1,
+      toolCallId: "call-structured-result",
+      name: "search",
+      output: '{"matches":["a.ts"],"count":1}',
+    });
+  });
+
   it("publishes normalized content and a single completed terminal", () => {
     const engine = fakeEngine();
     const chat = stream();

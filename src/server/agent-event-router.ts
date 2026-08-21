@@ -361,6 +361,7 @@ export function persistTraceEvent(
   trace: TraceEvent,
   options?: SessionPersistenceOptions,
 ): boolean {
+  if (options?.persist === false) return false;
   const sessionFile = runtime.session.sessionFile;
   if (!sessionFile || !trace.turnId) return false;
   const sessionFlushed = Boolean((runtime.session.sessionManager as any)?.flushed);
@@ -555,7 +556,11 @@ export function attachSessionEvents(
         turnId,
         id: tid,
       };
-      emitTrace(runtime, chatStream, trace, { minIntervalMs: 250, authorizeSessionWrite });
+      // Streaming output is already delivered through SSE and the final
+      // tool_execution_end frame is persisted below. Persisting the growing
+      // partialResult here would synchronously rewrite the full accumulated
+      // output every 250ms and block unrelated API requests during long tools.
+      emitTrace(runtime, chatStream, trace, { persist: false });
       if (event.partialResult) {
         const toolBlock = chatStream.blocks.find(
           (b): b is AssistantBlock & { type: "tool" } => b.type === "tool" && b.toolCallId === event.toolCallId
@@ -696,7 +701,9 @@ export function attachSessionEvents(
               turnId,
               id: resolved.blockId,
             };
-            emitTrace(runtime, chatStream, trace, { minIntervalMs: 250, authorizeSessionWrite });
+            // Keep partial thinking in memory/SSE; agent_end persists the
+            // finalized block and trace once.
+            emitTrace(runtime, chatStream, trace, { persist: false });
             const block: AssistantBlock = {
               type: "thinking",
               text: curThinking,
@@ -762,7 +769,9 @@ export function attachSessionEvents(
               turnId,
               id: tidThinking,
             };
-            emitTrace(runtime, chatStream, trace, { minIntervalMs: 250, authorizeSessionWrite });
+            // Keep partial thinking in memory/SSE; agent_end persists the
+            // finalized block and trace once.
+            emitTrace(runtime, chatStream, trace, { persist: false });
             const block: AssistantBlock = {
               type: "thinking",
               text: chatStream.thinkingBuffer,
@@ -1191,7 +1200,9 @@ export function attachEngineEvents(
     if (event.type === "tool.updated" && turnId) {
       const block = chatStream.blocks.find((item): item is Extract<AssistantBlock, { type: "tool" }> => item.type === "tool" && item.toolCallId === event.toolCallId);
       if (block) emitBlock(runtime, chatStream, { ...block, output: event.output }, { persist: false });
-      emitTrace(runtime, chatStream, { type: "tool", status: "running", name: event.name, output: event.output, turnId, id: `${event.toolCallId}@${turnId}` }, { minIntervalMs: 250, authorizeSessionWrite });
+      // Partial tool output is an SSE concern. Only the terminal tool frame
+      // is persisted, avoiding repeated synchronous writes of growing output.
+      emitTrace(runtime, chatStream, { type: "tool", status: "running", name: event.name, output: event.output, turnId, id: `${event.toolCallId}@${turnId}` }, { persist: false });
       return;
     }
     if (event.type === "tool.completed" || event.type === "tool.failed") {
