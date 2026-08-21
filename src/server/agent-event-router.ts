@@ -610,7 +610,7 @@ export function attachSessionEvents(
           status: event.isError ? "error" : "success",
           turnId,
           blockId: "tool-" + (event.toolCallId || flowBlock2?.blockId || nextBlockSeq(chatStream)),
-          seq: nextBlockSeq(chatStream),
+          seq: flowBlock2?.seq ?? nextBlockSeq(chatStream),
         };
         emitBlock(runtime, chatStream, block, { authorizeSessionWrite });
       }
@@ -650,12 +650,15 @@ export function attachSessionEvents(
           if (closedThinking !== null) markBlockDone(chatStream, closedThinking);
           const resolved = resolveIndexedBlockInput(chatStream, "text", textKey, inc.type, "text", "text");
           if (resolved !== null) {
+            const existingTextBlock = chatStream.blocks.find((block): block is Extract<AssistantBlock, { type: "text" }> =>
+              block.type === "text" && block.blockId === resolved.blockId,
+            );
             const block: AssistantBlock = {
               type: "text",
               text: curText,
               turnId,
               blockId: resolved.blockId,
-              seq: nextBlockSeq(chatStream),
+              seq: existingTextBlock?.seq ?? nextBlockSeq(chatStream),
             };
             emitBlock(runtime, chatStream, block, { persist: false });
             if (inc.delta && inc.type === "text_delta") {
@@ -684,6 +687,9 @@ export function attachSessionEvents(
           const thinkingKey = `${mprefix}:thinking-${resolvedThinkingIndex}`;
           const resolved = resolveIndexedBlockInput(chatStream, "thinking", thinkingKey, inc.type, "thinking", "thinking");
           if (resolved !== null) {
+            const existingThinkingBlock = chatStream.blocks.find((block): block is Extract<AssistantBlock, { type: "thinking" }> =>
+              block.type === "thinking" && block.blockId === resolved.blockId,
+            );
             const trace: TraceEvent = {
               type: "thinking", status: "streaming",
               text: curThinking,
@@ -697,7 +703,7 @@ export function attachSessionEvents(
               status: inc.type === "thinking_end" ? "done" : "streaming",
               turnId,
               blockId: resolved.blockId,
-              seq: nextBlockSeq(chatStream),
+              seq: existingThinkingBlock?.seq ?? nextBlockSeq(chatStream),
             };
             emitBlock(runtime, chatStream, block, { persist: false });
             // 思考结束（thinking_end）或新思考直接开启（thinking_start 未带
@@ -733,7 +739,8 @@ export function attachSessionEvents(
               const block: AssistantBlock = {
                 type: "text", text: curText, turnId,
                 // 段索引 i 始终 ≥0，避免无 contentIndex 时出现非法 blockId（text--1）。
-                blockId: `m${chatStream.messageSeq || 1}:text-${i}`, seq: nextBlockSeq(chatStream),
+                blockId: `m${chatStream.messageSeq || 1}:text-${i}`,
+                seq: chatStream.blocks.find((candidate) => candidate.blockId === `m${chatStream.messageSeq || 1}:text-${i}`)?.seq ?? nextBlockSeq(chatStream),
               };
               emitBlock(runtime, chatStream, block, { persist: false });
               if (i >= segCount || !prev) {
@@ -762,7 +769,7 @@ export function attachSessionEvents(
               status: "streaming",
               turnId,
               blockId: tidThinking,
-              seq: nextBlockSeq(chatStream),
+              seq: chatStream.blocks.find((candidate) => candidate.blockId === tidThinking)?.seq ?? nextBlockSeq(chatStream),
             };
             emitBlock(runtime, chatStream, block, { persist: false });
           }
@@ -1108,6 +1115,13 @@ export function attachEngineEvents(
 
   return engine.subscribe((event) => {
     const turnId = currentTurn(event);
+    if (event.type === "turn.started") {
+      completedTurns.delete(turnId);
+    } else if (turnId && completedTurns.has(turnId)) {
+      // A terminal event closes the protocol generation. Late provider events
+      // must not recreate blocks after the stream has been finalized.
+      return;
+    }
     if (event.type === "turn.started") {
       chatStream.turnId = event.turnId || chatStream.turnId;
       structuredNodeBuffers.clear();
