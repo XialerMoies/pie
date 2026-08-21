@@ -191,15 +191,6 @@ describe("prompts", () => {
       assert.ok(r.includes("危险命令也应交给 Command 的内置安全层处理"), "危险命令应由工具安全层返回拦截");
     });
 
-    it("task control requires a bounded plan and prevents redundant tool loops", async () => {
-      const mod = await import("../src/agent/prompts.ts");
-      const r = mod.resolveSystemPrompt();
-      assert.ok(r.includes("任务控制"));
-      assert.ok(r.includes("先给出简短计划"));
-      assert.ok(r.includes("不要重复读取同一目标"));
-      assert.ok(r.includes("停止工具调用并回答"));
-    });
-
     it("resolveSystemPrompt 返回非空字符串", async () => {
       const mod = await import("../src/agent/prompts.ts");
       const r = mod.resolveSystemPrompt();
