@@ -103,6 +103,14 @@ class ChatSseControllerView {
         return;
       }
       if (data.type === 'thinking') {
+        // Engine block frames own the visible Thought node. The legacy
+        // thinking compatibility frame follows every block delta and must not
+        // mutate message-level state, otherwise a later updateUI() replaces
+        // the whole assistant bubble and turns streaming into flashing.
+        if (last?.blocks?.length) {
+          sb('ms');
+          return;
+        }
         if (last) {
           last.thinking = (last.thinking || '') + (data.text || '');
           last._rv = (last._rv || 0) + 1;

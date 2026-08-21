@@ -89,6 +89,10 @@ describe("built dashboard event flow", () => {
       assert.strictEqual(doc.querySelector("#ms > .m"), root, "assistant root must remain mounted");
       if (block.text) assert.ok(mounted.textContent.includes(block.text), `${block.blockId} text must update immediately`);
       else assert.ok(mounted.textContent.trim().length > 0, `${block.blockId} state must render immediately`);
+
+      const revisionAfterBlock = win.App.ChatState.getMessages()[0]._rv;
+      controller.handleMessage(1, { data: JSON.stringify({ type: "thinking", text: "legacy compatibility frame" }) });
+      assert.strictEqual(win.App.ChatState.getMessages()[0]._rv, revisionAfterBlock, "compatibility thinking frames must not trigger message-level redraws");
     }
 
     const terminalBlocks = latestBlocks();
