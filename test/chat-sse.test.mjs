@@ -122,27 +122,6 @@ describe("Chat SSE", () => {
     }
   });
 
-  it("POST /api/chat rejects a second prompt while the engine is streaming", async () => {
-    const chatStream = { textBuffer: "keep", thinkingBuffer: "keep", response: null, currentWorkspace: ROOT, turnId: "turn-active" };
-    const ctx = {
-      engine: {
-        session: { workspace: ROOT, isStreaming: true, isPromptActive: true },
-        async syncModelProviders() { throw new Error("must not sync while busy"); },
-        async prompt() { throw new Error("must not prompt while busy"); },
-      },
-      runtime: { currentWorkspace: ROOT, session: { isStreaming: true } },
-      paths: { APP_ROOT: ROOT },
-      chatStream,
-    };
-    const res = makeResWithEvents();
-
-    await handleChat(makeReq("POST", "/api/chat", { message: "duplicate" }), res, ctx);
-
-    assert.equal(res._status, 409);
-    assert.deepEqual(JSON.parse(res._body), { ok: false, error: "已有任务正在执行" });
-    assert.equal(chatStream.textBuffer, "keep");
-  });
-
   it("POST /api/chat provider sync failure terminates SSE without leaking details", async () => {
     let promptCalls = 0;
     const sseResponse = makeResWithEvents();

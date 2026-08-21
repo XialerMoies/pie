@@ -179,14 +179,6 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
       try {
         const parsed = JSON.parse(body);
         const { message, workspace: requestedWorkspace, attachments } = parsed;
-        // A second POST must not reset the live stream state or race PI's
-        // session.prompt(). Queue runtime input through /api/chat/note instead.
-        const sessionState = engine.session;
-        if (sessionState.isPromptActive === true || (sessionState.isStreaming && chatStream.turnId)) {
-          res.writeHead(409, { "Content-Type": "application/json", ...cors });
-          res.end(JSON.stringify({ ok: false, error: "已有任务正在执行" }));
-          return;
-        }
         const workspace = await authorizeWorkspacePath(ctx, requestedWorkspace, "chat.workspace");
         if (workspace && engine.session.workspace !== workspace) {
           console.log(`📂 Chat with workspace: ${workspace} (was: ${engine.session.workspace})`);
