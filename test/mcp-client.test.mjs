@@ -388,6 +388,8 @@ describe("agentToolToPiTool", () => {
       toolName: "structured",
       result: "structured text",
       metadata: { provenance: { source: "test" }, count: 2 },
+      outcome: { status: "success" },
+      legacy: true,
       isError: false,
     });
   });

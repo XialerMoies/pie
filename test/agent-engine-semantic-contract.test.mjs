@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { attachEngineEvents } from "../src/server/server.ts";
 import { mapPiEvent } from "../src/agent-engine/event-normalizer.ts";
 import { commandTool } from "../src/agent/tools/command.ts";
+import { ToolRegistry, structuredToolError } from "../src/agent/types.ts";
 
 function fakeEngine() {
   let listener;
@@ -47,6 +48,47 @@ describe("AgentEngine lifecycle semantics", () => {
       toolCallId: "call-structured-result",
       name: "search",
       output: '{"matches":["a.ts"],"count":1}',
+    });
+  });
+
+  it("maps an explicit structured tool failure to tool.failed", () => {
+    const mapped = mapPiEvent({
+      type: "tool_execution_end",
+      toolCallId: "call-missing",
+      toolName: "search",
+      result: "missing",
+      data: null,
+      outcome: {
+        status: "failed",
+        failure: {
+          kind: "not_found",
+          code: "resource_not_found",
+          message: "missing",
+          details: { path: "/missing" },
+        },
+      },
+      isError: true,
+    }, {
+      base: { version: 1, sessionId: "session-1", turnId: "turn-missing", seq: 1, timestamp: 1 },
+    });
+
+    assert.deepEqual(mapped.events[0], {
+      version: 1,
+      type: "tool.failed",
+      sessionId: "session-1",
+      turnId: "turn-missing",
+      seq: 1,
+      timestamp: 1,
+      toolCallId: "call-missing",
+      name: "search",
+      error: {
+        kind: "not_found",
+        code: "resource_not_found",
+        message: "missing",
+        category: "storage",
+        retryable: true,
+        details: { path: "/missing" },
+      },
     });
   });
 
@@ -216,6 +258,49 @@ describe("AgentEngine lifecycle semantics", () => {
     assert.strictEqual(thinkingBlocks[1].text, "第二段思考", "第二段完整累积，不回退到旧节点");
     assert.strictEqual(thinkingBlocks[1].status, "streaming", "第二段进行中");
     assert.notStrictEqual(thinkingBlocks[0].blockId, thinkingBlocks[1].blockId, "两段 blockId 不同");
+  });
+
+  it("carries a structured tool failure through adapter, normalizer, and server presentation", async () => {
+    const registry = new ToolRegistry();
+    const traces = [];
+    registry.register({
+      name: "missing-tool",
+      description: "demo",
+      parameters: { type: "object", properties: {} },
+      execute: async () => structuredToolError("missing", {
+        kind: "not_found",
+        code: "resource_not_found",
+        details: { path: "/missing" },
+      }),
+      isReadOnly: true,
+      resultFormat: "structured",
+    });
+
+    const [tool] = registry.toPITools("/workspace", (event) => traces.push(event));
+    const engine = fakeEngine();
+    const chat = stream();
+    attachEngineEvents(engine, fakeRuntime(), chat);
+    engine.emit({ version: 1, type: "turn.started", sessionId: "session-1", turnId: "turn-cross-layer", seq: 1, timestamp: 1 });
+    engine.emit({ version: 1, type: "tool.started", sessionId: "session-1", turnId: "turn-cross-layer", seq: 2, timestamp: 2, toolCallId: "call-missing", name: "missing-tool", input: {} });
+    await tool.execute("call-missing", {});
+
+    const mapped = mapPiEvent(traces.at(-1), {
+      base: { version: 1, sessionId: "session-1", turnId: "turn-cross-layer", seq: 3, timestamp: 3 },
+    });
+    assert.equal(mapped.events[0].type, "tool.failed");
+    engine.emit(mapped.events[0]);
+
+    const block = chat.blocks.find((item) => item.type === "tool" && item.toolCallId === "call-missing");
+    assert.equal(block.status, "error");
+    assert.equal(block.error, "missing");
+    const payloads = chat.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1]));
+    const streamed = payloads.find((event) => event.type === "block" && event.block?.toolCallId === "call-missing" && event.block?.status === "error");
+    assert.equal(streamed.block.error, "missing");
+    assert.equal(
+      payloads.some((event) => event.type === "trace" || event.type === "delta" || event.type === "thinking"),
+      false,
+      "canonical engine presentation must not publish raw trace or legacy delta/thinking frames",
+    );
   });
 
   it("keeps structured Thought segments linear and rejects late writes", () => {

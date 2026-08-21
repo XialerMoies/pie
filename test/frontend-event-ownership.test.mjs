@@ -119,18 +119,16 @@ describe("application event stream ownership", () => {
     assert.match(pkg.scripts["test:frontend"], /test\/app-events-frontend\.test\.mjs/);
   });
 
-  it("keeps route tests complete with bounded parallelism", () => {
+  it("keeps route tests isolated with bounded parallelism and memory", () => {
     const pkg = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf8"));
-    const commands = pkg.scripts["test:routes"].split(/\s+&&\s+/);
-
-    assert.strictEqual(commands.length, 2);
-    assert.match(commands[0], /--test-concurrency=4/);
-    assert.match(commands[0], /test\/multi-instance-e2e\.mjs/);
-    assert.doesNotMatch(commands[0], /test\/workspace-lock\.test\.mjs/);
-    assert.strictEqual(
-      commands[1],
-      "node scripts/tsx-test.mjs --test --test-concurrency=1 test/workspace-lock.test.mjs",
-    );
+    assert.strictEqual(pkg.scripts["test:routes"], "node scripts/test-routes.mjs");
+    const runner = readFileSync(resolve(process.cwd(), "scripts/test-routes.mjs"), "utf8");
+    assert.match(runner, /runFile\(file, 4\)/);
+    assert.match(runner, /runFile\(file, 1\)/);
+    assert.match(runner, /processTreeRssMb/);
+    assert.match(runner, /MY_CODE_AGENT_TEST_MEMORY_MB \|\| 2048/);
+    assert.match(runner, /test\/multi-instance-e2e\.mjs/);
+    assert.match(runner, /test\/workspace-lock\.test\.mjs/);
   });
 });
 

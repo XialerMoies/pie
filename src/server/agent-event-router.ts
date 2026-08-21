@@ -3,6 +3,7 @@ import type { AgentEngine, EngineEvent } from "../agent-engine/index.js";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "fs";
 import type { AssistantBlock, ChatStreamState, ChatTextInputState, ServerContext, TraceEvent } from "./routes/types.js";
 import { writeChatEvent } from "./chat-stream.js";
+import { writePresentationEvent } from "./presentation-events.js";
 
 export type SessionWriteAuthorizer = (sessionFile: string, source: string) => void;
 
@@ -10,6 +11,8 @@ export interface SessionPersistenceOptions {
   persist?: boolean;
   force?: boolean;
   minIntervalMs?: number;
+  /** Publish a trace to the chat SSE stream. Persistence remains independent. */
+  publish?: boolean;
   authorizeSessionWrite?: SessionWriteAuthorizer;
 }
 
@@ -32,7 +35,7 @@ export function tagSessionHeader(
 }
 
 // ─── 路径（绝对路径）───────────────────────────────────────────────
-function appendAssistantSnapshot(aggregate: string, previousSnapshot: string | undefined, snapshot: string): { aggregate: string; snapshot: string; delta: string } {
+export function appendAssistantSnapshot(aggregate: string, previousSnapshot: string | undefined, snapshot: string): { aggregate: string; snapshot: string; delta: string } {
   if (!snapshot) return { aggregate, snapshot: previousSnapshot || "", delta: "" };
   const delta = previousSnapshot && snapshot.startsWith(previousSnapshot)
     ? snapshot.slice(previousSnapshot.length)
@@ -65,7 +68,7 @@ function nodeFlowLog(message: string, ...args: unknown[]): void {
 }
 
 /** Finalize a block (thinking/text) in the chat stream by marking it done. */
-function markBlockDone(chatStream: ChatStreamState, blockId: string): void {
+export function markBlockDone(chatStream: ChatStreamState, blockId: string): void {
   const index = chatStream.blocks.findIndex((block) => block.blockId === blockId);
   if (index < 0) return;
   const block = chatStream.blocks[index];
@@ -99,7 +102,7 @@ function setActiveInput(chatStream: ChatStreamState, kind: "text" | "thinking", 
 }
 
 /** Close a node input. Returns the closed blockId when a node was open, else null. */
-function closeActiveInput(chatStream: ChatStreamState, kind: "text" | "thinking", allowImplicitStart = false): string | null {
+export function closeActiveInput(chatStream: ChatStreamState, kind: "text" | "thinking", allowImplicitStart = false): string | null {
   const slot = slotRef(chatStream, kind);
   if (!slot.active) return null;
   const closedBlockId = slot.active.blockId;
@@ -132,7 +135,7 @@ function openIndexedInput(
  * dropped. When a start closes a previous node, the previous blockId is
  * reported so the caller can finalize it.
  */
-function resolveIndexedBlockInput(
+export function resolveIndexedBlockInput(
   chatStream: ChatStreamState,
   kind: "text" | "thinking",
   key: string,
@@ -184,7 +187,7 @@ const tracePersistState = new Map<string, TracePersistRecord>();
 const pendingTracePersist = new Map<string, TraceEvent>();
 const pendingBlockPersist = new Map<string, AssistantBlock>();
 
-function stringifyTraceValue(value: unknown, max = 2400): string {
+export function stringifyTraceValue(value: unknown, max = 2400): string {
   if (typeof value === "string") {
     return value.length > max ? value.slice(0, max) + "\n... truncated" : value;
   }
@@ -229,7 +232,7 @@ function traceFingerprint(trace: TraceEvent): string {
   });
 }
 
-function cleanupTracePersistState(turnId: string): void {
+export function cleanupTracePersistState(turnId: string): void {
   if (!turnId) return;
   for (const key of tracePersistState.keys()) {
     if (key.startsWith(`${turnId}:`)) tracePersistState.delete(key);
@@ -333,7 +336,7 @@ export function emitBlock(
   if (options?.persist !== false) {
     persistBlockEvent(runtime, emittedBlock, options);
   }
-  writeChatEvent(chatStream, { type: "block", block: emittedBlock });
+  writePresentationEvent(chatStream, { type: "block", block: emittedBlock });
 }
 
 export function recordUserNoteBlock(
@@ -405,501 +408,13 @@ export function emitTrace(
   if (!turnId) return;
   const normalized = assignTraceSeq(chatStream, { ...trace, turnId } as TraceEvent);
   persistTraceEvent(runtime, normalized, options);
-  writeChatEvent(chatStream, { type: "trace", trace: normalized });
-}
-
-export function attachSessionEvents(
-  runtime: AgentRuntime,
-  chatStream: ChatStreamState,
-  ctx?: ServerContext,
-): void {
-  let lastStreamingUsagePublishAt = 0;
-  const publishUsageChanged = (): void => {
-    try { ctx?.appEvents.publish("usage.changed"); } catch {}
-  };
-  const publishStreamingUsageChanged = (): void => {
-    const now = Date.now();
-    if (now - lastStreamingUsagePublishAt < 500) return;
-    lastStreamingUsagePublishAt = now;
-    publishUsageChanged();
-  };
-  const publishLifecycleChanged = (): void => {
-    try { ctx?.appEvents.publish("dashboard.changed"); } catch {}
-    publishUsageChanged();
-  };
-  const publishLifecycleAfterIdle = (sourceSession?: AgentRuntime["session"]): void => {
-    const sessionAtEnd = sourceSession ?? runtime.session;
-    let sessionIdAtEnd: string | undefined;
-    try { sessionIdAtEnd = sessionAtEnd?.sessionManager?.getSessionId?.() || undefined; } catch {}
-    const isCurrentSession = (): boolean => {
-      if (runtime.session !== sessionAtEnd) return false;
-      if (!sessionIdAtEnd) return true;
-      try { return runtime.session?.sessionManager?.getSessionId?.() === sessionIdAtEnd; } catch { return false; }
-    };
-    const publishForCurrentSession = (): void => {
-      if (isCurrentSession()) publishLifecycleChanged();
-    };
-    const recordIdleError = (error: unknown): void => {
-      try {
-        console.warn(`[server] waitForIdle failed: ${error instanceof Error ? error.message : String(error)}`);
-      } catch {}
-    };
-    const fallbackPublish = (error?: unknown): void => {
-      if (error !== undefined) recordIdleError(error);
-      queueMicrotask(publishForCurrentSession);
-    };
-
-    try {
-      const agent = sessionAtEnd?.agent;
-      if (typeof agent?.waitForIdle !== "function") {
-        fallbackPublish();
-        return;
-      }
-      void Promise.resolve(agent.waitForIdle()).then(
-        publishForCurrentSession,
-        (error) => {
-          recordIdleError(error);
-          publishForCurrentSession();
-        },
-      );
-    } catch (error) {
-      fallbackPublish(error);
-    }
-  };
-  const authorizeSessionWrite: SessionWriteAuthorizer | undefined = ctx?.permissionService
-    ? (sessionFile, source) => {
-      ctx.permissionService!.authorizePathSync(ctx.paths.SESSIONS_DIR, sessionFile, "write", source);
-    }
-    : undefined;
-
-  runtime.onEvent((event: any, sourceSession) => {
-    if (sourceSession && runtime.session !== sourceSession) return;
-    if (event.type === "queue_update") {
-      writeChatEvent(chatStream, {
-        type: "queue_update",
-        steering: Array.isArray(event.steering) ? event.steering : [],
-        followUp: Array.isArray(event.followUp) ? event.followUp : [],
-      });
-      return;
-    }
-    if (event.type === "agent_start") {
-      publishLifecycleChanged();
-      lastStreamingUsagePublishAt = Date.now();
-    }
-    if (event.type === "compaction_start") {
-      if ((runtime.session as any).isCompacting) publishUsageChanged();
-      else queueMicrotask(publishUsageChanged);
-    }
-    if (event.type === "compaction_end") queueMicrotask(publishUsageChanged);
-    if (event.type === "agent_end" && !chatStream.turnId) {
-      publishLifecycleAfterIdle(sourceSession);
-      return;
-    }
-
-    const turnId = chatStream.turnId || (event.turnIndex !== undefined ? `turn-${event.turnIndex}` : "");
-    const tid = (event.toolCallId || event.id || event.type) + "@" + turnId;
-
-    // lifecycle 步骤不再生成 step 事件（旧 session 仍可回放，新 session 不再写入）
-    if (event.type === "message_end" && event.message?.role === "toolResult") {
-      flushPendingTracePersist(runtime, turnId, { authorizeSessionWrite });
-    }
-    if (event.type === "turn_end") {
-      flushPendingTracePersist(runtime, turnId, { authorizeSessionWrite });
-    }
-
-    // B-5：assistant message 序号——工具调用后的新 assistant message 从 contentIndex 0 重新开始，
-    // blockId 需带 message 前缀避免跨 message 冲突。
-    if (event.type === "message_start" && event.message?.role === "assistant") {
-      closeActiveInput(chatStream, "text", true);
-      closeActiveInput(chatStream, "thinking", true);
-      chatStream.messageSeq = (chatStream.messageSeq || 0) + 1;
-    }
-
-    // ─── Tool trace ─────────────────────────────────────────
-    if (event.type === "tool_execution_start" && turnId) {
-      closeActiveInput(chatStream, "text", true);
-      closeActiveInput(chatStream, "thinking", true);
-      if (!chatStream.emittedTraces.has(tid)) {
-        chatStream.emittedTraces.add(tid);
-        const trace: TraceEvent = {
-          type: "tool", status: "running",
-          name: event.toolName || "unknown",
-          input: event.args,
-          turnId,
-          id: tid,
-        };
-        emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
-        // B-5：tool 物理合并成一个 block（type:"tool"，含 input，运行中更新 output，
-        // 结束时更新 status）。blockId 用 toolCallId 稳定，seq 首次分配、更新保留。
-        // persist:false——running 态不落盘，只有 tool_execution_end 持久化最终态，
-        // 避免同一 blockId 在 JSONL 里重复（刷新恢复出多个工具节点）。
-        const block: AssistantBlock = {
-          type: "tool", status: "running",
-          toolCallId: event.toolCallId || "",
-          name: event.toolName || "unknown",
-          input: event.args,
-          turnId,
-          blockId: "tool-" + (event.toolCallId || nextBlockSeq(chatStream)),
-          seq: nextBlockSeq(chatStream),
-        };
-        emitBlock(runtime, chatStream, block, { persist: false });
-      }
-    }
-
-    if (event.type === "tool_execution_update" && turnId) {
-      const trace: TraceEvent = {
-        type: "tool",
-        status: "running",
-        name: event.toolName || "unknown",
-        input: event.args,
-        output: stringifyTraceValue(event.partialResult),
-        turnId,
-        id: tid,
-      };
-      // Streaming output is already delivered through SSE and the final
-      // tool_execution_end frame is persisted below. Persisting the growing
-      // partialResult here would synchronously rewrite the full accumulated
-      // output every 250ms and block unrelated API requests during long tools.
-      emitTrace(runtime, chatStream, trace, { persist: false });
-      if (event.partialResult) {
-        const toolBlock = chatStream.blocks.find(
-          (b): b is AssistantBlock & { type: "tool" } => b.type === "tool" && b.toolCallId === event.toolCallId
-        );
-        if (toolBlock && !(toolBlock.output || "").includes("[截断")) {
-          const chunk = String(event.partialResult ?? "");
-          const merged = (toolBlock.output || "") + chunk;
-          if (merged.length >= 50400) {
-            emitBlock(runtime, chatStream, {
-              ...toolBlock,
-              output: merged.slice(0, 50370) + '\n... [截断: 输出超过 50KB]',
-            } as AssistantBlock, { persist: false });
-            return;
-          }
-          emitBlock(runtime, chatStream, {
-            ...toolBlock,
-            output: merged,
-          } as AssistantBlock, { persist: false });
-        }
-      }
-    }
-
-    if (event.type === "tool_execution_end" && turnId) {
-      if (!chatStream.emittedTraces.has(tid + "@end")) {
-        chatStream.emittedTraces.add(tid + "@end");
-        const trace: TraceEvent = {
-          type: "tool",
-          status: event.isError ? "error" : "success",
-          name: event.toolName || "unknown",
-          output: event.result,
-          error: event.isError ? event.result : undefined,
-          metadata: event.metadata,
-          turnId,
-          id: tid,
-        };
-        emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
-        // B-5：tool 合并——更新已有 tool block 的 status/output/error，不单独生成 tool_result。
-        // blockId 稳定，emitBlock 保留初始 seq。
-        const flowBlock2 = chatStream.blocks.find(
-          (b): b is AssistantBlock & { type: "tool" } =>
-            b.type === "tool" && b.toolCallId === event.toolCallId
-        );
-        const flowOut = flowBlock2?.output || "";
-        const block: AssistantBlock = {
-          type: "tool",
-          toolCallId: event.toolCallId || "",
-          name: flowBlock2?.name || event.toolName || "unknown",
-          input: flowBlock2?.input,
-          output: event.result || flowOut || undefined,
-          error: event.isError ? (event.result || flowOut) : undefined,
-          metadata: event.metadata,
-          status: event.isError ? "error" : "success",
-          turnId,
-          blockId: "tool-" + (event.toolCallId || flowBlock2?.blockId || nextBlockSeq(chatStream)),
-          seq: flowBlock2?.seq ?? nextBlockSeq(chatStream),
-        };
-        emitBlock(runtime, chatStream, block, { authorizeSessionWrite });
-      }
-    }
-
-    // ─── Thinking trace / text & thinking block ──────────────
-    if (event.type === "message_update" && turnId) {
-      const msg = event.message;
-      if (msg?.role === "assistant" && msg?.content) {
-        publishStreamingUsageChanged();
-        const fullThinking = msg.content.filter((c: any) => c.type === "thinking").map((c: any) => c.thinking || "").join("");
-        const thinkingState = appendAssistantSnapshot(chatStream.thinkingBuffer, chatStream.currentThinkingSnapshot, fullThinking);
-        chatStream.currentThinkingSnapshot = thinkingState.snapshot;
-
-        // B-5：用 contentIndex 作 text/thinking 的稳定 blockId（content 数组结构稳定，
-        // 同块多次 delta 的 contentIndex 恒定）。首次创建分配 seq，更新由 emitBlock 保留原 seq。
-        // assistantMessageEvent 是单个增量（text_delta 等），contentIndex 指向对应 content 块。
-        const inc = (event as any).assistantMessageEvent as
-          | { type: string; contentIndex?: number; delta?: string }
-          | undefined;
-        const incIndex = typeof inc?.contentIndex === "number" ? inc.contentIndex : -1;
-
-        if (inc?.type === "text_delta" || inc?.type === "text_end" || inc?.type === "text_start") {
-          // contentIndex 是 content 数组的位置索引（pi-ai 组装时 content.length-1）。
-          // content 块本身没有 index 字段，直接用下标取值。
-          // blockId 带 message 前缀，避免工具前后不同 assistant message 的 contentIndex 冲突。
-          const mprefix = `m${chatStream.messageSeq || 1}`;
-          // 无 contentIndex 时（incIndex = -1）回退到正文段索引，避免非法 blockId（text--1）。
-          const resolvedTextIndex = incIndex >= 0
-            ? incIndex
-            : msg.content.findIndex((c: any) => c.type === "text");
-          const contentBlock = msg.content[incIndex];
-          const curText = contentBlock?.type === "text" ? (contentBlock.text || "") : (inc.delta || "");
-          const textKey = `${mprefix}:text-${resolvedTextIndex}`;
-          // 正文输入到达时切断思考输入（同一 assistant 内容流里两者互斥）。
-          const closedThinking = closeActiveInput(chatStream, "thinking");
-          if (closedThinking !== null) markBlockDone(chatStream, closedThinking);
-          const resolved = resolveIndexedBlockInput(chatStream, "text", textKey, inc.type, "text", "text");
-          if (resolved !== null) {
-            const existingTextBlock = chatStream.blocks.find((block): block is Extract<AssistantBlock, { type: "text" }> =>
-              block.type === "text" && block.blockId === resolved.blockId,
-            );
-            const block: AssistantBlock = {
-              type: "text",
-              text: curText,
-              turnId,
-              blockId: resolved.blockId,
-              seq: existingTextBlock?.seq ?? nextBlockSeq(chatStream),
-            };
-            emitBlock(runtime, chatStream, block, { persist: false });
-            if (inc.delta && inc.type === "text_delta") {
-              // P2-1：done.text 应是全部正文拼接，不是只留最后一段。
-              // 用当前 message 的完整文本更新 snapshot（累积），跨 message 由 messageSeq 区分。
-              chatStream.textBuffer = curText;
-              chatStream.currentTextSnapshot = curText;
-              writeChatEvent(chatStream, { type: "delta", text: inc.delta });
-            }
-            if (resolved.closed !== undefined) markBlockDone(chatStream, resolved.closed);
-          }
-        } else if (inc?.type === "thinking_delta" || inc?.type === "thinking_end" || inc?.type === "thinking_start") {
-          // B-5：thinking 独立成块——用 contentIndex 作稳定 blockId，多段思考各自独立。
-          // 思考输入到达时切断正文输入（同一 assistant 内容流里两者互斥）。
-          const closedText = closeActiveInput(chatStream, "text");
-          if (closedText !== null) markBlockDone(chatStream, closedText);
-          const mprefix = `m${chatStream.messageSeq || 1}`;
-          // 无 contentIndex 时（incIndex = -1）回退到 thinking 段索引，避免非法 blockId。
-          const resolvedThinkingIndex = incIndex >= 0
-            ? incIndex
-            : msg.content.findIndex((c: any) => c.type === "thinking");
-          const contentBlock = msg.content[incIndex];
-          const curThinking = contentBlock?.type === "thinking" ? (contentBlock.thinking || "") : (inc.delta || "");
-          // 同步 thinkingBuffer（累积），供 done.thinking 与 thinking 收尾 trace 使用
-          chatStream.thinkingBuffer = thinkingState.aggregate;
-          const thinkingKey = `${mprefix}:thinking-${resolvedThinkingIndex}`;
-          const resolved = resolveIndexedBlockInput(chatStream, "thinking", thinkingKey, inc.type, "thinking", "thinking");
-          if (resolved !== null) {
-            const existingThinkingBlock = chatStream.blocks.find((block): block is Extract<AssistantBlock, { type: "thinking" }> =>
-              block.type === "thinking" && block.blockId === resolved.blockId,
-            );
-            const trace: TraceEvent = {
-              type: "thinking", status: "streaming",
-              text: curThinking,
-              turnId,
-              id: resolved.blockId,
-            };
-            // Keep partial thinking in memory/SSE; agent_end persists the
-            // finalized block and trace once.
-            emitTrace(runtime, chatStream, trace, { persist: false });
-            const block: AssistantBlock = {
-              type: "thinking",
-              text: curThinking,
-              status: inc.type === "thinking_end" ? "done" : "streaming",
-              turnId,
-              blockId: resolved.blockId,
-              seq: existingThinkingBlock?.seq ?? nextBlockSeq(chatStream),
-            };
-            emitBlock(runtime, chatStream, block, { persist: false });
-            // 思考结束（thinking_end）或新思考直接开启（thinking_start 未带
-            // end 时，守卫返回被关闭的旧节点）：旧节点都必须立即标 done，
-            // 不能因 LLM 未发 end 就一直保持 streaming。
-            if (resolved.closed !== undefined) markBlockDone(chatStream, resolved.closed);
-            if (inc.type === "thinking_end") markBlockDone(chatStream, resolved.blockId);
-          }
-        } else {
-          // 无 contentIndex 的兼容路径：遍历 content 的 text 块，用块序号作 blockId。
-          // 工具边界后 content 新增 text 块会生成新段；同段更新由 emitBlock 保留 seq。
-          // 硬性不变式：兼容路径创建/更新任何节点前，先关闭 text 与 thinking
-          // 的可写入状态，确保"开新节点必先关旧节点"，避免新旧节点并存写入。
-          const closedCompatText = closeActiveInput(chatStream, "text");
-          if (closedCompatText !== null) markBlockDone(chatStream, closedCompatText);
-          const closedCompatThinking = closeActiveInput(chatStream, "thinking");
-          if (closedCompatThinking !== null) markBlockDone(chatStream, closedCompatThinking);
-          const textBlocks = msg.content
-            .map((block: any, index: number) => ({ block, index }))
-            .filter(({ block }: any) => block.type === "text");
-          if (!chatStream.textSegments) chatStream.textSegments = [];
-          const segCount = chatStream.textSegments.length;
-          const totalText = textBlocks.map(({ block }: any) => block.text || "").join("");
-          const textState = appendAssistantSnapshot(chatStream.textBuffer, chatStream.currentTextSnapshot, totalText);
-          chatStream.currentTextSnapshot = textState.snapshot;
-          chatStream.textBuffer = textState.aggregate;
-          for (let i = 0; i < textBlocks.length; i++) {
-            const curText = textBlocks[i].block.text || "";
-            const prev = chatStream.textSegments[i] ?? "";
-            const delta = curText.startsWith(prev) ? curText.slice(prev.length) : curText;
-            if (delta || prev !== curText) {
-              chatStream.textSegments[i] = curText;
-              const block: AssistantBlock = {
-                type: "text", text: curText, turnId,
-                // 段索引 i 始终 ≥0，避免无 contentIndex 时出现非法 blockId（text--1）。
-                blockId: `m${chatStream.messageSeq || 1}:text-${i}`,
-                seq: chatStream.blocks.find((candidate) => candidate.blockId === `m${chatStream.messageSeq || 1}:text-${i}`)?.seq ?? nextBlockSeq(chatStream),
-              };
-              emitBlock(runtime, chatStream, block, { persist: false });
-              if (i >= segCount || !prev) {
-                writeChatEvent(chatStream, { type: "delta", text: delta || curText });
-              }
-            }
-          }
-          while (chatStream.textSegments.length > textBlocks.length) chatStream.textSegments.pop();
-          // 兼容路径：thinking 也合并为单一 block（无 contentIndex 时）
-          if (thinkingState.delta) {
-            chatStream.thinkingBuffer = thinkingState.aggregate;
-            const tidThinking = "thinking@" + turnId;
-            if (!chatStream.emittedTraces.has(tidThinking)) {
-              chatStream.emittedTraces.add(tidThinking);
-            }
-            const trace: TraceEvent = {
-              type: "thinking", status: "streaming",
-              text: chatStream.thinkingBuffer,
-              turnId,
-              id: tidThinking,
-            };
-            // Keep partial thinking in memory/SSE; agent_end persists the
-            // finalized block and trace once.
-            emitTrace(runtime, chatStream, trace, { persist: false });
-            const block: AssistantBlock = {
-              type: "thinking",
-              text: chatStream.thinkingBuffer,
-              status: "streaming",
-              turnId,
-              blockId: tidThinking,
-              seq: chatStream.blocks.find((candidate) => candidate.blockId === tidThinking)?.seq ?? nextBlockSeq(chatStream),
-            };
-            emitBlock(runtime, chatStream, block, { persist: false });
-          }
-        }
-      }
-    }
-
-    if (event.type === "agent_end") {
-      const bufLen = chatStream.textBuffer.length;
-      console.log(`[sse] agent_end — text=${bufLen}B thinking=${chatStream.thinkingBuffer.length}B`);
-      const sessionId = runtime.session.sessionManager?.getSessionId?.() || "";
-      const turnId = chatStream.turnId;
-      const ws = chatStream.currentWorkspace || "";
-
-      // 收尾 thinking trace
-      const tidThinking = "thinking@" + turnId;
-      if (chatStream.thinkingBuffer && turnId) {
-        const trace: TraceEvent = { type: "thinking", status: "done", text: chatStream.thinkingBuffer, turnId, id: tidThinking };
-        flushPendingTracePersist(runtime, turnId, { authorizeSessionWrite });
-        emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
-      }
-      flushPendingTracePersist(runtime, turnId, { authorizeSessionWrite });
-
-      // B-5 P1-3：indexed thinking 收尾——agent_end 时把仍是 streaming 的
-      // thinking block（m<seq>:thinking-<idx>）更新为 done，避免回复结束后仍显示"进行中"。
-      for (let i = 0; i < chatStream.blocks.length; i++) {
-        const b = chatStream.blocks[i];
-        if (b.type === "thinking" && b.status === "streaming") {
-          chatStream.blocks[i] = { ...b, status: "done" as const };
-        }
-      }
-      flushPendingBlockPersist(runtime, turnId, { authorizeSessionWrite });
-
-      // B-5：末尾必须是正文节点（硬不变量）。
-      // 若 blocks 末尾不是 text（纯工具调用/只有 thinking），补一个正文收尾节点：
-      //  - textBuffer 有真实正文 → 补真实正文
-      //  - 无正文 → 补占位正文（本轮未生成最终回复）
-      //  - 错误/中断 → 说明未完成（不伪装成正常回复）
-      const lastBlock = chatStream.blocks[chatStream.blocks.length - 1];
-      if (lastBlock?.type !== "text") {
-        // agent_end 事件用 messages 数组（SDK AgentEndEvent: { type, messages: AgentMessage[] }），
-        // 取最后一个 assistant message 的错误信息判断中断/失败。
-        const finalMsgs = (event as any).messages as
-          | Array<{ role?: string; stopReason?: string; errorMessage?: string }>
-          | undefined;
-        const finalMsg = Array.isArray(finalMsgs)
-          ? finalMsgs.filter((m) => m?.role === "assistant").pop()
-          : undefined;
-        const aborted = finalMsg?.stopReason === "error" || finalMsg?.stopReason === "aborted" || Boolean(finalMsg?.errorMessage);
-        const realText = chatStream.textBuffer?.trim();
-        let trailingText: string;
-        if (aborted) {
-          trailingText = (finalMsg?.errorMessage || "本轮回复未完成（发生错误或已中断）。").trim();
-        } else if (realText) {
-          trailingText = chatStream.textBuffer;
-        } else {
-          trailingText = "本轮未生成最终回复。";
-        }
-        const trailSeq = nextBlockSeq(chatStream);
-        const trailBlock: AssistantBlock = {
-          type: "text", text: trailingText, turnId,
-          blockId: "text-trailing", seq: trailSeq,
-        };
-        // persist:false——由下方"持久化流式 text/thinking block"统一落盘一次，避免重复
-        emitBlock(runtime, chatStream, trailBlock, { persist: false });
-      }
-
-      // 持久化 text / thinking block（流式 persist:false 与末尾兜底在此统一落盘一次）
-      for (const block of chatStream.blocks) {
-        if (block.type === "text" || block.type === "thinking") {
-          persistBlockEvent(runtime, block, { authorizeSessionWrite });
-        }
-      }
-
-      if (ws) {
-        console.log(`  agent_end: tagging workspace "${ws}" session=${sessionId}`);
-        tagSessionHeader(runtime.session.sessionFile, ws, authorizeSessionWrite);
-      }
-
-      // P2-1：done.text 应为全部正文拼接（多段正文/多 message 的完整内容），
-      // 不依赖可能被单段覆盖的 textBuffer。从 blocks 收集所有 text block 按 seq 拼接。
-      const fullText = chatStream.blocks
-        .filter((b) => b.type === "text")
-        .sort((a, b) => a.seq - b.seq)
-        .map((b) => b.text || "")
-        .join("\n\n");
-
-      writeChatEvent(chatStream, {
-          type: "done",
-          text: fullText || chatStream.textBuffer,
-          thinking: chatStream.thinkingBuffer || undefined,
-          turnId,
-          sessionId,
-          blocks: chatStream.blocks,
-      });
-      try { chatStream.response?.end(); } catch { /* ignore */ }
-      chatStream.response = null;
-      chatStream.textBuffer = "";
-      chatStream.thinkingBuffer = "";
-      chatStream.currentTextSnapshot = "";
-      chatStream.currentThinkingSnapshot = "";
-      cleanupTracePersistState(turnId);
-      chatStream.turnId = "";
-      chatStream.emittedTraces = new Set();
-      chatStream.blocks = [];
-      chatStream.blockSeq = 0;
-      chatStream.textSegments = [];
-      chatStream.activeTextInput = undefined;
-      chatStream.textBlockGenerations = {};
-      chatStream.activeThinkingInput = undefined;
-      chatStream.thinkingBlockGenerations = {};
-      chatStream.currentWorkspace = "";
-      publishLifecycleAfterIdle(sourceSession);
-    }
-  });
+  if (options?.publish !== false) writeChatEvent(chatStream, { type: "trace", trace: normalized });
 }
 
 /**
- * Engine-owned event bridge used by the desktop server. The legacy PI bridge above
- * remains available for replay fixtures, but new runtime events never cross this
- * boundary as raw PI objects.
+ * Engine-owned event bridge used by the desktop server. Replay fixtures use the
+ * isolated replay-event adapter; new runtime events never cross this boundary
+ * as raw PI objects.
  */
 export function attachEngineEvents(
   engine: AgentEngine,
@@ -1087,17 +602,16 @@ export function attachEngineEvents(
       .sort((left, right) => left.seq - right.seq)
       .map((block) => block.text)
       .join("\n\n");
-    const status = event.type === "turn.completed" ? "done" : event.type === "turn.cancelled" ? "cancelled" : "error";
     if (event.type === "turn.cancelled") {
-      writeChatEvent(chatStream, { type: "cancelled", turnId, sessionId, reason: event.reason });
+      writePresentationEvent(chatStream, { type: "cancelled", turnId, sessionId, reason: event.reason });
     } else {
-      writeChatEvent(chatStream, {
+      writePresentationEvent(chatStream, {
         type: "done",
         text: fullText || chatStream.textBuffer,
         thinking: chatStream.thinkingBuffer || undefined,
         turnId,
         sessionId,
-        status,
+        status: event.type === "turn.completed" ? "done" : "error",
         ...(event.type === "turn.completed" && event.usage ? { usage: event.usage } : {}),
         ...(event.type === "turn.failed" ? { error: event.error.message } : {}),
         blocks: chatStream.blocks,
@@ -1142,7 +656,7 @@ export function attachEngineEvents(
       return;
     }
     if (event.type === "queue.updated") {
-      writeChatEvent(chatStream, { type: "queue_update", steering: event.steering, followUp: event.followUp });
+      writePresentationEvent(chatStream, { type: "queue_update", steering: event.steering, followUp: event.followUp });
       return;
     }
     if (event.type === "usage.updated") {
@@ -1165,7 +679,6 @@ export function attachEngineEvents(
         messageSeq: event.messageSeq,
         phase: event.phase || "delta",
       } : undefined);
-      writeChatEvent(chatStream, { type: "delta", text: event.text });
       return;
     }
     if (event.type === "thinking.delta" && turnId) {
@@ -1176,7 +689,6 @@ export function attachEngineEvents(
         messageSeq: event.messageSeq,
         phase: event.phase || "delta",
       } : undefined);
-      writeChatEvent(chatStream, { type: "thinking", text: event.text });
       return;
     }
     if (event.type === "tool.started" && turnId) {
@@ -1190,7 +702,7 @@ export function attachEngineEvents(
       }
       const id = `${event.toolCallId}@${turnId}`;
       const trace: TraceEvent = { type: "tool", status: "running", name: event.name, input: event.input, turnId, id };
-      emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
+      emitTrace(runtime, chatStream, trace, { force: true, publish: false, authorizeSessionWrite });
       emitBlock(runtime, chatStream, {
         type: "tool", toolCallId: event.toolCallId, name: event.name, input: event.input,
         status: "running", turnId, blockId: `tool-${event.toolCallId}`, seq: nextBlockSeq(chatStream),
@@ -1202,7 +714,7 @@ export function attachEngineEvents(
       if (block) emitBlock(runtime, chatStream, { ...block, output: event.output }, { persist: false });
       // Partial tool output is an SSE concern. Only the terminal tool frame
       // is persisted, avoiding repeated synchronous writes of growing output.
-      emitTrace(runtime, chatStream, { type: "tool", status: "running", name: event.name, output: event.output, turnId, id: `${event.toolCallId}@${turnId}` }, { persist: false });
+      emitTrace(runtime, chatStream, { type: "tool", status: "running", name: event.name, output: event.output, turnId, id: `${event.toolCallId}@${turnId}` }, { persist: false, publish: false });
       return;
     }
     if (event.type === "tool.completed" || event.type === "tool.failed") {
@@ -1227,7 +739,7 @@ export function attachEngineEvents(
         type: "tool", status: failed ? "error" : "success", name: event.name,
         output: event.type === "tool.completed" ? event.output : undefined,
         error: failed ? failureMessage : undefined, metadata: event.metadata, turnId, id: `${event.toolCallId}@${turnId}`,
-      }, { force: true, authorizeSessionWrite });
+      }, { force: true, publish: false, authorizeSessionWrite });
       return;
     }
     if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.cancelled") {

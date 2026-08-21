@@ -159,7 +159,7 @@ Expected: FAIL，当前 `message_update` 不触发 `usage.changed`。
 
 - [ ] **Step 3: 实现无计时器节流**
 
-在 `attachSessionEvents` 闭包维护：
+在 `attachReplayEvents` 闭包维护：
 
 ```ts
 let lastStreamingUsagePublishAt = 0

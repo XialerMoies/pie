@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { attachEngineEvents, attachSessionEvents } from "../src/server/server.ts";
+import { attachEngineEvents } from "../src/server/server.ts";
 import { parseSessionMessages } from "../src/server/routes/session-message-parser.ts";
 import {
   CHAT_FLOW_ENGINE_EVENTS,
@@ -51,38 +51,6 @@ function logicalBlocks(blocks) {
   }));
 }
 
-function runLegacyStructuredFlow() {
-  let listener;
-  const runtime = {
-    session: { sessionFile: undefined, sessionManager: { getSessionId: () => "session-structured" }, agent: { waitForIdle: async () => {} } },
-    onEvent(next) { listener = next; return () => { listener = undefined; }; },
-  };
-  const chat = stream();
-  chat.turnId = "turn-structured";
-  attachSessionEvents(runtime, chat);
-  const update = (content, assistantMessageEvent) => listener({
-    type: "message_update",
-    turnId: "turn-structured",
-    message: { role: "assistant", content },
-    assistantMessageEvent,
-  });
-  listener({ type: "message_start", turnId: "turn-structured", message: { role: "assistant", content: [] } });
-  update([{ type: "thinking", thinking: "先" }], { type: "thinking_start", contentIndex: 0 });
-  update([{ type: "thinking", thinking: "先分析" }], { type: "thinking_delta", contentIndex: 0, delta: "分析" });
-  update([{ type: "thinking", thinking: "先分析" }], { type: "thinking_end", contentIndex: 0 });
-  listener({ type: "tool_execution_start", turnId: "turn-structured", toolCallId: "call-structured", toolName: "search", args: { query: "structured" } });
-  listener({ type: "tool_execution_end", turnId: "turn-structured", toolCallId: "call-structured", toolName: "search", result: "找到结果", isError: false });
-  listener({ type: "message_start", turnId: "turn-structured", message: { role: "assistant", content: [] } });
-  update([{ type: "thinking", thinking: "再" }], { type: "thinking_start", contentIndex: 0 });
-  update([{ type: "thinking", thinking: "再验证" }], { type: "thinking_delta", contentIndex: 0, delta: "验证" });
-  update([{ type: "thinking", thinking: "再验证" }], { type: "thinking_end", contentIndex: 0 });
-  update([{ type: "thinking", thinking: "再验证" }, { type: "text", text: "最终" }], { type: "text_start", contentIndex: 1 });
-  update([{ type: "thinking", thinking: "再验证" }, { type: "text", text: "最终正文" }], { type: "text_delta", contentIndex: 1, delta: "正文" });
-  update([{ type: "thinking", thinking: "再验证" }, { type: "text", text: "最终正文" }], { type: "text_end", contentIndex: 1 });
-  listener({ type: "agent_end", turnId: "turn-structured", messages: [] });
-  return payloads(chat).find((event) => event.type === "done");
-}
-
 describe("chat event flow contract", () => {
   it("preserves linear node boundaries at every server event and matches terminal replay", () => {
     const engine = fakeEngine();
@@ -98,6 +66,11 @@ describe("chat event flow contract", () => {
     const done = payloads(chat).find((event) => event.type === "done");
     assert.ok(done, "terminal done event must exist");
     assert.equal(payloads(chat).filter((event) => event.type === "done").length, 1);
+    assert.equal(
+      payloads(chat).some((event) => event.type === "trace" || event.type === "delta" || event.type === "thinking"),
+      false,
+      "canonical engine bridge must have one user-visible presentation source",
+    );
 
     const ordered = done.blocks.slice().sort((left, right) => left.seq - right.seq);
     assert.deepEqual(ordered.map((block) => block.type), ["thinking", "tool", "thinking", "text"]);
@@ -166,13 +139,8 @@ describe("chat event flow contract", () => {
     assert.equal(beforeSecondThinking.find((block) => block.blockId === "m1:thinking-0")?.text, "先分析");
     assert.equal(beforeSecondThinking.find((block) => block.blockId === "m1:thinking-0")?.status, "done");
 
-    const legacyDone = runLegacyStructuredFlow();
-    assert.deepEqual(logicalBlocks(legacyDone.blocks), logicalBlocks(done.blocks), "旧事件桥和新事件桥必须产生同一规范化节点流");
-    assert.deepEqual(legacyDone.blocks.map((block) => block.seq), done.blocks.map((block) => block.seq), "旧事件桥和新事件桥必须使用同一逻辑节点序号");
-    for (const output of [done.blocks, legacyDone.blocks]) {
-      const seq = output.slice().sort((left, right) => left.seq - right.seq).map((block) => block.seq);
-      assert.ok(seq.every((value, index) => index === 0 || value > seq[index - 1]), "两条桥的 seq 都必须严格单调");
-    }
+    const seq = done.blocks.slice().sort((left, right) => left.seq - right.seq).map((block) => block.seq);
+    assert.ok(seq.every((value, index) => index === 0 || value > seq[index - 1]), "生产事件桥的 seq 必须严格单调");
   });
 
   it("deduplicates repeated tool events and emits one terminal event for failure/cancellation", () => {
@@ -219,6 +187,30 @@ describe("chat event flow contract", () => {
       const replayBlocks = replay.find((message) => message.role === "assistant")?.blocks || [];
       assert.deepEqual(logicalBlocks(replayBlocks), logicalBlocks(done.blocks), "JSONL 回放必须保留实时节点的 ID、顺序、文本和状态");
       assert.deepEqual(replayBlocks.map((block) => block.seq), [1, 2, 3, 4]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists debug traces without publishing a second chat presentation stream", () => {
+    const dir = mkdtempSync(join(tmpdir(), "chat-presentation-boundary-"));
+    const sessionFile = join(dir, "session.jsonl");
+    writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "session-flow" }) + "\n");
+    try {
+      const engine = fakeEngine();
+      const chat = stream();
+      attachEngineEvents(engine, persistedRuntime(sessionFile), chat);
+      engine.emit({ version: 1, type: "turn.started", sessionId: "session-flow", turnId: "turn-boundary", seq: 1, timestamp: 1 });
+      engine.emit({ version: 1, type: "tool.started", sessionId: "session-flow", turnId: "turn-boundary", seq: 2, timestamp: 2, toolCallId: "trace-tool", name: "search", input: { query: "x" } });
+      engine.emit({ version: 1, type: "tool.completed", sessionId: "session-flow", turnId: "turn-boundary", seq: 3, timestamp: 3, toolCallId: "trace-tool", name: "search", output: "ok" });
+      engine.emit({ version: 1, type: "content.delta", sessionId: "session-flow", turnId: "turn-boundary", seq: 4, timestamp: 4, text: "正文" });
+      engine.emit({ version: 1, type: "turn.completed", sessionId: "session-flow", turnId: "turn-boundary", seq: 5, timestamp: 5 });
+
+      const live = payloads(chat);
+      assert.equal(live.some((event) => event.type === "trace"), false);
+      const persisted = readFileSync(sessionFile, "utf8");
+      assert.match(persisted, /"type":"trace"/, "debug trace must remain available to replay/diagnostics");
+      assert.match(persisted, /"trace-tool@turn-boundary"/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

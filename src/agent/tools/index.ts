@@ -85,6 +85,8 @@ type ExtraCtx = {
   getSubagentDefinitions?: ToolContext["getSubagentDefinitions"]
   getSubagentLimits?: ToolContext["getSubagentLimits"]
   delegateTasks?: ToolContext["delegateTasks"]
+  toolOutcomeObserver?: ToolContext["toolOutcomeObserver"]
+  toolOutcomeSource?: ToolContext["toolOutcomeSource"]
 }
 
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */

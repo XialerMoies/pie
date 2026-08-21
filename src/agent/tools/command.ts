@@ -434,7 +434,11 @@ async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: Tool
     const child = bashExecutable
       ? spawn(bashExecutable, ["-lc", cmd], { cwd, env, stdio: ["pipe", "pipe", "pipe"], shell: false, timeout, windowsHide: true })
       : spawn(shellCommand, [], { cwd, env, stdio: ["pipe", "pipe", "pipe"], shell: true, timeout, windowsHide: true })
-    let stdout = "", stderr = "", truncated = false
+    let stdout = "", stderr = "", truncated = false, timedOut = false
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true
+      try { child.kill() } catch {}
+    }, timeout)
     const stdoutDecoder = new StringDecoder("utf8"), stderrDecoder = new StringDecoder("utf8")
     const pushUpdate = (chunk: string) => ctx?.onUpdate?.(chunk)
     child.stdout?.on("data", (data: Buffer) => {
@@ -451,8 +455,19 @@ async function executeCmd(cmd: string, args: Record<string, unknown>, ctx?: Tool
       if (text.length >= remaining) { stderr += text.slice(0, remaining) + "\n...截断"; truncated = true; pushUpdate(text.slice(0, remaining)); pushUpdate("\n...截断"); child.kill(); return }
       stderr += text; pushUpdate(text)
     })
-    child.on("error", (err) => { ctx?.onUpdate?.(`执行失败: ${err.message}\n`); reject(new Error(err.message)) })
+    child.on("error", (err) => {
+      clearTimeout(timeoutTimer)
+      ctx?.onUpdate?.(`执行失败: ${err.message}\n`)
+      reject(Object.assign(new Error(err.message), { code: (err as NodeJS.ErrnoException).code }))
+    })
     child.on("close", (code) => {
+      clearTimeout(timeoutTimer)
+      if (timedOut) {
+        const error = Object.assign(new Error(`Command timed out after ${timeout}ms`), { code: "ETIMEDOUT" })
+        ctx?.onUpdate?.(`执行超时（${timeout}ms）\n`)
+        reject(error)
+        return
+      }
       const st = stdoutDecoder.end(), se = stderrDecoder.end()
       if (st) stdout += st; if (se) stderr += se
       let result = ""

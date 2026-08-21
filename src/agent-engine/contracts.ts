@@ -1,3 +1,5 @@
+import type { ToolFailureKind } from "../agent/types.js";
+
 export const ENGINE_EVENT_VERSION = 1 as const;
 
 export type UsageSource = "exact" | "mixed" | "estimated";
@@ -66,6 +68,9 @@ export interface EngineErrorInfo {
   category: EngineErrorCategory;
   retryable: boolean;
   message: string;
+  /** Preserved tool-level failure classification when this is a tool error. */
+  kind?: ToolFailureKind;
+  details?: unknown;
 }
 
 export interface EngineSessionSnapshot {

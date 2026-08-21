@@ -331,7 +331,24 @@ export interface ToolContext {
   getSubagentDefinitions?: SubagentDefinitionProvider
   getSubagentLimits?: () => SubagentDelegationLimits
   delegateTasks?: SubagentDelegateExecutor
+  /** Host-owned observer for structured/legacy outcome migration telemetry. */
+  toolOutcomeObserver?: ToolOutcomeObserver
+  toolOutcomeSource?: ToolOutcomeSource
 }
+
+export type ToolOutcomeSource = "live" | "replay" | "test"
+
+export interface ToolOutcomeObservation {
+  source: ToolOutcomeSource
+  toolName: string
+  toolCallId: string
+  outcome: ToolOutcome["status"]
+  failureKind?: ToolFailureKind
+  legacy: boolean
+  legacyReason?: "string_result" | "missing_outcome" | "invalid_outcome"
+}
+
+export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void
 
 export type ToolTraceEmitter = (event: {
   type: "tool_execution_start" | "tool_execution_update" | "tool_execution_end"
@@ -343,6 +360,9 @@ export type ToolTraceEmitter = (event: {
   diagnostics?: AgentToolDiagnostic[]
   metadata?: Record<string, unknown>
   partialResult?: string
+  outcome?: ToolOutcome
+  /** Migration marker for legacy string/untyped structured results. */
+  legacy?: boolean
   isError?: boolean
 }) => void
 
@@ -353,11 +373,42 @@ export interface AgentToolDiagnostic {
   details?: unknown
 }
 
+export type ToolFailureKind =
+  | "not_found"
+  | "transport_error"
+  | "permission_denied"
+  | "validation_error"
+  | "cancelled"
+  | "execution_error"
+
+export type ToolOutcome =
+  | { status: "success" }
+  | {
+      status: "failed"
+      failure: {
+        kind: ToolFailureKind
+        code: string
+        message: string
+        details?: unknown
+      }
+    }
+
+export interface StructuredToolErrorOptions {
+  kind: ToolFailureKind
+  code?: string
+  details?: unknown
+  metadata?: Record<string, unknown>
+}
+
 export interface AgentToolResult {
   text: string
   data?: unknown
   diagnostics?: AgentToolDiagnostic[]
   metadata?: Record<string, unknown>
+  outcome?: ToolOutcome
+  /** Migration-only marker retained until all producers return envelopes. */
+  legacy?: boolean
+  legacyReason?: "string_result" | "missing_outcome" | "invalid_outcome"
 }
 
 export type NormalizedAgentToolResult = {
@@ -365,6 +416,9 @@ export type NormalizedAgentToolResult = {
   data: unknown
   diagnostics: AgentToolDiagnostic[]
   metadata: Record<string, unknown>
+  outcome: ToolOutcome
+  legacy: boolean
+  legacyReason?: "string_result" | "missing_outcome" | "invalid_outcome"
 }
 
 export type AgentToolExecutionResult = string | AgentToolResult
@@ -375,42 +429,144 @@ export function structuredToolResult(
   diagnostics: AgentToolDiagnostic[] = [],
   metadata?: Record<string, unknown>,
 ): AgentToolResult {
-  return { text, data, diagnostics, ...(metadata ? { metadata } : {}) }
+  return { text, data, diagnostics, outcome: { status: "success" }, ...(metadata ? { metadata } : {}) }
 }
 
 export function structuredToolError(
   text: string,
-  code = "tool_error",
+  codeOrOptions: string | StructuredToolErrorOptions = "tool_error",
   details?: unknown,
   metadata?: Record<string, unknown>,
 ): AgentToolResult {
+  const options = typeof codeOrOptions === "string"
+    ? { kind: inferToolFailureKind(codeOrOptions, details), code: codeOrOptions, details, metadata }
+    : codeOrOptions
+  const code = options.code || "tool_error"
   return {
     text,
     data: null,
-    diagnostics: [{ code, severity: "error", message: text, ...(details === undefined ? {} : { details }) }],
-    ...(metadata ? { metadata } : {}),
+    diagnostics: [{ code, severity: "error", message: text, ...(options.details === undefined ? {} : { details: options.details }) }],
+    outcome: {
+      status: "failed",
+      failure: {
+        kind: options.kind,
+        code,
+        message: text,
+        ...(options.details === undefined ? {} : { details: options.details }),
+      },
+    },
+    ...(options.metadata ? { metadata: options.metadata } : {}),
   }
 }
 
+function inferToolFailureKind(code: string, details?: unknown): ToolFailureKind {
+  const status = details && typeof details === "object" && "status" in details
+    ? Number((details as { status?: unknown }).status)
+    : undefined
+  if (status === 401 || status === 403) return "permission_denied"
+  if (status === 404) return "not_found"
+  if (/(^|_)(not[_-]?found|missing|no[_-]?such)(_|$)/i.test(code)) return "not_found"
+  if (/(^|_)(permission|access|authorization|confirmation|denied)(_|$)/i.test(code)) return "permission_denied"
+  if (/(^|_)(invalid|validation|malformed|unsupported|required)(_|$)/i.test(code)) return "validation_error"
+  if (/(^|_)(cancel|cancelled|aborted|abort)(_|$)/i.test(code)) return "cancelled"
+  if (/(^|_)(network|transport|fetch|timeout)(_|$)/i.test(code)) return "transport_error"
+  return "execution_error"
+}
+
 export function normalizeAgentToolExecutionResult(result: AgentToolExecutionResult): NormalizedAgentToolResult {
-  if (typeof result === "string") return { text: result, data: null, diagnostics: [], metadata: {} }
+  if (typeof result === "string") return {
+    text: result,
+    data: null,
+    diagnostics: [],
+    metadata: {},
+    outcome: { status: "success" },
+    legacy: true,
+    legacyReason: "string_result",
+  }
   if (!result || typeof result.text !== "string") {
     throw new Error("Tool returned an invalid structured result")
   }
+  const diagnostics = Array.isArray(result.diagnostics)
+    ? result.diagnostics.filter((diagnostic): diagnostic is AgentToolDiagnostic =>
+      Boolean(diagnostic) &&
+      typeof diagnostic === "object" &&
+      typeof diagnostic.code === "string" &&
+      (diagnostic.severity === "info" || diagnostic.severity === "warning" || diagnostic.severity === "error") &&
+      typeof diagnostic.message === "string",
+      )
+      : []
+  const missingOutcome = result.outcome === undefined
+  const invalidOutcome = !missingOutcome && !normalizeToolOutcome(result.outcome)
+  const outcome = missingOutcome
+    ? { status: "success" as const }
+    : normalizeToolOutcome(result.outcome) || {
+      status: "failed" as const,
+      failure: {
+        kind: "validation_error" as const,
+        code: "invalid_tool_outcome",
+        message: "Tool returned an invalid outcome envelope",
+      },
+    }
   return {
     text: result.text,
     data: result.data === undefined ? null : result.data,
-    diagnostics: Array.isArray(result.diagnostics)
-      ? result.diagnostics.filter((diagnostic): diagnostic is AgentToolDiagnostic =>
-        Boolean(diagnostic) &&
-        typeof diagnostic === "object" &&
-        typeof diagnostic.code === "string" &&
-        (diagnostic.severity === "info" || diagnostic.severity === "warning" || diagnostic.severity === "error") &&
-        typeof diagnostic.message === "string",
-      )
-      : [],
+    diagnostics,
     metadata: result.metadata && typeof result.metadata === "object" ? result.metadata : {},
+    outcome,
+    legacy: Boolean(result.legacy) || missingOutcome,
+    ...(result.legacyReason || missingOutcome || invalidOutcome ? { legacyReason: result.legacyReason || (missingOutcome ? "missing_outcome" : "invalid_outcome") } : {}),
   }
+}
+
+type ToolFailure = Extract<ToolOutcome, { status: "failed" }>["failure"]
+
+function classifyThrownToolFailure(error: unknown): ToolFailure {
+  const record = error && typeof error === "object"
+    ? error as { name?: unknown; code?: unknown; cause?: unknown; message?: unknown }
+    : undefined
+  const name = typeof record?.name === "string" ? record.name : ""
+  const code = typeof record?.code === "string" ? record.code : ""
+  const message = error instanceof Error ? error.message : String(error)
+  const cause = record?.cause && typeof record.cause === "object"
+    ? record.cause as { code?: unknown; message?: unknown }
+    : undefined
+  const causeCode = typeof cause?.code === "string" ? cause.code : ""
+  const causeMessage = typeof cause?.message === "string" ? cause.message : ""
+
+  if (name === "AbortError" || code === "ABORT_ERR" || /\b(?:abort|aborted|cancel|cancelled)\b/i.test(message)) {
+    return { kind: "cancelled", code: "tool_cancelled", message }
+  }
+  if (
+    code === "ECONNREFUSED" || code === "ECONNRESET" || code === "ETIMEDOUT" ||
+    causeCode === "ECONNREFUSED" || causeCode === "ECONNRESET" || causeCode === "ETIMEDOUT" ||
+    /fetch failed|network error|socket|connection reset|connection refused|timed out/i.test(`${message} ${causeMessage}`)
+  ) {
+    return { kind: "transport_error", code: /timeout|timed out/i.test(`${message} ${causeMessage}`) ? "tool_timeout" : "tool_transport_failed", message }
+  }
+  return { kind: "execution_error", code: "tool_execution_failed", message }
+}
+
+function normalizeToolOutcome(value: unknown): ToolOutcome | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const outcome = value as Record<string, unknown>
+  if (outcome.status === "success") return { status: "success" }
+  if (outcome.status !== "failed" || !outcome.failure || typeof outcome.failure !== "object" || Array.isArray(outcome.failure)) return undefined
+  const failure = outcome.failure as Record<string, unknown>
+  if (!isToolFailureKind(failure.kind) || typeof failure.code !== "string" || typeof failure.message !== "string") return undefined
+  return {
+    status: "failed",
+    failure: {
+      kind: failure.kind,
+      code: failure.code,
+      message: failure.message,
+      ...(failure.details === undefined ? {} : { details: failure.details }),
+    },
+  }
+}
+
+function isToolFailureKind(value: unknown): value is ToolFailureKind {
+  return value === "not_found" || value === "transport_error" || value === "permission_denied"
+    || value === "validation_error" || value === "cancelled" || value === "execution_error"
 }
 
 /** Tool 参数定义（JSON Schema 格式） */
@@ -541,10 +697,14 @@ export function defineAgentTool(tool: AgentTool): AgentTool {
         text: normalized.text,
         data: normalized.data,
         diagnostics: normalized.diagnostics,
+        outcome: normalized.outcome,
+        ...(normalized.legacy ? { legacy: true } : {}),
+        ...(normalized.legacyReason ? { legacyReason: normalized.legacyReason } : {}),
         metadata: {
           ...normalized.metadata,
           tool: tool.name,
           outcome: authorizationDecision.status === "deny" ? "denied" : "completed",
+          toolOutcome: normalized.outcome.status,
           authorization: authorizationDecision,
         },
       }
@@ -573,6 +733,8 @@ export interface ToolExecutionExtraContext {
   getSubagentDefinitions?: ToolContext["getSubagentDefinitions"]
   getSubagentLimits?: ToolContext["getSubagentLimits"]
   delegateTasks?: ToolContext["delegateTasks"]
+  toolOutcomeObserver?: ToolContext["toolOutcomeObserver"]
+  toolOutcomeSource?: ToolContext["toolOutcomeSource"]
 }
 
 export function agentToolToPIToolDefinition(
@@ -628,7 +790,18 @@ export function agentToolToPIToolDefinition(
           result: normalized.text,
           ...(structured ? { data: normalized.data, diagnostics: normalized.diagnostics } : {}),
           ...(Object.keys(normalized.metadata).length > 0 ? { metadata: normalized.metadata } : {}),
-          isError: false,
+          outcome: normalized.outcome,
+          ...(normalized.legacy ? { legacy: true } : {}),
+          isError: normalized.outcome.status === "failed",
+        })
+        extraCtx?.toolOutcomeObserver?.({
+          source: extraCtx.toolOutcomeSource || "live",
+          toolName: authorizedTool.name,
+          toolCallId: _toolCallId,
+          outcome: normalized.outcome.status,
+          ...(normalized.outcome.status === "failed" ? { failureKind: normalized.outcome.failure.kind } : {}),
+          legacy: normalized.legacy,
+          ...(normalized.legacyReason ? { legacyReason: normalized.legacyReason } : {}),
         })
         return {
           content: [{ type: "text" as const, text: normalized.text }],
@@ -638,6 +811,7 @@ export function agentToolToPIToolDefinition(
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
+        const failure = classifyThrownToolFailure(error)
         const metadata = error && typeof error === "object" &&
           "metadata" in error && (error as { metadata?: unknown }).metadata &&
           typeof (error as { metadata?: unknown }).metadata === "object"
@@ -649,7 +823,19 @@ export function agentToolToPIToolDefinition(
           toolName: authorizedTool.name,
           result: message,
           ...(metadata ? { metadata } : {}),
+          outcome: {
+            status: "failed",
+            failure,
+          },
           isError: true,
+        })
+        extraCtx?.toolOutcomeObserver?.({
+          source: extraCtx.toolOutcomeSource || "live",
+          toolName: authorizedTool.name,
+          toolCallId: _toolCallId,
+          outcome: "failed",
+          failureKind: failure.kind,
+          legacy: false,
         })
         throw error
       }

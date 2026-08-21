@@ -6,6 +6,7 @@ import type {
   EngineUsage,
   UsageSource,
 } from "./contracts.js";
+import type { ToolFailureKind } from "../agent/types.js";
 import { normalizeEngineUsage } from "./contracts.js";
 
 export interface PiEventContext {
@@ -67,6 +68,40 @@ export function usageFromContext(value: PiEventContext["contextUsage"]): EngineU
 
 function publicError(code: string, category: EngineErrorInfo["category"], message: string, retryable = false): EngineErrorInfo {
   return { code, category, message, retryable };
+}
+
+function toolFailureError(value: unknown): EngineErrorInfo | undefined {
+  const outcome = record(value);
+  if (outcome?.status !== "failed") return undefined;
+  const failure = record(outcome.failure);
+  const kind = failure?.kind;
+  const code = failure?.code;
+  const message = failure?.message;
+  if (!failure || !isToolFailureKind(kind) || typeof code !== "string" || typeof message !== "string") return undefined;
+  return {
+    kind,
+    code,
+    message,
+    category: toolFailureCategory(kind),
+    retryable: kind === "transport_error" || kind === "not_found",
+    ...(failure.details === undefined ? {} : { details: failure.details }),
+  };
+}
+
+function isToolFailureKind(value: unknown): value is ToolFailureKind {
+  return value === "not_found" || value === "transport_error" || value === "permission_denied"
+    || value === "validation_error" || value === "cancelled" || value === "execution_error";
+}
+
+function toolFailureCategory(kind: ToolFailureKind): EngineErrorInfo["category"] {
+  switch (kind) {
+    case "not_found": return "storage";
+    case "transport_error": return "network";
+    case "permission_denied": return "permission";
+    case "validation_error": return "validation";
+    case "cancelled": return "cancelled";
+    default: return "internal";
+  }
 }
 
 function lastAssistantMessage(event: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -154,6 +189,27 @@ export function mapPiEvent(raw: unknown, context: PiEventContext): PiEventMappin
       ...(record(event?.metadata) ? { metadata: record(event?.metadata) } : {}),
     };
     const output = toolResultText(event?.result);
+    const failure = toolFailureError(event?.outcome);
+    if (failure) {
+      return {
+        events: [{
+          ...common,
+          type: "tool.failed",
+          error: failure,
+        }],
+        recognized: true,
+      };
+    }
+    if (record(event?.outcome)?.status === "success") {
+      return {
+        events: [{
+          ...common,
+          type: "tool.completed",
+          ...(output === undefined ? {} : { output }),
+        }],
+        recognized: true,
+      };
+    }
     return event?.isError === true
       ? {
           events: [{

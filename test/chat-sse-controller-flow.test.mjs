@@ -127,6 +127,32 @@ describe("chat SSE controller event flow", () => {
     assert.strictEqual(fullRenders, 0);
   });
 
+  it("does not treat persisted/debug trace frames as a second presentation source", () => {
+    reset();
+    const controller = global.window.App.ChatViews.createSseController({
+      scheduleMessagesRender: () => { scheduledRenders += 1; },
+      updateUI: () => {},
+      markLastMessageRendered: () => { markedRendered += 1; },
+      renderMessages: () => { fullRenders += 1; },
+      refreshComposer: () => {},
+      setAssistantError: () => {},
+      completeSend: () => {},
+      failSend: () => {},
+    });
+
+    assert.strictEqual(controller.bind(10), true);
+    const before = { ...messages[0] };
+    handlers.onMessage({ data: JSON.stringify({
+      type: "trace",
+      trace: { type: "tool", status: "running", name: "search", output: "debug-only" },
+    }) });
+
+    assert.deepStrictEqual(messages[0], before, "debug trace must not mutate the user presentation state");
+    assert.strictEqual(markedRendered, 0);
+    assert.strictEqual(scheduledRenders, 0);
+    assert.strictEqual(fullRenders, 0);
+  });
+
   it("keeps a late tool completion block after the terminal boundary so OUT is rendered live", () => {
     reset();
     const controller = global.window.App.ChatViews.createSseController({

@@ -770,6 +770,34 @@
       "owner": "tooling"
     },
     {
+      "file": "scripts/dist-dir.mjs",
+      "line": 10,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dist-dir.mjs",
+      "line": 20,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dist-dir.mjs",
+      "line": 30,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/dist-dir.mjs",
+      "line": 38,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
       "file": "scripts/release-check.mjs",
       "line": 17,
       "api": "spawn",
@@ -777,8 +805,64 @@
       "owner": "tooling"
     },
     {
+      "file": "scripts/test-build.mjs",
+      "line": 17,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-build.mjs",
+      "line": 24,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-build.mjs",
+      "line": 34,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-build.mjs",
+      "line": 43,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
       "file": "scripts/test-parallel.mjs",
       "line": 36,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-routes.mjs",
+      "line": 35,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-routes.mjs",
+      "line": 44,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-routes.mjs",
+      "line": 54,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-routes.mjs",
+      "line": 65,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"

@@ -14,9 +14,23 @@ describe("server agent event router structure", () => {
     const serverSource = readFileSync(SERVER, "utf8");
     const routerSource = readFileSync(ROUTER, "utf8");
 
-    assert.match(serverSource, /export\s+\{[\s\S]*attachSessionEvents[\s\S]*\}\s+from\s+"\.\/agent-event-router\.js"/);
+    assert.doesNotMatch(serverSource, /attachSessionEvents/);
+    assert.doesNotMatch(serverSource, /attachReplayEvents/);
     assert.doesNotMatch(serverSource, /runtime\.onEvent\(\(event: any, sourceSession\) =>/);
-    assert.match(routerSource, /export function attachSessionEvents\(/);
-    assert.match(routerSource, /runtime\.onEvent\(\(event: any, sourceSession\) =>/);
+    assert.doesNotMatch(routerSource, /attachSessionEvents/);
+    assert.doesNotMatch(routerSource, /attachReplayEvents/);
+    assert.equal(
+      existsSync(resolve(ROOT, "src", "server", "replay-event-adapter.ts")),
+      false,
+      "legacy replay adapter must be removed when old session compatibility is unsupported",
+    );
+  });
+
+  it("keeps the canonical engine bridge on the presentation boundary", () => {
+    const routerSource = readFileSync(ROUTER, "utf8");
+    const engineBridge = routerSource.slice(routerSource.indexOf("export function attachEngineEvents("));
+    assert.match(engineBridge, /writePresentationEvent\(chatStream/);
+    assert.doesNotMatch(engineBridge, /writeChatEvent\(chatStream/);
+    assert.match(routerSource, /if \(options\?\.publish !== false\) writeChatEvent/);
   });
 });

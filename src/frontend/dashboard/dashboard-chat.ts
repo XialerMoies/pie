@@ -302,7 +302,9 @@ function markLastMessageRendered(): void {
   const M = dashboardChatRuntimeState.getMessages();
   while (_msgKeys.length < M.length) _msgKeys.push("");
   while (_msgKeys.length > M.length) _msgKeys.pop();
-  if (M.length > 0) _msgKeys[M.length - 1] = _messageKey(M[M.length - 1]);
+  if (M.length > 0) {
+    _msgKeys[M.length - 1] = _messageKey(M[M.length - 1]);
+  }
 }
 
 /** 重置消息 key 缓存（用于 M 被整体替换的场景） */
