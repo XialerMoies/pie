@@ -74,6 +74,8 @@ export interface EngineSessionSnapshot {
   sessionFile?: string;
   model?: EngineModel;
   isStreaming: boolean;
+  /** True when this host has an active user prompt, excluding background provider refreshes. */
+  isPromptActive?: boolean;
   isCompacting: boolean;
   thinkingLevel?: string;
   availableThinkingLevels?: string[];

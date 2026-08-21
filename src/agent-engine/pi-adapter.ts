@@ -21,6 +21,31 @@ export interface PiAgentEngineAdapterOptions {
   id?: string;
   clock?: () => number;
   turnId?: () => string;
+  /** Parent-agent guardrails. They apply to one prompt, including PI's internal tool loop. */
+  maxTurns?: number;
+  maxToolCalls?: number;
+  maxRepeatedToolCalls?: number;
+  timeoutMs?: number;
+}
+
+const DEFAULT_PARENT_LIMITS = {
+  maxTurns: 40,
+  maxToolCalls: 200,
+  maxRepeatedToolCalls: 3,
+  timeoutMs: 15 * 60 * 1000,
+} as const;
+
+function positiveLimit(value: number | undefined, fallback: number, max: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.min(Math.floor(value), max)
+    : fallback;
+}
+
+interface TurnGuard {
+  toolCalls: number;
+  turns: number;
+  toolFingerprintCounts: Map<string, number>;
+  error?: AgentEngineError;
 }
 
 type RuntimeLike = Pick<
@@ -51,6 +76,10 @@ export class PiAgentEngineAdapter implements AgentEngine {
   readonly #runtime: RuntimeLike;
   readonly #clock: () => number;
   readonly #turnIdFactory: () => string;
+  readonly #maxTurns: number;
+  readonly #maxToolCalls: number;
+  readonly #maxRepeatedToolCalls: number;
+  readonly #timeoutMs: number;
   readonly #listeners = new Set<(event: EngineEvent) => void>();
   readonly #unsubscribeRuntime: () => void;
   #seq = 0;
@@ -60,6 +89,9 @@ export class PiAgentEngineAdapter implements AgentEngine {
   #compactionBefore?: EngineUsage;
   #assistantMessageSeq = 0;
   readonly #seenAssistantContent = new Set<string>();
+  #promptInFlight = false;
+  #turnGuard?: TurnGuard;
+  #guardTimer?: ReturnType<typeof setTimeout>;
   #disposed = false;
   readonly #knownModels = new Map<string, unknown>();
 
@@ -68,6 +100,10 @@ export class PiAgentEngineAdapter implements AgentEngine {
     this.id = options.id ?? randomUUID();
     this.#clock = options.clock ?? Date.now;
     this.#turnIdFactory = options.turnId ?? randomUUID;
+    this.#maxTurns = positiveLimit(options.maxTurns, DEFAULT_PARENT_LIMITS.maxTurns, 1000);
+    this.#maxToolCalls = positiveLimit(options.maxToolCalls, DEFAULT_PARENT_LIMITS.maxToolCalls, 10_000);
+    this.#maxRepeatedToolCalls = positiveLimit(options.maxRepeatedToolCalls, DEFAULT_PARENT_LIMITS.maxRepeatedToolCalls, 100);
+    this.#timeoutMs = positiveLimit(options.timeoutMs, DEFAULT_PARENT_LIMITS.timeoutMs, 24 * 60 * 60 * 1000);
     this.#unsubscribeRuntime = typeof runtime.onEvent === "function"
       ? runtime.onEvent((event, sourceSession) => {
           if (!this.#isCurrentSession(sourceSession)) return;
@@ -92,7 +128,8 @@ export class PiAgentEngineAdapter implements AgentEngine {
           capabilities: normalizeModelCapabilities(model),
         },
       } : {}),
-      isStreaming: Boolean(session.isStreaming),
+      isStreaming: Boolean(session.isStreaming) || this.#promptInFlight,
+      ...(this.#promptInFlight ? { isPromptActive: true } : {}),
       isCompacting: Boolean((session as { isCompacting?: boolean }).isCompacting),
       thinkingLevel: typeof session.thinkingLevel === "string" ? session.thinkingLevel : "off",
       availableThinkingLevels: this.#thinkingLevels(session),
@@ -111,15 +148,29 @@ export class PiAgentEngineAdapter implements AgentEngine {
       category: "cancelled",
       message: "操作已取消",
     });
+    if (this.#promptInFlight || this.#runtime.session.isStreaming) {
+      throw new AgentEngineError({
+        code: "turn_in_progress",
+        category: "validation",
+        retryable: false,
+        message: "当前已有任务正在执行，请使用补充或中止操作",
+      });
+    }
     this.#pendingTurnId = input.turnId?.trim() || this.#turnIdFactory();
     this.#activeTurnId = this.#pendingTurnId;
     this.#terminal = undefined;
+    this.#promptInFlight = true;
+    this.#turnGuard = { toolCalls: 0, turns: 0, toolFingerprintCounts: new Map() };
+    this.#guardTimer = setTimeout(() => {
+      this.#tripGuard("turn_timeout", "任务执行超过时间限制");
+    }, this.#timeoutMs);
     const onAbort = () => { void this.cancel(this.#activeTurnId); };
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       await (this.#runtime.runWithStableSession ?? (async (operation: () => Promise<void>) => operation())).call(this.#runtime, async () => {
         await this.#runtime.session.prompt(input.message);
       });
+      if (this.#turnGuard?.error) throw this.#turnGuard.error;
     } catch (error) {
       if (!this.#terminal) {
         const normalized = normalizeEngineError(error, {
@@ -133,6 +184,10 @@ export class PiAgentEngineAdapter implements AgentEngine {
       }
       throw error;
     } finally {
+      if (this.#guardTimer !== undefined) clearTimeout(this.#guardTimer);
+      this.#guardTimer = undefined;
+      this.#turnGuard = undefined;
+      this.#promptInFlight = false;
       signal?.removeEventListener("abort", onAbort);
     }
   }
@@ -284,6 +339,26 @@ export class PiAgentEngineAdapter implements AgentEngine {
       this.#assistantMessageSeq = 0;
       this.#seenAssistantContent.clear();
     }
+    if (type === "turn_end" && this.#turnGuard) {
+      this.#turnGuard.turns += 1;
+      if (this.#turnGuard.turns >= this.#maxTurns) {
+        this.#tripGuard("turn_limit", "任务步骤超过限制，已自动停止");
+      }
+    }
+    if (type === "tool_execution_start" && this.#turnGuard) {
+      this.#turnGuard.toolCalls += 1;
+      const event = raw as { toolName?: unknown; args?: unknown };
+      let args = "";
+      try { args = JSON.stringify(event.args ?? null); } catch { args = "[unserializable]"; }
+      const fingerprint = `${typeof event.toolName === "string" ? event.toolName : "unknown"}:${args}`;
+      const fingerprintCount = (this.#turnGuard.toolFingerprintCounts.get(fingerprint) ?? 0) + 1;
+      this.#turnGuard.toolFingerprintCounts.set(fingerprint, fingerprintCount);
+      if (this.#turnGuard.toolCalls >= this.#maxToolCalls) {
+        this.#tripGuard("turn_tool_limit", "工具调用次数超过限制，已自动停止");
+      } else if (fingerprintCount >= this.#maxRepeatedToolCalls) {
+        this.#tripGuard("turn_repeated_tool", "检测到同一工具调用反复重复，已自动停止");
+      }
+    }
     if (type === "message_start" && (raw as { message?: { role?: unknown } } | undefined)?.message?.role === "assistant") {
       this.#assistantMessageSeq += 1;
     }
@@ -350,6 +425,15 @@ export class PiAgentEngineAdapter implements AgentEngine {
     this.#compactionBefore = undefined;
     this.#assistantMessageSeq = 0;
     this.#seenAssistantContent.clear();
+  }
+
+  #tripGuard(code: "turn_timeout" | "turn_limit" | "turn_tool_limit" | "turn_repeated_tool", message: string): void {
+    const guard = this.#turnGuard;
+    if (!guard || guard.error || this.#terminal) return;
+    guard.error = new AgentEngineError({ code, category: "validation", retryable: false, message });
+    this.#terminal = "turn.failed";
+    this.#emit({ ...this.#base(), type: "turn.failed", error: guard.error.toJSON() });
+    try { this.#runtime.session.abort(); } catch { /* PI abort is best effort. */ }
   }
 
   #assertAvailable(): void {
