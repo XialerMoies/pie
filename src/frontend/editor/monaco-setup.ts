@@ -51,6 +51,7 @@ const translationObserver = new ObserverOwner();
 // ─── 诊断轮询 ──────────────────────────────────────────────────
 
 let _diagFile = "";
+let _diagInFlight = false;
 
 /** 将 tsserver 诊断转换为 Monaco markers + ProblemItem 列表 */
 function _diagnosticsToState(filePath: string, diags: any[]): { markers: monaco.editor.IMarkerData[]; problems: ProblemItem[] } {
@@ -102,20 +103,28 @@ function _diagnosticsToState(filePath: string, diags: any[]): { markers: monaco.
 
 async function pollDiagnostics(): Promise<void> {
   if (!_diagFile || !editor) return;
+  if (_diagInFlight) return;
   const model = editor.getModel();
   if (!model) return;
+  const filePath = _diagFile;
+  _diagInFlight = true;
 
   try {
-    const diags = await tsDiagnostics(_diagFile);
-    if (diags && diags.length > 0) console.log(`[tsserver] ${diags.length} diagnostics for ${_diagFile}`);
-    const { markers, problems } = _diagnosticsToState(_diagFile, diags as any[]);
+    const diags = await tsDiagnostics(filePath);
+    // The active editor can change while tsserver is responding. Do not let a
+    // stale response overwrite the newly selected file's markers/problems.
+    if (filePath !== _diagFile || editor?.getModel() !== model) return;
+    if (diags && diags.length > 0) console.log(`[tsserver] ${diags.length} diagnostics for ${filePath}`);
+    const { markers, problems } = _diagnosticsToState(filePath, diags as any[]);
     monaco.editor.setModelMarkers(model, "typescript", markers);
 
     // 同步写入 ProblemsStore
     const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
-    if (store) store.setProblems(_diagFile, problems);
+    if (store) store.setProblems(filePath, problems);
   } catch {
     // ignore
+  } finally {
+    _diagInFlight = false;
   }
 }
 

@@ -48,6 +48,7 @@ function parseJSON(body) {
 describe("typescript routes", () => {
   let lastTsRequest = null;
   let isRunningCalls = 0;
+  let diagnosticsCalls = 0;
   let organizeImportsResult = null;
 
   const sendRequest = async (cmd, args) => {
@@ -55,6 +56,8 @@ describe("typescript routes", () => {
     switch (cmd) {
       case "semanticDiagnosticsSync":
       case "syntacticDiagnosticsSync":
+        diagnosticsCalls++;
+        await new Promise((resolve) => setTimeout(resolve, 20));
         return [];
       case "completionInfo":
         return { entries: [] };
@@ -141,8 +144,20 @@ describe("typescript routes", () => {
   beforeEach(() => {
     lastTsRequest = null;
     isRunningCalls = 0;
+    diagnosticsCalls = 0;
     organizeImportsResult = null;
     writeFileSync(TEST_FILE, "const test = 1;\n", "utf-8");
+  });
+
+  it("coalesces concurrent diagnostics requests for the same file", async () => {
+    const [first, second] = await Promise.all([
+      callHandler(handleTypeScript, "GET", `/api/ts/diagnostics?file=${encodeURIComponent(TEST_FILE)}&projectRoot=${encodeURIComponent(TEST_WORKSPACE)}`, undefined, ctx),
+      callHandler(handleTypeScript, "GET", `/api/ts/diagnostics?file=${encodeURIComponent(TEST_FILE)}&projectRoot=${encodeURIComponent(TEST_WORKSPACE)}`, undefined, ctx),
+    ]);
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(diagnosticsCalls, 2, "two concurrent route calls should share one semantic+s syntactic pair");
   });
 
   after(() => {

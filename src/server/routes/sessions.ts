@@ -3,6 +3,7 @@
  */
 import { resolveEngine, type RouteHandler, type ServerContext } from "./types.js";
 import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync, statSync, mkdirSync, renameSync } from "fs";
+import { readFile as readFileAsync, stat as statAsync } from "fs/promises";
 import { resolve, basename, dirname } from "path";
 import { randomUUID } from "crypto";
 import { parseBody } from "./parse-body.js";
@@ -223,8 +224,9 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
         if (!existsSync(dir)) return [];
         const records: Array<Record<string, unknown>> = [];
         for (const fullPath of await findAuthorizedJsonl(ctx, dir, "sessions.list")) {
-          const stat = existsSync(fullPath) ? statSync(fullPath) : null;
-          const content = readFileSync(fullPath, "utf-8");
+          const stat = await statAsync(fullPath).catch(() => null);
+          const content = await readFileAsync(fullPath, "utf-8").catch(() => "");
+          if (!content) continue;
           const lines = content.trim().split("\n");
           const header = lines[0] ? JSON.parse(lines[0]) : {};
           const id = header.id || basename(fullPath, ".jsonl");

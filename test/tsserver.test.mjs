@@ -3,9 +3,21 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { createTsserverSpawnOptions } from "../src/server/ts-server.ts";
+import { createTsserverSpawnOptions, TsserverManager } from "../src/server/ts-server.ts";
 
 describe("tsserver process boundary", () => {
+  it("bounds requests and rejects an unresponsive tsserver", async () => {
+    const manager = new TsserverManager({ requestTimeoutMs: 20, maxPendingRequests: 1 });
+    manager.process = { send() {} };
+
+    const first = manager.sendRequest("semanticDiagnosticsSync", { file: "x.ts" });
+    await assert.rejects(
+      manager.sendRequest("syntacticDiagnosticsSync", { file: "x.ts" }),
+      /request queue is full/,
+    );
+    await assert.rejects(first, /request timeout/);
+  });
+
   it("uses the isolated tsserver environment and preserves project toolchain variables", () => {
     const previous = {
       PATH: process.env.PATH,

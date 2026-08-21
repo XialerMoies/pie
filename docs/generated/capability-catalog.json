@@ -828,28 +828,28 @@
     },
     {
       "file": "src/server/routes/git.ts",
-      "line": 45,
-      "api": "execFileSync",
+      "line": 46,
+      "api": "execFile",
       "category": "server",
       "owner": "server"
     },
     {
       "file": "src/server/ts-server.ts",
-      "line": 79,
+      "line": 86,
       "api": "fork",
       "category": "tsserver",
       "owner": "server"
     },
     {
       "file": "src/server/ts-server.ts",
-      "line": 135,
+      "line": 156,
       "api": "child_process.send",
       "category": "tsserver",
       "owner": "server"
     },
     {
       "file": "src/server/ts-server.ts",
-      "line": 158,
+      "line": 184,
       "api": "child_process.send",
       "category": "tsserver",
       "owner": "server"

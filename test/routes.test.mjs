@@ -279,7 +279,7 @@ function parseJSON(body) {
 
 // ─── 导入路由 ─────────────────────────────────────────────
 
-let handleDashboard, handleSessions, handleGit, handleSearch;
+let handleDashboard, handleSessions, handleGit, handleSearch, runGitCommand;
 let handleSettings, handleChat, handleExplorer, handleTypeScript;
 let dispatchRoute;
 
@@ -289,6 +289,7 @@ before(async () => {
   handleChat = (await import(`../src/server/routes/chat.ts?t=${ts}`)).handleChat;
   handleSessions = (await import(`../src/server/routes/sessions.ts?t=${ts}`)).handleSessions;
   handleGit = (await import(`../src/server/routes/git.ts?t=${ts}`)).handleGit;
+  runGitCommand = (await import(`../src/server/routes/git.ts?t=${ts}`)).runGitCommand;
   handleSearch = (await import(`../src/server/routes/search.ts?t=${ts}`)).handleSearch;
   handleSettings = (await import(`../src/server/routes/settings.ts?t=${ts}`)).handleSettings;
   handleExplorer = (await import(`../src/server/routes/explorer.ts?t=${ts}`)).handleExplorer;
@@ -3245,10 +3246,14 @@ describe("search conversations route", () => {
 });
 
 describe("git routes", () => {
-  it("constructs Git child processes with the user command environment policy", () => {
+  it("constructs asynchronous Git child processes with the user command environment policy", async () => {
     const source = readFileSync(resolve(ROOT, "src/server/routes/git.ts"), "utf8")
     assert.match(source, /createUserCommandEnv/)
     assert.match(source, /env:\s*createUserCommandEnv\(/)
+    assert.doesNotMatch(source, /execFileSync/)
+    const pending = runGitCommand(["--version"], ROOT, 5000);
+    assert.equal(typeof pending?.then, "function", "git 路由不得返回同步子进程结果");
+    assert.match(await pending, /git version/i);
   })
 
   it("GET /api/git/status 返回状态（正确根目录）", async () => {

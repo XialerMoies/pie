@@ -21,6 +21,10 @@ import { authorizeRoutePath, writeServerPermissionError } from "../permission-se
 import { PathGuardError, writePathGuardError } from "./path-guard.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
+// Multiple renderer timers can ask for the same file while tsserver is still
+// loading its project. Share one computation per manager/file instead of
+// queueing duplicate semantic and syntactic requests in the child process.
+const diagnosticsInFlight = new WeakMap<object, Map<string, Promise<unknown[]>>>();
 
 async function getTsServer(ctx: import("./types.js").ServerContext): Promise<import("../ts-server.js").TsserverManager> {
   const tsServer = ctx.tsServer;
@@ -69,11 +73,23 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       const authorized = await authorizeTsFile(ctx, file, "read", "ts.diagnostics", u.searchParams.get("projectRoot"));
       const ts = await getTsServer(ctx);
 
-      const [semantic, syntactic] = await Promise.all([
-        ts.sendRequest("semanticDiagnosticsSync", { file: authorized.path }).catch(() => []),
-        ts.sendRequest("syntacticDiagnosticsSync", { file: authorized.path }).catch(() => []),
-      ]);
-      const all = [...(semantic || []), ...(syntactic || [])];
+      let byFile = diagnosticsInFlight.get(ts as object);
+      if (!byFile) {
+        byFile = new Map();
+        diagnosticsInFlight.set(ts as object, byFile);
+      }
+      let pending = byFile.get(authorized.path);
+      if (!pending) {
+        pending = Promise.all([
+          ts.sendRequest("semanticDiagnosticsSync", { file: authorized.path }).catch(() => []),
+          ts.sendRequest("syntacticDiagnosticsSync", { file: authorized.path }).catch(() => []),
+        ]).then(([semantic, syntactic]) => [...(semantic || []), ...(syntactic || [])]);
+        byFile.set(authorized.path, pending);
+        void pending.finally(() => {
+          if (byFile?.get(authorized.path) === pending) byFile.delete(authorized.path);
+        });
+      }
+      const all = await pending;
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify(all));
     } catch (err: unknown) {

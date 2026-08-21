@@ -37,6 +37,33 @@ function mockRuntime(sessionFile, sessionManager = {}) {
 }
 
 describe("trace persistence lifecycle", () => {
+  it("does not synchronously persist repeated running tool updates", () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "trace-running-update-"));
+    const sessionFile = resolve(dir, "session.jsonl");
+    writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "session-1" }) + "\n");
+    const runtime = mockRuntime(sessionFile, { flushed: true });
+    const writes = [];
+    const chatStream = {
+      textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "",
+      response: { write(chunk) { writes.push(String(chunk)); return true; }, end() {} },
+      turnId: "turn-running", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0,
+    };
+
+    attachSessionEvents(runtime, chatStream);
+    runtime.emit({ type: "tool_execution_start", toolCallId: "call-running", toolName: "command", args: { command: "long" } });
+    const before = readFileSync(sessionFile, "utf-8");
+    const realNow = Date.now;
+    Date.now = () => realNow() + 1000;
+    try {
+      runtime.emit({ type: "tool_execution_update", toolCallId: "call-running", toolName: "command", partialResult: "x".repeat(20000) });
+    } finally {
+      Date.now = realNow;
+    }
+
+    assert.ok(writes.some((chunk) => chunk.includes('"type":"trace"')), "running update must remain visible over SSE");
+    assert.equal(readFileSync(sessionFile, "utf-8"), before, "running update must not synchronously append a large trace");
+  });
+
   it("forwards SDK queue_update through the chat SSE stream", () => {
     const runtime = mockRuntime(undefined);
     const chatStream = {

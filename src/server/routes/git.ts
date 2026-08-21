@@ -4,7 +4,7 @@
  * 核心解析逻辑在 git-core.ts，此处仅 HTTP 路由分发。
  */
 import type { RouteHandler } from "./types.js";
-import { execFileSync } from "child_process";
+import { execFile } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { relative } from "path";
 import { parseBody } from "./parse-body.js";
@@ -41,15 +41,26 @@ function gitErrorMessage(error: unknown, fallback: string): string {
 
 export { findGitRoot } from "./git-core.js";
 
-function git(args: string[], cwd: string, timeout = 10000): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf-8",
-    timeout,
-    env: createUserCommandEnv({ hostEnv: process.env, platform: process.platform }),
-    stdio: ["pipe", "pipe", "pipe"],
+export function runGitCommand(args: string[], cwd: string, timeout = 10000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, {
+      cwd,
+      encoding: "utf-8",
+      timeout,
+      env: createUserCommandEnv({ hostEnv: process.env, platform: process.platform }),
+      windowsHide: true,
+    }, (error, stdout, stderr) => {
+      if (error) {
+        Object.assign(error, { stdout, stderr });
+        reject(error);
+        return;
+      }
+      resolve(String(stdout));
+    });
   });
 }
+
+const git = runGitCommand;
 
 export const handleGit: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
@@ -79,11 +90,11 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
       const guarded = await authorizeRoutePath(ctx, gitRoot, requestedPath, "read", "git.diff");
       const filePath = relative(gitRoot, guarded.path).replace(/\\/g, "/");
       let hasHead = true;
-      try { git(["rev-parse", "--verify", "HEAD"], gitRoot, 5000); } catch { hasHead = false; }
+      try { await git(["rev-parse", "--verify", "HEAD"], gitRoot, 5000); } catch { hasHead = false; }
       let untracked = !hasHead;
       let diffPaths = [filePath];
       if (hasHead) {
-        const status = git(["status", "--porcelain", "--untracked-files=all"], gitRoot, 5000);
+        const status = await git(["status", "--porcelain", "--untracked-files=all"], gitRoot, 5000);
         const entries = parsePorcelain(status);
         const requestedEntry = entries.find(entry => entry.path === filePath || entry.renamePath === filePath);
         untracked = requestedEntry?.x === "?" || requestedEntry?.y === "?";
@@ -99,7 +110,7 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
           : createFileDiff(filePath, content.toString("utf8"));
       } else {
         const output = hasHead
-          ? git(["diff", "--no-color", "--no-ext-diff", "--find-renames", "HEAD", "--", ...diffPaths], gitRoot, 10000)
+          ? await git(["diff", "--no-color", "--no-ext-diff", "--find-renames", "HEAD", "--", ...diffPaths], gitRoot, 10000)
           : "";
         diff = parseUnifiedDiff(output, filePath);
       }
@@ -119,21 +130,21 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
       }
       const pathspec = gitWorkspacePathspec(gitRoot, root);
       const gitPathspec = literalGitPathspec(pathspec);
-      const output = git(["status", "--porcelain", ...(gitPathspec ? ["--", gitPathspec] : [])], gitRoot);
+      const output = await git(["status", "--porcelain", ...(gitPathspec ? ["--", gitPathspec] : [])], gitRoot);
       const entries = scopeGitStatusEntries(parsePorcelain(output), pathspec);
       // 附加信息：分支 / 远程差异 / 最新 commit
       let branch = "HEAD";
-      try { branch = git(["rev-parse", "--abbrev-ref", "HEAD"], gitRoot, 5000).trim(); } catch {}
+      try { branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], gitRoot, 5000)).trim(); } catch {}
       let ahead = 0, behind = 0;
       try {
-        const revs = git(["rev-list", "--count", "--left-right", "HEAD...@{upstream}"], gitRoot, 5000).trim();
+        const revs = (await git(["rev-list", "--count", "--left-right", "HEAD...@{upstream}"], gitRoot, 5000)).trim();
         const parts = revs.split("\t");
         ahead = parseInt(parts[0] || "0", 10);
         behind = parseInt(parts[1] || "0", 10);
       } catch {}
       let lastCommit = "";
       try {
-        lastCommit = git(["log", "-1", "--format=%h %s", ...(gitPathspec ? ["--", gitPathspec] : [])], gitRoot, 5000).trim();
+        lastCommit = (await git(["log", "-1", "--format=%h %s", ...(gitPathspec ? ["--", gitPathspec] : [])], gitRoot, 5000)).trim();
       } catch {}
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({
@@ -164,7 +175,7 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
       const gitPathspec = literalGitPathspec(pathspec);
       const rawCount = parseInt(u.searchParams.get("count") || "10", 10);
       const count = Number.isFinite(rawCount) ? Math.max(1, Math.min(rawCount, 100)) : 10;
-      const output = git(["log", "--oneline", `-${count}`, ...(gitPathspec ? ["--", gitPathspec] : [])], gitRoot);
+      const output = await git(["log", "--oneline", `-${count}`, ...(gitPathspec ? ["--", gitPathspec] : [])], gitRoot);
       const entries = parseLog(output);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ gitRoot, entries }));
@@ -183,8 +194,8 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
         return true;
       }
       if (!msg) { res.writeHead(200, { ...cors }); res.end(JSON.stringify({ error: "empty_message", message: "提交信息不能为空" })); return true; }
-      git(["add", "-A"], gitRoot2, 15000);
-      git(["commit", "-m", msg], gitRoot2, 15000);
+      await git(["add", "-A"], gitRoot2, 15000);
+      await git(["commit", "-m", msg], gitRoot2, 15000);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true, message: "提交成功" }));
       return true;
@@ -201,7 +212,7 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
         return true;
       }
       try {
-        git(["push"], gitRoot2, 60000);
+        await git(["push"], gitRoot2, 60000);
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, message: "推送成功" }));
       } catch (pushErr: unknown) {
@@ -223,7 +234,7 @@ export const handleGit: RouteHandler = async (req, res, ctx) => {
         return true;
       }
       try {
-        git(["pull"], gitRoot2, 60000);
+        await git(["pull"], gitRoot2, 60000);
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, message: "拉取成功" }));
       } catch (pullErr: unknown) {

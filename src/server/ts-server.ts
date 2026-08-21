@@ -58,9 +58,16 @@ export function createTsserverSpawnOptions(projectRoot: string, tsLibDir: string
 export class TsserverManager {
   private process: ChildProcess | null = null;
   private seq = 0;
-  private pending = new Map<number, { resolve: (body: any) => void; reject: (err: Error) => void }>();
+  private pending = new Map<number, { resolve: (body: any) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private onEvent: ((event: TsserverEvent) => void) | null = null;
   private ready = false;
+  private readonly requestTimeoutMs: number;
+  private readonly maxPendingRequests: number;
+
+  constructor(options?: { requestTimeoutMs?: number; maxPendingRequests?: number }) {
+    this.requestTimeoutMs = Math.max(1000, options?.requestTimeoutMs ?? 15_000);
+    this.maxPendingRequests = Math.max(1, options?.maxPendingRequests ?? 64);
+  }
 
   /** 注册事件回调 */
   setEventHandler(handler: (event: TsserverEvent) => void): void {
@@ -126,13 +133,32 @@ export class TsserverManager {
   async sendRequest(command: string, args?: any): Promise<any> {
     const proc = this.process;
     if (!proc) throw new Error("tsserver not started");
+    if (this.pending.size >= this.maxPendingRequests) {
+      throw new Error(`tsserver request queue is full (${this.maxPendingRequests})`);
+    }
 
     const seq = ++this.seq;
     const request: TsserverRequest = { seq, type: "request", command, arguments: args };
 
     return new Promise((resolve, reject) => {
-      this.pending.set(seq, { resolve, reject });
-      proc.send(request);
+      const timer = setTimeout(() => {
+        const pending = this.pending.get(seq);
+        if (!pending) return;
+        this.pending.delete(seq);
+        reject(new Error(`tsserver request timeout: ${command}`));
+      }, this.requestTimeoutMs);
+      this.pending.set(seq, {
+        resolve: (body) => { clearTimeout(timer); resolve(body); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+        timer,
+      });
+      try {
+        proc.send(request);
+      } catch (error) {
+        this.pending.delete(seq);
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
