@@ -3,6 +3,7 @@ export const ENGINE_EVENT_VERSION = 1 as const;
 export type UsageSource = "exact" | "mixed" | "estimated";
 export type CapabilityState = "supported" | "unsupported" | "unknown";
 export type EngineTerminalEvent = "turn.completed" | "turn.failed" | "turn.cancelled";
+export type EngineContentPhase = "start" | "delta" | "end";
 export type EngineErrorCategory =
   | "provider"
   | "permission"
@@ -88,14 +89,16 @@ export interface EngineEventBase {
   turnId: string;
   seq: number;
   timestamp: number;
+  /** Assistant message ordinal and content segment index, when the provider exposes them. */
+  messageSeq?: number;
 }
 
 export type EngineEvent =
   | (EngineEventBase & { type: "engine.ready"; turnId: "" })
   | (EngineEventBase & { type: "session.changed"; turnId: ""; session: EngineSessionSnapshot })
   | (EngineEventBase & { type: "turn.started" })
-  | (EngineEventBase & { type: "content.delta"; text: string })
-  | (EngineEventBase & { type: "thinking.delta"; text: string })
+  | (EngineEventBase & { type: "content.delta"; text: string; contentIndex?: number; phase?: EngineContentPhase })
+  | (EngineEventBase & { type: "thinking.delta"; text: string; contentIndex?: number; phase?: EngineContentPhase })
   | (EngineEventBase & { type: "tool.started"; toolCallId: string; name: string; input?: unknown })
   | (EngineEventBase & { type: "tool.updated"; toolCallId: string; name: string; output: string })
   | (EngineEventBase & { type: "tool.completed"; toolCallId: string; name: string; output?: string; metadata?: Record<string, unknown> })

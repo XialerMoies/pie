@@ -42,6 +42,51 @@ type SessionMessage = {
   _compacted?: boolean;
 };
 
+function normalizeToolCallId(value: unknown): string {
+  return String(value || "").replace(/@turn-[^@]+$/, "");
+}
+
+function blockMergeKey(block: any): string {
+  if (block?.type === "tool" && block.toolCallId) {
+    return `tool:${normalizeToolCallId(block.toolCallId)}`;
+  }
+  if (block?.type === "tool_use" && block.toolCallId) {
+    return `tool_use:${normalizeToolCallId(block.toolCallId)}`;
+  }
+  if (block?.type === "tool_result" && block.toolUseId) {
+    return `tool_result:${normalizeToolCallId(block.toolUseId)}`;
+  }
+  return `${block?.type || "block"}:${String(block?.blockId || "")}`;
+}
+
+function mergeBlockRecord(previous: any, next: any): any {
+  const merged = { ...previous };
+  for (const [key, value] of Object.entries(next || {})) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && value.length === 0 && merged[key] !== undefined) continue;
+    merged[key] = value;
+  }
+  if (previous?.seq !== undefined) merged.seq = previous.seq;
+  if (previous?.blockId) merged.blockId = previous.blockId;
+  return merged;
+}
+
+function mergeBlockList(blocks: any[]): any[] {
+  const merged: any[] = [];
+  const indexes = new Map<string, number>();
+  for (const block of blocks) {
+    const key = blockMergeKey(block);
+    const previousIndex = indexes.get(key);
+    if (previousIndex === undefined) {
+      indexes.set(key, merged.length);
+      merged.push(block);
+    } else {
+      merged[previousIndex] = mergeBlockRecord(merged[previousIndex], block);
+    }
+  }
+  return merged.sort((a, b) => (a.seq || 0) - (b.seq || 0));
+}
+
 function textFromBlocks(blocks: Array<{type: string; text?: string; thinking?: string}>): string {
   return blocks.filter((c) => c.type === "text").map((c) => fixSurrogates(c.text || "")).join(" ").trim() || "";
 }
@@ -99,7 +144,7 @@ function convertTracesToBlocks(traces: SessionTrace[], content?: string): any[] 
       const terminalStatus = isError ? 'error' : 'success';
       // B-5：tool 合并成一个 block（一个 seq）
       blocks.push({
-        type: 'tool', toolCallId: t.id, name: t.name, input: t.input,
+        type: 'tool', toolCallId: normalizeToolCallId(t.id), name: t.name, input: t.input,
         output: isError ? undefined : last.output,
         error: isError ? (last.error || (last.status === 'running' ? '[中断]' : undefined)) : undefined,
         metadata: last.metadata,
@@ -158,7 +203,7 @@ export function parseSessionMessages(content: string): SessionMessage[] {
     if (prevIdx === -1) {
       list.push(entry.block);
     } else {
-      list[prevIdx] = { ...entry.block, seq: list[prevIdx].seq };
+      list[prevIdx] = mergeBlockRecord(list[prevIdx], entry.block);
     }
     blocksByTurn.set(turnId, list);
   }
@@ -211,13 +256,10 @@ export function parseSessionMessages(content: string): SessionMessage[] {
       last.thinking = [last.thinking, message.thinking].filter(Boolean).join("\n\n") || undefined;
       last.trace = appendTrace(last.trace || [], message.trace || []);
       if (message.blocks?.length) {
-        const blocks = [...((last as any).blocks || [])];
-        for (const block of message.blocks) {
-          const idx = blocks.findIndex((existing: any) => existing.blockId === block.blockId);
-          if (idx === -1) blocks.push(block);
-          else blocks[idx] = { ...block, seq: blocks[idx].seq };
-        }
-        (last as any).blocks = blocks.sort((a: any, b: any) => (a.seq || 0) - (b.seq || 0));
+        (last as any).blocks = mergeBlockList([
+          ...((last as any).blocks || []),
+          ...message.blocks,
+        ]);
       }
       if (!last.turnId && message.turnId) last.turnId = message.turnId;
       return;
@@ -325,6 +367,9 @@ export function parseSessionMessages(content: string): SessionMessage[] {
   for (const msg of messages) {
     if (msg.role === "assistant" && !(msg as any).blocks && msg.trace && msg.trace.length > 0) {
       (msg as any).blocks = convertTracesToBlocks(msg.trace, msg.content);
+    }
+    if (msg.role === "assistant" && (msg as any).blocks) {
+      (msg as any).blocks = mergeBlockList((msg as any).blocks);
     }
   }
 

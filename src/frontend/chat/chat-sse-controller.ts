@@ -76,7 +76,10 @@ class ChatSseControllerView {
       if (data.type === 'subagent_event' && data.event) {
         const updated = this.dependencies.chat.updateSubagentEvent?.(data.event) || false;
         if (!updated) this.callbacks.scheduleMessagesRender();
-        else sb('ms');
+        else {
+          this.callbacks.markLastMessageRendered();
+          sb('ms');
+        }
         return;
       }
       if (data.type === 'command_confirm') {
@@ -150,7 +153,10 @@ class ChatSseControllerView {
     last._rv = (last._rv || 0) + 1;
     const updated = this.dependencies.chat.updateLastBlock?.(block) || false;
     if (!updated) this.callbacks.scheduleMessagesRender();
-    else sb('ms');
+    else {
+      this.callbacks.markLastMessageRendered();
+      sb('ms');
+    }
 
     const permissionFailure = block.metadata?.permissionFailure;
     if (permissionFailure && typeof permissionFailure === 'object') {
@@ -173,7 +179,10 @@ class ChatSseControllerView {
       return;
     }
     if (last?.streaming) {
-      if (!last.blocks?.length) this.dependencies.chat.appendDelta?.(data.text || '');
+      if (!last.blocks?.length) {
+        this.dependencies.chat.appendDelta?.(data.text || '');
+        this.callbacks.markLastMessageRendered();
+      }
     } else {
       this.dependencies.chatState.appendMessage({ role: 'assistant', content: data.text || '', thinking: '', streaming: true });
       this.callbacks.updateUI();

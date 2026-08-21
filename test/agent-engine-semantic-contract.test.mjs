@@ -193,4 +193,47 @@ describe("AgentEngine lifecycle semantics", () => {
     assert.strictEqual(thinkingBlocks[1].status, "streaming", "第二段进行中");
     assert.notStrictEqual(thinkingBlocks[0].blockId, thinkingBlocks[1].blockId, "两段 blockId 不同");
   });
+
+  it("keeps structured Thought segments linear and rejects late writes", () => {
+    const engine = fakeEngine();
+    const chat = stream();
+    attachEngineEvents(engine, fakeRuntime(), chat);
+    const emit = (type, text, seq, phase) => engine.emit({
+      version: 1, type, sessionId: "session-1", turnId: "turn-structured", seq, timestamp: seq,
+      text, messageSeq: 1, contentIndex: 0, phase,
+    });
+    engine.emit({ version: 1, type: "turn.started", sessionId: "session-1", turnId: "turn-structured", seq: 1, timestamp: 1 });
+    emit("thinking.delta", "第一段", 2, "start");
+    emit("thinking.delta", "追加", 3, "delta");
+    emit("thinking.delta", "", 4, "end");
+    // A delta after end must be dropped, not appended to the closed Thought node.
+    emit("thinking.delta", "迟到内容", 5, "delta");
+    emit("thinking.delta", "第二段", 6, "start");
+    emit("thinking.delta", "继续", 7, "delta");
+    engine.emit({ version: 1, type: "turn.completed", sessionId: "session-1", turnId: "turn-structured", seq: 8, timestamp: 8 });
+
+    const thinkingBlocks = chat.eventHistory
+      .map((entry) => JSON.parse(entry.data.split("data: ")[1]))
+      .filter((event) => event.type === "done")
+      .at(-1).blocks.filter((block) => block.type === "thinking");
+    assert.deepEqual(thinkingBlocks.map((block) => block.text), ["第一段追加", "第二段继续"]);
+    assert.ok(thinkingBlocks[0].seq < thinkingBlocks[1].seq, "Thought 节点必须按开启顺序排列");
+    assert.equal(thinkingBlocks[0].status, "done");
+    assert.equal(thinkingBlocks[1].status, "done");
+  });
+
+  it("keeps done block payload ordered when completion arrives out of order", () => {
+    const engine = fakeEngine();
+    const chat = stream();
+    attachEngineEvents(engine, fakeRuntime(), chat);
+    engine.emit({ version: 1, type: "turn.started", sessionId: "session-1", turnId: "turn-order", seq: 1, timestamp: 1 });
+    engine.emit({ version: 1, type: "tool.started", sessionId: "session-1", turnId: "turn-order", seq: 2, timestamp: 2, toolCallId: "a", name: "a" });
+    engine.emit({ version: 1, type: "tool.started", sessionId: "session-1", turnId: "turn-order", seq: 3, timestamp: 3, toolCallId: "b", name: "b" });
+    engine.emit({ version: 1, type: "tool.completed", sessionId: "session-1", turnId: "turn-order", seq: 4, timestamp: 4, toolCallId: "b", name: "b", output: "B" });
+    engine.emit({ version: 1, type: "tool.completed", sessionId: "session-1", turnId: "turn-order", seq: 5, timestamp: 5, toolCallId: "a", name: "a", output: "A" });
+    engine.emit({ version: 1, type: "turn.completed", sessionId: "session-1", turnId: "turn-order", seq: 6, timestamp: 6 });
+
+    const done = chat.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1])).find((event) => event.type === "done");
+    assert.deepEqual(done.blocks.filter((block) => block.type === "tool").map((block) => block.toolCallId), ["a", "b"]);
+  });
 });

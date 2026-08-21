@@ -74,6 +74,13 @@ function lastAssistantMessage(event: Record<string, unknown>): Record<string, un
   return [...messages].reverse().map(record).find((message) => message?.role === "assistant");
 }
 
+function contentPhase(type: unknown): "start" | "delta" | "end" | undefined {
+  if (type === "text_start" || type === "thinking_start") return "start";
+  if (type === "text_end" || type === "thinking_end") return "end";
+  if (type === "text_delta" || type === "thinking_delta") return "delta";
+  return undefined;
+}
+
 const QUIET_PI_EVENTS = new Set([
   "message_start",
   "message_end",
@@ -92,11 +99,15 @@ export function mapPiEvent(raw: unknown, context: PiEventContext): PiEventMappin
   if (type === "message_update") {
     const increment = record(event?.assistantMessageEvent);
     const delta = typeof increment?.delta === "string" ? increment.delta : "";
-    if (increment?.type === "text_delta" && delta) {
-      return { events: [{ ...base, type: "content.delta", text: delta }], recognized: true };
+    const phase = contentPhase(increment?.type);
+    const contentIndex = typeof increment?.contentIndex === "number" && Number.isSafeInteger(increment.contentIndex) && increment.contentIndex >= 0
+      ? increment.contentIndex
+      : undefined;
+    if (typeof increment?.type === "string" && increment.type.startsWith("text_") && phase) {
+      return { events: [{ ...base, type: "content.delta", text: delta, ...(contentIndex === undefined ? {} : { contentIndex }), phase }], recognized: true };
     }
-    if (increment?.type === "thinking_delta" && delta) {
-      return { events: [{ ...base, type: "thinking.delta", text: delta }], recognized: true };
+    if (typeof increment?.type === "string" && increment.type.startsWith("thinking_") && phase) {
+      return { events: [{ ...base, type: "thinking.delta", text: delta, ...(contentIndex === undefined ? {} : { contentIndex }), phase }], recognized: true };
     }
     return { events: [], recognized: true };
   }

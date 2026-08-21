@@ -437,6 +437,34 @@ describe("chat ui state", () => {
     env.win.Element.prototype.replaceWith = origReplaceWith;
   });
 
+  it("流式 block 原位更新后，后续 UI 同步不替换整条 assistant 气泡", async () => {
+    const streams = [];
+    class MockEventSource {
+      constructor() { this.onmessage = null; this.onerror = null; attachEventListeners(this); streams.push(this); }
+      close() {}
+    }
+    global.EventSource = MockEventSource;
+    env.win.EventSource = MockEventSource;
+
+    const input = env.doc.getElementById("ci");
+    input.value = "检查";
+    input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
+    await new Promise((resolve) => setImmediate(resolve));
+    const panel = env.doc.getElementById("ms");
+    const assistantRoot = panel.lastElementChild;
+    streams[0].onmessage({
+      data: JSON.stringify({
+        type: "block",
+        block: { type: "thinking", status: "streaming", text: "新内容", blockId: "think-1", seq: 1 },
+      }),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    env.win.updateUI();
+
+    assert.strictEqual(panel.lastElementChild, assistantRoot, "流式更新后不应整条替换 assistant 气泡");
+    assert.match(assistantRoot.innerHTML, /新内容/);
+  });
+
   it("同长度内容替换仍触发重绘", () => {
     const panel = env.doc.getElementById("ms");
     env.win.updateUI();

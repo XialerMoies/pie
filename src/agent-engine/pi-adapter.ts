@@ -58,6 +58,8 @@ export class PiAgentEngineAdapter implements AgentEngine {
   #pendingTurnId = "";
   #terminal?: EngineTerminalEvent;
   #compactionBefore?: EngineUsage;
+  #assistantMessageSeq = 0;
+  readonly #seenAssistantContent = new Set<string>();
   #disposed = false;
   readonly #knownModels = new Map<string, unknown>();
 
@@ -279,9 +281,15 @@ export class PiAgentEngineAdapter implements AgentEngine {
       this.#activeTurnId = this.#pendingTurnId || this.#turnIdFactory();
       this.#pendingTurnId = "";
       this.#terminal = undefined;
+      this.#assistantMessageSeq = 0;
+      this.#seenAssistantContent.clear();
     }
+    if (type === "message_start" && (raw as { message?: { role?: unknown } } | undefined)?.message?.role === "assistant") {
+      this.#assistantMessageSeq += 1;
+    }
+    const base = { ...this.#base(), ...(this.#assistantMessageSeq > 0 ? { messageSeq: this.#assistantMessageSeq } : {}) };
     const mapping = mapPiEvent(raw, {
-      base: this.#base(),
+      base,
       contextUsage: this.#runtime.getContextUsageSnapshot(),
       compactionBefore: this.#compactionBefore,
     });
@@ -292,7 +300,20 @@ export class PiAgentEngineAdapter implements AgentEngine {
       if (this.#terminal) return;
       this.#terminal = mapping.terminal;
     }
-    for (const event of mapping.events) this.#emit(event);
+    for (const mappedEvent of mapping.events) {
+      let event = mappedEvent;
+      if (event.type === "content.delta" || event.type === "thinking.delta") {
+        const index = event.contentIndex === undefined ? "*" : String(event.contentIndex);
+        const key = `${event.messageSeq ?? 0}:${event.type}:${index}`;
+        // Providers in the wild omit *_start. Synthesize it only for the first
+        // segment; subsequent deltas must still target an open node.
+        if (event.phase === "delta" && !this.#seenAssistantContent.has(key)) {
+          event = { ...event, phase: "start" };
+        }
+        this.#seenAssistantContent.add(key);
+      }
+      this.#emit(event);
+    }
   }
 
   #base(): EngineEventBase {
@@ -327,6 +348,8 @@ export class PiAgentEngineAdapter implements AgentEngine {
     this.#pendingTurnId = "";
     this.#terminal = undefined;
     this.#compactionBefore = undefined;
+    this.#assistantMessageSeq = 0;
+    this.#seenAssistantContent.clear();
   }
 
   #assertAvailable(): void {

@@ -11,6 +11,7 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 import * as marked from "marked";
+import { CHAT_FLOW_SSE_BLOCKS } from "./fixtures/chat-event-flow.mjs";
 
 // 初始化 happy-dom
 const win = new Window();
@@ -694,6 +695,135 @@ describe("msgs() 渲染", () => {
     Object.defineProperty(panel, "innerHTML", descriptor);
   });
 
+  it("流式正文更新不重建正文节点的 innerHTML", () => {
+    state.M = [{
+      role: "assistant",
+      streaming: true,
+      blocks: [{ type: "text", text: "旧内容", blockId: "text-stream", seq: 1 }],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    const body = panel.querySelector('[data-block-id="text-stream"] .trace-text-body');
+    assert.ok(body);
+    let rewrites = 0;
+    const descriptor = Object.getOwnPropertyDescriptor(win.Element.prototype, "innerHTML");
+    Object.defineProperty(body, "innerHTML", {
+      configurable: true,
+      get() { return descriptor.get.call(this); },
+      set(value) { rewrites += 1; return descriptor.set.call(this, value); },
+    });
+
+    const block = { type: "text", text: "新内容", blockId: "text-stream", seq: 1 };
+    state.M[0].blocks[0] = block;
+    assert.strictEqual(win.App.Chat.updateLastBlock(block), true);
+    assert.strictEqual(rewrites, 0, "流式正文不能反复重建 innerHTML");
+    assert.strictEqual(body.textContent, "新内容");
+    Object.defineProperty(body, "innerHTML", descriptor);
+  });
+
+  it("流式 Thought 更新不重建思考节点的 innerHTML", () => {
+    state.M = [{
+      role: "assistant",
+      streaming: true,
+      blocks: [{ type: "thinking", status: "streaming", text: "旧思考", blockId: "thinking-stream", seq: 1 }],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    const body = panel.querySelector('[data-block-id="thinking-stream"] .trace-thinking-text');
+    assert.ok(body);
+    let rewrites = 0;
+    const descriptor = Object.getOwnPropertyDescriptor(win.Element.prototype, "innerHTML");
+    Object.defineProperty(body, "innerHTML", {
+      configurable: true,
+      get() { return descriptor.get.call(this); },
+      set(value) { rewrites += 1; return descriptor.set.call(this, value); },
+    });
+
+    const block = { type: "thinking", status: "streaming", text: "新思考", blockId: "thinking-stream", seq: 1 };
+    state.M[0].blocks[0] = block;
+    assert.strictEqual(win.App.Chat.updateLastBlock(block), true);
+    assert.strictEqual(rewrites, 0, "流式 Thought 不能反复重建 innerHTML");
+    assert.strictEqual(body.textContent, "新思考");
+    Object.defineProperty(body, "innerHTML", descriptor);
+  });
+
+  it("流式节点顺序未变化时不重复移动已有 DOM 节点", () => {
+    state.M = [{
+      role: "assistant",
+      streaming: true,
+      blocks: [
+        { type: "thinking", status: "done", text: "先想", blockId: "thinking-fixed", seq: 1 },
+        { type: "text", text: "旧正文", blockId: "text-fixed", seq: 2 },
+      ],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    const trace = panel.querySelector('.trace.block-trace');
+    assert.ok(trace);
+    let moves = 0;
+    const originalInsertBefore = trace.insertBefore;
+    trace.insertBefore = function (...args) {
+      moves += 1;
+      return originalInsertBefore.apply(this, args);
+    };
+
+    const block = { type: "text", text: "新正文", blockId: "text-fixed", seq: 2 };
+    state.M[0].blocks[1] = block;
+    assert.strictEqual(win.App.Chat.updateLastBlock(block), true);
+    assert.strictEqual(moves, 0, "顺序未变化时不得重复移动已有节点");
+    trace.insertBefore = originalInsertBefore;
+  });
+
+  it("事件脚本逐步更新时保留已挂载节点身份并只增量改变活动节点", () => {
+    state.M = [{ role: "assistant", streaming: true, blocks: [] }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    const root = panel.firstElementChild;
+    const nodes = new Map();
+    const removedBlockIds = [];
+    const observer = new win.MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.removedNodes) {
+          if (node instanceof win.HTMLElement && node.dataset.blockId) removedBlockIds.push(node.dataset.blockId);
+        }
+      }
+    });
+    observer.observe(panel, { childList: true, subtree: true });
+
+    const apply = (block) => {
+      const blocks = state.M[0].blocks;
+      const index = blocks.findIndex((item) => item.blockId === block.blockId);
+      if (index >= 0) blocks[index] = { ...block };
+      else blocks.push({ ...block });
+      assert.strictEqual(win.App.Chat.updateLastBlock(block), true);
+      const trace = panel.querySelector(".trace.block-trace");
+      if (trace && !observer.takeRecords) observer.observe(trace, { childList: true, subtree: true });
+      const mounted = panel.querySelector(`[data-block-id="${block.blockId}"]`);
+      assert.ok(mounted, `block ${block.blockId} should mount`);
+      if (nodes.has(block.blockId)) assert.strictEqual(mounted, nodes.get(block.blockId), `${block.blockId} should preserve identity`);
+      else nodes.set(block.blockId, mounted);
+      assert.strictEqual(panel.firstElementChild, root, "assistant root should not be replaced");
+      for (const record of observer.takeRecords()) {
+        for (const node of record.removedNodes) {
+          if (node instanceof win.HTMLElement && node.dataset.blockId) removedBlockIds.push(node.dataset.blockId);
+        }
+      }
+    };
+
+    for (const block of CHAT_FLOW_SSE_BLOCKS) {
+      apply(block);
+    }
+    observer.disconnect();
+
+    assert.strictEqual(nodes.get("thinking-flow-1").textContent.includes("先分析路径"), true);
+    assert.strictEqual(nodes.get("thinking-flow-2").textContent.includes("再验证结论"), true);
+    assert.deepStrictEqual(
+      [...panel.querySelectorAll("[data-block-id]")].map((node) => node.dataset.blockId),
+      ["thinking-flow-1", "tool-flow", "thinking-flow-2", "text-flow"],
+    );
+    assert.deepStrictEqual(removedBlockIds, [], "streaming updates must not remove mounted event nodes");
+  });
+
   it("流式 tool_use block 原位更新且不替换 block flow", () => {
     state.M = [{
       role: "assistant",
@@ -755,6 +885,38 @@ describe("msgs() 渲染", () => {
     win.App.Chat.updateLastBlock(toolBlock);
     const order = [...panel.querySelectorAll('[data-block-id]')].map((e) => e.dataset.blockId);
     assert.deepStrictEqual(order, ["think-1", "tool-1", "text-1"], "中间插入按 seq 排序");
+  });
+
+  it("结束态同步会修复已有 DOM 的乱序节点", () => {
+    state.M = [{
+      role: "assistant",
+      streaming: true,
+      blocks: [
+        { type: "thinking", status: "done", text: "later", blockId: "block-15", seq: 15 },
+        { type: "text", text: "middle", blockId: "block-14", seq: 14 },
+        { type: "thinking", status: "done", text: "first", blockId: "block-13", seq: 13 },
+      ],
+    }];
+    const panel = doc.getElementById("ms");
+    panel.innerHTML = win.msgs();
+    const trace = panel.querySelector(".trace.block-trace");
+    assert.ok(trace);
+    const nodes = new Map([...panel.querySelectorAll("[data-block-id]")].map((node) => [node.dataset.blockId, node]));
+    trace.append(nodes.get("block-15"), nodes.get("block-14"), nodes.get("block-13"));
+    assert.deepStrictEqual(
+      [...panel.querySelectorAll("[data-block-id]")].map((node) => node.dataset.blockId),
+      ["block-15", "block-14", "block-13"],
+    );
+
+    state.M[0].streaming = false;
+    const finalized = win.App.Chat.finalizeLastMessage();
+
+    assert.strictEqual(finalized, true);
+    assert.deepStrictEqual(
+      [...panel.querySelectorAll("[data-block-id]")].map((node) => node.dataset.blockId),
+      ["block-13", "block-14", "block-15"],
+      "结束态必须按 seq 重排已有节点",
+    );
   });
 
   it("首个 tool_use block 只填充消息内容区", () => {

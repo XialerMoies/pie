@@ -91,6 +91,32 @@ function insertBlockNode(flow: HTMLElement, block: any, blocks: any[]): boolean 
   return chatViews.ChatEventNodeView.insertBlockNode(flow, block, blocks);
 }
 
+function syncBlockNodeOrder(flow: HTMLElement, blocks: any[]): void {
+  const trace = flow.querySelector<HTMLElement>('.trace.block-trace');
+  if (!trace) return;
+  const summary = trace.querySelector<HTMLElement>('[data-edit-summary]');
+  const sorted = blocks
+    .map((block, index) => ({ block, index }))
+    .sort((left, right) => {
+      const leftSeq = Number.isFinite(Number(left.block.seq)) ? Number(left.block.seq) : Number.MAX_SAFE_INTEGER;
+      const rightSeq = Number.isFinite(Number(right.block.seq)) ? Number(right.block.seq) : Number.MAX_SAFE_INTEGER;
+      return leftSeq - rightSeq || left.index - right.index;
+    });
+  const mountedNodes = new Map(
+    Array.from(trace.querySelectorAll<HTMLElement>('[data-block-id]'))
+      .map((node) => [node.dataset.blockId, node] as const),
+  );
+  const nodes = sorted
+    .map(({ block }) => mountedNodes.get(blockId(block)))
+    .filter((node): node is HTMLElement => Boolean(node));
+  let anchor: ChildNode | null = summary;
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const node = nodes[index];
+    if (node.nextSibling !== anchor) trace.insertBefore(node, anchor);
+    anchor = node;
+  }
+}
+
 function refreshEditSummary(flow: HTMLElement, blocks: any[]): void {
   chatViews.ChatEventNodeView.refreshEditSummary(flow, blocks);
 }
@@ -150,6 +176,7 @@ function updateLastBlock(block: any): boolean {
     return true;
   }
   refreshEditSummary(flow, message.blocks);
+  syncBlockNodeOrder(flow, message.blocks);
 
   const target = Array.from(flow.querySelectorAll<HTMLElement>('[data-block-id]'))
     .find(element => element.dataset.blockId === blockId(block));
@@ -160,7 +187,10 @@ function updateLastBlock(block: any): boolean {
   }
   if (target && block.type === 'text') {
     const textBody = target.querySelector('.trace-text-body') as HTMLElement | null;
-      if (textBody) textBody.innerHTML = mdRender(block.text || '');
+      if (textBody) {
+        if (message.streaming === true) textBody.textContent = block.text || '';
+        else textBody.innerHTML = mdRender(block.text || '');
+      }
       else replaceBlockContents(target, renderEventBlock(block, message.blocks, undefined, message.subagentBatches));
       refreshEditSummary(flow, message.blocks);
       return true;
@@ -168,7 +198,8 @@ function updateLastBlock(block: any): boolean {
   if (target && block.type === 'thinking') {
     const textElement = target.querySelector('.trace-thinking-text') as HTMLElement | null;
       if (textElement) {
-        textElement.innerHTML = mdRender(block.text || '');
+        if (message.streaming === true) textElement.textContent = block.text || '';
+        else textElement.innerHTML = mdRender(block.text || '');
         refreshEditSummary(flow, message.blocks);
         return true;
     }
@@ -218,6 +249,8 @@ function finalizeLastMessage(): boolean {
       contentElement.innerHTML = renderBlocks(message.blocks, message.subagentBatches);
       return true;
     }
+
+    syncBlockNodeOrder(flow, message.blocks);
 
     let fullySynced = true;
     for (const block of [...message.blocks].sort((a: any, b: any) => a.seq - b.seq)) {

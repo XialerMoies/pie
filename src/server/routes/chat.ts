@@ -27,6 +27,10 @@ function terminateChatTurn(chatStream: ChatStreamState, message: string): void {
   chatStream.blockSeq = 0;
   chatStream.blocks = [];
   chatStream.textSegments = [];
+  chatStream.activeTextInput = undefined;
+  chatStream.textBlockGenerations = {};
+  chatStream.activeThinkingInput = undefined;
+  chatStream.thinkingBlockGenerations = {};
   chatStream.emittedTraces = new Set();
   chatStream.currentWorkspace = "";
 }
@@ -191,6 +195,10 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         chatStream.blockSeq = 0;
         chatStream.blocks = [];
         chatStream.textSegments = [];
+        chatStream.activeTextInput = undefined;
+        chatStream.textBlockGenerations = {};
+        chatStream.activeThinkingInput = undefined;
+        chatStream.thinkingBlockGenerations = {};
         chatStream.emittedTraces = new Set();
         if (workspace) chatStream.currentWorkspace = workspace;
         // 处理引用文件附件

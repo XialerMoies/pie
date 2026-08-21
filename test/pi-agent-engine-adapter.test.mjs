@@ -102,6 +102,39 @@ describe("PiAgentEngineAdapter", () => {
     assert.equal(events.at(-1).usage.source, "exact");
   });
 
+  it("preserves assistant message/content boundaries for node reconstruction", () => {
+    const runtime = createRuntime();
+    const engine = adapter(runtime);
+    const events = [];
+    engine.subscribe((event) => events.push(event));
+
+    runtime.emit({ type: "agent_start" });
+    runtime.emit({ type: "message_start", message: { role: "assistant" } });
+    runtime.emit({
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "first" }] },
+      assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+    });
+    runtime.emit({
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "first" }] },
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "first" },
+    });
+    runtime.emit({ type: "message_start", message: { role: "assistant" } });
+    runtime.emit({
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "second" }] },
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "second" },
+    });
+
+    const thinking = events.filter((event) => event.type === "thinking.delta");
+    assert.deepEqual(thinking.map((event) => ({ messageSeq: event.messageSeq, contentIndex: event.contentIndex, phase: event.phase })), [
+      { messageSeq: 1, contentIndex: 0, phase: "start" },
+      { messageSeq: 1, contentIndex: 0, phase: "delta" },
+      { messageSeq: 2, contentIndex: 0, phase: "start" },
+    ]);
+  });
+
   it("makes cancellation idempotent and suppresses a later completed terminal", async () => {
     const runtime = createRuntime();
     const engine = adapter(runtime);

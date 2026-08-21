@@ -192,6 +192,41 @@ describe("parseSessionMessages", () => {
     assert.strictEqual(blocks[3].type, "text");
   });
 
+  it("assistant_block 按完成顺序追加时，刷新回放仍按初始 seq 排列", () => {
+    const c = [
+      JSON.stringify({ type: "session", id: "s1" }),
+      JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "out of order" }] } }),
+      JSON.stringify({ type: "assistant_block", turnId: "t1", block: { type: "tool", toolCallId: "b", name: "b", status: "success", blockId: "tool-b", seq: 3 } }),
+      JSON.stringify({ type: "assistant_block", turnId: "t1", block: { type: "tool", toolCallId: "a", name: "a", status: "success", blockId: "tool-a", seq: 2 } }),
+      JSON.stringify({ type: "assistant_block", turnId: "t1", block: { type: "text", text: "final", blockId: "text-1", seq: 4 } }),
+      JSON.stringify({ type: "message", id: "a1", turnId: "t1", message: { role: "assistant", content: [{ type: "text", text: "final" }] } }),
+    ].join("\n");
+    const blocks = mod.parseSessionMessages(c)[1].blocks;
+    assert.deepEqual(blocks.map((block) => block.blockId), ["tool-a", "tool-b", "text-1"]);
+  });
+
+  it("刷新回放合并同一工具调用的旧新 blockId，不重复显示工具节点", () => {
+    const c = [
+      JSON.stringify({ type: "session", id: "s1" }),
+      JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "run" }] } }),
+      JSON.stringify({ type: "assistant_block", turnId: "t1", block: {
+        type: "tool", toolCallId: "call-1", name: "search", input: { query: "x" },
+        status: "running", blockId: "call-1@t1", seq: 1,
+      } }),
+      JSON.stringify({ type: "assistant_block", turnId: "t1", block: {
+        type: "tool", toolCallId: "call-1", name: "search", output: "result",
+        status: "success", blockId: "tool-call-1", seq: 2,
+      } }),
+      JSON.stringify({ type: "message", id: "a1", turnId: "t1", message: { role: "assistant", content: [{ type: "text", text: "done" }] } }),
+    ].join("\n");
+    const blocks = mod.parseSessionMessages(c)[1].blocks;
+    assert.equal(blocks.filter((block) => block.type === "tool" && block.toolCallId === "call-1").length, 1);
+    assert.deepEqual(blocks.find((block) => block.type === "tool") , {
+      type: "tool", toolCallId: "call-1", name: "search", input: { query: "x" },
+      output: "result", status: "success", blockId: "call-1@t1", seq: 1,
+    });
+  });
+
   it("旧 trace 格式自动转为 block（Stage ②）", () => {
     const c = [
       JSON.stringify({ type: "session", id: "s1" }),

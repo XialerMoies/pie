@@ -323,7 +323,12 @@ export function emitBlock(
     emittedBlock = { ...block, seq: chatStream.blocks[idx].seq };
     chatStream.blocks[idx] = emittedBlock;
   } else {
-    chatStream.blocks.push(emittedBlock);
+    // Keep the in-memory protocol canonical even when an adapter delivers a
+    // completed event after a later-started block. Persistence and SSE both
+    // consume this array, so never expose completion order as logical order.
+    const insertAt = chatStream.blocks.findIndex((existing) => existing.seq > emittedBlock.seq);
+    if (insertAt < 0) chatStream.blocks.push(emittedBlock);
+    else chatStream.blocks.splice(insertAt, 0, emittedBlock);
   }
   if (options?.persist !== false) {
     persistBlockEvent(runtime, emittedBlock, options);
@@ -898,9 +903,64 @@ export function attachEngineEvents(
     : undefined;
   /** per-generation thinking 起点：key = `thinking-${turnId}`, value = 该 generation 在 thinkingBuffer 中的起始偏移 */
   const thinkingGenStarts = new Map<string, number>();
+  const structuredNodeBuffers = new Map<string, string>();
 
   const currentTurn = (event: EngineEvent): string => event.turnId || chatStream.turnId;
-  const upsertTextBlock = (type: "text" | "thinking", text: string, turnId: string): void => {
+  const upsertTextBlock = (
+    type: "text" | "thinking",
+    text: string,
+    turnId: string,
+    input?: { contentIndex?: number; messageSeq?: number; phase?: "start" | "delta" | "end" },
+  ): void => {
+    // The PI adapter preserves message/content boundaries when available. A
+    // structured event is handled by the same close-before-open state machine
+    // used by the legacy bridge, so a late delta can never reopen a closed node.
+    if (input?.phase && Number.isSafeInteger(input.messageSeq) && (input.messageSeq as number) > 0) {
+      const contentIndex = Number.isSafeInteger(input.contentIndex) && (input.contentIndex as number) >= 0
+        ? input.contentIndex as number
+        : 0;
+      const key = `m${input.messageSeq}:${type}-${contentIndex}`;
+      if (type === "text") {
+        const closedThinking = closeActiveInput(chatStream, "thinking");
+        if (closedThinking !== null) markBlockDone(chatStream, closedThinking);
+      } else {
+        const closedText = closeActiveInput(chatStream, "text");
+        if (closedText !== null) markBlockDone(chatStream, closedText);
+      }
+      const resolved = resolveIndexedBlockInput(
+        chatStream,
+        type,
+        key,
+        `${type}_${input.phase}`,
+        type,
+        type,
+      );
+      if (resolved === null) return;
+      const previous = structuredNodeBuffers.get(resolved.blockId) || "";
+      const nodeText = input.phase === "start" ? text : previous + text;
+      structuredNodeBuffers.set(resolved.blockId, nodeText);
+      const existing = chatStream.blocks.find((block): block is Extract<AssistantBlock, { type: typeof type }> => block.type === type && block.blockId === resolved.blockId);
+      nodeFlowLog("structured-upsert", type, {
+        turnId,
+        key,
+        blockId: resolved.blockId,
+        phase: input.phase,
+        textLen: text.length,
+        nodeTextLen: nodeText.length,
+      });
+      emitBlock(runtime, chatStream, {
+        type,
+        text: nodeText,
+        ...(type === "thinking" ? { status: input.phase === "end" ? "done" as const : "streaming" as const } : {}),
+        turnId,
+        blockId: resolved.blockId,
+        seq: existing?.seq ?? nextBlockSeq(chatStream),
+      } as AssistantBlock, { persist: false });
+      if (resolved.closed !== undefined) markBlockDone(chatStream, resolved.closed);
+      if (input.phase === "end") markBlockDone(chatStream, resolved.blockId);
+      return;
+    }
+
     // 硬性不变式：Normalized 引擎事件桥同样必须"切换节点类型前关闭旧类型"。
     // 写入 text 时若 thinking 节点存在则标 done，写入 thinking 时若 text 节点
     // 存在则视为已结束（text 无 done 标记，但不再被更新）。
@@ -999,6 +1059,7 @@ export function attachEngineEvents(
         seq: nextBlockSeq(chatStream),
       }, { persist: false });
     }
+    chatStream.blocks.sort((left, right) => left.seq - right.seq);
     for (const block of chatStream.blocks) {
       if (block.type === "text" || block.type === "thinking") persistBlockEvent(runtime, block, { authorizeSessionWrite });
     }
@@ -1040,6 +1101,7 @@ export function attachEngineEvents(
     chatStream.textSegments = [];
     chatStream.thinkingBlockGenerations = {};
     thinkingGenStarts.clear();
+    structuredNodeBuffers.clear();
     chatStream.currentWorkspace = "";
     publishLifecycleChanged();
   };
@@ -1048,6 +1110,10 @@ export function attachEngineEvents(
     const turnId = currentTurn(event);
     if (event.type === "turn.started") {
       chatStream.turnId = event.turnId || chatStream.turnId;
+      structuredNodeBuffers.clear();
+      thinkingGenStarts.clear();
+      chatStream.activeTextInput = undefined;
+      chatStream.activeThinkingInput = undefined;
       publishLifecycleChanged();
       lastStreamingUsagePublishAt = Date.now();
       return;
@@ -1070,13 +1136,23 @@ export function attachEngineEvents(
     }
     if (event.type === "content.delta" && turnId) {
       chatStream.textBuffer += event.text;
-      upsertTextBlock("text", chatStream.textBuffer, turnId);
+      const structured = event.phase !== undefined || event.messageSeq !== undefined || event.contentIndex !== undefined;
+      upsertTextBlock("text", structured ? event.text : chatStream.textBuffer, turnId, structured ? {
+        contentIndex: event.contentIndex,
+        messageSeq: event.messageSeq,
+        phase: event.phase || "delta",
+      } : undefined);
       writeChatEvent(chatStream, { type: "delta", text: event.text });
       return;
     }
     if (event.type === "thinking.delta" && turnId) {
       chatStream.thinkingBuffer += event.text;
-      upsertTextBlock("thinking", chatStream.thinkingBuffer, turnId);
+      const structured = event.phase !== undefined || event.messageSeq !== undefined || event.contentIndex !== undefined;
+      upsertTextBlock("thinking", structured ? event.text : chatStream.thinkingBuffer, turnId, structured ? {
+        contentIndex: event.contentIndex,
+        messageSeq: event.messageSeq,
+        phase: event.phase || "delta",
+      } : undefined);
       writeChatEvent(chatStream, { type: "thinking", text: event.text });
       return;
     }
