@@ -10,6 +10,7 @@ import { WorkspaceLockConflictError } from "../workspace-lock.js";
 import { authorizeWorkspacePath, switchAuthorizedWorkspace } from "./workspace-authorization.js";
 import { replayChatEvents, resetChatEventHistory, writeChatEvent, writeChatStreamBaseline } from "../chat-stream.js";
 import { serverConfirmationRegistry } from "../confirmation-registry.js";
+import { inferTaskRequirements } from "../task-lifecycle.js";
 
 const COMMAND_CONFIRM_TIMEOUT_MS = 120_000;
 const MODEL_PROVIDER_SYNC_ERROR = "模型提供商同步失败，请重试。";
@@ -200,6 +201,8 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         chatStream.activeThinkingInput = undefined;
         chatStream.thinkingBlockGenerations = {};
         chatStream.emittedTraces = new Set();
+        chatStream.taskRequirements = inferTaskRequirements(typeof message === "string" ? message : "");
+        chatStream.taskLifecycle = undefined;
         if (workspace) chatStream.currentWorkspace = workspace;
         // 处理引用文件附件
         let finalMessage = message;

@@ -16,6 +16,7 @@
  * - description 动态函数
  * - inputSchema（Zod 类型校验）
  */
+import { createHash } from "node:crypto"
 
 export type ShellDialect = "cmd" | "posix-bash" | "powershell"
 
@@ -334,9 +335,24 @@ export interface ToolContext {
   /** Host-owned observer for structured/legacy outcome migration telemetry. */
   toolOutcomeObserver?: ToolOutcomeObserver
   toolOutcomeSource?: ToolOutcomeSource
+  /** Optional host-owned read-through cache for unchanged successful evidence. */
+  evidenceLookup?: (toolName: string, scope: ToolEvidenceScope) => ToolEvidenceLookup | undefined
 }
 
 export type ToolOutcomeSource = "live" | "replay" | "test"
+
+export interface ToolEvidenceScope {
+  workspace?: string
+  target?: string
+  operation?: string
+  argsFingerprint?: string
+}
+
+export interface ToolEvidenceLookup {
+  evidenceId: string
+  summary: string
+  payloadHash: string
+}
 
 export interface ToolOutcomeObservation {
   source: ToolOutcomeSource
@@ -346,6 +362,12 @@ export interface ToolOutcomeObservation {
   failureKind?: ToolFailureKind
   legacy: boolean
   legacyReason?: "string_result" | "missing_outcome" | "invalid_outcome"
+  /** Runtime evidence metadata. Payloads are summarized/hashed at the ledger boundary. */
+  requestScope?: ToolEvidenceScope
+  payloadSummary?: string
+  payloadHash?: string
+  complete?: boolean
+  timestamp?: string
 }
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void
@@ -735,6 +757,7 @@ export interface ToolExecutionExtraContext {
   delegateTasks?: ToolContext["delegateTasks"]
   toolOutcomeObserver?: ToolContext["toolOutcomeObserver"]
   toolOutcomeSource?: ToolContext["toolOutcomeSource"]
+  evidenceLookup?: ToolContext["evidenceLookup"]
 }
 
 export function agentToolToPIToolDefinition(
@@ -764,8 +787,34 @@ export function agentToolToPIToolDefinition(
       _onUpdate?: (partialResult: unknown) => void,
     ) => {
       const args = params as Record<string, unknown>
+      const requestScope: ToolEvidenceScope = {
+        ...(workspace ? { workspace } : {}),
+        ...((typeof args.target === "string" || typeof args.path === "string" || typeof args.file === "string")
+          ? { target: String(args.target || args.path || args.file).slice(0, 512) } : {}),
+        ...((typeof args.operation === "string" || typeof args.action === "string")
+          ? { operation: String(args.operation || args.action).slice(0, 128) } : {}),
+        argsFingerprint: createHash("sha256").update(JSON.stringify(args)).digest("hex"),
+      }
       emitTrace?.({ type: "tool_execution_start", toolCallId: _toolCallId, toolName: authorizedTool.name, args })
       try {
+        const cached = extraCtx?.evidenceLookup?.(authorizedTool.name, requestScope)
+        if (cached) {
+          const text = cached.summary || "已使用此前验证的结果。"
+          emitTrace?.({
+            type: "tool_execution_end", toolCallId: _toolCallId, toolName: authorizedTool.name,
+            result: text, outcome: { status: "success" },
+            metadata: { evidenceId: cached.evidenceId, deduplicated: true },
+          })
+          extraCtx?.toolOutcomeObserver?.({
+            source: extraCtx.toolOutcomeSource || "live", toolName: authorizedTool.name,
+            toolCallId: _toolCallId, outcome: "success", legacy: false,
+            requestScope, payloadSummary: text, payloadHash: cached.payloadHash, complete: true,
+          })
+          return {
+            content: [{ type: "text" as const, text }],
+            details: { evidenceId: cached.evidenceId, deduplicated: true },
+          }
+        }
         const onUpdate = (chunk: string) => emitTrace?.({
           type: "tool_execution_update",
           toolCallId: _toolCallId,
@@ -802,6 +851,9 @@ export function agentToolToPIToolDefinition(
           ...(normalized.outcome.status === "failed" ? { failureKind: normalized.outcome.failure.kind } : {}),
           legacy: normalized.legacy,
           ...(normalized.legacyReason ? { legacyReason: normalized.legacyReason } : {}),
+          requestScope,
+          payloadSummary: normalized.text.slice(0, 240),
+          complete: normalized.outcome.status === "success" && !normalized.legacy,
         })
         return {
           content: [{ type: "text" as const, text: normalized.text }],
@@ -836,6 +888,9 @@ export function agentToolToPIToolDefinition(
           outcome: "failed",
           failureKind: failure.kind,
           legacy: false,
+          requestScope,
+          payloadSummary: message.slice(0, 240),
+          complete: false,
         })
         throw error
       }

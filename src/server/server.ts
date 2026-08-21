@@ -60,6 +60,7 @@ import { ProviderReferenceChecker } from "../model-provider/provider-reference-c
 import { CustomProviderService } from "../model-provider/custom-provider-service.js";
 import { FileProviderReferenceMutationLock } from "../model-provider/provider-reference-lock.js";
 import { StructuredLogger, ToolOutcomeMetrics, createToolOutcomeObserver } from "./observability.js";
+import { EvidenceLedger } from "./evidence-ledger.js";
 import { createServerContext } from "./server-bootstrap.js";
 import { createHttpApp, openAppEventStream } from "./http-app.js";
 export { openAppEventStream } from "./http-app.js";
@@ -69,7 +70,7 @@ import { toolRegistry } from "../agent/tools/index.js";
 import { setLocalApiToken } from "../agent/tools/local-api.js";
 
 import { attachEngineEvents, recordUserNoteBlock } from "./agent-event-router.js";
-export { attachEngineEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
+export { attachEngineEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTaskLifecycle, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
 export { writePresentationEvent } from "./presentation-events.js";
 
 export function attachMcpEvents(appEvents: Pick<AppEventHub, "publish">): () => void {
@@ -132,11 +133,15 @@ async function main() {
   });
   const toolOutcomeMetrics = new ToolOutcomeMetrics();
   toolOutcomeMetrics.setExpectedTools(toolRegistry.getAll().map((tool) => tool.name));
+  const evidenceLedger = new EvidenceLedger({
+    filePath: join(STARTUP.layout.instanceRoot, "evidence-ledger.jsonl"),
+  });
   const observability = {
     logger,
     appVersion: process.env.npm_package_version || "0.1.0",
     startedAt,
     toolOutcomeMetrics,
+    evidenceLedger,
   };
   mark("server_start");
   console.log("Starting Pi server...");
@@ -283,8 +288,9 @@ async function main() {
       };
     },
     delegateTasks: subagentBridge.runtimeConfig.delegateTasks,
-    toolOutcomeObserver: createToolOutcomeObserver(toolOutcomeMetrics, logger),
+    toolOutcomeObserver: createToolOutcomeObserver(toolOutcomeMetrics, logger, evidenceLedger),
     toolOutcomeSource: "live",
+    evidenceLookup: (toolName, scope) => evidenceLedger.lookup(toolName, scope),
     skillService,
   }));
 

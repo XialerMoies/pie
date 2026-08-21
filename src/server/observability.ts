@@ -3,6 +3,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { IncomingHttpHeaders } from "node:http";
 import type { ToolOutcomeObservation } from "../agent/types.js";
+import type { EvidenceLedger } from "./evidence-ledger.js";
 
 export type LogLevel = "info" | "warn" | "error";
 
@@ -138,6 +139,7 @@ export interface ServerObservability {
   appVersion: string;
   startedAt: number;
   toolOutcomeMetrics?: ToolOutcomeMetrics;
+  evidenceLedger?: EvidenceLedger;
 }
 
 export interface ToolOutcomeToolMetric {
@@ -234,9 +236,11 @@ export class ToolOutcomeMetrics {
 export function createToolOutcomeObserver(
   metrics: ToolOutcomeMetrics,
   logger?: StructuredLogger,
+  evidenceLedger?: EvidenceLedger,
 ): (observation: ToolOutcomeObservation) => void {
   return (observation) => {
     metrics.observe(observation);
+    evidenceLedger?.observe(observation);
     logger?.info("tool.outcome", {
       source: observation.source,
       toolName: observation.toolName,
@@ -268,6 +272,7 @@ export function diagnosticsSnapshot(
     workspaceConfigured: Boolean(workspace),
     instanceId,
     ...(observability.toolOutcomeMetrics ? { toolOutcomeMetrics: observability.toolOutcomeMetrics.snapshot() } : {}),
+    ...(observability.evidenceLedger ? { evidenceLedger: observability.evidenceLedger.snapshot() } : {}),
     logs: observability.logger.entries(),
   };
 }

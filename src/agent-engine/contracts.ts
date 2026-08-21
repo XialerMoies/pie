@@ -6,6 +6,8 @@ export type UsageSource = "exact" | "mixed" | "estimated";
 export type CapabilityState = "supported" | "unsupported" | "unknown";
 export type EngineTerminalEvent = "turn.completed" | "turn.failed" | "turn.cancelled";
 export type EngineContentPhase = "start" | "delta" | "end";
+/** Visibility of a runtime event before it is reduced into presentation events. */
+export type EngineEventVisibility = "user" | "debug" | "internal";
 export type EngineErrorCategory =
   | "provider"
   | "permission"
@@ -94,6 +96,8 @@ export interface EngineEventBase {
   turnId: string;
   seq: number;
   timestamp: number;
+  /** Runtime visibility boundary; normalized events always carry this field. */
+  visibility?: EngineEventVisibility;
   /** Assistant message ordinal and content segment index, when the provider exposes them. */
   messageSeq?: number;
 }
@@ -168,6 +172,16 @@ export const ENGINE_EVENT_TYPES = [
 
 const EVENT_TYPES = new Set<EngineEvent["type"]>(ENGINE_EVENT_TYPES);
 
+export function defaultEngineEventVisibility(type: EngineEvent["type"]): EngineEventVisibility {
+  if (type === "diagnostic") return "debug";
+  if (type === "content.delta" || type === "thinking.delta"
+    || type === "tool.started" || type === "tool.updated"
+    || type === "tool.completed" || type === "tool.failed"
+    || type === "turn.completed" || type === "turn.failed"
+    || type === "turn.cancelled" || type === "queue.updated") return "user";
+  return "internal";
+}
+
 function nonNegativeNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
@@ -214,7 +228,7 @@ export function normalizeModelCapabilities(value: {
   };
 }
 
-export function normalizeEngineEvent(value: EngineEvent): EngineEvent {
+export function normalizeEngineEvent(value: EngineEvent): EngineEvent & { visibility: EngineEventVisibility } {
   if (!value || typeof value !== "object") throw new TypeError("engine event must be an object");
   if (value.version !== ENGINE_EVENT_VERSION) throw new TypeError("engine event version must be 1");
   if (!EVENT_TYPES.has(value.type)) throw new TypeError("engine event type is unsupported");
@@ -222,7 +236,10 @@ export function normalizeEngineEvent(value: EngineEvent): EngineEvent {
   if (typeof value.turnId !== "string") throw new TypeError("engine event turnId must be a string");
   if (!Number.isSafeInteger(value.seq) || value.seq < 1) throw new TypeError("engine event seq must be a positive integer");
   if (!Number.isFinite(value.timestamp) || value.timestamp < 0) throw new TypeError("engine event timestamp must be non-negative");
-  return value;
+  return {
+    ...value,
+    visibility: value.visibility ?? defaultEngineEventVisibility(value.type),
+  };
 }
 
 export function assertTerminalTransition(

@@ -1,9 +1,12 @@
 import type { AgentRuntime } from "../agent/index.js";
 import type { AgentEngine, EngineEvent } from "../agent-engine/index.js";
+import { reduceEngineEvent } from "./event-domain-reducer.js";
+import { AssistantDomainReducer } from "./assistant-domain-reducer.js";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "fs";
 import type { AssistantBlock, ChatStreamState, ChatTextInputState, ServerContext, TraceEvent } from "./routes/types.js";
-import { writeChatEvent } from "./chat-stream.js";
 import { writePresentationEvent } from "./presentation-events.js";
+import { TaskLifecycle } from "./task-lifecycle.js";
+import type { TaskLifecycleSnapshot } from "./task-lifecycle.js";
 
 export type SessionWriteAuthorizer = (sessionFile: string, source: string) => void;
 
@@ -11,8 +14,6 @@ export interface SessionPersistenceOptions {
   persist?: boolean;
   force?: boolean;
   minIntervalMs?: number;
-  /** Publish a trace to the chat SSE stream. Persistence remains independent. */
-  publish?: boolean;
   authorizeSessionWrite?: SessionWriteAuthorizer;
 }
 
@@ -339,6 +340,28 @@ export function emitBlock(
   writePresentationEvent(chatStream, { type: "block", block: emittedBlock });
 }
 
+/** Persist the terminal task contract so refresh/replay can inspect why a turn completed. */
+export function persistTaskLifecycle(
+  runtime: AgentRuntime,
+  task: TaskLifecycleSnapshot,
+  options?: SessionPersistenceOptions,
+): boolean {
+  const sessionFile = runtime.session.sessionFile;
+  if (!sessionFile || !task.turnId) return false;
+  const sessionFlushed = Boolean((runtime.session.sessionManager as any)?.flushed);
+  if (!sessionFlushed || !existsSync(sessionFile)) return false;
+  try {
+    options?.authorizeSessionWrite?.(sessionFile, "sessions.task_lifecycle");
+    appendFileSync(sessionFile, JSON.stringify({
+      type: "task_lifecycle",
+      turnId: task.turnId,
+      task,
+      timestamp: new Date().toISOString(),
+    }) + "\n");
+    return true;
+  } catch { return false; }
+}
+
 export function recordUserNoteBlock(
   runtime: AgentRuntime,
   chatStream: ChatStreamState,
@@ -408,13 +431,11 @@ export function emitTrace(
   if (!turnId) return;
   const normalized = assignTraceSeq(chatStream, { ...trace, turnId } as TraceEvent);
   persistTraceEvent(runtime, normalized, options);
-  if (options?.publish !== false) writeChatEvent(chatStream, { type: "trace", trace: normalized });
 }
 
 /**
- * Engine-owned event bridge used by the desktop server. Replay fixtures use the
- * isolated replay-event adapter; new runtime events never cross this boundary
- * as raw PI objects.
+ * Engine-owned event bridge used by the desktop server. Runtime events are
+ * reduced before this bridge emits the canonical presentation protocol.
  */
 export function attachEngineEvents(
   engine: AgentEngine,
@@ -432,138 +453,22 @@ export function attachEngineEvents(
   const authorizeSessionWrite: SessionWriteAuthorizer | undefined = ctx?.permissionService
     ? (sessionFile, source) => ctx.permissionService!.authorizePathSync(ctx.paths.SESSIONS_DIR, sessionFile, "write", source)
     : undefined;
-  /** per-generation thinking 起点：key = `thinking-${turnId}`, value = 该 generation 在 thinkingBuffer 中的起始偏移 */
-  const thinkingGenStarts = new Map<string, number>();
-  const structuredNodeBuffers = new Map<string, string>();
+  const presentationKinds = new Set([
+    "content", "thinking", "tool_started", "tool_updated", "tool_completed",
+    "tool_failed", "terminal", "queue",
+  ]);
+  const taskLifecycle = new TaskLifecycle();
 
   const currentTurn = (event: EngineEvent): string => event.turnId || chatStream.turnId;
-  const upsertTextBlock = (
-    type: "text" | "thinking",
-    text: string,
-    turnId: string,
-    input?: { contentIndex?: number; messageSeq?: number; phase?: "start" | "delta" | "end" },
-  ): void => {
-    // The PI adapter preserves message/content boundaries when available. A
-    // structured event is handled by the same close-before-open state machine
-    // used by the legacy bridge, so a late delta can never reopen a closed node.
-    if (input?.phase && Number.isSafeInteger(input.messageSeq) && (input.messageSeq as number) > 0) {
-      const contentIndex = Number.isSafeInteger(input.contentIndex) && (input.contentIndex as number) >= 0
-        ? input.contentIndex as number
-        : 0;
-      const key = `m${input.messageSeq}:${type}-${contentIndex}`;
-      if (type === "text") {
-        const closedThinking = closeActiveInput(chatStream, "thinking");
-        if (closedThinking !== null) markBlockDone(chatStream, closedThinking);
-      } else {
-        const closedText = closeActiveInput(chatStream, "text");
-        if (closedText !== null) markBlockDone(chatStream, closedText);
-      }
-      const resolved = resolveIndexedBlockInput(
-        chatStream,
-        type,
-        key,
-        `${type}_${input.phase}`,
-        type,
-        type,
-      );
-      if (resolved === null) return;
-      const previous = structuredNodeBuffers.get(resolved.blockId) || "";
-      const nodeText = input.phase === "start" ? text : previous + text;
-      structuredNodeBuffers.set(resolved.blockId, nodeText);
-      const existing = chatStream.blocks.find((block): block is Extract<AssistantBlock, { type: typeof type }> => block.type === type && block.blockId === resolved.blockId);
-      nodeFlowLog("structured-upsert", type, {
-        turnId,
-        key,
-        blockId: resolved.blockId,
-        phase: input.phase,
-        textLen: text.length,
-        nodeTextLen: nodeText.length,
-      });
-      emitBlock(runtime, chatStream, {
-        type,
-        text: nodeText,
-        ...(type === "thinking" ? { status: input.phase === "end" ? "done" as const : "streaming" as const } : {}),
-        turnId,
-        blockId: resolved.blockId,
-        seq: existing?.seq ?? nextBlockSeq(chatStream),
-      } as AssistantBlock, { persist: false });
-      if (resolved.closed !== undefined) markBlockDone(chatStream, resolved.closed);
-      if (input.phase === "end") markBlockDone(chatStream, resolved.blockId);
-      return;
-    }
-
-    // 硬性不变式：Normalized 引擎事件桥同样必须"切换节点类型前关闭旧类型"。
-    // 写入 text 时若 thinking 节点存在则标 done，写入 thinking 时若 text 节点
-    // 存在则视为已结束（text 无 done 标记，但不再被更新）。
-    // 引擎桥不维护 active 状态，因此直接操作 blocks 实现互斥。
-    if (type === "text") {
-      const openThinking = chatStream.blocks.find(
-        (block): block is Extract<AssistantBlock, { type: "thinking" }> =>
-          block.type === "thinking" && block.status === "streaming",
-      );
-      if (openThinking !== undefined) {
-        markBlockDone(chatStream, openThinking.blockId);
-        nodeFlowLog("engine-cutoff", "text", { thinkingBlock: openThinking.blockId });
-      }
-    } else {
-      const existingText = chatStream.blocks.find((block) => block.type === "text");
-      if (existingText !== undefined) {
-        nodeFlowLog("engine-cutoff", "thinking", { textBlock: existingText.blockId });
-      }
-    }
-    // thinking generation：工具边界（或正文）标 done 后，后续 thinking.delta
-    // 若继续写同一 block 会覆盖已关闭的旧节点。检测到最新 thinking 已 done 时
-    // 开新的 generation 节点；仍在 streaming 的 thinking 保持其当前 blockId。
-    // 节点文本用分段累积：每 generation 记录其在 thinkingBuffer 中的起点，
-    // 节点文本 = thinkingBuffer.slice(起点)，只含本段内容；thinkingBuffer
-    // 仍全局累积，供 done.thinking 汇总。
-    chatStream.thinkingBlockGenerations ??= {};
-    const baseId = `${type}-${turnId}`;
-    let blockId = baseId;
-    if (type === "thinking") {
-      const latestThinking = [...chatStream.blocks]
-        .filter((block): block is Extract<AssistantBlock, { type: "thinking" }> =>
-          block.type === "thinking" && block.blockId.startsWith(baseId))
-        .sort((a, b) => b.seq - a.seq)[0];
-      if (latestThinking !== undefined) {
-        if (latestThinking.status === "done") {
-          // 已关闭的旧节点：开新 generation。起点 = 上一段（done）在
-          // thinkingBuffer 中的终点 = 上一段起点 + 上一段文本长度。此时 text
-          // 已含新 delta，不能直接用 text.length 作为起点，否则会把新段内容
-          // 也计入起点导致新节点文本为空。
-          const prevStart = thinkingGenStarts.get(latestThinking.blockId) ?? 0;
-          const nextStart = prevStart + latestThinking.text.length;
-          const currentGen = chatStream.thinkingBlockGenerations[baseId] || 0;
-          const nextGen = currentGen + 1;
-          chatStream.thinkingBlockGenerations[baseId] = nextGen;
-          blockId = nextGen === 1 ? `${baseId}#2` : `${baseId}#${nextGen + 1}`;
-          thinkingGenStarts.set(blockId, nextStart);
-          nodeFlowLog("engine-newgen", "thinking", { from: latestThinking.blockId, to: blockId, gen: nextGen, start: nextStart });
-        } else {
-          // 仍在 streaming：保持当前 generation 的 blockId，不切回 baseId。
-          blockId = latestThinking.blockId;
-        }
-      } else {
-        chatStream.thinkingBlockGenerations[baseId] = 0;
-        thinkingGenStarts.set(baseId, 0);
-      }
-    }
-    // 分段文本：thinking 节点只显示本 generation 起点之后的内容。
-    const genStart = type === "thinking" ? (thinkingGenStarts.get(blockId) ?? 0) : 0;
-    const nodeText = type === "thinking" && genStart > 0 && text.length >= genStart
-      ? text.slice(genStart)
-      : text;
-    nodeFlowLog("upsert", type, { turnId, textLen: text.length, blockId, nodeTextLen: nodeText.length });
-    const existing = chatStream.blocks.find((block): block is Extract<AssistantBlock, { type: typeof type }> => block.type === type && block.blockId === blockId);
-    emitBlock(runtime, chatStream, {
-      type,
-      text: nodeText,
-      ...(type === "thinking" ? { status: "streaming" as const } : {}),
-      turnId,
-      blockId,
-      seq: existing?.seq ?? nextBlockSeq(chatStream),
-    } as AssistantBlock, { persist: false });
-  };
+  const domainReducer = new AssistantDomainReducer(chatStream, {
+    markBlockDone: (blockId) => markBlockDone(chatStream, blockId),
+    closeActiveInput: (kind) => closeActiveInput(chatStream, kind),
+    resolveIndexedBlockInput: (kind, key, eventType, startSuffix, deltaSuffix) =>
+      resolveIndexedBlockInput(chatStream, kind, key, eventType, startSuffix, deltaSuffix),
+    nextBlockSeq: () => nextBlockSeq(chatStream),
+    emitBlock: (block, persist) => emitBlock(runtime, chatStream, block, { persist }),
+    log: nodeFlowLog,
+  });
 
   const finish = (event: Extract<EngineEvent, { type: "turn.completed" | "turn.failed" | "turn.cancelled" }>): void => {
     const turnId = currentTurn(event);
@@ -575,6 +480,26 @@ export function attachEngineEvents(
         emitBlock(runtime, chatStream, { ...block, status: "done" }, { persist: false });
       }
     }
+    const hasOriginalFinalText = chatStream.blocks.some((block) => block.type === "text") || Boolean(chatStream.textBuffer.trim());
+    const toolCallIds = chatStream.blocks
+      .filter((block): block is Extract<AssistantBlock, { type: "tool" | "tool_use" }> => block.type === "tool" || block.type === "tool_use")
+      .map((block) => block.toolCallId);
+    const evidence = ctx?.observability?.evidenceLedger
+      ?.getSuccessfulFacts(toolCallIds)
+      .map((entry) => ({
+        evidenceId: entry.evidenceId,
+        toolCallId: entry.toolCallId,
+        canonicalTool: entry.canonicalTool,
+        requestScope: entry.requestScope,
+        payloadHash: entry.payloadHash,
+        createdAt: entry.createdAt,
+      }));
+    const evidenceCount = evidence?.length ?? 0;
+    if (event.type === "turn.completed") taskLifecycle.complete(hasOriginalFinalText, evidenceCount);
+    else if (event.type === "turn.failed") taskLifecycle.fail(event.error.category);
+    else taskLifecycle.cancel(event.reason || "cancelled");
+    chatStream.taskLifecycle = taskLifecycle.snapshot();
+    persistTaskLifecycle(runtime, chatStream.taskLifecycle, { authorizeSessionWrite });
     // A thought-only normalized turn must not become the visible final answer.
     // Keep the Thought block for inspection, but require a separate text block
     // so the same terminal invariant applies to both event bridges.
@@ -602,19 +527,25 @@ export function attachEngineEvents(
       .sort((left, right) => left.seq - right.seq)
       .map((block) => block.text)
       .join("\n\n");
+    const task = taskLifecycle.snapshot();
+    const finalText = task.status === "blocked" && task.reason === "evidence_insufficient"
+      ? `未验证：${fullText || "没有获得足够的成功证据。"}`
+      : fullText || chatStream.textBuffer;
     if (event.type === "turn.cancelled") {
       writePresentationEvent(chatStream, { type: "cancelled", turnId, sessionId, reason: event.reason });
     } else {
       writePresentationEvent(chatStream, {
         type: "done",
-        text: fullText || chatStream.textBuffer,
+        text: finalText,
         thinking: chatStream.thinkingBuffer || undefined,
         turnId,
         sessionId,
-        status: event.type === "turn.completed" ? "done" : "error",
+        status: event.type === "turn.completed" && task.status === "completed" ? "done" : "error",
         ...(event.type === "turn.completed" && event.usage ? { usage: event.usage } : {}),
         ...(event.type === "turn.failed" ? { error: event.error.message } : {}),
         blocks: chatStream.blocks,
+        ...(evidence && evidence.length > 0 ? { evidence } : {}),
+        task,
       });
     }
     try { chatStream.response?.end(); } catch {}
@@ -630,13 +561,18 @@ export function attachEngineEvents(
     chatStream.blockSeq = 0;
     chatStream.textSegments = [];
     chatStream.thinkingBlockGenerations = {};
-    thinkingGenStarts.clear();
-    structuredNodeBuffers.clear();
+    domainReducer.reset();
     chatStream.currentWorkspace = "";
     publishLifecycleChanged();
   };
 
   return engine.subscribe((event) => {
+    const domainEvent = reduceEngineEvent(event);
+    // Debug and explicitly non-user runtime events are never a presentation
+    // source. Lifecycle/usage bookkeeping remains internal to the bridge, but
+    // content/tool/terminal transitions require user visibility.
+    if (domainEvent.kind === "debug"
+      || (presentationKinds.has(domainEvent.kind) && !domainEvent.presentationEligible)) return;
     const turnId = currentTurn(event);
     if (event.type === "turn.started") {
       completedTurns.delete(turnId);
@@ -647,8 +583,9 @@ export function attachEngineEvents(
     }
     if (event.type === "turn.started") {
       chatStream.turnId = event.turnId || chatStream.turnId;
-      structuredNodeBuffers.clear();
-      thinkingGenStarts.clear();
+      taskLifecycle.start(chatStream.turnId, chatStream.taskRequirements);
+      chatStream.taskLifecycle = taskLifecycle.snapshot();
+      domainReducer.reset();
       chatStream.activeTextInput = undefined;
       chatStream.activeThinkingInput = undefined;
       publishLifecycleChanged();
@@ -672,9 +609,11 @@ export function attachEngineEvents(
       return;
     }
     if (event.type === "content.delta" && turnId) {
+      taskLifecycle.contentDelta(event.text);
+      chatStream.taskLifecycle = taskLifecycle.snapshot();
       chatStream.textBuffer += event.text;
       const structured = event.phase !== undefined || event.messageSeq !== undefined || event.contentIndex !== undefined;
-      upsertTextBlock("text", structured ? event.text : chatStream.textBuffer, turnId, structured ? {
+      domainReducer.upsertTextBlock("text", structured ? event.text : chatStream.textBuffer, turnId, structured ? {
         contentIndex: event.contentIndex,
         messageSeq: event.messageSeq,
         phase: event.phase || "delta",
@@ -684,7 +623,7 @@ export function attachEngineEvents(
     if (event.type === "thinking.delta" && turnId) {
       chatStream.thinkingBuffer += event.text;
       const structured = event.phase !== undefined || event.messageSeq !== undefined || event.contentIndex !== undefined;
-      upsertTextBlock("thinking", structured ? event.text : chatStream.thinkingBuffer, turnId, structured ? {
+      domainReducer.upsertTextBlock("thinking", structured ? event.text : chatStream.thinkingBuffer, turnId, structured ? {
         contentIndex: event.contentIndex,
         messageSeq: event.messageSeq,
         phase: event.phase || "delta",
@@ -692,17 +631,13 @@ export function attachEngineEvents(
       return;
     }
     if (event.type === "tool.started" && turnId) {
-      // 工具执行 = text/thinking 段落边界：引擎桥不维护 active，直接标 blocks 里
-      // 仍在 streaming 的 thinking 为 done，避免工具后仍显示"思考进行中"。
-      for (const openBlock of chatStream.blocks) {
-        if (openBlock.type === "thinking" && openBlock.status === "streaming") {
-          markBlockDone(chatStream, openBlock.blockId);
-          nodeFlowLog("tool-boundary", "thinking", { blockId: openBlock.blockId });
-        }
-      }
+      taskLifecycle.toolStarted(event.toolCallId, event.name, event.input);
+      chatStream.taskLifecycle = taskLifecycle.snapshot();
+      // Tool execution closes an in-flight Thought node before opening its tool block.
+      domainReducer.closeThinkingAtToolBoundary();
       const id = `${event.toolCallId}@${turnId}`;
       const trace: TraceEvent = { type: "tool", status: "running", name: event.name, input: event.input, turnId, id };
-      emitTrace(runtime, chatStream, trace, { force: true, publish: false, authorizeSessionWrite });
+      emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
       emitBlock(runtime, chatStream, {
         type: "tool", toolCallId: event.toolCallId, name: event.name, input: event.input,
         status: "running", turnId, blockId: `tool-${event.toolCallId}`, seq: nextBlockSeq(chatStream),
@@ -714,7 +649,7 @@ export function attachEngineEvents(
       if (block) emitBlock(runtime, chatStream, { ...block, output: event.output }, { persist: false });
       // Partial tool output is an SSE concern. Only the terminal tool frame
       // is persisted, avoiding repeated synchronous writes of growing output.
-      emitTrace(runtime, chatStream, { type: "tool", status: "running", name: event.name, output: event.output, turnId, id: `${event.toolCallId}@${turnId}` }, { persist: false, publish: false });
+      emitTrace(runtime, chatStream, { type: "tool", status: "running", name: event.name, output: event.output, turnId, id: `${event.toolCallId}@${turnId}` }, { persist: false });
       return;
     }
     if (event.type === "tool.completed" || event.type === "tool.failed") {
@@ -727,6 +662,13 @@ export function attachEngineEvents(
         : typeof (permissionFailure as { message?: unknown } | undefined)?.message === "string"
           ? (permissionFailure as { message: string }).message
           : undefined;
+      if (event.type === "tool.completed") {
+        const evidenceAvailable = Boolean(ctx?.observability?.evidenceLedger?.getSuccessfulFacts([event.toolCallId]).length);
+        taskLifecycle.toolCompleted(event.toolCallId, evidenceAvailable);
+      } else {
+        taskLifecycle.toolFailed(event.toolCallId, event.name, event.error);
+      }
+      chatStream.taskLifecycle = taskLifecycle.snapshot();
       emitBlock(runtime, chatStream, {
         type: "tool", toolCallId: event.toolCallId, name: event.name, input: block?.input,
         output: event.type === "tool.completed" ? event.output : undefined,
@@ -739,7 +681,7 @@ export function attachEngineEvents(
         type: "tool", status: failed ? "error" : "success", name: event.name,
         output: event.type === "tool.completed" ? event.output : undefined,
         error: failed ? failureMessage : undefined, metadata: event.metadata, turnId, id: `${event.toolCallId}@${turnId}`,
-      }, { force: true, publish: false, authorizeSessionWrite });
+      }, { force: true, authorizeSessionWrite });
       return;
     }
     if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.cancelled") {

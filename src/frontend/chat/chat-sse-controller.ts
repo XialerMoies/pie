@@ -6,7 +6,6 @@ interface ChatSseEvent {
   reason?: string;
   permissionSuggestions?: any[];
   text?: string;
-  thinking?: boolean;
   turnId?: string;
   sessionId?: string;
   message?: string;
@@ -98,26 +97,6 @@ class ChatSseControllerView {
         this.handleBlock(last, data.block);
         return;
       }
-      if (data.type === 'delta') {
-        this.handleDelta(last, data);
-        return;
-      }
-      if (data.type === 'thinking') {
-        // Engine block frames own the visible Thought node. The legacy
-        // thinking compatibility frame follows every block delta and must not
-        // mutate message-level state, otherwise a later updateUI() replaces
-        // the whole assistant bubble and turns streaming into flashing.
-        if (last?.blocks?.length) {
-          sb('ms');
-          return;
-        }
-        if (last) {
-          last.thinking = (last.thinking || '') + (data.text || '');
-          last._rv = (last._rv || 0) + 1;
-        }
-        sb('ms');
-        return;
-      }
       if (data.type === 'done') {
         if (data.status === 'error') {
           this.handleFailedTerminal(last, data);
@@ -184,23 +163,6 @@ class ChatSseControllerView {
       this.callbacks.refreshComposer();
       this.callbacks.failSend();
     }
-  }
-
-  private handleDelta(last: any, data: ChatSseEvent): void {
-    if (data.thinking) {
-      sb('ms');
-      return;
-    }
-    if (last?.streaming) {
-      if (!last.blocks?.length) {
-        this.dependencies.chat.appendDelta?.(data.text || '');
-        this.callbacks.markLastMessageRendered();
-      }
-    } else {
-      this.dependencies.chatState.appendMessage({ role: 'assistant', content: data.text || '', thinking: '', streaming: true });
-      this.callbacks.updateUI();
-    }
-    sb('ms');
   }
 
   private handleDone(last: any, data: ChatSseEvent): void {

@@ -17,6 +17,7 @@ import type { ProviderReferenceMutationLock } from "../../model-provider/provide
 import type { ServerObservability } from "../observability.js";
 import type { ServerContextGroups } from "../server-context.js";
 import type { SkillService } from "../../agent/skills/skill-service.js";
+import type { TaskLifecycleSnapshot, TaskRequirements } from "../task-lifecycle.js";
 
 // ─── Trace Event 类型 ────────────────────────────────────
 
@@ -88,6 +89,9 @@ export interface ChatStreamState {
   /** SSE event sequence and bounded replay window for reconnecting clients. */
   eventSeq: number;
   eventHistory: ChatStreamEventFrame[];
+  /** Runtime task contract; final answers are derived from this state machine. */
+  taskRequirements?: TaskRequirements;
+  taskLifecycle?: TaskLifecycleSnapshot;
 }
 
 export interface ServerContext {

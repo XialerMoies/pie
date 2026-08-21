@@ -27,9 +27,35 @@ describe("AgentEngine public contract", () => {
       turnId: "turn-1",
       seq: 1,
       timestamp: 1_700_000_000_000,
+      visibility: "internal",
     });
     assert.throws(() => normalizeEngineEvent({ ...event, seq: 0 }), /seq/);
     assert.throws(() => normalizeEngineEvent({ ...event, version: 2 }), /version/);
+  });
+
+  it("assigns an explicit visibility boundary to normalized runtime events", () => {
+    const content = normalizeEngineEvent({
+      version: 1,
+      type: "content.delta",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      seq: 1,
+      timestamp: 1,
+      text: "正文",
+    });
+    assert.equal(content.visibility, "user");
+    const diagnostic = normalizeEngineEvent({
+      version: 1,
+      type: "diagnostic",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      seq: 2,
+      timestamp: 2,
+      level: "debug",
+      code: "probe",
+      message: "internal",
+    });
+    assert.equal(diagnostic.visibility, "debug");
   });
 
   it("allows one terminal state per turn and rejects terminal replacement", () => {

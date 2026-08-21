@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 const ROOT = resolve(import.meta.dirname, "..");
 const SERVER = resolve(ROOT, "src", "server", "server.ts");
 const ROUTER = resolve(ROOT, "src", "server", "agent-event-router.ts");
+const SSE_CONTROLLER = resolve(ROOT, "src", "frontend", "chat", "chat-sse-controller.ts");
 
 describe("server agent event router structure", () => {
   it("keeps runtime session event handling outside the server bootstrap file", () => {
@@ -31,6 +32,14 @@ describe("server agent event router structure", () => {
     const engineBridge = routerSource.slice(routerSource.indexOf("export function attachEngineEvents("));
     assert.match(engineBridge, /writePresentationEvent\(chatStream/);
     assert.doesNotMatch(engineBridge, /writeChatEvent\(chatStream/);
-    assert.match(routerSource, /if \(options\?\.publish !== false\) writeChatEvent/);
+    assert.match(routerSource, /reduceEngineEvent\(event\)/);
+    assert.doesNotMatch(routerSource, /publish\?: boolean/);
+  });
+
+  it("keeps legacy raw delta/thinking frames out of the production frontend", () => {
+    const controllerSource = readFileSync(SSE_CONTROLLER, "utf8");
+    assert.doesNotMatch(controllerSource, /data\.type\s*===\s*['"]delta['"]/);
+    assert.doesNotMatch(controllerSource, /data\.type\s*===\s*['"]thinking['"]/);
+    assert.doesNotMatch(controllerSource, /handleDelta\s*\(/);
   });
 });
