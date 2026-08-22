@@ -24,6 +24,7 @@
     "test:unit": "node scripts/test-suite.mjs unit",
     "test:routes": "node scripts/test-routes.mjs",
     "test:frontend": "node scripts/test-suite.mjs frontend",
+    "test:security-shadow": "node scripts/tsx-test.mjs --test --test-concurrency=1 test/command-security-shadow-parity-flow.test.mjs",
     "test:smoke": "node test/smoke.mjs",
     "test:build": "node scripts/test-build.mjs",
     "test:dist-event-flow": "npm run test:build",

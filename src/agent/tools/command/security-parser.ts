@@ -116,7 +116,7 @@ function parseShellWrapperIfPresent(result: SecurityParseResult, depth: number):
   if (inner === undefined) return result
   if (!inner.trim()) return { kind: "too-complex", reason: "Shell wrapper is missing -c command content" }
 
-  const innerResult = parseCommandForSecurity(inner, { shellDialect: "posix-bash" }, depth + 1)
+  const innerResult = parseCommandForSecurityLegacyFallback(inner, { shellDialect: "posix-bash" }, depth + 1)
   if (innerResult.kind === "simple") return innerResult
   if (innerResult.kind === "too-complex") {
     return { kind: "too-complex", reason: `Shell wrapper inner command is too complex: ${innerResult.reason}` }
@@ -156,6 +156,22 @@ function parseWithLegacyFacade(command: string, dialect: ShellDialect, depth: nu
   return parseShellWrapperIfPresent(parseWithLegacyAdapter(command, dialect), depth)
 }
 
+/**
+ * Synchronous parser consumers are explicit fallback paths. The async command
+ * execution path below is the canonical parser and must not silently fall back
+ * to this implementation when the POSIX Tree-sitter parser is unavailable.
+ */
+export function parseCommandForSecurityLegacyFallback(
+  command: string,
+  options: SecurityParseOptions = {},
+  depth = 0,
+): SecurityParseResult {
+  const dialect = options.shellDialect ?? defaultShellDialect()
+  const precheck = precheckCommand(command, dialect)
+  if (precheck) return precheck
+  return parseWithLegacyFacade(command, dialect, depth)
+}
+
 export function envFlagEnabled(name: string): boolean {
   const value = process.env[name]?.toLowerCase()
   return value === "1" || value === "true" || value === "yes" || value === "on"
@@ -188,17 +204,12 @@ function normalizedResultForShadow(result: SecurityParseResult): object {
   }
 
   if (result.kind === "too-complex") {
-    return {
-      kind: result.kind,
-      reason: result.reason,
-      nodeType: result.nodeType,
-    }
+    // Reason text and parser node types are diagnostics, not security
+    // semantics. Both parsers reaching too-complex is parity.
+    return { kind: result.kind }
   }
 
-  return {
-    kind: result.kind,
-    reason: result.reason,
-  }
+  return { kind: result.kind }
 }
 
 export function securityParseResultsDifferForShadow(left: SecurityParseResult, right: SecurityParseResult): boolean {
@@ -207,10 +218,6 @@ export function securityParseResultsDifferForShadow(left: SecurityParseResult, r
 
 function treeSitterShadowEnabled(): boolean {
   return envFlagEnabled("MY_CODE_AGENT_TREE_SITTER_SHADOW") || envFlagEnabled("MY_CODE_AGENT_TREE_SITTER_SHADOW_ONLY")
-}
-
-function treeSitterShadowOnlyEnabled(): boolean {
-  return envFlagEnabled("MY_CODE_AGENT_TREE_SITTER_SHADOW_ONLY")
 }
 
 function logTreeSitterShadowDiff(command: string, dialect: ShellDialect, treeSitter: SecurityParseResult, legacy: SecurityParseResult): void {
@@ -223,17 +230,6 @@ function logTreeSitterShadowDiff(command: string, dialect: ShellDialect, treeSit
     treeSitter: normalizedResultForShadow(treeSitter),
     legacy: normalizedResultForShadow(legacy),
   })
-}
-
-export function parseCommandForSecurity(
-  command: string,
-  options: SecurityParseOptions = {},
-  depth = 0,
-): SecurityParseResult {
-  const dialect = options.shellDialect ?? defaultShellDialect()
-  const precheck = precheckCommand(command, dialect)
-  if (precheck) return precheck
-  return parseWithLegacyFacade(command, dialect, depth)
 }
 
 export async function parseCommandForSecurityAsync(
@@ -251,12 +247,20 @@ export async function parseCommandForSecurityAsync(
       if (treeSitterShadowEnabled()) {
         const legacy = parseWithLegacyFacade(command, dialect, depth)
         logTreeSitterShadowDiff(command, dialect, parsed, legacy)
-        if (treeSitterShadowOnlyEnabled()) return legacy
       }
       return parsed
     }
+
+    // A missing/unloadable POSIX parser is a security failure, not permission
+    // to silently downgrade the production command path to the legacy parser.
+    return {
+      kind: "too-complex",
+      reason: `Tree-sitter security parser unavailable; command requires confirmation: ${parsed.reason ?? "unknown parser error"}`,
+    }
   }
 
+  // cmd is intentionally supported by the legacy parser until a native
+  // Windows grammar is introduced. Keep this fallback explicit and bounded.
   const result = parseWithLegacyAdapter(command, dialect)
   return parseShellWrapperIfPresentAsync(result, depth)
 }

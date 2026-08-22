@@ -17,7 +17,7 @@ import { StringDecoder } from "string_decoder"
 import { TextDecoder } from "util"
 import { validateCommandPaths } from "./command/path-validation.js"
 import { isCommandReadOnly } from "./command/read-only.js"
-import { defaultShellDialect, envFlagEnabled, parseCommandForSecurity, parseCommandForSecurityAsync, parseCommandForSecurityWithTreeSitterAsync } from "./command/security-parser.js"
+import { defaultShellDialect, envFlagEnabled, parseCommandForSecurityLegacyFallback, parseCommandForSecurityAsync, parseCommandForSecurityWithTreeSitterAsync } from "./command/security-parser.js"
 import type { SecurityParseResult, ShellDialect } from "./command/security-ast.js"
 import { parseShellCommand, shellDialectFromEnv, tokensWithoutRedirects } from "./command/shell-parser.js"
 import { isPureFileOperation, isRegularGitOperation } from "./command/pure-file-op.js"
@@ -193,7 +193,7 @@ export async function commandSecurityVerdictShadowDiff(
     workspaceRoot: options.workspaceRoot ?? options.cwd,
     shellDialect,
   }
-  const legacyParsed = parseCommandForSecurity(command, { shellDialect })
+  const legacyParsed = parseCommandForSecurityLegacyFallback(command, { shellDialect })
   const treeSitterParsed = await parseCommandForSecurityWithTreeSitterAsync(command, { shellDialect })
   if (treeSitterParsed.kind === "parse-unavailable") return null
 

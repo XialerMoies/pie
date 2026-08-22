@@ -101,8 +101,29 @@ export class WindowManager {
     promise: Promise<WorkspaceOpenAction>;
   }>();
   private readonly retryWorkspaces = new Map<WindowContext, string>();
+  private initialServerBinding: ServerBinding | null = null;
 
   constructor(private readonly adapters: WindowManagerAdapters) {}
+
+  /**
+   * Transfers the process-level startup binding to this manager. From this
+   * point on the manager is the only lifecycle owner; the Electron bootstrap
+   * may request start/dispose but must not stop the binding directly.
+   */
+  adoptInitialServerBinding(binding: ServerBinding): void {
+    if (this.initialServerBinding && this.initialServerBinding !== binding) {
+      throw new Error("Initial server binding has already been adopted");
+    }
+    this.initialServerBinding = binding;
+  }
+
+  startInitialServer(): Promise<number> {
+    const binding = this.initialServerBinding;
+    if (!binding || binding.kind === "none") {
+      return Promise.reject(new Error("No initial Pi server binding is configured"));
+    }
+    return binding.start();
+  }
 
   createEmptyWindow(): WindowContext {
     const instanceId = this.adapters.createInstanceId();
@@ -232,7 +253,13 @@ export class WindowManager {
   }
 
   disposeAll(): Promise<void> {
-    return Promise.all([...this.contexts].map((context) => this.dispose(context))).then(() => undefined);
+    const contexts = [...this.contexts];
+    return Promise.all(contexts.map((context) => this.dispose(context))).then(async () => {
+      const initial = this.initialServerBinding;
+      if (initial && !contexts.some((context) => context.server === initial)) {
+        await initial.stop();
+      }
+    });
   }
 
   private registerContext(context: WindowContext): WindowContext {

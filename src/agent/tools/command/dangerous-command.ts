@@ -1,4 +1,4 @@
-import { parseCommandForSecurity } from "./security-parser.js"
+import { parseCommandForSecurityLegacyFallback } from "./security-parser.js"
 import { checkAstDangerousPatterns } from "./dangerous-command/ast-rules.js"
 import {
   checkLegacyDangerousPatterns,
@@ -20,7 +20,7 @@ export function isDangerousCommand(cmd: string, options: DangerousCommandOptions
   const textResult = checkTextPreparseDangerousPatterns(trimmed)
   if (textResult) return textResult
 
-  const astParsed = options.parsed ?? parseCommandForSecurity(trimmed, { shellDialect: options.shellDialect })
+  const astParsed = options.parsed ?? parseCommandForSecurityLegacyFallback(trimmed, { shellDialect: options.shellDialect })
   const astResult = checkAstDangerousPatterns(astParsed, trimmed)
   if (astResult) return astResult
 

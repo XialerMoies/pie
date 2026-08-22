@@ -1,5 +1,5 @@
 import { isCommandSafeViaFlagParsing } from "./read-only-command-validation.js"
-import { parseCommandForSecurity } from "./security-parser.js"
+import { parseCommandForSecurityLegacyFallback } from "./security-parser.js"
 import type { SecurityParseOptions, SecurityParseResult, SecurityRedirect, SimpleCommand } from "./security-ast.js"
 
 const READONLY_SIMPLE = new Set([
@@ -43,7 +43,7 @@ export function isCommandReadOnly(
   const trimmed = command.trim()
   if (!trimmed) return false
 
-  const parsed = options.parsed ?? parseCommandForSecurity(trimmed, options)
+  const parsed = options.parsed ?? parseCommandForSecurityLegacyFallback(trimmed, options)
   if (parsed.kind !== "simple") return false
   return parsed.commands.every((command) => isSimpleCommandReadOnly(command))
 }

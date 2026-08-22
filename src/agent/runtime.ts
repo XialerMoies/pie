@@ -10,7 +10,7 @@ import type { AgentSession } from "@xiamol/pi-coding-agent"
 import { createAgentSession, ModelRuntime, ModelRegistry, SessionManager, DefaultResourceLoader } from "@xiamol/pi-coding-agent"
 import { resolveSystemPrompt } from "./prompts.js"
 import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools/index.js"
-import type { SessionPermissionState, ToolContext, ToolExecutionExtraContext } from "./types.js"
+import type { SessionPermissionState, ToolExecutionExtraContext, ToolHostContext } from "./types.js"
 import { applySessionPermissionSuggestions, normalizePermissionPath, resetSessionPermissionState } from "./permissions.js"
 import { wsDir } from "../server/routes/session-dir.js"
 import { calculateContextUsageSnapshot, type ContextUsageSnapshot } from "./context-usage.js"
@@ -22,7 +22,7 @@ import { setCurrentRuntime as _setGlobalRuntime, getCurrentRuntime as _getGlobal
 export const getCurrentRuntime = _getGlobalRuntime;
 export const setCurrentRuntime = _setGlobalRuntime;
 
-export interface RuntimeConfig {
+export interface RuntimeConfig extends ToolHostContext {
   agentDir: string
   cwd: string
   sessionsDir: string
@@ -31,28 +31,7 @@ export interface RuntimeConfig {
   modelsFile: string
   userMemoryRoot?: string
   workspaceMemoryRoot?: string
-  /** 权限模式：由宿主设置，传递给工具执行上下文 */
-  permissionMode?: ToolContext["permissionMode"]
-  getPermissionMode?: ToolContext["getPermissionMode"]
-  /** 实际 shell 方言：由宿主设置，传递给命令安全解析 */
-  shellDialect?: ToolContext["shellDialect"]
-  /** 用户确认回调：返回 true=允许，false/undefined=拒绝 */
-  confirmCommand?: ToolContext["confirmCommand"]
   sessionPermissionState?: SessionPermissionState
-  authorizePath?: ToolContext["authorizePath"]
-  authorizeTool?: ToolContext["authorizeTool"]
-  applyPermissionSuggestions?: ToolContext["applyPermissionSuggestions"]
-  desktopApiToken?: string
-  validateSubagentModel?: ToolContext["validateSubagentModel"]
-  getSubagentDefinitions?: ToolContext["getSubagentDefinitions"]
-  getSubagentLimits?: ToolContext["getSubagentLimits"]
-  delegateTasks?: ToolContext["delegateTasks"]
-  toolOutcomeObserver?: ToolContext["toolOutcomeObserver"]
-  toolOutcomeSource?: ToolContext["toolOutcomeSource"]
-  evidenceLookup?: ToolContext["evidenceLookup"]
-  getExecutionContract?: ToolContext["getExecutionContract"]
-  authorizeExecutionContract?: ToolContext["authorizeExecutionContract"]
-  getCorrelationContext?: ToolContext["getCorrelationContext"]
   syncModelProviders?: (runtime: ModelRuntime) => Promise<number>
   skillService?: SkillService
 }
@@ -65,9 +44,7 @@ export type SystemPromptRefreshResult =
   | { ok: true; revision?: string; workspaceKey?: string }
   | { ok: false; code: string; message: string; attemptedAt: string; previousRevision?: string }
 
-type RuntimeToolExtraContext = ToolExecutionExtraContext
-
-export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraContext | undefined {
+export function buildToolContextExtra(config: RuntimeConfig): ToolExecutionExtraContext | undefined {
   const permissionState = config.sessionPermissionState
   if (!config.userMemoryRoot && !config.workspaceMemoryRoot && !config.permissionMode && !config.getPermissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken && !config.validateSubagentModel && !config.getSubagentDefinitions && !config.getSubagentLimits && !config.delegateTasks && !config.toolOutcomeObserver && !config.evidenceLookup && !config.getCorrelationContext && !config.getExecutionContract && !config.authorizeExecutionContract) return undefined
   return {

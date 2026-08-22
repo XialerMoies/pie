@@ -274,14 +274,11 @@ initialServerBinding = createInitialServerBinding();
 
 // OwnedServerBinding keeps the direct dev path: spawn(process.execPath, ["--import", "tsx", script], ...).
 function startPiServer(): Promise<number> {
-  if (initialServerBinding.kind === "none") {
-    return Promise.reject(new Error("No initial Pi server binding is configured"));
-  }
-  return initialServerBinding.start();
+  return windowManager.startInitialServer();
 }
 
 function stopPiServer(): Promise<void> {
-  return initialContext ? windowManager.disposeAll() : initialServerBinding.stop();
+  return windowManager.disposeAll();
 }
 
 function reloadWindow(_port: number): Promise<void> {
@@ -317,6 +314,7 @@ const windowManager = new WindowManager({
     console.error(`Window ${context.id} server lifecycle failed:`, error);
   },
 });
+windowManager.adoptInitialServerBinding(initialServerBinding);
 
 const packagedE2EProbe = createElectronPackagedE2EProbe({
   enabled: E2E_MODE,

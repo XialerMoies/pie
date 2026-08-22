@@ -47,8 +47,8 @@ import { validateCommandPaths } from "../src/agent/tools/command/path-validation
 import { isCommandReadOnly } from "../src/agent/tools/command/read-only.ts"
 import {
   defaultShellDialect,
-  parseCommandForSecurity,
   parseCommandForSecurityAsync,
+  parseCommandForSecurityLegacyFallback,
   parseCommandForSecurityWithTreeSitterAsync,
   securityParseResultsDifferForShadow,
 } from "../src/agent/tools/command/security-parser.ts"
@@ -271,7 +271,7 @@ describe("security parser facade", () => {
   })
 
   it("应输出 SimpleCommand/env/redirect 合约", () => {
-    const parsed = parseCommandForSecurity('FOO=bar grep "a|b" file.txt | wc -l', { shellDialect: "posix-bash" })
+    const parsed = parseCommandForSecurityLegacyFallback('FOO=bar grep "a|b" file.txt | wc -l', { shellDialect: "posix-bash" })
     equal(parsed.kind, "simple")
     if (parsed.kind !== "simple") return
     equal(parsed.commands.length, 2)
@@ -282,7 +282,7 @@ describe("security parser facade", () => {
   })
 
   it("应解析 bash -lc 的静态内层命令", () => {
-    const parsed = parseCommandForSecurity('bash -lc "echo hi > out.txt"', { shellDialect: "cmd" })
+    const parsed = parseCommandForSecurityLegacyFallback('bash -lc "echo hi > out.txt"', { shellDialect: "cmd" })
     equal(parsed.kind, "simple")
     if (parsed.kind !== "simple") return
     equal(parsed.commands.length, 1)
@@ -337,7 +337,7 @@ describe("security parser facade", () => {
 
   it("shadow diff helper 应比较 Tree-sitter 与 legacy 解析结果", async () => {
     const treeSitter = await parseCommandForSecurityAsync("echo hi > out.txt", { shellDialect: "posix-bash" })
-    const legacy = parseCommandForSecurity("echo hi > out.txt", { shellDialect: "posix-bash" })
+    const legacy = parseCommandForSecurityLegacyFallback("echo hi > out.txt", { shellDialect: "posix-bash" })
     equal(securityParseResultsDifferForShadow(treeSitter, legacy), false)
 
     const tooComplex = await parseCommandForSecurityAsync("echo $(touch marker)", { shellDialect: "posix-bash" })

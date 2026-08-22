@@ -2,7 +2,7 @@ import os from "os"
 import path from "path"
 import { existsSync, statSync } from "fs"
 import { parseShellCommand, tokensWithoutRedirects, type ShellSegment } from "./shell-parser.js"
-import { parseCommandForSecurity } from "./security-parser.js"
+import { parseCommandForSecurityLegacyFallback } from "./security-parser.js"
 import type { SecurityParseResult, SecurityRedirect, ShellDialect, SimpleCommand } from "./security-ast.js"
 import { extractCommandPathArgs, type CommandPathArg, type PathExtractorContext, type PathOperation } from "./path-extractors.js"
 import {
@@ -586,7 +586,7 @@ export function validateCommandPaths(command: string, options: PathValidationOpt
     })
   }
 
-  const securityParsed = options.parsed ?? parseCommandForSecurity(command, { shellDialect: options.shellDialect })
+  const securityParsed = options.parsed ?? parseCommandForSecurityLegacyFallback(command, { shellDialect: options.shellDialect })
   const parsedResult = validateParsedCommands(securityParsed, cwd, scope)
   if (parsedResult) return parsedResult
 

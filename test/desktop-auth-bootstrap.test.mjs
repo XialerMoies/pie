@@ -251,6 +251,10 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
     const electronMain = readFileSync(new URL("../src/electron/electron-main.ts", import.meta.url), "utf8");
 
     assert.ok(electronMain.includes("function stopPiServer(): Promise<void>"), "server shutdown must be awaitable");
+    assert.match(electronMain, /function startPiServer\(\): Promise<number>\s*\{\s*return windowManager\.startInitialServer\(\);/);
+    assert.match(electronMain, /function stopPiServer\(\): Promise<void>\s*\{\s*return windowManager\.disposeAll\(\);/);
+    assert.doesNotMatch(electronMain, /function stopPiServer\(\)[\s\S]*initialServerBinding\.stop\(\)/, "Electron main must not stop bindings directly");
+    assert.match(electronMain, /windowManager\.adoptInitialServerBinding\(initialServerBinding\)/);
     assert.ok(electronMain.includes("event.preventDefault()"), "before-quit must pause Electron shutdown");
     assert.match(electronMain, /resumeQuitAfterDisposal\(\{[\s\S]*dispose:\s*stopPiServer,[\s\S]*resumeQuit:\s*\(\)\s*=>\s*\{[\s\S]*allowAppQuit\s*=\s*true;[\s\S]*app\.quit\(\);[\s\S]*reportFailure:/);
     assert.doesNotMatch(electronMain, /stopPiServer\(\)\.finally/);

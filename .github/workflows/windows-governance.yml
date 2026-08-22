@@ -29,6 +29,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run capabilities:check
+      - name: Run command security parser shadow parity
+        run: npm run test:security-shadow
       # problems-bottom-bar 测试加载编译产物 src/frontend/gen/*.js（gitignore），
       # 需先 compile 生成 gen/，否则 npm test 阶段 ENOENT。
       - run: npm run compile:frontend-ts

@@ -345,6 +345,17 @@ export interface ToolContext {
   authorizeExecutionContract?: (toolName: string, input: unknown, scope: ToolEvidenceScope) => ExecutionContractDecision
 }
 
+/** Host-owned capabilities shared by runtime configuration and tool adapters. */
+export type ToolHostContext = Omit<ToolContext,
+  | "cwd"
+  | "sessionId"
+  | "workspace"
+  | "toolCallId"
+  | "signal"
+  | "onUpdate"
+  | "authorizationDecision"
+>
+
 export type ExecutionContractKind = "fact_verification" | "implementation" | "diagnosis" | "exploration" | "conversation"
 
 export interface ExecutionContract {
@@ -791,32 +802,8 @@ export function defineAgentTool(tool: AgentTool): AgentTool {
   return authorizedTool
 }
 
-export interface ToolExecutionExtraContext {
-  userMemoryRoot?: ToolContext["userMemoryRoot"]
-  workspaceMemoryRoot?: ToolContext["workspaceMemoryRoot"]
-  permissionMode?: ToolContext["permissionMode"]
-  getPermissionMode?: ToolContext["getPermissionMode"]
-  confirmCommand?: ToolContext["confirmCommand"]
-  shellDialect?: ToolContext["shellDialect"]
-  additionalWorkingDirectories?: ToolContext["additionalWorkingDirectories"]
-  alwaysAllowRules?: ToolContext["alwaysAllowRules"]
-  alwaysDenyRules?: ToolContext["alwaysDenyRules"]
-  alwaysAskRules?: ToolContext["alwaysAskRules"]
-  applyPermissionSuggestions?: ToolContext["applyPermissionSuggestions"]
-  authorizePath?: ToolContext["authorizePath"]
-  authorizeTool?: ToolContext["authorizeTool"]
-  desktopApiToken?: ToolContext["desktopApiToken"]
-  validateSubagentModel?: ToolContext["validateSubagentModel"]
-  getSubagentDefinitions?: ToolContext["getSubagentDefinitions"]
-  getSubagentLimits?: ToolContext["getSubagentLimits"]
-  delegateTasks?: ToolContext["delegateTasks"]
-  toolOutcomeObserver?: ToolContext["toolOutcomeObserver"]
-  toolOutcomeSource?: ToolContext["toolOutcomeSource"]
-  evidenceLookup?: ToolContext["evidenceLookup"]
-  getCorrelationContext?: ToolContext["getCorrelationContext"]
-  getExecutionContract?: ToolContext["getExecutionContract"]
-  authorizeExecutionContract?: ToolContext["authorizeExecutionContract"]
-}
+/** Optional host capabilities forwarded unchanged through every tool adapter. */
+export type ToolExecutionExtraContext = Partial<ToolHostContext>
 
 export function agentToolToPIToolDefinition(
   tool: AgentTool,

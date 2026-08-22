@@ -6,6 +6,7 @@ import { afterEach, describe, it } from "node:test";
 import { commandTool } from "../src/agent/tools/command.ts";
 import { fileReadTool } from "../src/agent/tools/file-read.ts";
 import { ToolRegistry } from "../src/agent/types.ts";
+import { buildToolContextExtra } from "../src/agent/runtime.ts";
 import { mapPiEvent } from "../src/agent-engine/event-normalizer.ts";
 import { attachEngineEvents } from "../src/server/agent-event-router.ts";
 import { AGENT_FAULT_MATRIX_SCRIPT } from "./fixtures/agent-fault-matrix-script.mjs";
@@ -178,5 +179,33 @@ describe("A-08 real-entry agent fault matrix", () => {
       assert.ok(done);
       assert.equal(done.blocks.find((block) => block.type === "tool")?.status, outcome.status === "success" ? "success" : "error");
     }
+  });
+
+  it("forwards one host capability object through runtime config, registry, and PI execution", async () => {
+    const observer = () => {};
+    const captured = {};
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "context_probe",
+      description: "captures host context",
+      parameters: { type: "object", properties: {} },
+      resultFormat: "structured",
+      execute: async (_args, ctx) => {
+        captured.permissionMode = ctx.permissionMode;
+        captured.shellDialect = ctx.shellDialect;
+        captured.observer = ctx.toolOutcomeObserver;
+        return { text: "ok", data: {}, outcome: { status: "success" } };
+      },
+    });
+    const extra = buildToolContextExtra({
+      agentDir: process.cwd(), cwd: process.cwd(), sessionsDir: process.cwd(), authFile: "auth", modelsFile: "models",
+      permissionMode: "dontAsk", shellDialect: "posix-bash", toolOutcomeObserver: observer,
+    });
+    const [tool] = registry.toPITools(process.cwd(), undefined, extra);
+    const result = await tool.execute("context-probe", {});
+    assert.equal(result.content[0].text, "ok");
+    assert.equal(captured.permissionMode, "dontAsk");
+    assert.equal(captured.shellDialect, "posix-bash");
+    assert.equal(captured.observer, observer);
   });
 });

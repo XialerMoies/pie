@@ -1119,6 +1119,33 @@ describe("WindowManager", () => {
     assert.strictEqual(f.manager.contextForWorkspace("e:/projects/alpha"), context);
   });
 
+  it("owns startup binding start and disposal when no initial window exists yet", async () => {
+    const f = fixture();
+    const binding = ownedBinding({ port: 4781 });
+    f.manager.adoptInitialServerBinding(binding);
+
+    assert.equal(await f.manager.startInitialServer(), 4781);
+    await f.manager.disposeAll();
+    assert.equal(binding.stopCalls, 1);
+  });
+
+  it("does not stop the adopted initial binding twice after it becomes a window binding", async () => {
+    const f = fixture();
+    const binding = ownedBinding({ port: 4782 });
+    f.manager.adoptInitialServerBinding(binding);
+    const context = f.manager.createInitialWindow({
+      instanceId: "initial-owner",
+      workspace: workspaceA,
+      layout: resolveDataLayout({ dataRoot: f.dataRoot, workspace: workspaceA, instanceId: "initial-owner" }),
+      token: "initial-token",
+      server: binding,
+    });
+
+    await f.manager.disposeAll();
+    assert.equal(context.lifecycle, "closed");
+    assert.equal(binding.stopCalls, 1);
+  });
+
   it("waits for every owned dispose promise before completing app disposal", async () => {
     const firstStop = deferred();
     const secondStop = deferred();

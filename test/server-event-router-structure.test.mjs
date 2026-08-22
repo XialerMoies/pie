@@ -9,6 +9,7 @@ const ROUTER = resolve(ROOT, "src", "server", "agent-event-router.ts");
 const SSE_CONTROLLER = resolve(ROOT, "src", "frontend", "chat", "chat-sse-controller.ts");
 const TOOLS = resolve(ROOT, "src", "agent", "tools", "index.ts");
 const RUNTIME = resolve(ROOT, "src", "agent", "runtime.ts");
+const TYPES = resolve(ROOT, "src", "agent", "types.ts");
 
 describe("server agent event router structure", () => {
   it("keeps runtime session event handling outside the server bootstrap file", () => {
@@ -52,6 +53,11 @@ describe("server agent event router structure", () => {
     assert.doesNotMatch(runtimeSource, /type RuntimeToolExtraContext\s*=\s*Pick/);
     assert.match(toolsSource, /ToolExecutionExtraContext/);
     assert.match(runtimeSource, /ToolExecutionExtraContext/);
+    const typesSource = readFileSync(TYPES, "utf8");
+    assert.match(typesSource, /export type ToolHostContext = Omit<ToolContext/);
+    assert.match(typesSource, /export type ToolExecutionExtraContext = Partial<ToolHostContext>/);
+    assert.doesNotMatch(runtimeSource, /type RuntimeToolExtraContext\s*=/);
+    assert.match(runtimeSource, /RuntimeConfig extends ToolHostContext/);
     for (const file of ["test/mcp-client.test.mjs", "test/mcp-client-service.test.mjs"]) {
       assert.doesNotMatch(readFileSync(resolve(ROOT, file), "utf8"), /_getMcpCacheLen|_setMcpCache/);
     }
