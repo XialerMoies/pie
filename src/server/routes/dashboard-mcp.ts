@@ -13,13 +13,14 @@ import { updateLockedJson } from "../../data/locked-json-store.js";
 import { existingAncestorForPath, pathExists } from "./route-path-utils.js";
 
 function publishMcpChanged(ctx: ServerContext): void {
-  try { ctx.appEvents.publish("mcp.changed"); } catch {}
+  try { ctx.groups.core.appEvents.publish("mcp.changed"); } catch {}
 }
 
 export const handleDashboardMcp: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
   const cors = { "Access-Control-Allow-Origin": "*" };
-  const { runtime, paths: p } = ctx;
+  const { runtime } = ctx.groups.core;
+  const { paths: p } = ctx.groups.storage;
 
   // MCP 状态：合并已配置 server + 运行时状态（脱敏返回）
   if (url === "/api/mcp/servers" && method === "GET") {

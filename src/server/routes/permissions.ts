@@ -19,7 +19,7 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
 
   if (url === "/api/permissions/mode" && method === "GET") {
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
-    res.end(JSON.stringify({ mode: ctx.permissionMode?.get() || "standard" }));
+    res.end(JSON.stringify({ mode: ctx.groups.security.permissionMode?.get() || "standard" }));
     return true;
   }
 
@@ -32,7 +32,7 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ ok: false, code: "risk_acknowledgement_required", error: "Yes mode requires risk acknowledgement" }));
         return true;
       }
-      const mode = ctx.permissionMode?.set(body.mode) || body.mode;
+      const mode = ctx.groups.security.permissionMode?.set(body.mode) || body.mode;
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true, mode }));
     } catch (err) {
@@ -66,7 +66,7 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
   if (url?.startsWith("/api/permissions/audit") && method === "GET") {
     const parsedUrl = new URL(url, `http://${req.headers.host || "localhost"}`);
     const rawLimit = parseInt(parsedUrl.searchParams.get("limit") || "100", 10);
-    const audit = ctx.permissionService?.getAuditTrail(rawLimit) || [];
+    const audit = ctx.groups.security.permissionService?.getAuditTrail(rawLimit) || [];
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
     res.end(JSON.stringify({ audit, total: audit.length }));
     return true;
@@ -74,7 +74,7 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
 
   if (url === "/api/permissions/rules" && method === "GET") {
     try {
-      const rules = ctx.permissionService?.getRulesSnapshot() || emptyRulesSnapshot();
+      const rules = ctx.groups.security.permissionService?.getRulesSnapshot() || emptyRulesSnapshot();
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify(rules));
     } catch (err) {
@@ -86,7 +86,7 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
 
   if (url === "/api/permissions/rules" && method === "POST") {
     try {
-      const service = requirePermissionService(ctx.permissionService);
+      const service = requirePermissionService(ctx.groups.security.permissionService);
       const body = await parseBody(req);
       const list = normalizeRuleList(body?.list);
       const rule = normalizeRuleBody(body?.rule);
@@ -107,7 +107,7 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
 
   if (url?.startsWith("/api/permissions/rules") && method === "DELETE") {
     try {
-      const service = requirePermissionService(ctx.permissionService);
+      const service = requirePermissionService(ctx.groups.security.permissionService);
       const parsedUrl = new URL(url, `http://${req.headers.host || "localhost"}`);
       let body: Record<string, unknown> = {};
       try { body = await parseBody(req); } catch {}
@@ -139,7 +139,7 @@ export const handlePermissions: RouteHandler = async (req, res, ctx) => {
 
   if (url === "/api/permissions/rules/clear" && method === "POST") {
     try {
-      const service = requirePermissionService(ctx.permissionService);
+      const service = requirePermissionService(ctx.groups.security.permissionService);
       const body = await parseBody(req);
       const rawList = body?.list;
       const list = rawList === undefined || rawList === "all" ? "all" : normalizeRuleList(rawList);

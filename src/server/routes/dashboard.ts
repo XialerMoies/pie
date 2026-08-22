@@ -14,9 +14,9 @@ import { writePathGuardError } from "./path-guard.js";
 import { workspaceDataPaths } from "./session-dir.js";
 
 function activeWorkspaceStorage(ctx: ServerContext): { sessionsDir: string; usageIndexFile: string } {
-  const { paths } = ctx;
+  const { paths } = ctx.groups.storage;
   if (paths.STARTUP?.dataRoot) {
-    const workspace = ctx.runtime.currentWorkspace || paths.STARTUP.workspace || paths.APP_ROOT;
+    const workspace = ctx.groups.core.runtime.currentWorkspace || paths.STARTUP.workspace || paths.APP_ROOT;
     const workspacePaths = workspaceDataPaths(paths.DATA_DIR, workspace);
     return {
       sessionsDir: workspacePaths.sessionsDir,
@@ -49,7 +49,7 @@ function serializeContextUsage(usage: EngineContextUsage): EngineContextUsage {
 export const handleDashboard: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
   const cors = { "Access-Control-Allow-Origin": "*" };
-  const { paths: p } = ctx;
+  const { paths: p } = ctx.groups.storage;
   const engine = resolveEngine(ctx);
 
   if (url === "/api/bootstrap" && (method === "GET" || method === "HEAD")) {
@@ -65,7 +65,7 @@ export const handleDashboard: RouteHandler = async (req, res, ctx) => {
     || (url === "/api/compact" && method === "POST");
   if (sessionDependent) {
     try {
-      await ctx.runtime.waitForSessionReady?.();
+      await ctx.groups.core.runtime.waitForSessionReady?.();
     } catch {
       res.writeHead(503, { "Content-Type": "application/json", ...cors, "Retry-After": "1" });
       res.end(JSON.stringify({ ok: false, code: "SESSION_NOT_READY" }));

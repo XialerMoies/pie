@@ -11,7 +11,7 @@ function json(res: Parameters<RouteHandler>[1], status: number, body: unknown): 
 }
 
 export const handleSkillSettings: RouteHandler = async (req, res, ctx) => {
-  const service = ctx.skillService
+  const service = ctx.groups.core.skillService
   const url = req.url?.split("?")[0] || ""
   if (!url.startsWith("/api/settings/skills")) return false
   if (!service) {
@@ -25,7 +25,7 @@ export const handleSkillSettings: RouteHandler = async (req, res, ctx) => {
     }
     if (url === "/api/settings/skills/rescan" && req.method === "POST") {
       const result = await service.rescan()
-      const promptRefresh = await ctx.runtime.refreshSystemPrompt()
+      const promptRefresh = await ctx.groups.core.runtime.refreshSystemPrompt()
       json(res, 200, { ok: true, ...result, promptRefresh })
       return true
     }
@@ -33,14 +33,14 @@ export const handleSkillSettings: RouteHandler = async (req, res, ctx) => {
     if (item && req.method === "POST") {
       const [, source, id, action] = item as unknown as [string, SkillSource, string, "trust" | "untrust" | "enable" | "disable"]
       await service[action](source, id)
-      const promptRefresh = await ctx.runtime.refreshSystemPrompt()
+      const promptRefresh = await ctx.groups.core.runtime.refreshSystemPrompt()
       json(res, 200, { ok: true, ...await service.list(), promptRefresh })
       return true
     }
     const remove = url.match(REMOVE_ROUTE)
     if (remove && req.method === "DELETE") {
       await service.remove(remove[1] as SkillSource, remove[2])
-      const promptRefresh = await ctx.runtime.refreshSystemPrompt()
+      const promptRefresh = await ctx.groups.core.runtime.refreshSystemPrompt()
       json(res, 200, { ok: true, ...await service.list(), promptRefresh })
       return true
     }

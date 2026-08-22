@@ -10,7 +10,8 @@ import { cors, publishDashboardChanged } from "./common.js";
 
 export const handleSubagentSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
-  const { runtime, paths: p } = ctx;
+  const { runtime } = ctx.groups.core;
+  const { paths: p } = ctx.groups.storage;
   if (url === "/api/subagents" && method === "GET") {
     const file = p.SUBAGENTS_FILE || resolve(p.PI_CONFIG_DIR, "subagents.json");
     res.writeHead(200, { "Content-Type": "application/json", ...cors });
@@ -34,7 +35,7 @@ export const handleSubagentSettings: RouteHandler = async (req, res, ctx) => {
         }
         saved = await replaceSubagentDefinitions(file, agents);
       };
-      if (ctx.providerReferenceLock) await ctx.providerReferenceLock.runExclusive(replace);
+      if (ctx.groups.providers.providerReferenceLock) await ctx.groups.providers.providerReferenceLock.runExclusive(replace);
       else await replace();
       publishDashboardChanged(ctx);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });

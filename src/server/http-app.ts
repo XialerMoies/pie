@@ -67,8 +67,8 @@ export function createHttpApp(options: HttpAppOptions) {
     });
 
     const cors = { "Access-Control-Allow-Origin": "*" };
-    installSecurityHeaders(req, res, ctx.security);
-    const securityDecision = authorizeLocalApiRequest(req, ctx.security);
+    installSecurityHeaders(req, res, ctx.groups.security.config);
+    const securityDecision = authorizeLocalApiRequest(req, ctx.groups.security.config);
     if (!securityDecision.ok) { writeSecurityError(res, securityDecision); return; }
     if (isApiPreflight(req)) { res.writeHead(204); res.end(); return; }
     if (url === "/favicon.ico") { res.writeHead(200, { "Content-Type": "image/x-icon" }); res.end(); return; }

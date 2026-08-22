@@ -37,6 +37,16 @@ describe("AgentEngine server and CLI wiring", () => {
     assert.doesNotMatch(cli, /initAgent|session\.subscribe|session\.prompt/);
   });
 
+  it("uses one shared host factory for both public initialization boundaries", () => {
+    const agent = source("src/agent/index.ts");
+    assert.match(agent, /async function createAgentHost\(config: RuntimeConfig\)/);
+    assert.equal((agent.match(/AgentRuntime\.create\(config\)/g) || []).length, 1);
+    assert.equal((agent.match(/new PiAgentEngineAdapter\(runtime\)/g) || []).length, 1);
+    assert.doesNotMatch(agent, /export async function initAgent\(/);
+    assert.match(agent, /return \(await createAgentHost\(config\)\)\.engine/);
+    assert.match(agent, /return createAgentHost\(config\)/);
+  });
+
   it("disables PI built-in tools so evidence reads use governed custom tools", () => {
     const runtime = source("src/agent/runtime.ts");
     assert.match(runtime, /noTools:\s*["']builtin["']/);

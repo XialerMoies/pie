@@ -14,7 +14,7 @@ import { authorizeRoutePath, writeServerPermissionError } from "../permission-se
 const cors = { "Access-Control-Allow-Origin": "*" };
 
 async function findAuthorizedConversationFiles(ctx: Parameters<RouteHandler>[2]): Promise<string[]> {
-  const sessionsDir = ctx.paths.SESSIONS_DIR;
+  const sessionsDir = ctx.groups.storage.paths.SESSIONS_DIR;
   const byProjectDir = resolve(sessionsDir, "by-project");
   if (!existsSync(byProjectDir)) return [];
 
@@ -54,7 +54,7 @@ async function findAuthorizedConversationFiles(ctx: Parameters<RouteHandler>[2])
 
 export const handleSearch: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
-  const { paths: p } = ctx;
+  const { paths: p } = ctx.groups.storage;
 
   // GET /api/search?q=...&type=filename&root=...
   if (url?.startsWith("/api/search") && method === "GET") {

@@ -42,7 +42,17 @@ function context(tsServer) {
     tsServer,
     providerReferenceLock: { runExclusive: (fn) => fn() },
     appEvents: { publish() {} },
-    groups: { core: { engine } },
+    groups: {
+      core: { engine, runtime: { currentWorkspace: workspace, waitForSessionReady: async () => { throw new Error("must not wait"); } }, chatStream: {}, appEvents: { publish() {} } },
+      security: {},
+      storage: { paths: {
+        APP_ROOT: workspace, DATA_DIR: data, PI_CONFIG_DIR: resolve(data, "pi"),
+        SESSIONS_DIR: resolve(data, "pi", "sessions"), SETTINGS_FILE: resolve(data, "settings.json"),
+        FRONTEND_DIR: workspace, FRONTEND_SRC_DIR: workspace, HAS_BUILT_FRONTEND: false,
+      } },
+      providers: { providerReferenceLock: { runExclusive: (fn) => fn() }, model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (fn) => fn() } },
+      infra: { tsServer },
+    },
   };
 }
 

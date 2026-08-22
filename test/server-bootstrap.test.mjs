@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createServerContext } from "../src/server/server-bootstrap.ts";
+import { authorizeRoutePath } from "../src/server/permission-service.ts";
 
 function createFlatContext() {
   return {
@@ -31,7 +32,7 @@ function createFlatContext() {
 }
 
 describe("createServerContext", () => {
-  it("assembles all five ownership groups from one flat compatibility context", () => {
+  it("assembles all five ownership groups from startup dependencies", () => {
     const flat = createFlatContext();
     const context = createServerContext(flat);
 
@@ -42,13 +43,37 @@ describe("createServerContext", () => {
     assert.strictEqual(context.groups.infra.tsServer, flat.tsServer);
   });
 
-  it("keeps compatibility fields as views of the grouped source of truth", () => {
+  it("returns a grouped-only route context without flat compatibility getters", () => {
     const flat = createFlatContext();
     const context = createServerContext(flat);
 
-    assert.strictEqual(context.engine, context.groups.core.engine);
-    assert.strictEqual(context.runtime, context.groups.core.runtime);
-    assert.strictEqual(context.paths, context.groups.storage.paths);
-    assert.strictEqual(context.observability, context.groups.infra.observability);
+    assert.deepEqual(Object.keys(context), ["groups"]);
+    for (const field of ["engine", "runtime", "chatStream", "appEvents", "security", "permissionService", "paths", "observability"]) {
+      assert.equal(Object.prototype.hasOwnProperty.call(context, field), false, field);
+    }
+  });
+
+  it("carries grouped security dependencies through the real route authorization boundary", async () => {
+    const flat = createFlatContext();
+    const calls = [];
+    flat.rootRegistry = { resolveRegisteredRoot: () => ({ path: "workspace" }) };
+    flat.permissionService = {
+      authorizePath(root, target, operation, source, options) {
+        calls.push({ root, target, operation, source, options });
+        return Promise.resolve({ path: "workspace/" + target });
+      },
+    };
+
+    const context = createServerContext(flat);
+    const result = await authorizeRoutePath(context, "workspace", "file.txt", "read", "test.route");
+
+    assert.equal(result.path, "workspace/file.txt");
+    assert.deepEqual(calls, [{
+      root: "workspace",
+      target: "file.txt",
+      operation: "read",
+      source: "test.route",
+      options: { internalToolRequest: undefined },
+    }]);
   });
 });

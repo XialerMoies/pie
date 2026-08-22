@@ -64,7 +64,7 @@ const git = runGitCommand;
 
 export const handleGit: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
-  const { paths: p } = ctx;
+  const { paths: p } = ctx.groups.storage;
 
   if (!url?.startsWith("/api/git/")) return false;
 

@@ -779,16 +779,41 @@ export function writeServerPermissionError(
   return true;
 }
 
+export interface RouteSecurityContext {
+  permissionService?: ServerPermissionService;
+  rootRegistry?: RootRegistry;
+}
+
+export async function authorizePath(
+  security: RouteSecurityContext,
+  root: string,
+  target: string,
+  operation: PathPermissionOperation,
+  source: string,
+  internalToolRequest = false,
+): Promise<GuardedPath> {
+  const effectiveRoot = security.rootRegistry?.resolveRegisteredRoot(root)?.path || root;
+  return security.permissionService
+    ? security.permissionService.authorizePath(effectiveRoot, target, operation, source, {
+        internalToolRequest,
+      })
+    : guardPathWithinRoot(effectiveRoot, target, operation);
+}
+
 export async function authorizeRoutePath(
-  ctx: { permissionService?: ServerPermissionService; rootRegistry?: RootRegistry; internalToolRequest?: boolean },
+  ctx: {
+    groups: { security: RouteSecurityContext };
+    internalToolRequest?: boolean;
+  },
   root: string,
   target: string,
   operation: PathPermissionOperation,
   source: string,
 ): Promise<GuardedPath> {
-  const effectiveRoot = ctx.rootRegistry?.resolveRegisteredRoot(root)?.path || root;
-  return ctx.permissionService
-    ? ctx.permissionService.authorizePath(effectiveRoot, target, operation, source, {
+  const { permissionService, rootRegistry } = ctx.groups.security;
+  const effectiveRoot = rootRegistry?.resolveRegisteredRoot(root)?.path || root;
+  return permissionService
+    ? permissionService.authorizePath(effectiveRoot, target, operation, source, {
         internalToolRequest: ctx.internalToolRequest,
       })
     : guardPathWithinRoot(effectiveRoot, target, operation);

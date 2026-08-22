@@ -1,62 +1,43 @@
 import type { ServerContext } from "./routes/types.js";
-import type { ServerContextGroups } from "./server-context.js";
+import type { ServerContextDependencies, ServerContextGroups } from "./server-context.js";
 
 /** Assemble the immutable ownership groups once during server startup. */
 export function createServerContext(
-  flat: Omit<ServerContext, "groups">,
+  dependencies: ServerContextDependencies,
 ): ServerContext {
   const groups: ServerContextGroups = {
     core: {
-      engine: flat.engine,
-      runtime: flat.runtime,
-      chatStream: flat.chatStream,
-      appEvents: flat.appEvents,
-      recordUserNote: flat.recordUserNote,
-      skillService: flat.skillService,
+      engine: dependencies.engine,
+      runtime: dependencies.runtime,
+      chatStream: dependencies.chatStream,
+      appEvents: dependencies.appEvents,
+      recordUserNote: dependencies.recordUserNote,
+      skillService: dependencies.skillService,
     },
     security: {
-      config: flat.security,
-      permissionService: flat.permissionService,
-      rootRegistry: flat.rootRegistry,
-      permissionMode: flat.permissionMode,
+      config: dependencies.security,
+      permissionService: dependencies.permissionService,
+      rootRegistry: dependencies.rootRegistry,
+      permissionMode: dependencies.permissionMode,
     },
     storage: {
-      paths: flat.paths,
-      workspaceLock: flat.workspaceLock,
+      paths: dependencies.paths,
+      workspaceLock: dependencies.workspaceLock,
     },
     providers: {
-      customProviderService: flat.customProviderService,
-      providerReferenceLock: flat.providerReferenceLock,
+      customProviderService: dependencies.customProviderService,
+      providerReferenceLock: dependencies.providerReferenceLock,
       model: {
-        get modelRuntime() { return flat.runtime.modelRuntime; },
-        get modelRegistry() { return flat.runtime.modelRegistry; },
-        syncModelProviders: (options) => flat.runtime.syncModelProviders(options),
-        runWithStableSession: (operation) => flat.runtime.runWithStableSession(operation),
+        get modelRuntime() { return dependencies.runtime.modelRuntime; },
+        get modelRegistry() { return dependencies.runtime.modelRegistry; },
+        syncModelProviders: (options) => dependencies.runtime.syncModelProviders(options),
+        runWithStableSession: (operation) => dependencies.runtime.runWithStableSession(operation),
       },
     },
     infra: {
-      tsServer: flat.tsServer,
-      observability: flat.observability,
+      tsServer: dependencies.tsServer,
+      observability: dependencies.observability,
     },
   };
-  const context = { groups } as ServerContext;
-  Object.defineProperties(context, {
-    engine: { enumerable: true, get: () => groups.core.engine },
-    runtime: { enumerable: true, get: () => groups.core.runtime },
-    chatStream: { enumerable: true, get: () => groups.core.chatStream },
-    appEvents: { enumerable: true, get: () => groups.core.appEvents },
-    recordUserNote: { enumerable: true, get: () => groups.core.recordUserNote },
-    skillService: { enumerable: true, get: () => groups.core.skillService },
-    security: { enumerable: true, get: () => groups.security.config },
-    permissionService: { enumerable: true, get: () => groups.security.permissionService },
-    rootRegistry: { enumerable: true, get: () => groups.security.rootRegistry },
-    permissionMode: { enumerable: true, get: () => groups.security.permissionMode },
-    workspaceLock: { enumerable: true, get: () => groups.storage.workspaceLock },
-    paths: { enumerable: true, get: () => groups.storage.paths },
-    customProviderService: { enumerable: true, get: () => groups.providers.customProviderService },
-    providerReferenceLock: { enumerable: true, get: () => groups.providers.providerReferenceLock },
-    tsServer: { enumerable: true, get: () => groups.infra.tsServer },
-    observability: { enumerable: true, get: () => groups.infra.observability },
-  });
-  return context;
+  return { groups };
 }

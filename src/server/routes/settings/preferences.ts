@@ -7,7 +7,7 @@ import { cors } from "./common.js";
 
 export const handlePreferenceSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
-  const { paths: p } = ctx;
+  const { paths: p } = ctx.groups.storage;
 
   if (url === "/api/preferences" && method === "GET") {
     try {

@@ -96,7 +96,8 @@ export function cancelCommandConfirmationsForResponse(response: import("http").S
 export const handleChat: RouteHandler = (req, res, ctx) => {
   const { url, method } = req;
   const cors = { "Access-Control-Allow-Origin": "*" };
-  const { runtime, chatStream, paths: p } = ctx;
+  const { runtime, chatStream } = ctx.groups.core;
+  const { paths: p } = ctx.groups.storage;
   const engine = resolveEngine(ctx);
 
   if (url === "/api/chat/command-confirm" && method === "POST") {
@@ -150,7 +151,7 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         }
         if (mode === "followUp") await engine.followUp(message);
         else await engine.steer(message);
-        ctx.recordUserNote?.({ noteId, message, mode });
+        ctx.groups.core.recordUserNote?.({ noteId, message, mode });
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, mode, noteId }));
       } catch (err: unknown) {
@@ -250,7 +251,7 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         if (attachments && Array.isArray(attachments) && attachments.length > 0) {
           const ws = workspace || p.APP_ROOT;
           console.log(`📎 Processing ${attachments.length} attachment(s)`);
-          const { blocks } = await processAttachments(attachments, ws, ctx.permissionService);
+          const { blocks } = await processAttachments(attachments, ws, ctx.groups.security.permissionService);
           const contextBlock = buildContextBlock(blocks);
           if (contextBlock) {
             finalMessage = message + contextBlock;

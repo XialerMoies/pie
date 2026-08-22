@@ -2,21 +2,8 @@
  * Shared types for route handlers
  */
 import type { IncomingMessage, ServerResponse } from "http";
-import type { TsserverManager } from "../ts-server.js";
-import type { AgentRuntime } from "../../agent/index.js";
-import type { AgentEngine } from "../../agent-engine/index.js";
-import type { DesktopSecurityConfig } from "../security.js";
-import type { ServerPermissionService } from "../permission-service.js";
-import type { RootRegistry } from "../root-registry.js";
-import type { PermissionModeController } from "../permission-mode.js";
-import type { AppEventHub } from "../app-events.js";
-import type { StartupPathsSnapshot } from "../startup-paths.js";
-import type { WorkspaceLockCoordinator } from "../workspace-lock.js";
-import type { CustomProviderService } from "../../model-provider/custom-provider-service.js";
-import type { ProviderReferenceMutationLock } from "../../model-provider/provider-reference-lock.js";
-import type { ServerObservability } from "../observability.js";
 import type { ServerContextGroups } from "../server-context.js";
-import type { SkillService } from "../../agent/skills/skill-service.js";
+import type { AgentEngine } from "../../agent-engine/index.js";
 import type { TaskLifecycleSnapshot, TaskRequirements } from "../task-lifecycle.js";
 import type { CorrelationLedger, CorrelationIds } from "../correlation.js";
 
@@ -103,44 +90,13 @@ export interface ChatStreamState {
 }
 
 export interface ServerContext {
-  engine: AgentEngine;
-  runtime: AgentRuntime;
-  chatStream: ChatStreamState;
-  recordUserNote?: (note: { noteId: string; message: string; mode: "steer" | "followUp" }) => void;
-  appEvents: AppEventHub;
-  tsServer?: TsserverManager;
-  security?: DesktopSecurityConfig;
-  permissionService?: ServerPermissionService;
-  rootRegistry?: RootRegistry;
-  permissionMode?: PermissionModeController;
-  workspaceLock?: WorkspaceLockCoordinator;
-  customProviderService?: CustomProviderService;
-  providerReferenceLock?: ProviderReferenceMutationLock;
-  observability?: ServerObservability;
-  skillService?: SkillService;
+  groups: ServerContextGroups;
   /** True only for authenticated in-process Agent tool callbacks. */
   internalToolRequest?: boolean;
-  paths: {
-    APP_ROOT: string;
-    DATA_DIR: string;
-    PI_CONFIG_DIR: string;
-    SESSIONS_DIR: string;
-    SETTINGS_FILE: string;
-    SUBAGENTS_FILE?: string;
-    DATA_ROOT_POINTER_FILE?: string;
-    STARTUP?: StartupPathsSnapshot;
-    FRONTEND_DIR: string;
-    FRONTEND_SRC_DIR: string;
-    HAS_BUILT_FRONTEND: boolean;
-  };
-  groups: ServerContextGroups;
 }
 
 export function resolveEngine(ctx: ServerContext): AgentEngine {
-  const grouped = ctx.groups?.core?.engine;
-  if (grouped) return grouped;
-  if (ctx.engine) return ctx.engine;
-  throw new Error("Server context is missing an explicit AgentEngine");
+  return ctx.groups.core.engine;
 }
 
 export type RouteHandler = (

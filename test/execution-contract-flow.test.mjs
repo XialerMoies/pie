@@ -77,7 +77,7 @@ describe("A-17 execution contract cross-layer flow", () => {
 
   it("reads normalized skill facts through the real local HTTP settings route", async () => {
     const server = createServer((req, res) => {
-      void handleSkillSettings(req, res, {
+      void handleSkillSettings(req, res, withServerGroups({
         skillService: {
           list: async () => ({
             revision: "rev-skill",
@@ -86,7 +86,7 @@ describe("A-17 execution contract cross-layer flow", () => {
           }),
         },
         runtime: { refreshSystemPrompt: async () => ({ ok: true }) },
-      });
+      }));
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = server.address().port;
@@ -106,10 +106,10 @@ describe("A-17 execution contract cross-layer flow", () => {
 
   it("does not claim parse evidence when the normalized status API omits parse", async () => {
     const server = createServer((req, res) => {
-      void handleSkillSettings(req, res, {
+      void handleSkillSettings(req, res, withServerGroups({
         skillService: { list: async () => ({ revision: "rev-missing-parse", skills: [{ id: "skill-verification", source: "workspace", trust: "trusted", enabled: true }], diagnostics: [] }) },
         runtime: { refreshSystemPrompt: async () => ({ ok: true }) },
-      });
+      }));
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const previousPort = process.env.SERVER_PORT;

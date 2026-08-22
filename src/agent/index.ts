@@ -13,24 +13,23 @@ import { PiAgentEngineAdapter, type AgentEngine } from "../agent-engine/index.js
 
 export type { AgentRuntime, RuntimeConfig, AgentEngine }
 
-/**
- * Initialize the agent runtime with custom configuration.
- */
-export async function initAgent(config: RuntimeConfig): Promise<AgentRuntime> {
-  return AgentRuntime.create(config)
+export interface AgentHost {
+  engine: AgentEngine
+  runtime: AgentRuntime
+}
+
+/** Single construction path for every PI-backed host boundary. */
+async function createAgentHost(config: RuntimeConfig): Promise<AgentHost> {
+  const runtime = await AgentRuntime.create(config)
+  return { engine: new PiAgentEngineAdapter(runtime), runtime }
 }
 
 /** Initialize the stable host-facing engine while PI remains behind the adapter. */
 export async function initEngine(config: RuntimeConfig): Promise<AgentEngine> {
-  const runtime = await AgentRuntime.create(config)
-  return new PiAgentEngineAdapter(runtime)
+  return (await createAgentHost(config)).engine
 }
 
 /** Internal PI host for services that still manage providers and subagents. */
-export async function initAgentHost(config: RuntimeConfig): Promise<{
-  engine: AgentEngine
-  runtime: AgentRuntime
-}> {
-  const runtime = await AgentRuntime.create(config)
-  return { engine: new PiAgentEngineAdapter(runtime), runtime }
+export async function initAgentHost(config: RuntimeConfig): Promise<AgentHost> {
+  return createAgentHost(config)
 }

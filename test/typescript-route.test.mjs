@@ -142,6 +142,13 @@ describe("typescript routes", () => {
     },
     tsServer: mockTsServer,
   };
+  ctx.groups = {
+    core: { runtime: ctx.runtime, chatStream: ctx.chatStream, engine: {}, appEvents: { publish() {} } },
+    security: {},
+    storage: { get paths() { return ctx.paths; } },
+    providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+    infra: { get tsServer() { return ctx.tsServer; } },
+  };
 
   beforeEach(() => {
     lastTsRequest = null;

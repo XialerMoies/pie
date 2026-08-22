@@ -35,38 +35,38 @@ async function yieldToEventLoop(): Promise<void> {
 }
 
 function usesCanonicalWorkspaceData(ctx: ServerContext): boolean {
-  return !!ctx.paths.STARTUP?.dataRoot;
+  return !!ctx.groups.storage.paths.STARTUP?.dataRoot;
 }
 
 function sessionsDirForWorkspace(ctx: ServerContext, workspace: string): string {
   if (usesCanonicalWorkspaceData(ctx)) {
-    return workspaceDataPaths(ctx.paths.DATA_DIR, workspace).sessionsDir;
+    return workspaceDataPaths(ctx.groups.storage.paths.DATA_DIR, workspace).sessionsDir;
   }
-  return wsDir(ctx.paths.SESSIONS_DIR, workspace);
+  return wsDir(ctx.groups.storage.paths.SESSIONS_DIR, workspace);
 }
 
 function activeSessionsDir(ctx: ServerContext): string {
-  const workspace = resolveEngine(ctx).session.workspace || ctx.paths.STARTUP?.workspace || ctx.paths.APP_ROOT;
+  const workspace = resolveEngine(ctx).session.workspace || ctx.groups.storage.paths.STARTUP?.workspace || ctx.groups.storage.paths.APP_ROOT;
   return usesCanonicalWorkspaceData(ctx)
     ? sessionsDirForWorkspace(ctx, workspace)
-    : ctx.paths.SESSIONS_DIR;
+    : ctx.groups.storage.paths.SESSIONS_DIR;
 }
 
 function publishActiveSessionChanged(ctx: ServerContext): void {
-  try { ctx.appEvents.publish("dashboard.changed"); } catch {}
-  try { ctx.appEvents.publish("usage.changed"); } catch {}
+  try { ctx.groups.core.appEvents.publish("dashboard.changed"); } catch {}
+  try { ctx.groups.core.appEvents.publish("usage.changed"); } catch {}
 }
 
 function runWithProviderReferenceLock<T>(
   ctx: ServerContext,
   operation: () => T | Promise<T>,
 ): Promise<T> {
-  return ctx.providerReferenceLock?.runExclusive(operation) ?? Promise.resolve(operation());
+  return ctx.groups.providers.providerReferenceLock?.runExclusive(operation) ?? Promise.resolve(operation());
 }
 
 /** 迁移会话: 从 sessions/ 根目录按 workspace 分类移入 by-project/ */
 async function migrateOldSessions(ctx: ServerContext): Promise<void> {
-  const baseDir = ctx.paths.SESSIONS_DIR;
+  const baseDir = ctx.groups.storage.paths.SESSIONS_DIR;
   if (!existsSync(baseDir)) return;
   const authorizedBaseDir = await authorizeSessionPath(ctx, baseDir, "read", "sessions.auto-migrate.root");
   const entries = readdirSync(authorizedBaseDir, { withFileTypes: true });
@@ -211,7 +211,7 @@ async function authorizeSessionPath(
 
 export const handleSessions: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
-  const { paths: p } = ctx;
+  const { paths: p } = ctx.groups.storage;
   const engine = resolveEngine(ctx);
   const session = engine.session;
 

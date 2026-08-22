@@ -28,7 +28,7 @@ import { createPermissionModeController } from "../src/server/permission-mode.ts
 import { makeReq, makeRes, makeResWithEvents } from "./helpers/http.mjs";
 import { withServerGroups } from "./helpers/context.mjs";
 
-function routeCtx(root, permissionService) {
+function routeCtx(root, permissionService, permissionMode) {
   return withServerGroups({
     runtime: {
       session: {
@@ -45,6 +45,7 @@ function routeCtx(root, permissionService) {
     chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" },
     appEvents: new AppEventHub(),
     permissionService,
+    permissionMode,
     paths: {
       APP_ROOT: root,
       DATA_DIR: resolve(root, "data"),
@@ -1304,7 +1305,7 @@ describe("server permission service", () => {
     const root = makeTempRoot("server-perm-mode-");
     try {
       const mode = createPermissionModeController();
-      const ctx = { ...routeCtx(root, undefined), permissionMode: mode };
+      const ctx = routeCtx(root, undefined, mode);
 
       const initial = makeRes();
       await handlePermissions(makeReq("GET", "/api/permissions/mode"), initial, ctx);

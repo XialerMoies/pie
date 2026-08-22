@@ -42,7 +42,7 @@ function stateFile(piConfigDir: string): string {
 }
 
 function usesCanonicalWorkspaceData(ctx: Parameters<RouteHandler>[2]): boolean {
-  return !!ctx.paths.STARTUP?.dataRoot;
+  return !!ctx.groups.storage.paths.STARTUP?.dataRoot;
 }
 
 function emptyState(workspace: string): WorkspaceUiState {
@@ -86,7 +86,7 @@ export async function readWorkspaceUiState(
   ctx: Parameters<RouteHandler>[2],
   workspace: string,
 ): Promise<WorkspaceUiState> {
-  const paths = workspaceDataPaths(ctx.paths.DATA_DIR, workspace);
+  const paths = workspaceDataPaths(ctx.groups.storage.paths.DATA_DIR, workspace);
   const filePath = (await authorizeRoutePath(
     ctx,
     paths.workspaceRoot,
@@ -119,12 +119,12 @@ export async function readWorkspaceUiState(
 export const handleUiState: RouteHandler = async (req, res, ctx) => {
   const url = req.url ?? "";
   const method = req.method ?? "GET";
-  const piConfigDir = ctx.paths.PI_CONFIG_DIR;
+  const piConfigDir = ctx.groups.storage.paths.PI_CONFIG_DIR;
 
   if (url.startsWith("/api/ui-state") && method === "GET") {
     try {
       const params = new URL(url, "http://localhost").searchParams;
-      const requestedWorkspace = params.get("workspace") || ctx.runtime.currentWorkspace || ctx.paths.STARTUP?.workspace || "_default";
+      const requestedWorkspace = params.get("workspace") || ctx.groups.core.runtime.currentWorkspace || ctx.groups.storage.paths.STARTUP?.workspace || "_default";
       const workspace = requestedWorkspace === "_default"
         ? requestedWorkspace
         : await authorizeWorkspacePath(ctx, requestedWorkspace, "ui-state.read.workspace", { required: true });
@@ -156,7 +156,7 @@ export const handleUiState: RouteHandler = async (req, res, ctx) => {
         ? await authorizeWorkspacePath(ctx, parsed.workspacePath, "ui-state.save.workspace", { required: true })
         : "_default";
       if (usesCanonicalWorkspaceData(ctx) && workspace !== "_default") {
-        const paths = workspaceDataPaths(ctx.paths.DATA_DIR, workspace);
+        const paths = workspaceDataPaths(ctx.groups.storage.paths.DATA_DIR, workspace);
         mkdirSync(paths.workspaceRoot, { recursive: true });
         const filePath = (await authorizeRoutePath(
           ctx,

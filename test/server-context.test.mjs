@@ -44,6 +44,24 @@ describe("server context boundaries", () => {
     const routeTypes = source("src/server/routes/types.ts");
     assert.doesNotMatch(routeTypes, /new\s+PiAgentEngineAdapter/);
     assert.doesNotMatch(routeTypes, /legacyEngines/);
-    assert.match(routeTypes, /groups\?\.core\?\.engine|groups\.core\.engine/);
+    assert.match(routeTypes, /return ctx\.groups\.core\.engine/);
+    assert.doesNotMatch(routeTypes, /ctx\.engine/);
+    assert.doesNotMatch(routeTypes, /groups\?\./);
+  });
+
+  it("keeps the grouped contract at every server route boundary", () => {
+    for (const file of [
+      "src/server/http-app.ts",
+      "src/server/agent-event-router.ts",
+      "src/server/routes/chat.ts",
+      "src/server/routes/dashboard.ts",
+      "src/server/routes/permissions.ts",
+      "src/server/routes/settings/skills.ts",
+      "src/server/routes/typescript.ts",
+    ]) {
+      const text = source(file);
+      assert.doesNotMatch(text, /ctx\.(runtime|paths|appEvents|permissionService|permissionMode|workspaceLock|providerReferenceLock|skillService|tsServer|observability|security)\b/, file);
+      assert.doesNotMatch(text, /ctx\?\.(runtime|paths|appEvents|permissionService|permissionMode|workspaceLock|providerReferenceLock|skillService|tsServer|observability|security)\b/, file);
+    }
   });
 });

@@ -9,7 +9,7 @@ import { hasProviderAuth } from "./auth.js";
 
 export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
-  const { paths: p } = ctx;
+  const { paths: p } = ctx.groups.storage;
   const model = ctx.groups.providers.model;
   const engine = resolveEngine(ctx);
 
@@ -72,7 +72,7 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
           return settings;
         }, { trailingNewline: false });
       };
-      if (ctx.providerReferenceLock) await ctx.providerReferenceLock.runExclusive(save);
+      if (ctx.groups.providers.providerReferenceLock) await ctx.groups.providers.providerReferenceLock.runExclusive(save);
       else await save();
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));
@@ -116,7 +116,7 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
           throw persistenceError;
         }
       });
-      if (ctx.providerReferenceLock) await ctx.providerReferenceLock.runExclusive(switchModel);
+      if (ctx.groups.providers.providerReferenceLock) await ctx.groups.providers.providerReferenceLock.runExclusive(switchModel);
       else await switchModel();
       if (!found) {
         res.writeHead(404, { ...cors });

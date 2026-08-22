@@ -28,7 +28,7 @@ export function hasProviderAuth(model: ModelProviderContext, provider: string, s
 
 export const handleAuthSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
-  const { paths: p } = ctx;
+  const { paths: p } = ctx.groups.storage;
   const model = ctx.groups.providers.model;
   const modelRegistry = model.modelRegistry;
 

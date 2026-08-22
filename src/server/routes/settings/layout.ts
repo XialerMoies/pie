@@ -7,7 +7,7 @@ import { cors } from "./common.js";
 
 export const handleLayoutSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
-  const { paths: p } = ctx;
+  const { paths: p } = ctx.groups.storage;
 
   if (url === "/api/layout-config" && method === "POST") {
     try {

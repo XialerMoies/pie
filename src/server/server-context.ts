@@ -74,3 +74,23 @@ export interface ServerContextGroups {
   providers: ServerProviderContext;
   infra: ServerInfraContext;
 }
+
+/** Startup-only dependency shape used to assemble the grouped route context. */
+export interface ServerContextDependencies {
+  engine: AgentEngine;
+  runtime: AgentRuntime;
+  chatStream: ChatStreamState;
+  appEvents: AppEventHub;
+  recordUserNote?: (note: { noteId: string; message: string; mode: "steer" | "followUp" }) => void;
+  skillService?: SkillService;
+  security?: DesktopSecurityConfig;
+  permissionService?: ServerPermissionService;
+  rootRegistry?: RootRegistry;
+  permissionMode?: PermissionModeController;
+  workspaceLock?: WorkspaceLockCoordinator;
+  paths: ServerStorageContext["paths"];
+  customProviderService?: CustomProviderService;
+  providerReferenceLock?: ProviderReferenceMutationLock;
+  tsServer?: TsserverManager;
+  observability?: ServerObservability;
+}

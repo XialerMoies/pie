@@ -38,16 +38,16 @@ function diagnosticsFailure(err: unknown): { status: "pending" | "timeout" | "fa
 }
 
 async function getTsServer(ctx: import("./types.js").ServerContext): Promise<import("../ts-server.js").TsserverManager> {
-  const tsServer = ctx.tsServer;
+  const tsServer = ctx.groups.infra.tsServer;
   if (!tsServer) throw new Error("TSServer not available");
   if (!tsServer.isRunning()) {
-    const startPromise = tsServer.start(ctx.paths.APP_ROOT);
+    const startPromise = tsServer.start(ctx.groups.storage.paths.APP_ROOT);
     const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("tsserver startup timeout")), 8000));
     await Promise.race([startPromise, timeout]);
     // 初始化：发送 configure + compilerOptionsForInferredProjects
     // 告诉 tsserver 用推断项目，避免 tsconfig.json 的 rootDir 限制导致 Debug Failure
     if (tsServer.isRunning()) {
-      await tsServer.init(ctx.paths.APP_ROOT).catch(() => {});
+      await tsServer.init(ctx.groups.storage.paths.APP_ROOT).catch(() => {});
     }
   }
   if (!tsServer.isRunning()) throw new Error("tsserver failed to start");
@@ -66,7 +66,7 @@ async function authorizeTsFile(
   }
   const root = typeof projectRoot === "string" && projectRoot.trim()
     ? projectRoot
-    : (ctx.runtime?.currentWorkspace || ctx.paths.APP_ROOT);
+    : (ctx.groups.core.runtime?.currentWorkspace || ctx.groups.storage.paths.APP_ROOT);
   const guarded = await authorizeRoutePath(ctx, root, file, operation, source);
   return { path: guarded.path, root: guarded.root };
 }
@@ -396,7 +396,7 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
             convertTabsToSpaces: useTabs !== true,
             newLineCharacter: "\n",
           },
-          host: ctx.paths.APP_ROOT,
+          host: ctx.groups.storage.paths.APP_ROOT,
         });
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ edits: result || [] }));
@@ -409,7 +409,7 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
         const result = await ts.sendRequest("organizeImports", {
           file: authorized.path,
           scope: "",
-          host: ctx.paths.APP_ROOT,
+          host: ctx.groups.storage.paths.APP_ROOT,
         });
         if (result && Array.isArray(result)) {
           // apply changes to disk

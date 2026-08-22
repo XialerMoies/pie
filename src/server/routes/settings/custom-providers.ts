@@ -200,14 +200,14 @@ function createRequestLifecycleScope(
 async function authorizeMutationFiles(ctx: ServerContext): Promise<void> {
   await authorizeRoutePath(
     ctx,
-    ctx.paths.PI_CONFIG_DIR,
+    ctx.groups.storage.paths.PI_CONFIG_DIR,
     "custom-providers.json",
     "write",
     "settings.custom-providers.config",
   );
   await authorizeRoutePath(
     ctx,
-    ctx.paths.PI_CONFIG_DIR,
+    ctx.groups.storage.paths.PI_CONFIG_DIR,
     "custom-provider-secrets.json",
     "write",
     "settings.custom-providers.secrets",
@@ -225,7 +225,7 @@ async function authorizeStoredCredentialsIfNeeded(
   if (!needsStoredCredentials) return;
   await authorizeRoutePath(
     ctx,
-    ctx.paths.PI_CONFIG_DIR,
+    ctx.groups.storage.paths.PI_CONFIG_DIR,
     "custom-provider-secrets.json",
     "read",
     "settings.custom-providers.network",
@@ -270,7 +270,7 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
       const providerId = validateCustomProviderId(body.providerId, "providerId");
       await authorizeRoutePath(
         ctx,
-        ctx.paths.PI_CONFIG_DIR,
+        ctx.groups.storage.paths.PI_CONFIG_DIR,
         "custom-provider-secrets.json",
         "read",
         "settings.custom-providers.reveal",

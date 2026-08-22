@@ -39,6 +39,7 @@ export function withServerGroups(context) {
       get chatStream() { return context.chatStream; },
       get appEvents() { return context.appEvents || { publish() {} }; },
       get recordUserNote() { return context.recordUserNote; },
+      get skillService() { return context.skillService; },
     },
     security: {
       get config() { return context.security; },

@@ -64,9 +64,14 @@ describe("runtime evidence ledger cross-layer flow", () => {
     engine.session = { id: "session-1" };
     engine.subscribe = (listener) => { engine.on("event", listener); return () => engine.off("event", listener); };
     const chat = stream();
-    attachEngineEvents(engine, { session: { sessionFile, sessionManager: { flushed: true } } }, chat, {
-      appEvents: { publish() {} },
-      observability: { evidenceLedger: ledger },
+    const runtime = { session: { sessionFile, sessionManager: { flushed: true } } };
+    attachEngineEvents(engine, runtime, chat, {
+      groups: {
+        core: { engine, runtime, chatStream: chat, appEvents: { publish() {} } },
+        security: {}, storage: { paths: { SESSIONS_DIR: root } },
+        providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+        infra: { observability: { evidenceLedger: ledger } },
+      },
     });
     engine.emit("event", event("turn.started", "turn-1", 1));
     engine.emit("event", event("tool.started", "turn-1", 2, { toolCallId: "call-success", name: "read", input: { target: "present" } }));

@@ -17,7 +17,7 @@ export function runWithWorkspaceOwnership<T>(
   workspace: string,
   operation: () => T | Promise<T>,
 ): Promise<T> {
-  if (ctx.workspaceLock) return ctx.workspaceLock.switchTo(workspace, operation);
+  if (ctx.groups.storage.workspaceLock) return ctx.groups.storage.workspaceLock.switchTo(workspace, operation);
   return Promise.resolve().then(operation);
 }
 
@@ -29,8 +29,8 @@ interface WorkspaceSwitchState {
 const workspaceSwitchStates = new WeakMap<object, WorkspaceSwitchState>();
 
 function publishWorkspaceChanged(ctx: ServerContext): void {
-  try { ctx.appEvents.publish("dashboard.changed"); } catch {}
-  try { ctx.appEvents.publish("usage.changed"); } catch {}
+  try { ctx.groups.core.appEvents.publish("dashboard.changed"); } catch {}
+  try { ctx.groups.core.appEvents.publish("usage.changed"); } catch {}
 }
 
 function workspacePathKey(workspace: string): string {
@@ -65,11 +65,11 @@ export async function authorizeWorkspacePath(
     return "";
   }
 
-  if (ctx.permissionService) {
-    return ctx.permissionService.authorizeWorkspaceRoot(requestedWorkspace, source);
+  if (ctx.groups.security.permissionService) {
+    return ctx.groups.security.permissionService.authorizeWorkspaceRoot(requestedWorkspace, source);
   }
 
-  const currentWorkspace = resolveEngine(ctx).session.workspace || ctx.paths.APP_ROOT;
+  const currentWorkspace = resolveEngine(ctx).session.workspace || ctx.groups.storage.paths.APP_ROOT;
   return guardPathWithinRoot(currentWorkspace, requestedWorkspace, "read").path;
 }
 
@@ -90,13 +90,13 @@ export function switchAuthorizedWorkspace(
   if (active) return active;
 
   const task = state.tail.catch(() => undefined).then(async () => {
-    const currentWorkspace = engine.session.workspace || ctx.paths.APP_ROOT;
+    const currentWorkspace = engine.session.workspace || ctx.groups.storage.paths.APP_ROOT;
     if (sameWorkspace(currentWorkspace, requestedWorkspace)) {
       return { workspace: currentWorkspace, previousWorkspace: currentWorkspace, switched: false };
     }
 
     const authorizedWorkspace = await authorizeWorkspacePath(ctx, requestedWorkspace, source, { required: true });
-    const latestWorkspace = engine.session.workspace || ctx.paths.APP_ROOT;
+    const latestWorkspace = engine.session.workspace || ctx.groups.storage.paths.APP_ROOT;
     if (sameWorkspace(latestWorkspace, authorizedWorkspace)) {
       return { workspace: latestWorkspace, previousWorkspace: latestWorkspace, switched: false };
     }

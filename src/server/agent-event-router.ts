@@ -452,13 +452,13 @@ export function attachEngineEvents(
 ): () => void {
   let lastStreamingUsagePublishAt = 0;
   const completedTurns = new Set<string>();
-  const publishUsageChanged = (): void => { try { ctx?.appEvents.publish("usage.changed"); } catch {} };
+  const publishUsageChanged = (): void => { try { ctx?.groups?.core.appEvents.publish("usage.changed"); } catch {} };
   const publishLifecycleChanged = (): void => {
-    try { ctx?.appEvents.publish("dashboard.changed"); } catch {}
+    try { ctx?.groups?.core.appEvents.publish("dashboard.changed"); } catch {}
     publishUsageChanged();
   };
-  const authorizeSessionWrite: SessionWriteAuthorizer | undefined = ctx?.permissionService
-    ? (sessionFile, source) => ctx.permissionService!.authorizePathSync(ctx.paths.SESSIONS_DIR, sessionFile, "write", source)
+  const authorizeSessionWrite: SessionWriteAuthorizer | undefined = ctx?.groups?.security.permissionService
+    ? (sessionFile, source) => ctx.groups.security.permissionService!.authorizePathSync(ctx.groups.storage.paths.SESSIONS_DIR, sessionFile, "write", source)
     : undefined;
   const presentationKinds = new Set([
     "content", "thinking", "tool_started", "tool_updated", "tool_completed",
@@ -469,8 +469,8 @@ export function attachEngineEvents(
 
   const recordCorrelation = (stage: "runtime.event" | "task.transition" | "session.persisted", eventType: string, details?: Record<string, unknown>, failureKind?: string): void => {
     const correlation = chatStream.correlation;
-    if (!ctx?.observability?.correlationLedger || !correlation?.traceId) return;
-    ctx.observability.correlationLedger.record({
+    if (!ctx?.groups?.infra.observability?.correlationLedger || !correlation?.traceId) return;
+    ctx.groups.infra.observability.correlationLedger.record({
       ...correlation,
       stage,
       eventType,
@@ -514,7 +514,7 @@ export function attachEngineEvents(
     const toolCallIds = chatStream.blocks
       .filter((block): block is Extract<AssistantBlock, { type: "tool" | "tool_use" }> => block.type === "tool" || block.type === "tool_use")
       .map((block) => block.toolCallId);
-    const evidence = ctx?.observability?.evidenceLedger
+    const evidence = ctx?.groups?.infra.observability?.evidenceLedger
       ?.getSuccessfulFacts(toolCallIds)
       .map((entry) => ({
         evidenceId: entry.evidenceId,
@@ -742,7 +742,7 @@ export function attachEngineEvents(
           ? (permissionFailure as { message: string }).message
           : undefined;
       if (event.type === "tool.completed" && !failed) {
-        const evidenceAvailable = Boolean(ctx?.observability?.evidenceLedger?.getSuccessfulFacts([event.toolCallId]).length);
+        const evidenceAvailable = Boolean(ctx?.groups?.infra.observability?.evidenceLedger?.getSuccessfulFacts([event.toolCallId]).length);
         const evidenceFields = Array.isArray(event.metadata?.evidenceFields)
           ? event.metadata.evidenceFields.filter((field): field is string => typeof field === "string")
           : [];

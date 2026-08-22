@@ -26,9 +26,15 @@ function wire(requirements, ledger = new EvidenceLedger(), sessionFile) {
   engine.session = { id: "session-a04" };
   engine.subscribe = (listener) => { engine.on("event", listener); return () => engine.off("event", listener); };
   const stream = chat(requirements);
-  attachEngineEvents(engine, { session: { sessionFile, sessionManager: { flushed: Boolean(sessionFile) } } }, stream, {
-    appEvents: { publish() {} },
-    observability: { evidenceLedger: ledger },
+  const runtime = { session: { sessionFile, sessionManager: { flushed: Boolean(sessionFile) } } };
+  attachEngineEvents(engine, runtime, stream, {
+    groups: {
+      core: { engine, runtime, chatStream: stream, appEvents: { publish() {} } },
+      security: {},
+      storage: { paths: { SESSIONS_DIR: tmpdir() } },
+      providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+      infra: { observability: { evidenceLedger: ledger } },
+    },
   });
   return { engine, stream, ledger };
 }

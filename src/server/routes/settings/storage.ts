@@ -10,7 +10,8 @@ import { cors } from "./common.js";
 
 export const handleStorageSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
-  const { runtime, paths: p } = ctx;
+  const { runtime } = ctx.groups.core;
+  const { paths: p } = ctx.groups.storage;
 
   if (url === "/api/storage-location" && method === "GET") {
     const pointerFile = p.DATA_ROOT_POINTER_FILE;
@@ -25,8 +26,8 @@ export const handleStorageSettings: RouteHandler = async (req, res, ctx) => {
       workspace: runtime.currentWorkspace || p.STARTUP?.workspace || p.APP_ROOT,
       instanceId: p.STARTUP?.instanceId || "",
       workspaceLock: {
-        status: ctx.workspaceLock?.owner ? "locked" : "unlocked",
-        ...(ctx.workspaceLock?.owner ? { owner: ctx.workspaceLock.owner } : {}),
+        status: ctx.groups.storage.workspaceLock?.owner ? "locked" : "unlocked",
+        ...(ctx.groups.storage.workspaceLock?.owner ? { owner: ctx.groups.storage.workspaceLock.owner } : {}),
       },
     }));
     return true;

@@ -15,7 +15,7 @@ function makeTempRoot(prefix) {
 }
 
 function mockCtx(root) {
-  return {
+  const context = {
     runtime: {},
     chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: root },
     sseClients: [],
@@ -28,6 +28,15 @@ function mockCtx(root) {
       FRONTEND_DIR: resolve(root, "dist", "frontend"),
       FRONTEND_SRC_DIR: resolve(root, "src", "frontend"),
       HAS_BUILT_FRONTEND: false,
+    },
+  };
+  return {
+    groups: {
+      core: { engine: {}, runtime: context.runtime, chatStream: context.chatStream, appEvents: { publish() {} } },
+      security: {},
+      storage: { paths: context.paths },
+      providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+      infra: {},
     },
   };
 }
