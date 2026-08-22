@@ -12,6 +12,7 @@ import {
   serializeCapabilityCatalog,
   checkCapabilityCatalog,
 } from "../scripts/generate-capability-catalog.mjs";
+import { buildTestManifest } from "../scripts/test-manifest.mjs";
 
 describe("capability catalog source facts", () => {
   it("exports stable engine, application, and permission facts", () => {
@@ -143,6 +144,7 @@ describe("capability catalog generator", () => {
     const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
     const workflow = readFileSync(resolve(".github/workflows/windows-governance.yml"), "utf8");
     assert.match(workflow, /npm run capabilities:check/);
-    assert.match(packageJson.scripts["test:unit"], /test\/capability-catalog\.test\.mjs/);
+    assert.strictEqual(packageJson.scripts["test:unit"], "node scripts/test-suite.mjs unit");
+    assert.ok(buildTestManifest().suites.unit.includes("test/capability-catalog.test.mjs"));
   });
 });

@@ -4,6 +4,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { createContext, Script } from "node:vm";
 import { transform } from "esbuild";
+import { buildTestManifest } from "../scripts/test-manifest.mjs";
 
 function frontendTypeScriptFiles(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -115,20 +116,23 @@ describe("application event stream ownership", () => {
 
   it("keeps the application event contracts in the normal test suites", () => {
     const pkg = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf8"));
-    assert.match(pkg.scripts["test:unit"], /test\/app-events-server\.test\.mjs/);
-    assert.match(pkg.scripts["test:frontend"], /test\/app-events-frontend\.test\.mjs/);
+    const manifest = buildTestManifest();
+    assert.strictEqual(pkg.scripts["test:unit"], "node scripts/test-suite.mjs unit");
+    assert.strictEqual(pkg.scripts["test:frontend"], "node scripts/test-suite.mjs frontend");
+    assert.ok(manifest.suites.unit.includes("test/app-events-server.test.mjs"));
+    assert.ok(manifest.suites.frontend.includes("test/app-events-frontend.test.mjs"));
   });
 
   it("keeps route tests isolated with bounded parallelism and memory", () => {
     const pkg = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf8"));
     assert.strictEqual(pkg.scripts["test:routes"], "node scripts/test-routes.mjs");
     const runner = readFileSync(resolve(process.cwd(), "scripts/test-routes.mjs"), "utf8");
+    const manifest = buildTestManifest();
     assert.match(runner, /runFile\(file, 4\)/);
     assert.match(runner, /runFile\(file, 1\)/);
     assert.match(runner, /processTreeRssMb/);
     assert.match(runner, /MY_CODE_AGENT_TEST_MEMORY_MB \|\| 2048/);
-    assert.match(runner, /test\/multi-instance-e2e\.mjs/);
-    assert.match(runner, /test\/workspace-lock\.test\.mjs/);
+    assert.deepEqual(manifest.suites.routesSerial, ["test/multi-instance-e2e.mjs", "test/workspace-lock.test.mjs"]);
   });
 
   it("keeps build and runtime memory budgets separate and builds Monaco in its own graph", () => {

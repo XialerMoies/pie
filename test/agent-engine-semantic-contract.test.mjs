@@ -115,7 +115,16 @@ describe("AgentEngine lifecycle semantics", () => {
 
     const payloads = chat.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1]));
     assert.equal(payloads.some((event) => event.type === "done"), false);
-    assert.deepEqual(payloads.at(-1), { type: "cancelled", turnId: "turn-2", sessionId: "session-1", reason: "cancelled_by_user" });
+    const cancelled = payloads.at(-1);
+    assert.deepEqual(
+      { type: cancelled.type, turnId: cancelled.turnId, sessionId: cancelled.sessionId, reason: cancelled.reason },
+      { type: "cancelled", turnId: "turn-2", sessionId: "session-1", reason: "cancelled_by_user" },
+    );
+    assert.deepEqual(cancelled.correlation, {
+      sessionId: "session-1",
+      traceId: "trace-turn-2",
+      turnId: "turn-2",
+    });
   });
 
   it("does not promote a thought-only turn into the final answer", () => {

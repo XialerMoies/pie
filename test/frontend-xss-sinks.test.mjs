@@ -49,7 +49,6 @@ const APPROVED_SINKS = new Map([
   ["src/frontend/chat/chat-render.ts|appendDelta|innerHTML|msgsEl", approved(1, "57ab068e4f07", REVIEW.renderer)],
   ["src/frontend/chat/chat-render.ts|finalizeLastMessage|innerHTML|contentElement", approved(3, "33a94ef512ee", REVIEW.markdown)],
   ["src/frontend/chat/chat-render.ts|finalizeLastMessage|innerHTML|textBody", approved(1, "81486ebbce39", REVIEW.markdown)],
-  ["src/frontend/chat/chat-render.ts|finalizeLastMessage|innerHTML|textElement", approved(1, "81486ebbce39", REVIEW.markdown)],
   ["src/frontend/chat/chat-render.ts|finalizeLastMessage|insertAdjacentHTML|contentElement", approved(1, "e5e239560bc1", REVIEW.markdown)],
   ["src/frontend/chat/chat-render.ts|finalizeLastMessage|outerHTML|thinkingElement", approved(1, "e5e239560bc1", REVIEW.markdown)],
   ["src/frontend/chat/chat-render.ts|updateLastBlock|innerHTML|contentElement", approved(1, "6ad0a91196a7", REVIEW.renderer)],

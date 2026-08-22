@@ -310,6 +310,8 @@ export function diagnosticsSnapshot(
       createdAt: entry.createdAt,
       ...(entry.duplicateOf ? { duplicateOf: entry.duplicateOf } : {}),
       ...(entry.correlation ? { correlation: entry.correlation } : {}),
+      ...(entry.executionContract ? { executionContract: entry.executionContract } : {}),
+      ...(entry.evidenceFields?.length ? { evidenceFields: entry.evidenceFields } : {}),
     })),
   } : undefined;
   const safeLogs = observability.logger.entries().map((entry) => {

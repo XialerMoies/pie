@@ -8,6 +8,7 @@ import {
   buildCliTerminalLaunch,
   launchCliTerminal,
 } from "../src/electron/cli-terminal.ts";
+import { buildTestManifest } from "../scripts/test-manifest.mjs";
 
 describe("CLI terminal launch", () => {
   it("uses the absolute app-owned loader and entry for development", () => {
@@ -238,7 +239,8 @@ describe("CLI terminal launch", () => {
 
   it("registers the CLI suites in the standard unit test command", () => {
     const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-    assert.match(packageJson.scripts["test:unit"], /test\/cli-terminal\.test\.mjs/);
-    assert.match(packageJson.scripts["test:unit"], /test\/cli-startup\.test\.mjs/);
+    assert.strictEqual(packageJson.scripts["test:unit"], "node scripts/test-suite.mjs unit");
+    assert.ok(buildTestManifest().suites.unit.includes("test/cli-terminal.test.mjs"));
+    assert.ok(buildTestManifest().suites.unit.includes("test/cli-startup.test.mjs"));
   });
 });

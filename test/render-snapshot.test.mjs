@@ -444,6 +444,24 @@ describe("msgs() 渲染", () => {
     host.remove();
   });
 
+  it("错误卡片位于事件流底部且不重复摘要正文", () => {
+    state.M = [{
+      role: "assistant",
+      streaming: false,
+      blocks: [{ type: "thinking", status: "done", text: "已分析", blockId: "thought-error", seq: 1 }],
+      error: { title: "回复失败", message: "当前回复未能完成。", actions: ["copy"] },
+    }];
+
+    const host = doc.createElement("div");
+    host.innerHTML = win.msgs();
+    const message = host.querySelector(".m");
+    assert.ok(message);
+    const children = [...message.children];
+    assert.ok(children.indexOf(message.querySelector(".mt")) < children.indexOf(message.querySelector(".msg-error")), "错误卡片应位于事件流之后");
+    const html = message.querySelector(".msg-error")?.outerHTML || "";
+    assert.strictEqual((html.match(/当前回复未能完成。/g) || []).length, 1, "错误摘要不应在展开正文中重复");
+  });
+
   it("block tool_use 渲染为工具节点", () => {
     state.M = [{
       role: "assistant",

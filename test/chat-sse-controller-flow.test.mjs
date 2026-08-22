@@ -183,4 +183,31 @@ describe("chat SSE controller event flow", () => {
     assert.strictEqual(scheduledRenders, 0);
     assert.strictEqual(fullRenders, 0);
   });
+
+  it("keeps generic terminal failures concise and does not invent recovery advice", () => {
+    reset();
+    let failure;
+    const controller = global.window.App.ChatViews.createSseController({
+      scheduleMessagesRender: () => {},
+      updateUI: () => {},
+      markLastMessageRendered: () => {},
+      renderMessages: () => {},
+      refreshComposer: () => {},
+      setAssistantError: (...args) => { failure = args; },
+      completeSend: () => {},
+      failSend: () => {},
+    });
+
+    controller.bind(11);
+    handlers.onMessage({ data: JSON.stringify({ type: "done", status: "error", error: "Agent turn failed" }) });
+
+    assert.deepStrictEqual(failure, [
+      "回复失败",
+      "当前回复未能完成。",
+      undefined,
+      undefined,
+      undefined,
+      ["retry", "copy"],
+    ]);
+  });
 });

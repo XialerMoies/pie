@@ -53,6 +53,7 @@ import {
   type SubagentDelegationHost,
 } from "./subagent-delegation.js";
 import { createSubagentEventSink } from "./subagent-events.js";
+import { authorizeExecutionContractAttempt } from "./task-lifecycle.js";
 import { CustomProviderStore } from "../model-provider/custom-provider-store.js";
 import { PiCustomProviderAdapter } from "../model-provider/pi-custom-provider-adapter.js";
 import { CustomProviderRuntimeCoordinator } from "../model-provider/runtime-coordinator.js";
@@ -295,6 +296,12 @@ async function main() {
     getCorrelationContext: () => chatStream.correlation ? { ...chatStream.correlation } : undefined,
     toolOutcomeSource: "live",
     evidenceLookup: (toolName, scope) => evidenceLedger.lookup(toolName, scope),
+    getExecutionContract: () => chatStream.taskRequirements?.contract,
+    authorizeExecutionContract: (toolName, _input, scope) => {
+      const contract = chatStream.taskRequirements?.contract;
+      const attempts = chatStream.executionContractAttempts || (chatStream.executionContractAttempts = new Set());
+      return authorizeExecutionContractAttempt(contract, chatStream.taskLifecycle, attempts, toolName, scope);
+    },
     skillService,
   }));
 

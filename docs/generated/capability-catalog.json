@@ -474,6 +474,38 @@
       "source": "src/agent/tools/memory.ts"
     },
     {
+      "name": "skill_facts",
+      "description": "读取规范技能状态（trust、enabled、parse）。只用于事实核验，不读取技能正文。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "技能 id，例如 skill-verification"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "user",
+              "workspace"
+            ],
+            "description": "技能作用域"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": true
+      },
+      "source": "src/agent/tools/skill-facts.ts"
+    },
+    {
       "name": "str_replace_editor",
       "description": "精确文件编辑工具。仅编辑已有文件，两种模式：\n1. file_path + old_string + new_string → 在已有文件中精确替换\n2. file_path + edits: [{old_string, new_string, replace_all?}] → 批量替换\n\n创建新文件请使用 file_write。\nold_string 匹配会自动处理弯引号 → 直引号归一，以及 HTML 转义反转义。",
       "parameters": {
@@ -813,28 +845,28 @@
     },
     {
       "file": "scripts/test-build.mjs",
-      "line": 17,
+      "line": 19,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-build.mjs",
-      "line": 24,
+      "line": 26,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-build.mjs",
-      "line": 34,
+      "line": 36,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-build.mjs",
-      "line": 45,
+      "line": 47,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
@@ -848,28 +880,35 @@
     },
     {
       "file": "scripts/test-routes.mjs",
-      "line": 38,
+      "line": 14,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-routes.mjs",
-      "line": 47,
+      "line": 23,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-routes.mjs",
-      "line": 57,
+      "line": 33,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-routes.mjs",
-      "line": 68,
+      "line": 44,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-suite.mjs",
+      "line": 21,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"

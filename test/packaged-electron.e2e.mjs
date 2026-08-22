@@ -24,6 +24,35 @@ const children = new Set();
 let output = "";
 let passed = false;
 let secondLaunchChild = null;
+const memoryLimitMb = Number(process.env.MY_CODE_AGENT_TEST_MEMORY_MB || 2048);
+let peakRssMb = 0;
+let memoryExceeded = false;
+let memoryMonitor = null;
+
+function processTreeRssMb(pid) {
+  if (process.platform !== "win32") return Promise.resolve(0);
+  const script = "try { $root=" + Number(pid) + "; $all=@{}; Get-CimInstance Win32_Process | ForEach-Object { $all[[int]$_.ProcessId]=[int]$_.ParentProcessId }; $ids=@($root); for($i=0;$i -lt $ids.Count;$i++){ foreach($p in $all.GetEnumerator()){ if($p.Value -eq $ids[$i] -and $ids -notcontains $p.Key){ $ids += $p.Key } } }; $sum=0; foreach($id in $ids){ $proc=Get-Process -Id $id -ErrorAction SilentlyContinue; if($proc){ $sum += $proc.WorkingSet64 } }; [math]::Round($sum/1MB,0) } catch { 0 }";
+  return new Promise((resolveRss) => {
+    const probe = spawn("powershell", ["-NoProfile", "-Command", script], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+    let text = "";
+    probe.stdout.on("data", (chunk) => { text += chunk; });
+    probe.once("close", () => resolveRss(Number(text.trim()) || 0));
+    probe.once("error", () => resolveRss(0));
+  });
+}
+
+function startMemoryMonitor() {
+  memoryMonitor = setInterval(async () => {
+    const roots = [...children].filter((child) => child?.pid && !hasExited(child));
+    const usage = (await Promise.all(roots.map((child) => processTreeRssMb(child.pid)))).reduce((sum, value) => sum + value, 0);
+    peakRssMb = Math.max(peakRssMb, usage);
+    if (!memoryExceeded && usage >= memoryLimitMb) {
+      memoryExceeded = true;
+      console.error(`packaged Electron memory limit exceeded: RSS=${usage}MB / ${memoryLimitMb}MB`);
+      for (const child of roots) stopProcessTree(child);
+    }
+  }, 250);
+}
 
 function hasExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
@@ -210,10 +239,32 @@ function assertPackagedChatEventFlow(result) {
   assert.match(String(result.chatEventFlow?.visibleText || ""), /最终正文/);
 }
 
+function assertPackagedConcurrencyResult(result) {
+  const concurrency = result.concurrency;
+  assert.ok(concurrency && typeof concurrency === "object", "packaged concurrency result is missing");
+  assert.equal(concurrency.requestCount, 7);
+  assert.equal(concurrency.withinDeadline, true, "long tool stream did not reach terminal DOM state");
+  assert.equal(concurrency.streamOverlappedIndependentRequests, true, "independent requests did not overlap the long tool");
+  assert.deepEqual(concurrency.nodeOrder, ["e2e-thought", "e2e-tool", "e2e-text"]);
+  assert.equal(concurrency.stableNodeIdentity, true);
+  assert.equal(concurrency.mutationSummary?.rootReplaced, false);
+  assert.equal(concurrency.mutationSummary?.removedExisting, 0);
+  assert.equal(concurrency.chatPaneOpened, true);
+  assert.equal(concurrency.settingsOpened, true);
+  assert.equal(concurrency.loadingStates?.sessionListLoading, false);
+  assert.equal(concurrency.loadingStates?.settingsLoading, false);
+  assert.equal(concurrency.loadingStates?.workspaceLoading, false);
+  for (const request of concurrency.requestRecords || []) {
+    assert.equal(typeof request.completedMs, "number", `${request.name} did not complete`);
+    assert.notEqual(request.status, 0, `${request.name} transport failed`);
+  }
+}
+
 function assertSingleProcessMultiWindowResult(result) {
   assert.equal(result.ok, true, `packaged probe failed: ${JSON.stringify(result, null, 2)}`);
   assertExistingSecurityProbe(result);
   assertPackagedChatEventFlow(result);
+  assertPackagedConcurrencyResult(result);
   assertNoRawTokenFields(result);
 
   assert.equal(Number.isInteger(result.electronPid), true);
@@ -285,6 +336,8 @@ function assertSingleProcessMultiWindowResult(result) {
     electronPid: result.electronPid,
     serverPids: [projectA.serverPid, projectB.serverPid],
     ports: [projectA.port, projectB.port],
+    peakRssMb,
+    memoryLimitMb,
   };
 }
 
@@ -311,8 +364,10 @@ try {
   children.add(child);
   child.stdout?.on("data", (chunk) => { output += chunk.toString(); });
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
+  startMemoryMonitor();
 
   const result = await waitForResult(child);
+  if (memoryExceeded) throw new Error(`packaged Electron exceeded ${memoryLimitMb}MB RSS (peak ${peakRssMb}MB)`);
   const measured = assertSingleProcessMultiWindowResult(result);
   assert.equal(result.electronPid, child.pid, "result must identify the first executable's Electron main process");
   assert.ok(secondLaunchChild, "the harness did not launch a second executable");
@@ -344,6 +399,8 @@ try {
       : cleanupFailure;
   }
   if (process.platform === "win32") await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+  if (memoryMonitor) clearInterval(memoryMonitor);
+  memoryMonitor = null;
   if (!passed) {
     writeFileSync(join(tempRoot, "electron-output.log"), output, "utf8");
     console.error(`packaged Electron E2E artifacts retained at ${tempRoot}`);

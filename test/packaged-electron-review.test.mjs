@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { buildTestManifest } from "../scripts/test-manifest.mjs";
 
 import * as e2eDiagnostics from "../src/electron/e2e-diagnostics.ts";
 
@@ -104,9 +105,11 @@ test("packaged E2E has no unvalidated phase protocol", () => {
   const harness = readFileSync(new URL("./packaged-electron.e2e.mjs", import.meta.url), "utf8");
   const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   const unitScript = packageJson.scripts["test:unit"];
+  const manifest = buildTestManifest();
 
   assert.doesNotMatch(source, /E2E_PHASE|MY_CODE_AGENT_E2E_PHASE/);
   assert.doesNotMatch(harness, /MY_CODE_AGENT_E2E_PHASE/);
-  assert.match(unitScript, /(?:^|\s)test\/packaged-electron-poll\.test\.mjs(?:\s|$)/);
-  assert.match(unitScript, /(?:^|\s)test\/packaged-electron-review\.test\.mjs(?:\s|$)/);
+  assert.strictEqual(unitScript, "node scripts/test-suite.mjs unit");
+  assert.ok(manifest.suites.unit.includes("test/packaged-electron-poll.test.mjs"));
+  assert.ok(manifest.suites.unit.includes("test/packaged-electron-review.test.mjs"));
 });

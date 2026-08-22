@@ -551,7 +551,8 @@ describe("chat ui state", () => {
     assert.strictEqual(env.win.App.ChatState.isBusy(), false);
     assert.strictEqual(streams[0].closed, true);
     assert.strictEqual(last.streaming, false);
-    assert.strictEqual(last.error?.reason, "provider failed");
+    assert.match(last.error?.message || '', /provider failed/);
+    assert.strictEqual(last.error?.raw, "provider failed");
   });
 
   it("business error events stop the streaming assistant state", () => {

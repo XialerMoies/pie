@@ -98,6 +98,8 @@ export interface ChatStreamState {
   /** Runtime task contract; final answers are derived from this state machine. */
   taskRequirements?: TaskRequirements;
   taskLifecycle?: TaskLifecycleSnapshot;
+  /** Per-turn contract attempts; strict verification must not re-run identical sources. */
+  executionContractAttempts?: Set<string>;
 }
 
 export interface ServerContext {

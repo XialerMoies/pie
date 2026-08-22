@@ -1,36 +1,12 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { buildTestManifest } from "./test-manifest.mjs";
 
 const HARD_LIMIT_MB = Number(process.env.MY_CODE_AGENT_TEST_MEMORY_MB || 2048);
 const WARN_LIMIT_MB = Math.floor(HARD_LIMIT_MB * 0.8);
-const TEST_FILES = [
-  "test/routes.test.mjs",
-  "test/path-guard.test.mjs",
-  "test/server-security.test.mjs",
-  "test/desktop-ipc.test.mjs",
-  "test/multi-instance-security.test.mjs",
-  "test/multi-instance-launch.test.mjs",
-  "test/server-permission-service.test.mjs",
-  "test/root-registry.test.mjs",
-  "test/sessions.test.mjs",
-  "test/workspace-session.test.mjs",
-  "test/workspace-authorization.test.mjs",
-  "test/server-startup-paths.test.mjs",
-  "test/session-data-layout.test.mjs",
-  "test/typescript-route.test.mjs",
-  "test/chat-sse.test.mjs",
-  "test/chat-stream-replay.test.mjs",
-  "test/chat-event-flow-contract.test.mjs",
-  "test/deterministic-event-script-flow.test.mjs",
-  "test/agent-fault-matrix-flow.test.mjs",
-  "test/agent-terminal-guard-flow.test.mjs",
-  "test/agent-event-persistence-flow.test.mjs",
-  "test/attachments.test.mjs",
-  "test/tool-trace.test.mjs",
-  "test/tool-outcome-live-flow.test.mjs",
-  "test/agent-fault-matrix.test.mjs",
-];
-const SERIAL_FILES = ["test/multi-instance-e2e.mjs", "test/workspace-lock.test.mjs"];
+const testManifest = buildTestManifest();
+const TEST_FILES = testManifest.suites.routes;
+const SERIAL_FILES = testManifest.suites.routesSerial;
 
 function processTreeRssMb(pid) {
   if (process.platform !== "win32") {

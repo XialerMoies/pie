@@ -340,6 +340,41 @@ export interface ToolContext {
   getCorrelationContext?: () => ToolCorrelationContext | undefined
   /** Optional host-owned read-through cache for unchanged successful evidence. */
   evidenceLookup?: (toolName: string, scope: ToolEvidenceScope) => ToolEvidenceLookup | undefined
+  /** Host-owned task contract gate. Model input cannot modify the contract. */
+  getExecutionContract?: () => ExecutionContract | undefined
+  authorizeExecutionContract?: (toolName: string, input: unknown, scope: ToolEvidenceScope) => ExecutionContractDecision
+}
+
+export type ExecutionContractKind = "fact_verification" | "implementation" | "diagnosis" | "exploration" | "conversation"
+
+export interface ExecutionContract {
+  kind: ExecutionContractKind
+  targets?: readonly string[]
+  /** Host-owned instruction files may be read to understand the requested check,
+   * but their contents can never satisfy the task's evidence fields. */
+  instructionSources?: readonly string[]
+  allowedSources?: readonly string[]
+  allowedTools?: readonly string[]
+  requiredEvidence?: readonly string[]
+  completionCondition: "evidence_satisfied" | "change_verified" | "user_stop"
+  onMissingEvidence?: "report_unverified" | "ask_user"
+  maxUnrelatedAttempts?: number
+  revision: number
+}
+
+export interface ExecutionContractDecision {
+  allowed: boolean
+  code?: "execution_contract_violation" | "execution_contract_complete" | "duplicate_attempt"
+  reason?: string
+  retryable?: boolean
+}
+
+function targetMatches(target: string, source: string): boolean {
+  const normalizedTarget = target.replace(/\\/g, "/")
+  const normalizedSource = source.replace(/\\/g, "/")
+  return normalizedTarget === normalizedSource
+    || normalizedTarget.endsWith(`/${normalizedSource}`)
+    || normalizedSource.endsWith(`/${normalizedTarget}`)
 }
 
 export type ToolOutcomeSource = "live" | "replay" | "test"
@@ -361,6 +396,7 @@ export interface ToolEvidenceLookup {
   evidenceId: string
   summary: string
   payloadHash: string
+  evidenceFields?: string[]
 }
 
 export interface ToolOutcomeObservation {
@@ -378,6 +414,13 @@ export interface ToolOutcomeObservation {
   complete?: boolean
   timestamp?: string
   correlation?: ToolCorrelationContext
+  executionContract?: {
+    allowed: boolean
+    code?: string
+    reason?: string
+    revision?: number
+  }
+  evidenceFields?: string[]
 }
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void
@@ -771,6 +814,8 @@ export interface ToolExecutionExtraContext {
   toolOutcomeSource?: ToolContext["toolOutcomeSource"]
   evidenceLookup?: ToolContext["evidenceLookup"]
   getCorrelationContext?: ToolContext["getCorrelationContext"]
+  getExecutionContract?: ToolContext["getExecutionContract"]
+  authorizeExecutionContract?: ToolContext["authorizeExecutionContract"]
 }
 
 export function agentToolToPIToolDefinition(
@@ -804,10 +849,55 @@ export function agentToolToPIToolDefinition(
       const requestScope: ToolEvidenceScope = {
         ...(workspace ? { workspace } : {}),
         ...((typeof args.target === "string" || typeof args.path === "string" || typeof args.file === "string")
-          ? { target: String(args.target || args.path || args.file).slice(0, 512) } : {}),
+          ? { target: String(args.target || args.path || args.file).slice(0, 512) }
+          : (authorizedTool.name === "skill_facts" && typeof args.id === "string"
+            ? { target: `${args.source === "user" ? "user/skills" : "agent/skills"}/${args.id}/SKILL.md`.slice(0, 512) }
+            : {})),
         ...((typeof args.operation === "string" || typeof args.action === "string")
           ? { operation: String(args.operation || args.action).slice(0, 128) } : {}),
         argsFingerprint: createHash("sha256").update(JSON.stringify(args)).digest("hex"),
+      }
+      const contract = extraCtx?.getExecutionContract?.()
+      let executionContractDecision: ExecutionContractDecision | undefined
+      const sourceMatches = (sources: readonly string[] | undefined): boolean => Boolean(
+        sources?.some((source) => targetMatches(requestScope.target || "", source)),
+      )
+      if (contract?.kind === "fact_verification" && contract.targets?.length) {
+        const target = requestScope.target || ""
+        const instructionSource = sourceMatches(contract.instructionSources)
+        const sourceAllowed = !contract.allowedSources?.length || sourceMatches(contract.allowedSources) || instructionSource
+        const toolAllowed = !contract.allowedTools?.length || contract.allowedTools.includes(authorizedTool.name)
+        executionContractDecision = extraCtx?.authorizeExecutionContract?.(authorizedTool.name, args, requestScope)
+        if (!sourceAllowed || !toolAllowed || executionContractDecision?.allowed === false) {
+          const reason = executionContractDecision?.reason || (!sourceAllowed ? "source_not_allowed" : "tool_not_allowed")
+          const message = reason === "evidence_satisfied"
+            ? "未执行：事实核验所需证据已齐全，必须停止继续调查。"
+            : `未执行：事实核验契约禁止${reason === "source_not_allowed" ? "读取该来源" : "使用该工具"}。`
+          const contractCode = executionContractDecision?.code === "execution_contract_complete"
+            ? "execution_contract_complete" as const
+            : "execution_contract_violation" as const
+          const failure = {
+            status: "failed" as const,
+            failure: {
+              kind: "validation_error" as const,
+              code: contractCode,
+              message,
+            details: { reason, revision: contract.revision, target: target.slice(0, 512) },
+            },
+          }
+          emitTrace?.({ type: "tool_execution_start", toolCallId: _toolCallId, toolName: authorizedTool.name, args })
+          emitTrace?.({ type: "tool_execution_end", toolCallId: _toolCallId, toolName: authorizedTool.name, result: message, outcome: failure, metadata: { executionContract: reason, retryable: false }, isError: true })
+          extraCtx?.toolOutcomeObserver?.({
+            source: extraCtx.toolOutcomeSource || "live", toolName: authorizedTool.name, toolCallId: _toolCallId,
+            outcome: "failed", failureKind: "validation_error", legacy: false, requestScope,
+            payloadSummary: message, complete: false, ...(correlation ? { correlation } : {}),
+            executionContract: { allowed: false, code: contractCode, reason, revision: contract.revision },
+          })
+          return {
+            content: [{ type: "text" as const, text: message }],
+            details: { executionContract: reason, retryable: false, toolOutcome: "failed", outcome: failure },
+          }
+        }
       }
       emitTrace?.({ type: "tool_execution_start", toolCallId: _toolCallId, toolName: authorizedTool.name, args })
       try {
@@ -823,6 +913,7 @@ export function agentToolToPIToolDefinition(
             source: extraCtx.toolOutcomeSource || "live", toolName: authorizedTool.name,
             toolCallId: _toolCallId, outcome: "success", legacy: false,
             requestScope, payloadSummary: text, payloadHash: cached.payloadHash, complete: true,
+            evidenceFields: cached.evidenceFields,
             ...(correlation ? { correlation } : {}),
           })
           return {
@@ -843,17 +934,25 @@ export function agentToolToPIToolDefinition(
           toolCallId: _toolCallId,
           signal,
           onUpdate,
+          getExecutionContract: extraCtx?.getExecutionContract,
           ...extraCtx,
         }
         const normalized = normalizeAgentToolExecutionResult(await authorizedTool.execute(args, toolContext))
         const structured = authorizedTool.resultFormat === "structured"
+        // Instruction files explain how to perform a check. They are not the
+        // checked object, so never let their generic file content satisfy the
+        // contract's required evidence.
+        const instructionSource = contract?.kind === "fact_verification" && sourceMatches(contract.instructionSources)
+        const normalizedMetadata = instructionSource
+          ? Object.fromEntries(Object.entries(normalized.metadata).filter(([key]) => key !== "evidenceFields"))
+          : normalized.metadata
         emitTrace?.({
           type: "tool_execution_end",
           toolCallId: _toolCallId,
           toolName: authorizedTool.name,
           result: normalized.text,
           ...(structured ? { data: normalized.data, diagnostics: normalized.diagnostics } : {}),
-          ...(Object.keys(normalized.metadata).length > 0 ? { metadata: normalized.metadata } : {}),
+          ...(Object.keys(normalizedMetadata).length > 0 ? { metadata: normalizedMetadata } : {}),
           outcome: normalized.outcome,
           ...(normalized.legacy ? { legacy: true } : {}),
           isError: normalized.outcome.status === "failed",
@@ -869,13 +968,17 @@ export function agentToolToPIToolDefinition(
           requestScope,
           payloadSummary: normalized.text.slice(0, 240),
           complete: normalized.outcome.status === "success" && !normalized.legacy,
+          ...(contract && executionContractDecision ? { executionContract: { allowed: true, revision: contract.revision } } : {}),
+          evidenceFields: Array.isArray(normalizedMetadata.evidenceFields)
+            ? normalizedMetadata.evidenceFields.filter((field): field is string => typeof field === "string").slice(0, 32)
+            : undefined,
           ...(correlation ? { correlation } : {}),
         })
         return {
           content: [{ type: "text" as const, text: normalized.text }],
           details: structured
-            ? { ...normalized.metadata, data: normalized.data, diagnostics: normalized.diagnostics }
-            : normalized.metadata,
+            ? { ...normalizedMetadata, data: normalized.data, diagnostics: normalized.diagnostics }
+            : normalizedMetadata,
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)

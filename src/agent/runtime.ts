@@ -50,6 +50,8 @@ export interface RuntimeConfig {
   toolOutcomeObserver?: ToolContext["toolOutcomeObserver"]
   toolOutcomeSource?: ToolContext["toolOutcomeSource"]
   evidenceLookup?: ToolContext["evidenceLookup"]
+  getExecutionContract?: ToolContext["getExecutionContract"]
+  authorizeExecutionContract?: ToolContext["authorizeExecutionContract"]
   getCorrelationContext?: ToolContext["getCorrelationContext"]
   syncModelProviders?: (runtime: ModelRuntime) => Promise<number>
   skillService?: SkillService
@@ -67,7 +69,7 @@ type RuntimeToolExtraContext = ToolExecutionExtraContext
 
 export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraContext | undefined {
   const permissionState = config.sessionPermissionState
-  if (!config.userMemoryRoot && !config.workspaceMemoryRoot && !config.permissionMode && !config.getPermissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken && !config.validateSubagentModel && !config.getSubagentDefinitions && !config.getSubagentLimits && !config.delegateTasks && !config.toolOutcomeObserver && !config.evidenceLookup && !config.getCorrelationContext) return undefined
+  if (!config.userMemoryRoot && !config.workspaceMemoryRoot && !config.permissionMode && !config.getPermissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken && !config.validateSubagentModel && !config.getSubagentDefinitions && !config.getSubagentLimits && !config.delegateTasks && !config.toolOutcomeObserver && !config.evidenceLookup && !config.getCorrelationContext && !config.getExecutionContract && !config.authorizeExecutionContract) return undefined
   return {
     userMemoryRoot: config.userMemoryRoot,
     workspaceMemoryRoot: config.workspaceMemoryRoot,
@@ -95,6 +97,8 @@ export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraCo
     toolOutcomeSource: config.toolOutcomeSource,
     evidenceLookup: config.evidenceLookup,
     getCorrelationContext: config.getCorrelationContext,
+    getExecutionContract: config.getExecutionContract,
+    authorizeExecutionContract: config.authorizeExecutionContract,
   }
 }
 

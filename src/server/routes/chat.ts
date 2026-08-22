@@ -10,11 +10,36 @@ import { WorkspaceLockConflictError } from "../workspace-lock.js";
 import { authorizeWorkspacePath, switchAuthorizedWorkspace } from "./workspace-authorization.js";
 import { replayChatEvents, resetChatEventHistory, writeChatEvent, writeChatStreamBaseline } from "../chat-stream.js";
 import { serverConfirmationRegistry } from "../confirmation-registry.js";
-import { inferTaskRequirements } from "../task-lifecycle.js";
+import { expandTaskRequirements, formatExecutionContractGuidance, inferTaskRequirements } from "../task-lifecycle.js";
 import { randomUUID } from "node:crypto";
 
 const COMMAND_CONFIRM_TIMEOUT_MS = 120_000;
 const MODEL_PROVIDER_SYNC_ERROR = "模型提供商同步失败，请重试。";
+
+const E2E_LONG_TOOL_MESSAGE = "__my_code_agent_e2e_long_tool__";
+
+function waitForE2EProbe(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runE2ELongToolTurn(chatStream: ChatStreamState): Promise<void> {
+  const turnId = chatStream.turnId;
+  const traceId = chatStream.traceId;
+  const toolCallId = `e2e-tool-${Date.now().toString(36)}`;
+  const thinkingBlock = { type: "thinking" as const, status: "streaming" as const, text: "准备长工具", turnId, traceId, blockId: "e2e-thought", seq: 1 };
+  const toolBlock = { type: "tool" as const, status: "running" as const, name: "command", input: { command: "long-e2e-command" }, toolCallId, turnId, traceId, blockId: "e2e-tool", seq: 2 };
+  const textBlock = { type: "text" as const, text: "长工具执行完成", turnId, traceId, blockId: "e2e-text", seq: 3 };
+  writeChatEvent(chatStream, { type: "block", block: thinkingBlock });
+  writeChatEvent(chatStream, { type: "block", block: toolBlock });
+  // Keep the tool block open long enough to overlap the independent desktop requests.
+  await waitForE2EProbe(1_200);
+  const completedTool = { ...toolBlock, status: "success" as const, output: "long tool result" };
+  const completedThought = { ...thinkingBlock, status: "done" as const };
+  const terminalBlocks = [completedThought, completedTool, textBlock];
+  writeChatEvent(chatStream, { type: "block", block: completedTool });
+  writeChatEvent(chatStream, { type: "block", block: textBlock });
+  writeChatEvent(chatStream, { type: "done", turnId, text: textBlock.text, blocks: terminalBlocks });
+}
 
 function terminateChatTurn(chatStream: ChatStreamState, message: string): void {
   writeChatEvent(chatStream, { type: "error", message });
@@ -206,9 +231,20 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         chatStream.activeThinkingInput = undefined;
         chatStream.thinkingBlockGenerations = {};
         chatStream.emittedTraces = new Set();
-        chatStream.taskRequirements = inferTaskRequirements(typeof message === "string" ? message : "");
+        chatStream.executionContractAttempts = new Set();
+        const requestMessage = typeof message === "string" ? message : "";
+        chatStream.taskRequirements = expandTaskRequirements(chatStream.taskRequirements, requestMessage)
+          || inferTaskRequirements(requestMessage);
         chatStream.taskLifecycle = undefined;
         if (workspace) chatStream.currentWorkspace = workspace;
+        if (process.env.MY_CODE_AGENT_E2E_CONCURRENCY === "1" && requestMessage === E2E_LONG_TOOL_MESSAGE) {
+          void runE2ELongToolTurn(chatStream).catch((error: unknown) => {
+            writeChatEvent(chatStream, { type: "error", message: error instanceof Error ? error.message : String(error) });
+          });
+          res.writeHead(200, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: true, e2e: "long_tool" }));
+          return;
+        }
         // 处理引用文件附件
         let finalMessage = message;
         if (attachments && Array.isArray(attachments) && attachments.length > 0) {
@@ -221,6 +257,8 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
             console.log(`📎 Added ${blocks.length} file(s) to context`);
           }
         }
+        const contractGuidance = formatExecutionContractGuidance(chatStream.taskRequirements);
+        if (contractGuidance) finalMessage = `${finalMessage}\n\n${contractGuidance}`;
         try {
           await engine.syncModelProviders();
         } catch {

@@ -1,13 +1,15 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { buildTestManifest } from "./test-manifest.mjs";
 
 const TEST_LIMIT_MB = Number(process.env.MY_CODE_AGENT_TEST_MEMORY_MB || 2048);
 const BUILD_LIMIT_MB = Number(process.env.MY_CODE_AGENT_BUILD_MEMORY_MB || 3584);
 
+const testManifest = buildTestManifest();
 const steps = [
   ["build frontend", "scripts/build-frontend.mjs", []],
   ["smoke", "test/smoke.mjs", []],
-  ["dist flow", "scripts/tsx-test.mjs", ["--test", "--test-concurrency=1", "test/dist-chat-event-flow.test.mjs", "test/dist-agent-event-flow.test.mjs"]],
+  ["dist flow", "scripts/tsx-test.mjs", ["--test", "--test-concurrency=1", ...testManifest.suites.build]],
 ];
 
 function processTreeRssMb(pid) {

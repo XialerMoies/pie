@@ -206,13 +206,14 @@ class ChatSseControllerView {
     if (typeof data.text === 'string') last.content = data.text;
     if (Array.isArray(data.blocks)) last.blocks = data.blocks;
     const reason = data.error || data.message || 'Agent turn failed';
+    const hasSpecificReason = reason !== 'Agent turn failed';
     this.finalizeOpenBlocks(last, reason);
     this.callbacks.setAssistantError(
       '回复失败',
-      '当前回复未能完成。请查看错误详情后重试。',
-      reason,
-      ['检查模型与网络状态', '重新发送当前消息'],
-      reason,
+      hasSpecificReason ? `当前回复未能完成：${reason}` : '当前回复未能完成。',
+      undefined,
+      undefined,
+      hasSpecificReason ? reason : undefined,
       ['retry', 'copy'],
     );
     this.dependencies.chatState.setBusy(false);

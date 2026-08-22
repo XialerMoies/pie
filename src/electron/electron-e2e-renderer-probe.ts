@@ -132,6 +132,133 @@ export async function runPackagedChatEventFlowProbe(
   })()`, true);
 }
 
+/**
+ * Run the packaged dashboard while a deterministic long tool event is active.
+ * The probe records request timing, stream-to-DOM timing, loading states and
+ * node identity so a final DOM snapshot cannot hide starvation or replacement.
+ */
+export async function runPackagedConcurrencyProbe(
+  win: BrowserWindow,
+): Promise<Record<string, unknown>> {
+  return win.webContents.executeJavaScript(`(async () => {
+    const startedAt = performance.now();
+    const requests = [
+      ['diagnostics', '/api/diagnostics'],
+      ['sessions', '/api/sessions'],
+      ['uiState', '/api/ui-state'],
+      ['tokenUsage', '/api/token-usage'],
+      ['explorer', '/api/explorer'],
+      ['skills', '/api/settings/skills'],
+      ['tsDiagnostics', '/api/ts/diagnostics?file=index.ts'],
+    ];
+    const requestRecords = [];
+    const timedFetch = async (name, url) => {
+      const start = performance.now();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8_000);
+      try {
+        const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+        const firstByte = performance.now();
+        await response.text();
+        const completed = performance.now();
+        const record = { name, status: response.status, firstByteMs: firstByte - start, completedMs: completed - start, state: response.headers.get('X-Request-State') || 'complete' };
+        requestRecords.push(record);
+        return record;
+      } catch (error) {
+        const completed = performance.now();
+        const record = { name, status: 0, firstByteMs: null, completedMs: completed - start, state: error?.name === 'AbortError' ? 'timeout' : 'failed' };
+        requestRecords.push(record);
+        return record;
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+
+    const chatState = window.App?.ChatState;
+    const chat = window.App?.Chat;
+    chatState?.replaceMessages?.([]);
+    chat?.updateUI?.();
+    const messageContainer = document.querySelector('#ms');
+    if (!messageContainer) throw new Error('chat message container is unavailable');
+    messageContainer.innerHTML = '';
+    let assistantRoot = null;
+    const nodeIdentities = {};
+    const nodeOrder = [];
+    const mutationSummary = { removedExisting: 0, addedExisting: 0, rootReplaced: false };
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.removedNodes) {
+          if (node.nodeType === 1 && node.matches?.('[data-block-id]')) mutationSummary.removedExisting += 1;
+        }
+        for (const node of record.addedNodes) {
+          if (node.nodeType === 1 && node.matches?.('[data-block-id]')) mutationSummary.addedExisting += 1;
+        }
+      }
+      if (assistantRoot && messageContainer.querySelector('.m') !== assistantRoot) mutationSummary.rootReplaced = true;
+    });
+    observer.observe(messageContainer, { childList: true, subtree: true });
+
+    const streamStarted = performance.now();
+    const input = document.querySelector('#ci');
+    const send = document.querySelector('#cs');
+    if (!(input instanceof HTMLTextAreaElement) || !(send instanceof HTMLElement)) throw new Error('chat composer is unavailable');
+    input.value = '__my_code_agent_e2e_long_tool__';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('[data-side="chat"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const chatPaneOpened = Boolean(document.querySelector('#sl'));
+    const settings = window.App?.Settings;
+    settings?.openSettingsModal?.();
+    document.querySelector('.ms-item[data-st="skills"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const settingsOpened = Boolean(document.querySelector('#settings-modal'));
+    send.click();
+
+    const streamDeadline = performance.now() + 15_000;
+    let firstBlockAt = null;
+    let terminalAt = null;
+    let independentStarted = null;
+    let independent = null;
+    while (performance.now() < streamDeadline) {
+      const nodes = Array.from(messageContainer.querySelectorAll('[data-block-id]'));
+      for (const node of nodes) {
+        const id = node.dataset.blockId;
+        if (!id) continue;
+        if (!nodeIdentities[id]) { nodeIdentities[id] = node; nodeOrder.push(id); }
+        else if (nodeIdentities[id] !== node) mutationSummary.removedExisting += 1;
+      }
+      if (!firstBlockAt && nodeOrder.length > 0) {
+        firstBlockAt = performance.now();
+        assistantRoot = messageContainer.querySelector('.m');
+        independentStarted = performance.now();
+        independent = Promise.all(requests.map(([name, url]) => timedFetch(name, url)));
+      }
+      if (nodeOrder.includes('e2e-text') && messageContainer.textContent?.includes('长工具执行完成')) { terminalAt = performance.now(); break; }
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    const records = await (independent || Promise.all(requests.map(([name, url]) => timedFetch(name, url))));
+    observer.disconnect();
+    const loadingStates = {
+      sessionListLoading: document.querySelector('#sl')?.classList.contains('is-loading') || /加载中/.test(document.querySelector('#sl')?.textContent || ''),
+      settingsLoading: /加载中/.test(document.querySelector('#mc-settings')?.textContent || ''),
+      workspaceLoading: document.documentElement.classList.contains('preferences-loading'),
+    };
+    return {
+      requestRecords: records.sort((a, b) => a.name.localeCompare(b.name)),
+      requestCount: records.length,
+      independentStartedMs: independentStarted === null ? null : independentStarted - startedAt,
+      firstBlockMs: firstBlockAt === null ? null : firstBlockAt - streamStarted,
+      terminalMs: terminalAt === null ? null : terminalAt - streamStarted,
+      streamOverlappedIndependentRequests: independentStarted !== null && terminalAt !== null && independentStarted < terminalAt && records.length === requests.length,
+      nodeOrder,
+      stableNodeIdentity: Object.keys(nodeIdentities).length === nodeOrder.length,
+      mutationSummary,
+      chatPaneOpened,
+      settingsOpened,
+      loadingStates,
+      withinDeadline: terminalAt !== null,
+    };
+  })()`, true);
+}
+
 export async function collectRendererE2EResult(
   win: BrowserWindow,
   outsidePath: string,

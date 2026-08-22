@@ -21,6 +21,8 @@ export interface EvidenceLedgerEntry {
   createdAt: string;
   duplicateOf?: string;
   correlation?: CorrelationIds;
+  executionContract?: ToolOutcomeObservation["executionContract"];
+  evidenceFields?: string[];
 }
 
 export interface EvidenceLedgerOptions {
@@ -93,6 +95,8 @@ export class EvidenceLedger {
       createdAt,
       ...(previous ? { duplicateOf: previous.evidenceId } : {}),
       ...(observation.correlation ? { correlation: { ...observation.correlation, toolCallId: observation.toolCallId } } : {}),
+      ...(observation.executionContract ? { executionContract: { ...observation.executionContract } } : {}),
+      ...(observation.evidenceFields?.length ? { evidenceFields: [...new Set(observation.evidenceFields)].slice(0, 32) } : {}),
     };
     this.#entries.push(entry);
     if (this.#entries.length > this.#maxEntries) this.#entries.splice(0, this.#entries.length - this.#maxEntries);
@@ -113,7 +117,12 @@ export class EvidenceLedger {
     const entry = [...this.#entries].reverse().find((candidate) =>
       candidate.canonicalTool === toolName && candidate.status === "success" && candidate.complete
       && stable(candidate.requestScope) === stable(scope));
-    return entry ? { evidenceId: entry.evidenceId, summary: entry.summary || "", payloadHash: entry.payloadHash } : undefined;
+    return entry ? {
+      evidenceId: entry.evidenceId,
+      summary: entry.summary || "",
+      payloadHash: entry.payloadHash,
+      ...(entry.evidenceFields?.length ? { evidenceFields: [...entry.evidenceFields] } : {}),
+    } : undefined;
   }
 
   snapshot(): { total: number; successful: number; failed: number; unverified: number; entries: EvidenceLedgerEntry[] } {

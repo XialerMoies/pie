@@ -496,6 +496,15 @@ export function attachEngineEvents(
     if (!turnId) return;
     if (completedTurns.has(turnId)) return;
     completedTurns.add(turnId);
+    const openToolBlocks = chatStream.blocks.filter((block): block is Extract<AssistantBlock, { type: "tool" | "tool_use" }> =>
+      (block.type === "tool" || block.type === "tool_use") && block.status === "running",
+    );
+    // A provider terminal event can race with sibling tool calls. Never expose
+    // those calls as still running, and do not let turn.completed claim success
+    // while a tool is unresolved.
+    if (openToolBlocks.length > 0 && event.type === "turn.completed") {
+      taskLifecycle.fail("tool_incomplete_at_terminal");
+    }
     for (const block of [...chatStream.blocks]) {
       if (block.type === "thinking" && block.status === "streaming") {
         emitBlock(runtime, chatStream, { ...block, status: "done" }, { persist: false });
@@ -514,12 +523,28 @@ export function attachEngineEvents(
         requestScope: entry.requestScope,
         payloadHash: entry.payloadHash,
         createdAt: entry.createdAt,
+        ...(entry.evidenceFields?.length ? { evidenceFields: entry.evidenceFields } : {}),
       }));
     const evidenceCount = evidence?.length ?? 0;
-    if (event.type === "turn.completed") taskLifecycle.complete(hasOriginalFinalText, evidenceCount);
-    else if (event.type === "turn.failed") taskLifecycle.fail(event.error.category);
+    if (event.type === "turn.completed") {
+      if (openToolBlocks.length === 0) taskLifecycle.complete(hasOriginalFinalText, evidenceCount);
+    } else if (event.type === "turn.failed") {
+      const details = event.error.details;
+      const detailReason = details && typeof details === "object" && typeof (details as { reason?: unknown }).reason === "string"
+        ? (details as { reason: string }).reason
+        : undefined;
+      taskLifecycle.fail(detailReason || event.error.code || event.error.category);
+    }
     else taskLifecycle.cancel(event.reason || "cancelled");
     chatStream.taskLifecycle = taskLifecycle.snapshot();
+    const terminalReason = chatStream.taskLifecycle.reason || (event.type === "turn.failed" ? event.error.message : undefined) || "turn_ended_before_tool_completed";
+    for (const block of openToolBlocks) {
+      if (block.type === "tool") {
+        emitBlock(runtime, chatStream, { ...block, status: "error", error: terminalReason }, { persist: false });
+      } else {
+        emitBlock(runtime, chatStream, { ...block, status: "error" }, { persist: false });
+      }
+    }
     const taskPersisted = persistTaskLifecycle(runtime, chatStream.taskLifecycle, { authorizeSessionWrite });
     // A thought-only normalized turn must not become the visible final answer.
     // Keep the Thought block for inspection, but require a separate text block
@@ -549,8 +574,10 @@ export function attachEngineEvents(
       .map((block) => block.text)
       .join("\n\n");
     const task = taskLifecycle.snapshot();
-    const finalText = task.status === "blocked" && task.reason === "evidence_insufficient"
-      ? `未验证：${fullText || "没有获得足够的成功证据。"}`
+    const strictVerification = chatStream.taskRequirements?.contract?.kind === "fact_verification"
+      || chatStream.taskRequirements?.requiresEvidence === true;
+    const finalText = strictVerification && task.status !== "completed"
+      ? `未验证：${task.missingEvidence?.length ? `缺少证据字段：${task.missingEvidence.join("、")}` : task.reason || "没有获得足够的成功证据。"}`
       : fullText || chatStream.textBuffer;
     // A cancellation requested by the runtime after a hard tool failure is
     // presented as a failed/blocked turn, not as a successful user cancel.
@@ -564,7 +591,9 @@ export function attachEngineEvents(
         sessionId,
         status: event.type === "turn.completed" && task.status === "completed" ? "done" : "error",
         ...(event.type === "turn.completed" && event.usage ? { usage: event.usage } : {}),
-        ...(event.type === "turn.failed" ? { error: event.error.message } : {}),
+        ...(task.status !== "completed"
+          ? { error: task.reason || (event.type === "turn.failed" ? event.error.message : event.type === "turn.cancelled" ? event.reason : undefined) || "Agent turn failed" }
+          : {}),
         blocks: chatStream.blocks,
         ...(evidence && evidence.length > 0 ? { evidence } : {}),
         task,
@@ -616,6 +645,7 @@ export function attachEngineEvents(
     const lifecycleStatus = taskLifecycle.snapshot().status;
     if (turnId
       && lifecycleStatus !== "running"
+      && event.type !== "turn.started"
       && event.type !== "turn.completed"
       && event.type !== "turn.failed"
       && event.type !== "turn.cancelled") return;
@@ -713,7 +743,10 @@ export function attachEngineEvents(
           : undefined;
       if (event.type === "tool.completed" && !failed) {
         const evidenceAvailable = Boolean(ctx?.observability?.evidenceLedger?.getSuccessfulFacts([event.toolCallId]).length);
-        taskLifecycle.toolCompleted(event.toolCallId, evidenceAvailable);
+        const evidenceFields = Array.isArray(event.metadata?.evidenceFields)
+          ? event.metadata.evidenceFields.filter((field): field is string => typeof field === "string")
+          : [];
+        taskLifecycle.toolCompleted(event.toolCallId, evidenceAvailable, evidenceFields);
       } else {
         const error = event.type === "tool.failed"
           ? event.error

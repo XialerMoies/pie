@@ -26,6 +26,23 @@ function categoryOf(error: EngineErrorInfo): RetryCategory {
   return error.category;
 }
 
+function contractFailureReason(error: EngineErrorInfo): string | undefined {
+  if (!error.details || typeof error.details !== "object") return undefined
+  const reason = (error.details as { reason?: unknown }).reason
+  if (typeof reason !== "string" || reason.length === 0) return undefined
+  // These reasons are host-owned execution-contract outcomes. Preserve them
+  // so the final SSE frame explains the actual stop instead of a generic retry
+  // hint intended for ordinary validation failures.
+  return new Set([
+    "source_not_allowed",
+    "tool_not_allowed",
+    "duplicate_attempt",
+    "evidence_satisfied",
+    "execution_contract_source_not_allowed",
+    "execution_contract_tool_not_allowed",
+  ]).has(reason) ? reason : undefined
+}
+
 /**
  * Classifies one failed request. State is keyed by request identity, so a
  * changed target/argument starts a distinct retry budget instead of sharing a
@@ -58,7 +75,7 @@ export class RetryPolicy {
       reason = "permission_must_change_before_retry";
     } else if (category === "validation_error") {
       action = "stop";
-      reason = "arguments_must_change_before_retry";
+      reason = contractFailureReason(error) || "arguments_must_change_before_retry";
     } else if (category === "transport_error" || category === "network") {
       action = attempt < this.#transportAttempts ? "retry" : "block";
       reason = action === "retry"

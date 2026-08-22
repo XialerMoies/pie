@@ -1,6 +1,22 @@
 import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool } from "../types.js"
 import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
+function evidenceFields(path: string, content: string, complete: boolean): string[] {
+  if (!complete) return []
+  const fields = ["content"]
+  if (path.replace(/\\/g, "/").endsWith("data/user/skill-state.json")) {
+    try {
+      const parsed = JSON.parse(content) as { records?: Record<string, { trust?: unknown; enabled?: unknown }> }
+      const records = parsed.records && typeof parsed.records === "object" ? Object.values(parsed.records) : []
+      if (records.some((record) => record && typeof record === "object" && "trust" in record)) fields.push("trust")
+      if (records.some((record) => record && typeof record === "object" && "enabled" in record)) fields.push("enabled")
+    } catch {
+      // The file contents remain evidence, but malformed state cannot satisfy fields.
+    }
+  }
+  return fields
+}
+
 export const fileReadTool: AgentTool = defineAgentTool({
   name: "file_read",
   aliases: ["file-read"],
@@ -95,13 +111,13 @@ export const fileReadTool: AgentTool = defineAgentTool({
     // 文件头信息
     const mtime = data.mtime ? data.mtime.slice(0, 16).replace("T", " ") : ""
     const header = `📄 ${path}  (${totalLines} 行, ${(data.size / 1024).toFixed(1)}KB${mtime ? ", " + mtime : ""})`
-    return structuredToolResult(header + "\n" + lines.join("\n") + truncated, {
+      return structuredToolResult(header + "\n" + lines.join("\n") + truncated, {
       ...data,
       path,
       lineRange: { start: startLine, end: endLine },
       totalLines,
       truncated: endLine < totalLines,
-    })
+    }, [], { evidenceFields: evidenceFields(path, data.content, endLine === totalLines) })
   },
 
   isReadOnly: true,

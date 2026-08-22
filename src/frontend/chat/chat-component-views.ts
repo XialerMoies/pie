@@ -327,7 +327,7 @@ class ChatErrorView {
     const actionButtons = actions.length > 0
       ? `<div class="msg-error-actions">${actions.map(action => `<button type="button" class="msg-error-btn" data-chat-error-action="${E(action)}">${E(actionLabels[action] || action)}</button>`).join('')}</div>`
       : '';
-    return `<details class="msg-error"><summary><span class="msg-error-title">${E(error.title || '发生了错误')}</span><span class="msg-error-summary">${E(error.message || '点击查看详情')}</span></summary><div class="msg-error-body"><div class="msg-error-message">${E(error.message || '发生了错误')}</div>${reason}${steps}${raw}${actionButtons}</div></details>`;
+    return `<details class="msg-error"><summary><span class="msg-error-title">${E(error.title || '发生了错误')}</span><span class="msg-error-summary">${E(error.message || '点击查看详情')}</span></summary><div class="msg-error-body">${reason}${steps}${raw}${actionButtons}</div></details>`;
   }
 
   mount(container: HTMLElement): HTMLElement {

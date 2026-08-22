@@ -68,6 +68,30 @@ describe("A-04 task lifecycle cross-layer flow", () => {
     assert.equal("evidence" in done, false);
   });
 
+  it("completes a contract only when every required evidence field is observed", () => {
+    const requirements = inferTaskRequirements("请检查 agent/skills/skill-verification/SKILL.md 的状态和内容");
+    const ledger = new EvidenceLedger();
+    const flow = wire(requirements, ledger);
+    ledger.observe({ source: "live", toolName: "skill_facts", toolCallId: "facts-1", outcome: "success", legacy: false,
+      requestScope: { target: "agent/skills/skill-verification/SKILL.md" }, payloadSummary: "facts", complete: true,
+      evidenceFields: ["trust", "enabled", "parse"] });
+    ledger.observe({ source: "live", toolName: "file_read", toolCallId: "read-1", outcome: "success", legacy: false,
+      requestScope: { target: "agent/skills/skill-verification/SKILL.md" }, payloadSummary: "content", complete: true,
+      evidenceFields: ["content"] });
+    flow.engine.emit("event", base("turn.started", 1));
+    flow.engine.emit("event", base("tool.started", 2, { toolCallId: "facts-1", name: "skill_facts", input: { id: "skill-verification" } }));
+    flow.engine.emit("event", base("tool.completed", 3, { toolCallId: "facts-1", name: "skill_facts", output: "facts", metadata: { evidenceFields: ["trust", "enabled", "parse"] } }));
+    flow.engine.emit("event", base("tool.started", 4, { toolCallId: "read-1", name: "file_read", input: { path: "agent/skills/skill-verification/SKILL.md" } }));
+    flow.engine.emit("event", base("tool.completed", 5, { toolCallId: "read-1", name: "file_read", output: "content", metadata: { evidenceFields: ["content"] } }));
+    flow.engine.emit("event", base("content.delta", 6, { text: "已核验" }));
+    flow.engine.emit("event", base("turn.completed", 7));
+    const done = flow.stream.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1])).find((payload) => payload.type === "done");
+    assert.equal(done.status, "done");
+    assert.equal(done.task.status, "completed");
+    assert.deepEqual(done.task.satisfiedEvidence, ["content", "trust", "enabled", "parse"]);
+    assert.deepEqual(done.task.missingEvidence, []);
+  });
+
   it("persists the terminal task contract for refresh/replay inspection", async () => {
     const root = await mkdtemp(join(tmpdir(), "mca-a04-task-"));
     const sessionFile = join(root, "session.jsonl");

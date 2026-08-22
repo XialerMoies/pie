@@ -9,6 +9,7 @@ import {
 import type { createElectronE2ERuntime } from "./electron-e2e-runtime.js";
 import {
   collectRendererE2EResult,
+  runPackagedConcurrencyProbe,
   runPackagedChatEventFlowProbe,
   runRendererCookieIsolationProbe,
   waitForRendererReady,
@@ -80,6 +81,7 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
       options.ensureDir(externalRoot);
       fs.writeFileSync(path.join(e2eRoot, "read.txt"), "packaged-read", "utf-8");
       fs.writeFileSync(path.join(projectA, "read.txt"), "workspace-read", "utf-8");
+      fs.writeFileSync(path.join(projectA, "index.ts"), "const answer: number = 1;\n", "utf-8");
       fs.writeFileSync(path.join(projectB, "read.txt"), "workspace-b-read", "utf-8");
       fs.writeFileSync(path.join(externalRoot, "read.txt"), "external-read", "utf-8");
       fs.writeFileSync(path.join(externalRoot, ".env"), "SECRET=e2e", "utf-8");
@@ -88,6 +90,7 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
 
       const renderer = await collectRendererE2EResult(win, path.join(externalRoot, "ipc.txt"));
       const chatEventFlow = await runPackagedChatEventFlowProbe(win);
+      const concurrency = await runPackagedConcurrencyProbe(win);
       const textIconStatus = await requestStatus(`${origin}/icons/file_type_text.svg`);
       const unauthorizedApiStatus = await requestStatus(`${origin}/api/dashboard`);
       const wrongTokenApi = await requestJson(initialServerBinding, "/api/dashboard", "GET", undefined, {
@@ -278,6 +281,7 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
         ...diagnostics,
         renderer,
         chatEventFlow,
+        concurrency,
         textIconStatus,
         unauthorizedApiStatus,
         wrongTokenApiStatus: wrongTokenApi.status,

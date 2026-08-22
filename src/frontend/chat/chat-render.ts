@@ -144,11 +144,11 @@ function renderMessage(m: any, messageIndex = -1): string {
   }
 
   if (m.blocks && m.blocks.length > 0) {
-    return `<div class="m ${c}${m.error ? ' error' : ''}"${indexAttr}><div class="ml">${lb}</div>${error}<div class="mt block-flow">${renderBlocks(m.blocks, m.subagentBatches)}</div>${ty}</div>`;
+    return `<div class="m ${c}${m.error ? ' error' : ''}"${indexAttr}><div class="ml">${lb}</div><div class="mt block-flow">${renderBlocks(m.blocks, m.subagentBatches)}</div>${error}${ty}</div>`;
   }
 
   const content = m.content ? mdRender(m.content) : '';
-  return `<div class="m ${c}${m.error ? ' error' : ''}"${indexAttr}><div class="ml">${lb}</div>${error}<div class="mt">${content}</div>${ty}</div>`;
+  return `<div class="m ${c}${m.error ? ' error' : ''}"${indexAttr}><div class="ml">${lb}</div><div class="mt">${content}</div>${error}${ty}</div>`;
 }
 
 function msgs(): string {
@@ -260,10 +260,11 @@ function finalizeLastMessage(): boolean {
         if (textBody) textBody.innerHTML = mdRender(block.text || '');
         else replaceBlockContents(target, renderEventBlock(block, message.blocks, undefined, message.subagentBatches));
       } else if (target && block.type === 'thinking') {
-        const textElement = target.querySelector('.trace-thinking-text') as HTMLElement | null;
-        if (textElement) textElement.innerHTML = mdRender(block.text || '');
-        else fullySynced = false;
-      } else if (target && block.type === 'tool_use') {
+        // Terminal status also changes the Thought summary ("Thought..." →
+        // "Thought"). Replace only the block contents so the mounted block
+        // root remains stable for live/replay identity checks.
+        replaceBlockContents(target, renderEventBlock(block, message.blocks, undefined, message.subagentBatches));
+      } else if (target && (block.type === 'tool' || block.type === 'tool_use')) {
         if (block.name === 'delegate_tasks') {
           chatViews.refreshSubagentDelegation(target, subagentDelegationData(block, message.blocks, message.subagentBatches));
         } else {

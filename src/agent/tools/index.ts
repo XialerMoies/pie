@@ -30,6 +30,7 @@ import { readMemoryTool, writeMemoryTool, listMemoryTool, deleteMemoryTool, setM
 import { strReplaceEditorTool } from "./str-replace-editor.js"
 import { fileWriteTool } from "./file-write.js"
 import { delegateTasksTool } from "./delegate-tasks.js"
+import { skillFactsTool } from "./skill-facts.js"
 
 /** 全局 Tool 注册表 */
 export const toolRegistry = new ToolRegistry()
@@ -60,6 +61,7 @@ toolRegistry.register(setMemoryEnabledTool)
 toolRegistry.register(strReplaceEditorTool)
 toolRegistry.register(fileWriteTool)
 toolRegistry.register(delegateTasksTool)
+toolRegistry.register(skillFactsTool)
 
 export function registerTool(
   tool: Parameters<typeof toolRegistry.register>[0],
