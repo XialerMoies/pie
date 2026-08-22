@@ -1,5 +1,6 @@
 import { reduceSubagentEventReplay } from "../subagent-events.js";
 import { extractReplyTitle } from "../session-title.js";
+import { canonicalToolName } from "../../agent/tool-identity.js";
 
 /** 从历史消息中剥离已知的指令前缀（与前端 chat-mode.ts 保持一致） */
 function stripInstruction(text: string): string {
@@ -144,7 +145,7 @@ function convertTracesToBlocks(traces: SessionTrace[], content?: string): any[] 
       const terminalStatus = isError ? 'error' : 'success';
       // B-5：tool 合并成一个 block（一个 seq）
       blocks.push({
-        type: 'tool', toolCallId: normalizeToolCallId(t.id), name: t.name, input: t.input,
+        type: 'tool', toolCallId: normalizeToolCallId(t.id), name: canonicalToolName(t.name), input: t.input,
         output: isError ? undefined : last.output,
         error: isError ? (last.error || (last.status === 'running' ? '[中断]' : undefined)) : undefined,
         metadata: last.metadata,
@@ -302,7 +303,7 @@ export function parseSessionMessages(content: string): SessionMessage[] {
           attachTrace([{
             type: "tool",
             status: isError ? "error" : "success",
-            name: entry.message.toolName || "tool",
+            name: canonicalToolName(entry.message.toolName || "tool"),
             output: isError ? undefined : output,
             error: isError ? output : undefined,
             id: entry.message.toolCallId || entry.id || `tool-${pendingTrace.length}`,

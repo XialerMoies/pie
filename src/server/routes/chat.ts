@@ -11,6 +11,7 @@ import { authorizeWorkspacePath, switchAuthorizedWorkspace } from "./workspace-a
 import { replayChatEvents, resetChatEventHistory, writeChatEvent, writeChatStreamBaseline } from "../chat-stream.js";
 import { serverConfirmationRegistry } from "../confirmation-registry.js";
 import { inferTaskRequirements } from "../task-lifecycle.js";
+import { randomUUID } from "node:crypto";
 
 const COMMAND_CONFIRM_TIMEOUT_MS = 120_000;
 const MODEL_PROVIDER_SYNC_ERROR = "模型提供商同步失败，请重试。";
@@ -24,6 +25,8 @@ function terminateChatTurn(chatStream: ChatStreamState, message: string): void {
   chatStream.currentTextSnapshot = "";
   chatStream.currentThinkingSnapshot = "";
   chatStream.turnId = "";
+  chatStream.traceId = "";
+  chatStream.correlation = undefined;
   chatStream.traceSeq = 0;
   chatStream.blockSeq = 0;
   chatStream.blocks = [];
@@ -192,6 +195,8 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         chatStream.currentTextSnapshot = "";
         chatStream.currentThinkingSnapshot = "";
         chatStream.turnId = "turn-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6);
+        chatStream.traceId = randomUUID();
+        chatStream.correlation = { traceId: chatStream.traceId, turnId: chatStream.turnId, sessionId: engine.session.id };
         chatStream.traceSeq = 0;
         chatStream.blockSeq = 0;
         chatStream.blocks = [];

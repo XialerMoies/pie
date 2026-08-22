@@ -25,23 +25,23 @@ export const handleSkillSettings: RouteHandler = async (req, res, ctx) => {
     }
     if (url === "/api/settings/skills/rescan" && req.method === "POST") {
       const result = await service.rescan()
-      await ctx.runtime.refreshSystemPrompt()
-      json(res, 200, { ok: true, ...result })
+      const promptRefresh = await ctx.runtime.refreshSystemPrompt()
+      json(res, 200, { ok: true, ...result, promptRefresh })
       return true
     }
     const item = url.match(ITEM_ROUTE)
     if (item && req.method === "POST") {
       const [, source, id, action] = item as unknown as [string, SkillSource, string, "trust" | "untrust" | "enable" | "disable"]
       await service[action](source, id)
-      await ctx.runtime.refreshSystemPrompt()
-      json(res, 200, { ok: true, ...await service.list() })
+      const promptRefresh = await ctx.runtime.refreshSystemPrompt()
+      json(res, 200, { ok: true, ...await service.list(), promptRefresh })
       return true
     }
     const remove = url.match(REMOVE_ROUTE)
     if (remove && req.method === "DELETE") {
       await service.remove(remove[1] as SkillSource, remove[2])
-      await ctx.runtime.refreshSystemPrompt()
-      json(res, 200, { ok: true, ...await service.list() })
+      const promptRefresh = await ctx.runtime.refreshSystemPrompt()
+      json(res, 200, { ok: true, ...await service.list(), promptRefresh })
       return true
     }
     json(res, 400, { ok: false, error: "Invalid skill route" })

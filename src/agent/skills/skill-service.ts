@@ -17,6 +17,17 @@ export interface SkillListResult {
   skills: SkillSummary[]
   diagnostics: SkillScanDiagnostic[]
   failClosed?: true
+  revision?: string
+  workspaceKey?: string
+}
+
+export interface SkillFactSnapshot {
+  revision: string
+  generatedAt: string
+  workspaceRoot?: string
+  workspaceKey?: string
+  result: SkillListResult
+  entries: ScannedSkill[]
 }
 
 export type SkillLoadResult =
@@ -38,6 +49,12 @@ const validId = (id: string) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) && id !=
 function contained(root: string, target: string): boolean {
   const rel = relative(root, target)
   return rel !== "" && !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`)
+}
+
+function stable(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`
+  return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stable((value as Record<string, unknown>)[key])}`).join(",")}}`
 }
 
 export class SkillService {
@@ -70,12 +87,41 @@ export class SkillService {
   }
 
   async list(): Promise<SkillListResult> {
-    const scope = this.scopeSnapshot()
-    return (await this.listSnapshot(scope)).result
+    const snapshot = await this.snapshot()
+    return { ...snapshot.result, revision: snapshot.revision, ...(snapshot.workspaceKey ? { workspaceKey: snapshot.workspaceKey } : {}) }
   }
 
-  async promptInput(workspaceSkillRoot: string): Promise<SkillPromptInput> {
-    const snapshot = await this.listSnapshot(this.scopeSnapshot(workspaceSkillRoot))
+  async snapshot(workspaceSkillRoot?: string): Promise<SkillFactSnapshot> {
+    const scope = this.scopeSnapshot(workspaceSkillRoot)
+    const snapshot = await this.listSnapshot(scope)
+    const revision = createHash("sha256").update(stable({
+      scope,
+      skills: snapshot.result.skills,
+      diagnostics: snapshot.result.diagnostics,
+      failClosed: snapshot.result.failClosed === true,
+      fingerprints: snapshot.entries.map((entry) => ({ id: entry.id, source: entry.source, fingerprint: entry.fingerprint })),
+    })).digest("hex")
+    const resultWithRevision: SkillListResult = {
+      ...snapshot.result,
+      revision,
+      ...(scope.workspaceKey ? { workspaceKey: scope.workspaceKey } : {}),
+    }
+    return {
+      revision,
+      generatedAt: new Date().toISOString(),
+      ...(scope.workspaceRoot ? { workspaceRoot: scope.workspaceRoot } : {}),
+      ...(scope.workspaceKey ? { workspaceKey: scope.workspaceKey } : {}),
+      result: resultWithRevision,
+      entries: snapshot.entries,
+    }
+  }
+
+  async promptInput(workspaceSkillRoot: string, factSnapshot?: SkillFactSnapshot): Promise<SkillPromptInput> {
+    const snapshot = factSnapshot || await this.snapshot(workspaceSkillRoot)
+    const expectedScope = this.scopeSnapshot(workspaceSkillRoot)
+    if (snapshot.workspaceKey !== expectedScope.workspaceKey || snapshot.workspaceRoot !== expectedScope.workspaceRoot) {
+      throw new Error("Skill snapshot scope does not match the requested workspace")
+    }
     const entries = new Map(snapshot.entries.map((entry) => [entry.id, entry]))
     const bodies = new Map<string, string>()
     for (const summary of snapshot.result.skills) {
@@ -83,7 +129,13 @@ export class SkillService {
       const entry = entries.get(summary.id)
       if (entry?.skill) bodies.set(summary.id, entry.skill.body)
     }
-    return { summaries: snapshot.result.skills, bodies }
+    return {
+      summaries: snapshot.result.skills,
+      bodies,
+      revision: snapshot.revision,
+      workspaceKey: snapshot.workspaceKey,
+      diagnostics: snapshot.result.diagnostics,
+    }
   }
 
   private async listSnapshot(scope: SkillScopeSnapshot): Promise<SkillListSnapshot> {

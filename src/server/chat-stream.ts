@@ -15,6 +15,15 @@ function frame(id: number, payload: unknown): string {
 export function writeChatEvent(state: ChatStreamState, payload: unknown): number {
   normalizeState(state);
   const id = ++state.eventSeq;
+  const eventType = payload && typeof payload === "object" && "type" in payload ? String((payload as { type?: unknown }).type || "unknown") : "unknown";
+  if (state.correlationLedger && state.correlation?.traceId) {
+    state.correlationLedger.record({
+      ...state.correlation,
+      stage: "presentation.emitted",
+      eventType,
+      details: { sseEventId: id },
+    });
+  }
   const data = frame(id, payload);
   state.eventHistory.push({ id, data });
   if (state.eventHistory.length > MAX_CHAT_EVENT_HISTORY) {
@@ -42,7 +51,18 @@ export function replayChatEvents(state: ChatStreamState, response: ServerRespons
   let replayed = 0;
   for (const event of state.eventHistory) {
     if (event.id <= last) continue;
-    try { response.write(event.data); replayed++; } catch { break; }
+    try {
+      response.write(event.data);
+      replayed++;
+      if (state.correlationLedger && state.correlation?.traceId) {
+        state.correlationLedger.record({
+          ...state.correlation,
+          stage: "sse.replay",
+          replay: true,
+          details: { sseEventId: event.id, afterEventId: last },
+        });
+      }
+    } catch { break; }
   }
   return replayed;
 }

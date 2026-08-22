@@ -46,6 +46,92 @@ export async function runRendererCookieIsolationProbe(
   return { firstDashboardStatus, secondDashboardStatus };
 }
 
+/**
+ * Exercise the production dashboard bundle inside the packaged BrowserWindow
+ * with the same canonical block presentation frames used by the dist flow.
+ * This intentionally observes each frame, node identity and refresh replay;
+ * a final DOM snapshot alone would not catch streaming replacement regressions.
+ */
+export async function runPackagedChatEventFlowProbe(
+  win: BrowserWindow,
+): Promise<Record<string, unknown>> {
+  return win.webContents.executeJavaScript(`(async () => {
+    const chatState = window.App?.ChatState;
+    const chat = window.App?.Chat;
+    const views = window.App?.ChatViews;
+    if (!chatState || !chat || !views?.ChatSseControllerView) throw new Error('chat event flow APIs are unavailable');
+    const ms = document.querySelector('#ms');
+    if (!ms) throw new Error('chat message container is unavailable');
+    const blocks = [
+      { type: 'thinking', status: 'streaming', text: '先分析', blockId: 'packaged-thought-1', seq: 1, turnId: 'packaged-turn' },
+      { type: 'tool', status: 'running', name: 'file_read', input: { path: 'SKILL.md' }, toolCallId: 'packaged-tool', blockId: 'packaged-tool', seq: 2, turnId: 'packaged-turn' },
+      { type: 'tool', status: 'success', name: 'file_read', input: { path: 'SKILL.md' }, output: '事实内容', toolCallId: 'packaged-tool', blockId: 'packaged-tool', seq: 2, turnId: 'packaged-turn' },
+      { type: 'thinking', status: 'streaming', text: '再验证', blockId: 'packaged-thought-2', seq: 3, turnId: 'packaged-turn' },
+      { type: 'text', text: '最终正文', blockId: 'packaged-text', seq: 4, turnId: 'packaged-turn' },
+    ];
+    // Replay is a canonical snapshot: repeated frames for one logical block
+    // must collapse to its final state before the session is rendered again.
+    const terminalBlocks = Array.from(
+      blocks.reduce((byId, block) => byId.set(block.blockId, block), new Map()),
+      ([, block]) => block,
+    );
+    let closed = 0;
+    let fullRenders = 0;
+    let scheduled = 0;
+    chatState.replaceMessages([{ role: 'assistant', content: '', streaming: true, blocks: [] }]);
+    ms.innerHTML = chat.msgs();
+    const root = ms.querySelector('.m');
+    const identities = {};
+    for (const block of blocks) {
+      const controller = flowController();
+      controller.handleMessage(1, { data: JSON.stringify({ type: 'block', block }) });
+      const node = ms.querySelector('[data-block-id="' + block.blockId + '"]');
+      if (!node) throw new Error('block did not mount: ' + block.blockId);
+      if (identities[block.blockId] && identities[block.blockId] !== node) throw new Error('block identity changed: ' + block.blockId);
+      identities[block.blockId] = node;
+      if (ms.querySelector('.m') !== root) throw new Error('assistant root changed during stream');
+    }
+    const liveSnapshot = Array.from(ms.querySelectorAll('[data-block-id]')).map((node) => ({ id: node.dataset.blockId, text: node.textContent }));
+    const controller = flowController();
+    controller.handleMessage(1, { data: JSON.stringify({ type: 'done', turnId: 'packaged-turn', text: '最终正文', blocks: terminalBlocks.map((block) => block.type === 'thinking' ? { ...block, status: 'done' } : block) }) });
+    await Promise.resolve();
+    const terminalSnapshot = Array.from(ms.querySelectorAll('[data-block-id]')).map((node) => ({ id: node.dataset.blockId, text: node.textContent }));
+    chatState.replaceMessages([{ role: 'assistant', content: '最终正文', streaming: false, blocks: terminalBlocks.map((block) => block.type === 'thinking' ? { ...block, status: 'done' } : block) }]);
+    ms.innerHTML = chat.msgs();
+    const refreshSnapshot = Array.from(ms.querySelectorAll('[data-block-id]')).map((node) => ({ id: node.dataset.blockId, text: node.textContent }));
+    return {
+      blockIds: liveSnapshot.map((item) => item.id),
+      terminalBlockIds: terminalSnapshot.map((item) => item.id),
+      refreshMatches: JSON.stringify(terminalSnapshot) === JSON.stringify(refreshSnapshot),
+      assistantRootStable: Boolean(root),
+      closed,
+      fullRenders,
+      scheduled,
+      visibleText: terminalSnapshot.map((item) => item.text).join(' '),
+    };
+
+    function flowController() {
+      const controller = new views.ChatSseControllerView({
+        scheduleMessagesRender: () => { scheduled += 1; },
+        updateUI: () => {},
+        markLastMessageRendered: () => {},
+        renderMessages: () => { fullRenders += 1; },
+        refreshComposer: () => {},
+        setAssistantError: () => {},
+        completeSend: () => {},
+        failSend: () => {},
+      }, {
+        chat,
+        chatState,
+        chatStream: { isCurrent: () => true, setHandlers: () => true, close: () => { closed += 1; } },
+        chatViews: views,
+      });
+      controller.bind(1);
+      return controller;
+    }
+  })()`, true);
+}
+
 export async function collectRendererE2EResult(
   win: BrowserWindow,
   outsidePath: string,
@@ -58,6 +144,12 @@ export async function collectRendererE2EResult(
       cache: 'no-store',
       headers: token ? { 'X-My-Code-Agent-Token': token } : {},
     });
+    const diagnosticsResponse = await fetch('/api/diagnostics', {
+      cache: 'no-store',
+      headers: token ? { 'X-My-Code-Agent-Token': token } : {},
+    });
+    let diagnosticsPayload = null;
+    try { diagnosticsPayload = await diagnosticsResponse.json(); } catch {}
     const popup = window.open('https://example.com', '_blank');
     const initialUrl = location.href;
     location.href = 'https://example.com/blocked-navigation';
@@ -79,6 +171,19 @@ export async function collectRendererE2EResult(
     return {
       appRendered: Boolean(document.querySelector('#app')?.childElementCount),
       apiStatus: response.status,
+      diagnosticsStatus: diagnosticsResponse.status,
+      diagnosticsOk: diagnosticsPayload?.ok === true,
+      diagnosticsCorrelationShape: Boolean(
+        diagnosticsPayload?.correlation
+        && typeof diagnosticsPayload.correlation === 'object'
+        && Number.isInteger(diagnosticsPayload.correlation.total)
+        && Number.isInteger(diagnosticsPayload.correlation.traces)
+        && Number.isInteger(diagnosticsPayload.correlation.turns)
+        && Array.isArray(diagnosticsPayload.correlation.records),
+      ),
+      diagnosticsHasSensitiveFields: JSON.stringify(diagnosticsPayload || {}).match(
+        /(?:api[_-]?key|authorization|cookie|password|secret|token|credential|private[_-]?key)/i,
+      ) !== null,
       desktopTokenPresent: typeof token === 'string' && token.length > 0,
       nodeRequireType: typeof globalThis.require,
       inlineHandlerCount: document.querySelectorAll('[onclick],[onchange],[oninput],[onsubmit]').length,

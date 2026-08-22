@@ -2,13 +2,14 @@ import type { AssistantBlock, ChatStreamState } from "./routes/types.js";
 import { writeChatEvent } from "./chat-stream.js";
 import type { EvidenceLedgerEntry } from "./evidence-ledger.js";
 import type { TaskLifecycleSnapshot } from "./task-lifecycle.js";
+import type { CorrelationIds } from "./correlation.js";
 
 /**
  * User-visible events emitted by the canonical engine bridge.
  * Raw traces and legacy delta/thinking frames are intentionally excluded.
  */
 export type PresentationEvent =
-  | { type: "block"; block: AssistantBlock }
+  | { type: "block"; block: AssistantBlock; correlation?: CorrelationIds }
   | {
       type: "done";
       text: string;
@@ -22,11 +23,14 @@ export type PresentationEvent =
       /** Only successful, complete ledger entries may be attached to a final answer. */
       evidence?: Array<Pick<EvidenceLedgerEntry, "evidenceId" | "toolCallId" | "canonicalTool" | "requestScope" | "payloadHash" | "createdAt">>;
       task?: TaskLifecycleSnapshot;
+      correlation?: CorrelationIds;
     }
-  | { type: "cancelled"; turnId: string; sessionId: string; reason?: string }
-  | { type: "queue_update"; steering: unknown[]; followUp: unknown[] };
+  | { type: "cancelled"; turnId: string; sessionId: string; reason?: string; correlation?: CorrelationIds }
+  | { type: "queue_update"; steering: unknown[]; followUp: unknown[]; correlation?: CorrelationIds };
 
 /** Single write boundary for canonical user-visible chat events. */
 export function writePresentationEvent(state: ChatStreamState, event: PresentationEvent): number {
-  return writeChatEvent(state, event);
+  return writeChatEvent(state, state.correlation && !event.correlation
+    ? { ...event, correlation: state.correlation }
+    : event);
 }

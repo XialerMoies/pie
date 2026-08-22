@@ -23,20 +23,35 @@ import { ObserverOwner } from "./observer-owner";
 // ─── 不再需要 addExtraLib — tsserver 子进程直接读文件系统 node_modules
 
 // ─── Worker 配置 ─────────────────────────────────────────────
-import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import TypeScriptWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
-import JsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
-import CssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
-import HtmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
+// Worker graphs are built in separate Vite processes. Keeping only stable
+// URLs in this entry prevents Rollup from retaining all language workers in
+// one native-memory peak.
+const isDevSource = import.meta.url.includes("/src/frontend/");
+const devWorkerBase = import.meta.url.includes("/gen/editor/") ? "../../editor/workers/" : "./workers/";
+const workerBase = isDevSource ? devWorkerBase : "../assets/";
+const workerExtension = isDevSource ? ".ts" : ".js";
+const workerFile = (productionName: string, devName: string) =>
+  `${workerBase}${isDevSource ? devName : productionName}${workerExtension}`;
+const workerUrls = {
+  editor: new URL(workerFile("editor.worker", "editor"), import.meta.url).href,
+  typescript: new URL(workerFile("ts.worker", "typescript"), import.meta.url).href,
+  json: new URL(workerFile("json.worker", "json"), import.meta.url).href,
+  css: new URL(workerFile("css.worker", "css"), import.meta.url).href,
+  html: new URL(workerFile("html.worker", "html"), import.meta.url).href,
+};
+
+function createMonacoWorker(url: string, label: string): Worker {
+  return new Worker(url, { type: "module", name: label });
+}
 
 self.MonacoEnvironment = {
   getWorker(_: unknown, label: string) {
     switch (label) {
-      case "typescript": case "javascript": return new TypeScriptWorker({ name: label });
-      case "json": return new JsonWorker({ name: label });
-      case "css": case "scss": case "less": return new CssWorker({ name: label });
-      case "html": case "handlebars": case "razor": return new HtmlWorker({ name: label });
-      default: return new EditorWorker({ name: label });
+      case "typescript": case "javascript": return createMonacoWorker(workerUrls.typescript, label);
+      case "json": return createMonacoWorker(workerUrls.json, label);
+      case "css": case "scss": case "less": return createMonacoWorker(workerUrls.css, label);
+      case "html": case "handlebars": case "razor": return createMonacoWorker(workerUrls.html, label);
+      default: return createMonacoWorker(workerUrls.editor, label);
     }
   },
 };

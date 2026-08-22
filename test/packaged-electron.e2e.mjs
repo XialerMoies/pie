@@ -150,6 +150,10 @@ function assertExistingSecurityProbe(result) {
   assert.equal(result.packaged, true);
   assert.equal(result.renderer?.appRendered, true);
   assert.equal(result.renderer?.apiStatus, 200);
+  assert.equal(result.renderer?.diagnosticsStatus, 200);
+  assert.equal(result.renderer?.diagnosticsOk, true);
+  assert.equal(result.renderer?.diagnosticsCorrelationShape, true);
+  assert.equal(result.renderer?.diagnosticsHasSensitiveFields, false);
   assert.equal(result.renderer?.desktopTokenPresent, true);
   assert.equal(result.renderer?.nodeRequireType, "undefined");
   assert.equal(result.renderer?.inlineHandlerCount, 0);
@@ -190,9 +194,26 @@ function assertExistingSecurityProbe(result) {
   ]);
 }
 
+function assertPackagedChatEventFlow(result) {
+  assert.deepEqual(result.chatEventFlow?.blockIds, [
+    "packaged-thought-1",
+    "packaged-tool",
+    "packaged-thought-2",
+    "packaged-text",
+  ]);
+  assert.deepEqual(result.chatEventFlow?.terminalBlockIds, result.chatEventFlow?.blockIds);
+  assert.equal(result.chatEventFlow?.refreshMatches, true);
+  assert.equal(result.chatEventFlow?.assistantRootStable, true);
+  assert.equal(result.chatEventFlow?.fullRenders, 0);
+  assert.equal(result.chatEventFlow?.scheduled, 0);
+  assert.match(String(result.chatEventFlow?.visibleText || ""), /先分析/);
+  assert.match(String(result.chatEventFlow?.visibleText || ""), /最终正文/);
+}
+
 function assertSingleProcessMultiWindowResult(result) {
   assert.equal(result.ok, true, `packaged probe failed: ${JSON.stringify(result, null, 2)}`);
   assertExistingSecurityProbe(result);
+  assertPackagedChatEventFlow(result);
   assertNoRawTokenFields(result);
 
   assert.equal(Number.isInteger(result.electronPid), true);

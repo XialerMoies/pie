@@ -659,8 +659,15 @@
     },
     {
       "file": "scripts/build-frontend.mjs",
-      "line": 22,
-      "api": "execSync",
+      "line": 29,
+      "api": "execFileSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/build-frontend.mjs",
+      "line": 40,
+      "api": "execFileSync",
       "category": "build-or-test",
       "owner": "tooling"
     },
@@ -771,28 +778,28 @@
     },
     {
       "file": "scripts/dist-dir.mjs",
-      "line": 10,
+      "line": 11,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/dist-dir.mjs",
-      "line": 20,
+      "line": 21,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/dist-dir.mjs",
-      "line": 30,
+      "line": 31,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/dist-dir.mjs",
-      "line": 38,
+      "line": 41,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
@@ -827,7 +834,7 @@
     },
     {
       "file": "scripts/test-build.mjs",
-      "line": 43,
+      "line": 45,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
@@ -841,28 +848,28 @@
     },
     {
       "file": "scripts/test-routes.mjs",
-      "line": 35,
+      "line": 37,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-routes.mjs",
-      "line": 44,
+      "line": 46,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-routes.mjs",
-      "line": 54,
+      "line": 56,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-routes.mjs",
-      "line": 65,
+      "line": 67,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"

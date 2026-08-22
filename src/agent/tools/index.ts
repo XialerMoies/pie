@@ -12,9 +12,10 @@ import {
   ToolRegistry,
   agentToolToPIToolDefinition,
   type AgentTool,
-  type ToolContext,
+  type ToolExecutionExtraContext,
   type ToolTraceEmitter,
 } from "../types.js"
+import { canonicalToolName } from "../tool-identity.js"
 import { gitStatusTool } from "./git-status.js"
 import { searchTool } from "./search.js"
 import { fileReadTool } from "./file-read.js"
@@ -66,31 +67,8 @@ export function registerTool(
   toolRegistry.register(tool)
 }
 
-type ExtraCtx = {
-  userMemoryRoot?: ToolContext["userMemoryRoot"]
-  workspaceMemoryRoot?: ToolContext["workspaceMemoryRoot"]
-  permissionMode?: ToolContext["permissionMode"]
-  getPermissionMode?: ToolContext["getPermissionMode"]
-  confirmCommand?: ToolContext["confirmCommand"]
-  shellDialect?: ToolContext["shellDialect"]
-  additionalWorkingDirectories?: ToolContext["additionalWorkingDirectories"]
-  alwaysAllowRules?: ToolContext["alwaysAllowRules"]
-  alwaysDenyRules?: ToolContext["alwaysDenyRules"]
-  alwaysAskRules?: ToolContext["alwaysAskRules"]
-  applyPermissionSuggestions?: ToolContext["applyPermissionSuggestions"]
-  authorizePath?: ToolContext["authorizePath"]
-  authorizeTool?: ToolContext["authorizeTool"]
-  desktopApiToken?: ToolContext["desktopApiToken"]
-  validateSubagentModel?: ToolContext["validateSubagentModel"]
-  getSubagentDefinitions?: ToolContext["getSubagentDefinitions"]
-  getSubagentLimits?: ToolContext["getSubagentLimits"]
-  delegateTasks?: ToolContext["delegateTasks"]
-  toolOutcomeObserver?: ToolContext["toolOutcomeObserver"]
-  toolOutcomeSource?: ToolContext["toolOutcomeSource"]
-}
-
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */
-export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ExtraCtx) {
+export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext) {
   return toolRegistry.toPITools(workspace, emitTrace, extraCtx)
 }
 
@@ -102,9 +80,11 @@ export function agentToolToPiTool(
   tool: AgentTool,
   workspace?: string,
   emitTrace?: ToolTraceEmitter,
-  extraCtx?: ExtraCtx,
+  extraCtx?: ToolExecutionExtraContext,
 ) {
-  return agentToolToPIToolDefinition(tool, workspace, emitTrace, extraCtx)
+  const canonical = canonicalToolName(tool.name)
+  const normalized = canonical === tool.name ? tool : { ...tool, name: canonical }
+  return agentToolToPIToolDefinition(normalized, workspace, emitTrace, extraCtx)
 }
 
 // ─── MCP 原始工具缓存（后台连接，不阻塞工具注册）─────────────
@@ -225,16 +205,7 @@ export async function disconnectMcp(): Promise<void> {
  * 后台刷新 MCP 连接（同 workspace 切 session 时调用）。
  * 断开旧 client 前立即失效 raw tool cache，连接完成后再发布新工具。
  */
-/** @internal 测试用：返回当前 MCP cache 长度 */
-export function _getMcpCacheLen(): number { return _mcpCache.length }
-/** @internal 测试用：注入已知 MCP AgentTool cache，验证命中分支 */
-export function _setMcpCache(workspace: string, tools: AgentTool[]): void {
-  _mcpWorkspace = workspace
-  _mcpCache = tools
-  _mcpCacheInitialized = true
-}
-
-export async function reconnectMcp(workspace: string, emitTrace?: ToolTraceEmitter, extraCtx?: ExtraCtx): Promise<void> {
+export async function reconnectMcp(workspace: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext): Promise<void> {
   const ws = workspace ?? ""
   const current = _mcpInFlight
   if (current && current.workspace === ws && current.epoch === _mcpRequestEpoch) {
@@ -252,7 +223,7 @@ export async function reconnectMcp(workspace: string, emitTrace?: ToolTraceEmitt
 export async function getCustomToolsAsync(
   workspace?: string,
   emitTrace?: ToolTraceEmitter,
-  extraCtx?: ExtraCtx,
+  extraCtx?: ToolExecutionExtraContext,
 ): Promise<ReturnType<typeof toolRegistry.toPITools>> {
   // 1. 内置自定义工具
   const builtin = getCustomTools(workspace, emitTrace, extraCtx)

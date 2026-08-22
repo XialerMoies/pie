@@ -7,6 +7,7 @@ import type { AssistantBlock, ChatStreamState, ChatTextInputState, ServerContext
 import { writePresentationEvent } from "./presentation-events.js";
 import { TaskLifecycle } from "./task-lifecycle.js";
 import type { TaskLifecycleSnapshot } from "./task-lifecycle.js";
+import { canonicalToolName } from "../agent/tool-identity.js";
 
 export type SessionWriteAuthorizer = (sessionFile: string, source: string) => void;
 
@@ -320,7 +321,9 @@ export function emitBlock(
   options?: SessionPersistenceOptions,
 ): void {
   const idx = chatStream.blocks.findIndex(b => b.blockId === block.blockId);
-  let emittedBlock = block;
+  let emittedBlock: AssistantBlock = chatStream.traceId && !block.traceId
+    ? { ...block, traceId: chatStream.traceId }
+    : block;
   if (idx >= 0) {
     // B-5：更新已存在的 block 时保留初始 seq，避免在事件流中"移动位置"（顺序漂移）。
     // 只有首次创建才分配新 seq；后续 text/thinking/tool 更新都不改变位置。
@@ -429,7 +432,11 @@ export function emitTrace(
 ): void {
   const turnId = trace.turnId || chatStream.turnId;
   if (!turnId) return;
-  const normalized = assignTraceSeq(chatStream, { ...trace, turnId } as TraceEvent);
+  const normalized = assignTraceSeq(chatStream, {
+    ...trace,
+    turnId,
+    ...(chatStream.traceId && !trace.traceId ? { traceId: chatStream.traceId } : {}),
+  } as TraceEvent);
   persistTraceEvent(runtime, normalized, options);
 }
 
@@ -458,6 +465,19 @@ export function attachEngineEvents(
     "tool_failed", "terminal", "queue",
   ]);
   const taskLifecycle = new TaskLifecycle();
+
+  const recordCorrelation = (stage: "runtime.event" | "task.transition" | "session.persisted", eventType: string, details?: Record<string, unknown>, failureKind?: string): void => {
+    const correlation = chatStream.correlation;
+    if (!ctx?.observability?.correlationLedger || !correlation?.traceId) return;
+    ctx.observability.correlationLedger.record({
+      ...correlation,
+      stage,
+      eventType,
+      ...(chatStream.taskLifecycle?.status ? { status: chatStream.taskLifecycle.status } : {}),
+      ...(failureKind ? { failureKind } : {}),
+      ...(details ? { details } : {}),
+    });
+  };
 
   const currentTurn = (event: EngineEvent): string => event.turnId || chatStream.turnId;
   const domainReducer = new AssistantDomainReducer(chatStream, {
@@ -499,7 +519,7 @@ export function attachEngineEvents(
     else if (event.type === "turn.failed") taskLifecycle.fail(event.error.category);
     else taskLifecycle.cancel(event.reason || "cancelled");
     chatStream.taskLifecycle = taskLifecycle.snapshot();
-    persistTaskLifecycle(runtime, chatStream.taskLifecycle, { authorizeSessionWrite });
+    const taskPersisted = persistTaskLifecycle(runtime, chatStream.taskLifecycle, { authorizeSessionWrite });
     // A thought-only normalized turn must not become the visible final answer.
     // Keep the Thought block for inspection, but require a separate text block
     // so the same terminal invariant applies to both event bridges.
@@ -555,6 +575,12 @@ export function attachEngineEvents(
     chatStream.currentTextSnapshot = "";
     chatStream.currentThinkingSnapshot = "";
     cleanupTracePersistState(turnId);
+    recordCorrelation("task.transition", event.type, {
+      terminal: true,
+      taskStatus: task.status,
+      evidenceCount,
+    });
+    recordCorrelation("session.persisted", "task_lifecycle", { taskStatus: task.status, persisted: taskPersisted });
     chatStream.turnId = "";
     chatStream.emittedTraces = new Set();
     chatStream.blocks = [];
@@ -582,9 +608,15 @@ export function attachEngineEvents(
       return;
     }
     if (event.type === "turn.started") {
+      if (chatStream.correlation?.turnId !== event.turnId) chatStream.traceId = `trace-${event.turnId || chatStream.turnId}`;
+      chatStream.traceId ||= `trace-${event.turnId || chatStream.turnId}`;
       chatStream.turnId = event.turnId || chatStream.turnId;
-      taskLifecycle.start(chatStream.turnId, chatStream.taskRequirements);
+      chatStream.sessionId = engine.session.id;
+      chatStream.correlation = { traceId: chatStream.traceId, turnId: chatStream.turnId, sessionId: chatStream.sessionId };
+      recordCorrelation("runtime.event", event.type);
+      taskLifecycle.start(chatStream.turnId, chatStream.taskRequirements, { traceId: chatStream.traceId, sessionId: chatStream.sessionId });
       chatStream.taskLifecycle = taskLifecycle.snapshot();
+      recordCorrelation("task.transition", event.type, { phase: chatStream.taskLifecycle.phase });
       domainReducer.reset();
       chatStream.activeTextInput = undefined;
       chatStream.activeThinkingInput = undefined;
@@ -592,6 +624,7 @@ export function attachEngineEvents(
       lastStreamingUsagePublishAt = Date.now();
       return;
     }
+    if (turnId) recordCorrelation("runtime.event", event.type);
     if (event.type === "queue.updated") {
       writePresentationEvent(chatStream, { type: "queue_update", steering: event.steering, followUp: event.followUp });
       return;
@@ -631,29 +664,33 @@ export function attachEngineEvents(
       return;
     }
     if (event.type === "tool.started" && turnId) {
-      taskLifecycle.toolStarted(event.toolCallId, event.name, event.input);
+      const toolName = canonicalToolName(event.name);
+      taskLifecycle.toolStarted(event.toolCallId, toolName, event.input);
       chatStream.taskLifecycle = taskLifecycle.snapshot();
+      recordCorrelation("task.transition", event.type, { tool: toolName, toolCallId: event.toolCallId });
       // Tool execution closes an in-flight Thought node before opening its tool block.
       domainReducer.closeThinkingAtToolBoundary();
       const id = `${event.toolCallId}@${turnId}`;
-      const trace: TraceEvent = { type: "tool", status: "running", name: event.name, input: event.input, turnId, id };
+      const trace: TraceEvent = { type: "tool", status: "running", name: toolName, input: event.input, turnId, id };
       emitTrace(runtime, chatStream, trace, { force: true, authorizeSessionWrite });
       emitBlock(runtime, chatStream, {
-        type: "tool", toolCallId: event.toolCallId, name: event.name, input: event.input,
+        type: "tool", toolCallId: event.toolCallId, name: toolName, input: event.input,
         status: "running", turnId, blockId: `tool-${event.toolCallId}`, seq: nextBlockSeq(chatStream),
       }, { persist: false });
       return;
     }
     if (event.type === "tool.updated" && turnId) {
+      const toolName = canonicalToolName(event.name);
       const block = chatStream.blocks.find((item): item is Extract<AssistantBlock, { type: "tool" }> => item.type === "tool" && item.toolCallId === event.toolCallId);
       if (block) emitBlock(runtime, chatStream, { ...block, output: event.output }, { persist: false });
       // Partial tool output is an SSE concern. Only the terminal tool frame
       // is persisted, avoiding repeated synchronous writes of growing output.
-      emitTrace(runtime, chatStream, { type: "tool", status: "running", name: event.name, output: event.output, turnId, id: `${event.toolCallId}@${turnId}` }, { persist: false });
+      emitTrace(runtime, chatStream, { type: "tool", status: "running", name: toolName, output: event.output, turnId, id: `${event.toolCallId}@${turnId}` }, { persist: false });
       return;
     }
     if (event.type === "tool.completed" || event.type === "tool.failed") {
       if (!turnId) return;
+      const toolName = canonicalToolName(event.name);
       const block = chatStream.blocks.find((item): item is Extract<AssistantBlock, { type: "tool" }> => item.type === "tool" && item.toolCallId === event.toolCallId);
       const permissionFailure = event.metadata?.permissionFailure;
       const failed = event.type === "tool.failed" || (permissionFailure !== null && typeof permissionFailure === "object");
@@ -666,11 +703,12 @@ export function attachEngineEvents(
         const evidenceAvailable = Boolean(ctx?.observability?.evidenceLedger?.getSuccessfulFacts([event.toolCallId]).length);
         taskLifecycle.toolCompleted(event.toolCallId, evidenceAvailable);
       } else {
-        taskLifecycle.toolFailed(event.toolCallId, event.name, event.error);
+        taskLifecycle.toolFailed(event.toolCallId, toolName, event.error);
       }
       chatStream.taskLifecycle = taskLifecycle.snapshot();
+      recordCorrelation("task.transition", event.type, { tool: toolName, toolCallId: event.toolCallId, status: failed ? "failed" : "completed" }, event.type === "tool.failed" ? event.error.kind : undefined);
       emitBlock(runtime, chatStream, {
-        type: "tool", toolCallId: event.toolCallId, name: event.name, input: block?.input,
+        type: "tool", toolCallId: event.toolCallId, name: toolName, input: block?.input,
         output: event.type === "tool.completed" ? event.output : undefined,
         error: failed ? failureMessage : undefined,
         metadata: event.metadata,
@@ -678,7 +716,7 @@ export function attachEngineEvents(
         blockId: `tool-${event.toolCallId}`, seq: block?.seq ?? nextBlockSeq(chatStream),
       }, { authorizeSessionWrite });
       emitTrace(runtime, chatStream, {
-        type: "tool", status: failed ? "error" : "success", name: event.name,
+        type: "tool", status: failed ? "error" : "success", name: toolName,
         output: event.type === "tool.completed" ? event.output : undefined,
         error: failed ? failureMessage : undefined, metadata: event.metadata, turnId, id: `${event.toolCallId}@${turnId}`,
       }, { force: true, authorizeSessionWrite });

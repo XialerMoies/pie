@@ -21,6 +21,8 @@ const TEST_FILES = [
   "test/chat-sse.test.mjs",
   "test/chat-stream-replay.test.mjs",
   "test/chat-event-flow-contract.test.mjs",
+  "test/deterministic-event-script-flow.test.mjs",
+  "test/agent-fault-matrix-flow.test.mjs",
   "test/agent-event-persistence-flow.test.mjs",
   "test/attachments.test.mjs",
   "test/tool-trace.test.mjs",

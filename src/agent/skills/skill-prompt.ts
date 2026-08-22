@@ -1,4 +1,4 @@
-import type { SkillSummary } from "./types.js"
+import type { SkillDiagnostic, SkillSummary } from "./types.js"
 
 const EVIDENCE_HARD_GATE = `## Evidence hard gate
 Verification claims are valid only when the tool result contains the requested source payload.
@@ -12,6 +12,9 @@ Verification claims are valid only when the tool result contains the requested s
 export interface SkillPromptInput {
   summaries: SkillSummary[]
   bodies: ReadonlyMap<string, string>
+  revision?: string
+  workspaceKey?: string
+  diagnostics?: readonly SkillDiagnostic[]
 }
 
 export function formatSkillPrompt(input: SkillPromptInput): string {

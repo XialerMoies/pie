@@ -138,6 +138,27 @@ describe("SkillService", () => {
     assert.doesNotMatch(prompt.bodies.get("release-check"), /# B/);
   });
 
+  it("publishes one revision for list and prompt facts, then changes it after content mutation", async () => {
+    const { service, userRoot } = await fixture();
+    await service.trust("user", "release-check");
+    await service.enable("user", "release-check");
+    const snapshot = await service.snapshot(join(userRoot, "missing-workspace", "agent", "skills"));
+    const prompt = await service.promptInput(join(userRoot, "missing-workspace", "agent", "skills"), snapshot);
+    const listed = await service.list();
+    assert.equal(prompt.revision, snapshot.revision);
+    assert.equal(typeof listed.revision, "string");
+    assert.equal(prompt.workspaceKey, snapshot.workspaceKey);
+    assert.equal(snapshot.result.skills[0].parse, "valid");
+    assert.equal(snapshot.result.skills[0].trust, "trusted");
+    assert.equal(snapshot.result.skills[0].enabled, true);
+    await writeFile(join(userRoot, "release-check", "SKILL.md"), document("release-check", "changed"));
+    const changed = await service.snapshot(join(userRoot, "missing-workspace", "agent", "skills"));
+    assert.notEqual(changed.revision, snapshot.revision);
+    assert.equal(changed.result.skills[0].trust, "untrusted");
+    assert.equal(changed.result.skills[0].enabled, false);
+    assert.equal(changed.result.skills[0].diagnostic.code, "content_changed");
+  });
+
   it("rejects invalid ids and unknown tools", async () => {
     const { service, userRoot } = await fixture();
     await assert.rejects(() => service.trust("user", "../escape"), /invalid/i);

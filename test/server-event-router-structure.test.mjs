@@ -7,6 +7,8 @@ const ROOT = resolve(import.meta.dirname, "..");
 const SERVER = resolve(ROOT, "src", "server", "server.ts");
 const ROUTER = resolve(ROOT, "src", "server", "agent-event-router.ts");
 const SSE_CONTROLLER = resolve(ROOT, "src", "frontend", "chat", "chat-sse-controller.ts");
+const TOOLS = resolve(ROOT, "src", "agent", "tools", "index.ts");
+const RUNTIME = resolve(ROOT, "src", "agent", "runtime.ts");
 
 describe("server agent event router structure", () => {
   it("keeps runtime session event handling outside the server bootstrap file", () => {
@@ -41,5 +43,17 @@ describe("server agent event router structure", () => {
     assert.doesNotMatch(controllerSource, /data\.type\s*===\s*['"]delta['"]/);
     assert.doesNotMatch(controllerSource, /data\.type\s*===\s*['"]thinking['"]/);
     assert.doesNotMatch(controllerSource, /handleDelta\s*\(/);
+  });
+
+  it("keeps test-only cache hooks and duplicate context aliases out of production", () => {
+    const toolsSource = readFileSync(TOOLS, "utf8");
+    const runtimeSource = readFileSync(RUNTIME, "utf8");
+    assert.doesNotMatch(toolsSource, /_getMcpCacheLen|_setMcpCache|type ExtraCtx\s*=/);
+    assert.doesNotMatch(runtimeSource, /type RuntimeToolExtraContext\s*=\s*Pick/);
+    assert.match(toolsSource, /ToolExecutionExtraContext/);
+    assert.match(runtimeSource, /ToolExecutionExtraContext/);
+    for (const file of ["test/mcp-client.test.mjs", "test/mcp-client-service.test.mjs"]) {
+      assert.doesNotMatch(readFileSync(resolve(ROOT, file), "utf8"), /_getMcpCacheLen|_setMcpCache/);
+    }
   });
 });

@@ -547,29 +547,6 @@ it("disconnectMcp 清空缓存", async () => {
   assert.ok(!names.some((n) => n.startsWith("mcp__")), "首次调用不应有 MCP 工具");
 });
 
-it("getCustomToolsAsync 命中 _mcpCache 返回 MCP 工具", async () => {
-  const tools = await import("../src/agent/tools/index.ts");
-  const svc = await import("../src/agent/mcp/MCPClientService.ts");
-  svc.reset();
-
-  // 初始 cache 为空
-  assert.strictEqual(tools._getMcpCacheLen(), 0, "初始 cache 应为空");
-
-  // 注入已知 MCP cache
-  const fakeTool = { name: "mcp__fake__tool", isReadOnly: true };
-  tools._setMcpCache("/test-ws", [fakeTool]);
-
-  // 同 workspace 调用：应命中 cache，返回内置 + MCP
-  const result = await tools.getCustomToolsAsync("/test-ws");
-  assert.ok(result.some((t) => t.name === "git-status"), "应有内置工具");
-  assert.ok(result.some((t) => t.name === "mcp__fake__tool"), "应有缓存的 MCP 工具");
-
-  // 不同 workspace：不应命中 cache
-  const resultWs2 = await tools.getCustomToolsAsync("/other-ws");
-  assert.ok(resultWs2.some((t) => t.name === "git-status"), "应有内置工具");
-  assert.ok(!resultWs2.some((t) => t.name === "mcp__fake__tool"), "跨 workspace 不应有旧 cache");
-});
-
 it("不调 disconnectMcp 时 generation 不变（同 workspace 保留 MCP）", async () => {
   const svc = await import("../src/agent/mcp/MCPClientService.ts");
   svc.reset();

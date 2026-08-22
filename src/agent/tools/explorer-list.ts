@@ -3,6 +3,7 @@ import { getLocalApiBaseUrl, localApiFetch } from "./local-api.js"
 
 export const explorerListTool: AgentTool = defineAgentTool({
   name: "explorer_list",
+  aliases: ["explorer-list"],
   description:
     "列出目录内容，返回结构化的文件和文件夹列表。比 bash ls 更好用：自动过滤 node_modules/.git、" +
     "目录排前面、显示完整相对路径。配合 file_read / search 使用：用这个看目录结构，用 search 找代码，用 file_read 读内容。",

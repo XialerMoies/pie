@@ -5,7 +5,7 @@
  * 3. esbuild 打包全部前端 .ts 为 IIFE bundle → dist/frontend/js/dashboard.js
  * 4. 更新 HTML：注入 marked.umd.js + dashboard.js
  */
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, cpSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -19,7 +19,37 @@ const OUT = resolve(ROOT, "dist", "frontend");
 console.log("→ Vite build…");
 console.log("-> Compile frontend TS...");
 execSync("node scripts/compile-frontend-ts.mjs", { cwd: ROOT, stdio: "inherit" });
-execSync("npx vite build", { cwd: ROOT, stdio: "inherit" });
+// Run the workspace-local Vite entry directly. Using npx adds an npm wrapper
+// to the monitored process tree and inflates the build RSS gate unnecessarily.
+// Dashboard and each worker are separate graphs. Monaco's main module is
+// bundled with esbuild below; keeping it out of Rollup avoids a second large
+// module graph and materially lowers the native RSS peak.
+const viteBin = resolve(ROOT, "node_modules", "vite", "bin", "vite.js");
+function runVite(target) {
+  execFileSync(process.execPath, [viteBin, "build"], {
+    cwd: ROOT,
+    stdio: "inherit",
+    env: { ...process.env, MY_CODE_AGENT_VITE_TARGET: target },
+  });
+}
+runVite("dashboard");
+for (const worker of ["editor", "typescript", "json", "css", "html"]) {
+  runVite(`worker:${worker}`);
+}
+const esbuildBin = resolve(ROOT, "node_modules", "esbuild", "bin", "esbuild");
+execFileSync(process.execPath, [
+  esbuildBin,
+  resolve(SRC, "editor", "monaco-setup.ts"),
+  "--bundle",
+  "--format=esm",
+  "--platform=browser",
+  `--outfile=${resolve(OUT, "js", "monaco-entry.js")}`,
+  "--loader:.ts=ts",
+  "--loader:.css=css",
+  "--loader:.ttf=file",
+  "--asset-names=assets/[name]-[hash]",
+  "--minify",
+], { cwd: ROOT, stdio: "inherit" });
 
 // Explorer icons are referenced by stable /icons/*.svg URLs and therefore
 // are not discovered by Vite's import graph.
@@ -64,7 +94,7 @@ let html = readFileSync(htmlPath, "utf-8");
 // 在 </body> 前插入 marked.umd.js + dashboard.js
 html = html.replace(
   /<\/body>/,
-  '<script src="./marked.umd.js"></script>\n<script src="./js/dashboard.js"></script>\n</body>'
+  '<link rel="stylesheet" href="./js/monaco-entry.css">\n<script src="./marked.umd.js"></script>\n<script src="./js/dashboard.js"></script>\n</body>'
 );
 
 writeFileSync(htmlPath, html, "utf-8");

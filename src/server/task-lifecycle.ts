@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { EngineErrorInfo } from "../agent-engine/contracts.js";
 import { RetryPolicy, type RetryDecision } from "./retry-policy.js";
+import type { CorrelationIds } from "./correlation.js";
 
 export type TaskPhase = "discovering" | "verifying" | "answering";
 export type TaskStatus = "running" | "completed" | "failed" | "blocked" | "cancelled";
@@ -14,6 +15,8 @@ export interface TaskRequirements {
 
 export interface TaskLifecycleSnapshot {
   turnId: string;
+  traceId?: string;
+  sessionId?: string;
   phase: TaskPhase;
   status: TaskStatus;
   kind: TaskKind;
@@ -72,13 +75,15 @@ export class TaskLifecycle {
     this.#requirements = options.requirements ?? { kind: "general", requiresEvidence: false, minSuccessfulEvidence: 0 };
   }
 
-  start(turnId: string, requirements = this.#requirements): void {
+  start(turnId: string, requirements = this.#requirements, correlation?: Pick<CorrelationIds, "traceId" | "sessionId">): void {
     this.#requirements = requirements;
     this.#startedTools.clear();
     this.#completedTools.clear();
     this.#retryPolicy = new RetryPolicy();
     this.#snapshot = {
       turnId,
+      ...(correlation?.traceId ? { traceId: correlation.traceId } : {}),
+      ...(correlation?.sessionId ? { sessionId: correlation.sessionId } : {}),
       phase: "discovering",
       status: "running",
       kind: requirements.kind,

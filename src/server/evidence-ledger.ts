@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ToolEvidenceLookup, ToolEvidenceScope, ToolFailureKind, ToolOutcomeObservation } from "../agent/types.js";
+import type { CorrelationIds } from "./correlation.js";
 
 export type EvidenceStatus = "success" | "failed" | "unverified";
 
@@ -19,6 +20,7 @@ export interface EvidenceLedgerEntry {
   source: ToolOutcomeObservation["source"];
   createdAt: string;
   duplicateOf?: string;
+  correlation?: CorrelationIds;
 }
 
 export interface EvidenceLedgerOptions {
@@ -90,6 +92,7 @@ export class EvidenceLedger {
       source: observation.source,
       createdAt,
       ...(previous ? { duplicateOf: previous.evidenceId } : {}),
+      ...(observation.correlation ? { correlation: { ...observation.correlation, toolCallId: observation.toolCallId } } : {}),
     };
     this.#entries.push(entry);
     if (this.#entries.length > this.#maxEntries) this.#entries.splice(0, this.#entries.length - this.#maxEntries);

@@ -9,6 +9,7 @@ import {
 import type { createElectronE2ERuntime } from "./electron-e2e-runtime.js";
 import {
   collectRendererE2EResult,
+  runPackagedChatEventFlowProbe,
   runRendererCookieIsolationProbe,
   waitForRendererReady,
 } from "./electron-e2e-renderer-probe.js";
@@ -86,6 +87,7 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
       fs.writeFileSync(path.join(siblingWorkspace, "read.txt"), "sibling-read", "utf-8");
 
       const renderer = await collectRendererE2EResult(win, path.join(externalRoot, "ipc.txt"));
+      const chatEventFlow = await runPackagedChatEventFlowProbe(win);
       const textIconStatus = await requestStatus(`${origin}/icons/file_type_text.svg`);
       const unauthorizedApiStatus = await requestStatus(`${origin}/api/dashboard`);
       const wrongTokenApi = await requestJson(initialServerBinding, "/api/dashboard", "GET", undefined, {
@@ -275,6 +277,7 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
         STARTUP: options.startup,
         ...diagnostics,
         renderer,
+        chatEventFlow,
         textIconStatus,
         unauthorizedApiStatus,
         wrongTokenApiStatus: wrongTokenApi.status,

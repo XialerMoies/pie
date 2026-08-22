@@ -130,6 +130,28 @@ describe("application event stream ownership", () => {
     assert.match(runner, /test\/multi-instance-e2e\.mjs/);
     assert.match(runner, /test\/workspace-lock\.test\.mjs/);
   });
+
+  it("keeps build and runtime memory budgets separate and builds Monaco in its own graph", () => {
+    const buildScript = readFileSync(resolve(process.cwd(), "scripts/build-frontend.mjs"), "utf8");
+    const viteConfig = readFileSync(resolve(process.cwd(), "vite.config.ts"), "utf8");
+    const buildRunner = readFileSync(resolve(process.cwd(), "scripts/test-build.mjs"), "utf8");
+    const distRunner = readFileSync(resolve(process.cwd(), "scripts/dist-dir.mjs"), "utf8");
+    assert.match(buildScript, /for \(const worker of \["editor", "typescript", "json", "css", "html"\]\)/);
+    assert.match(buildScript, /runVite\("dashboard"\)/);
+    assert.match(buildScript, /esbuildBin/);
+    assert.match(buildScript, /monaco-entry\.js/);
+    assert.match(buildScript, /monaco-entry\.css/);
+    assert.match(buildScript, /--loader:\.ttf=file/);
+    assert.match(viteConfig, /emptyOutDir: !buildWorker/);
+    assert.match(viteConfig, /reportCompressedSize: false/);
+    assert.match(buildRunner, /MY_CODE_AGENT_BUILD_MEMORY_MB \|\| 3584/);
+    assert.match(buildRunner, /MY_CODE_AGENT_TEST_MEMORY_MB \|\| 2048/);
+    assert.match(buildRunner, /label === "build frontend" \? BUILD_LIMIT_MB : TEST_LIMIT_MB/);
+    assert.match(distRunner, /MY_CODE_AGENT_BUILD_MEMORY_MB \|\| 3584/);
+    assert.match(distRunner, /electron-builder.*TEST_LIMIT_MB/);
+    assert.match(buildRunner, /peak RSS=/);
+    assert.match(distRunner, /peak RSS=/);
+  });
 });
 
 describe("dashboard DOM event ownership", () => {

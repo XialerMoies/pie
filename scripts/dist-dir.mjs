@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { resolve } from "node:path";
 
-const HARD_LIMIT_MB = Number(process.env.MY_CODE_AGENT_TEST_MEMORY_MB || 2048);
-const WARN_LIMIT_MB = Math.floor(HARD_LIMIT_MB * 0.8);
+const TEST_LIMIT_MB = Number(process.env.MY_CODE_AGENT_TEST_MEMORY_MB || 2048);
+const BUILD_LIMIT_MB = Number(process.env.MY_CODE_AGENT_BUILD_MEMORY_MB || 3584);
 
 function processTreeRssMb(pid) {
   if (process.platform !== "win32") {
@@ -34,35 +35,48 @@ function stopProcessTree(child) {
   child.kill("SIGTERM");
 }
 
-async function run(label, command, args) {
+async function run(label, command, args, limitMb) {
+  const hardLimitMb = Number.isFinite(limitMb) && limitMb > 0 ? limitMb : TEST_LIMIT_MB;
+  const warnLimitMb = Math.floor(hardLimitMb * 0.8);
   const child = spawn(command, args, {
     cwd: process.cwd(),
     stdio: "inherit",
     windowsHide: true,
     shell: process.platform === "win32",
-    env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --max-old-space-size=${HARD_LIMIT_MB}`.trim() },
+    env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --max-old-space-size=${hardLimitMb}`.trim() },
   });
   let warned = false;
   let stopped = false;
+  let peakUsage = 0;
   const monitor = setInterval(async () => {
     const usage = await processTreeRssMb(child.pid);
     if (!usage) return;
-    if (!warned && usage >= WARN_LIMIT_MB) {
+    peakUsage = Math.max(peakUsage, usage);
+    if (!warned && usage >= warnLimitMb) {
       warned = true;
-      console.error(`[dist-dir] memory warning: ${label} RSS=${usage}MB / ${HARD_LIMIT_MB}MB`);
+      console.error(`[dist-dir] memory warning: ${label} RSS=${usage}MB / ${hardLimitMb}MB`);
     }
-    if (!stopped && usage >= HARD_LIMIT_MB) {
+    if (!stopped && usage >= hardLimitMb) {
       stopped = true;
-      console.error(`[dist-dir] memory limit exceeded: ${label} RSS=${usage}MB / ${HARD_LIMIT_MB}MB`);
+      console.error(`[dist-dir] memory limit exceeded: ${label} RSS=${usage}MB / ${hardLimitMb}MB`);
       stopProcessTree(child);
     }
   }, 250);
   const [code, signal] = await once(child, "close");
   clearInterval(monitor);
-  if (stopped) throw new Error(`${label} exceeded the ${HARD_LIMIT_MB}MB memory limit`);
+  if (stopped) throw new Error(`${label} exceeded the ${hardLimitMb}MB memory limit (peak ${peakUsage}MB)`);
   if (code !== 0) throw new Error(`${label} failed with exit code ${code ?? "null"}${signal ? ` (${signal})` : ""}`);
+  console.log(`[dist-dir] ${label} peak RSS=${peakUsage}MB / ${hardLimitMb}MB`);
 }
 
-console.log(`[dist-dir] memory limit ${HARD_LIMIT_MB}MB (warning ${WARN_LIMIT_MB}MB)`);
-await run("build", process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"]);
-await run("electron-builder", process.platform === "win32" ? "electron-builder.cmd" : "electron-builder", ["--win", "dir"]);
+console.log(`[dist-dir] build memory limit ${BUILD_LIMIT_MB}MB; packaging memory limit ${TEST_LIMIT_MB}MB`);
+const skipBuild = process.argv.includes("--skip-build") || process.env.MY_CODE_AGENT_SKIP_DIST_BUILD === "1";
+if (skipBuild) {
+  console.log("[dist-dir] skipping build; packaging existing dist and dist-electron artifacts");
+} else {
+  await run("build", process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"], BUILD_LIMIT_MB);
+}
+const electronBuilder = process.platform === "win32"
+  ? resolve("node_modules", ".bin", "electron-builder.cmd")
+  : resolve("node_modules", ".bin", "electron-builder");
+await run("electron-builder", electronBuilder, ["--win", "dir"], TEST_LIMIT_MB);

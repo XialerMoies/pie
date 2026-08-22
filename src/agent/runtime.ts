@@ -10,11 +10,11 @@ import type { AgentSession } from "@xiamol/pi-coding-agent"
 import { createAgentSession, ModelRuntime, ModelRegistry, SessionManager, DefaultResourceLoader } from "@xiamol/pi-coding-agent"
 import { resolveSystemPrompt } from "./prompts.js"
 import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools/index.js"
-import type { SessionPermissionState, ToolContext } from "./types.js"
+import type { SessionPermissionState, ToolContext, ToolExecutionExtraContext } from "./types.js"
 import { applySessionPermissionSuggestions, normalizePermissionPath, resetSessionPermissionState } from "./permissions.js"
 import { wsDir } from "../server/routes/session-dir.js"
 import { calculateContextUsageSnapshot, type ContextUsageSnapshot } from "./context-usage.js"
-import type { SkillService } from "./skills/skill-service.js"
+import type { SkillFactSnapshot, SkillService } from "./skills/skill-service.js"
 import { formatSkillPrompt } from "./skills/skill-prompt.js"
 
 import { setCurrentRuntime as _setGlobalRuntime, getCurrentRuntime as _getGlobalRuntime } from "./globals.js";
@@ -50,38 +50,24 @@ export interface RuntimeConfig {
   toolOutcomeObserver?: ToolContext["toolOutcomeObserver"]
   toolOutcomeSource?: ToolContext["toolOutcomeSource"]
   evidenceLookup?: ToolContext["evidenceLookup"]
+  getCorrelationContext?: ToolContext["getCorrelationContext"]
   syncModelProviders?: (runtime: ModelRuntime) => Promise<number>
   skillService?: SkillService
 }
 
-type RuntimeToolExtraContext = Pick<
-  ToolContext,
-  | "userMemoryRoot"
-  | "workspaceMemoryRoot"
-  | "permissionMode"
-  | "getPermissionMode"
-  | "confirmCommand"
-  | "shellDialect"
-  | "additionalWorkingDirectories"
-  | "alwaysAllowRules"
-  | "alwaysDenyRules"
-  | "alwaysAskRules"
-  | "applyPermissionSuggestions"
-  | "authorizePath"
-  | "authorizeTool"
-  | "desktopApiToken"
-  | "validateSubagentModel"
-  | "getSubagentDefinitions"
-  | "getSubagentLimits"
-  | "delegateTasks"
-  | "toolOutcomeObserver"
-  | "toolOutcomeSource"
-  | "evidenceLookup"
->
+export type SkillPromptStatus =
+  | { status: "ready"; revision: string; workspaceKey?: string }
+  | { status: "error"; code: string; message: string; attemptedAt: string; previousRevision?: string }
+
+export type SystemPromptRefreshResult =
+  | { ok: true; revision?: string; workspaceKey?: string }
+  | { ok: false; code: string; message: string; attemptedAt: string; previousRevision?: string }
+
+type RuntimeToolExtraContext = ToolExecutionExtraContext
 
 export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraContext | undefined {
   const permissionState = config.sessionPermissionState
-  if (!config.userMemoryRoot && !config.workspaceMemoryRoot && !config.permissionMode && !config.getPermissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken && !config.validateSubagentModel && !config.getSubagentDefinitions && !config.getSubagentLimits && !config.delegateTasks && !config.toolOutcomeObserver && !config.evidenceLookup) return undefined
+  if (!config.userMemoryRoot && !config.workspaceMemoryRoot && !config.permissionMode && !config.getPermissionMode && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken && !config.validateSubagentModel && !config.getSubagentDefinitions && !config.getSubagentLimits && !config.delegateTasks && !config.toolOutcomeObserver && !config.evidenceLookup && !config.getCorrelationContext) return undefined
   return {
     userMemoryRoot: config.userMemoryRoot,
     workspaceMemoryRoot: config.workspaceMemoryRoot,
@@ -108,6 +94,7 @@ export function buildToolContextExtra(config: RuntimeConfig): RuntimeToolExtraCo
     toolOutcomeObserver: config.toolOutcomeObserver,
     toolOutcomeSource: config.toolOutcomeSource,
     evidenceLookup: config.evidenceLookup,
+    getCorrelationContext: config.getCorrelationContext,
   }
 }
 
@@ -164,6 +151,8 @@ export class AgentRuntime {
   private _modelProviderSyncWake?: Promise<number>
   /** 当前 in-flight provider sync 是否等待 streaming idle（read-only 查询不等待）。 */
   private _modelProviderSyncIdleWait?: boolean
+  private _skillPromptStatus?: SkillPromptStatus
+  private _skillPromptRefreshTail: Promise<void> = Promise.resolve()
 
   private constructor() {}
 
@@ -352,34 +341,85 @@ export class AgentRuntime {
     })
   }
 
-  /** 强制刷新 system prompt（从 sections 重新 resolve 并注入 session） */
-  async refreshSystemPrompt(): Promise<void> {
-    const { resolveSystemPrompt } = await import("./prompts.js")
-    const newPrompt = await this._buildSystemPrompt(this.currentWorkspace)
-    try {
-      // 更新 resource loader 的 append prompt
-      const loader = (this.session as any)._resourceLoader
-      if (loader?.setAppendSystemPrompt) {
-        loader.setAppendSystemPrompt([newPrompt])
+  /** Last skill fact snapshot status used by the active system prompt. */
+  getSkillPromptStatus(): SkillPromptStatus | undefined {
+    return this._skillPromptStatus ? { ...this._skillPromptStatus } : undefined
+  }
+
+  /** 强制刷新 system prompt（串行化，失败显式返回而不是伪装成功） */
+  async refreshSystemPrompt(): Promise<SystemPromptRefreshResult> {
+    const operation = async (): Promise<SystemPromptRefreshResult> => {
+      const attemptedAt = new Date().toISOString()
+      const previousRevision = this._skillPromptStatus?.status === "ready" ? this._skillPromptStatus.revision : undefined
+      let newPrompt: string
+      try {
+        newPrompt = await this._buildSystemPrompt(this.currentWorkspace)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const failure: SystemPromptRefreshResult = { ok: false, code: "skill_prompt_unavailable", message, attemptedAt, ...(previousRevision ? { previousRevision } : {}) }
+        this._skillPromptStatus = { status: "error", ...failure }
+        return failure
       }
-      // 触发 session 重建 system prompt
-      ;(this.session as any).refreshSystemPrompt?.()
-      console.log(`[runtime] ✅ System prompt refreshed`)
-    } catch (e) {
-      console.log(`[runtime] refreshSystemPrompt error: ${e}`)
+      if (this._skillPromptStatus?.status === "error") {
+        const message = this._skillPromptStatus.message
+        return { ok: false, code: "skill_prompt_unavailable", message, attemptedAt, ...(previousRevision ? { previousRevision } : {}) }
+      }
+      try {
+        const loader = (this.session as any)._resourceLoader
+        if (loader?.setAppendSystemPrompt) loader.setAppendSystemPrompt([newPrompt])
+        ;(this.session as any).refreshSystemPrompt?.()
+        const status = this._skillPromptStatus
+        const success: SystemPromptRefreshResult = {
+          ok: true,
+          ...(status?.status === "ready" ? { revision: status.revision, workspaceKey: status.workspaceKey } : {}),
+        }
+        console.log(`[runtime] ✅ System prompt refreshed${success.revision ? ` revision=${success.revision}` : ""}`)
+        return success
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const failure: SystemPromptRefreshResult = { ok: false, code: "system_prompt_refresh_failed", message, attemptedAt, ...(previousRevision ? { previousRevision } : {}) }
+        this._skillPromptStatus = { status: "error", ...failure }
+        console.log(`[runtime] refreshSystemPrompt error: ${message}`)
+        return failure
+      }
     }
+    const pending = this._skillPromptRefreshTail.then(operation, operation)
+    this._skillPromptRefreshTail = pending.then(() => undefined, () => undefined)
+    return pending
   }
 
   private async _buildSystemPrompt(cwd: string): Promise<string> {
     const base = resolveSystemPrompt()
     const service = this.config.skillService
-    if (!service) return base
+    if (!service) {
+      this._skillPromptStatus = undefined
+      return base
+    }
+    const workspaceSkillRoot = resolve(cwd, "agent", "skills")
     try {
-      const input = await service.promptInput(resolve(cwd, "agent", "skills"))
+      const snapshot: SkillFactSnapshot | undefined = typeof (service as any).snapshot === "function"
+        ? await service.snapshot(workspaceSkillRoot)
+        : undefined
+      const input = snapshot
+        ? await service.promptInput(workspaceSkillRoot, snapshot)
+        : await service.promptInput(workspaceSkillRoot)
       const skillPrompt = formatSkillPrompt(input)
+      this._skillPromptStatus = {
+        status: "ready",
+        revision: input.revision || snapshot?.revision || "legacy-prompt-input",
+        ...(input.workspaceKey ? { workspaceKey: input.workspaceKey } : {}),
+      }
       return [base, skillPrompt].filter(Boolean).join("\n\n")
     } catch (error) {
-      console.warn(`[runtime] Skill prompt unavailable; continuing without skills: ${error instanceof Error ? error.message : String(error)}`)
+      const message = error instanceof Error ? error.message : String(error)
+      this._skillPromptStatus = {
+        status: "error",
+        code: "skill_snapshot_unavailable",
+        message,
+        attemptedAt: new Date().toISOString(),
+        ...(this._skillPromptStatus?.status === "ready" ? { previousRevision: this._skillPromptStatus.revision } : {}),
+      }
+      console.warn(`[runtime] Skill prompt unavailable: ${message}`)
       return base
     }
   }

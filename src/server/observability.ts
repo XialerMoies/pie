@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import type { IncomingHttpHeaders } from "node:http";
 import type { ToolOutcomeObservation } from "../agent/types.js";
 import type { EvidenceLedger } from "./evidence-ledger.js";
+import type { CorrelationLedger } from "./correlation.js";
 
 export type LogLevel = "info" | "warn" | "error";
 
@@ -140,6 +141,7 @@ export interface ServerObservability {
   startedAt: number;
   toolOutcomeMetrics?: ToolOutcomeMetrics;
   evidenceLedger?: EvidenceLedger;
+  correlationLedger?: CorrelationLedger;
 }
 
 export interface ToolOutcomeToolMetric {
@@ -237,10 +239,38 @@ export function createToolOutcomeObserver(
   metrics: ToolOutcomeMetrics,
   logger?: StructuredLogger,
   evidenceLedger?: EvidenceLedger,
+  correlationLedger?: CorrelationLedger,
 ): (observation: ToolOutcomeObservation) => void {
   return (observation) => {
     metrics.observe(observation);
-    evidenceLedger?.observe(observation);
+    const evidence = evidenceLedger?.observe(observation);
+    if (observation.correlation) {
+      correlationLedger?.record({
+        ...observation.correlation,
+        toolCallId: observation.toolCallId,
+        stage: "tool.outcome",
+        status: observation.outcome,
+        ...(observation.failureKind ? { failureKind: observation.failureKind } : {}),
+        source: observation.source,
+        ...(evidence ? { evidenceId: evidence.evidenceId } : {}),
+        details: {
+          legacy: observation.legacy,
+          complete: observation.complete !== false,
+          ...(evidence?.duplicateOf ? { duplicateOf: evidence.duplicateOf } : {}),
+        },
+      });
+      if (evidence) {
+        correlationLedger?.record({
+          ...observation.correlation,
+          toolCallId: observation.toolCallId,
+          stage: "evidence.recorded",
+          status: evidence.status,
+          evidenceId: evidence.evidenceId,
+          source: observation.source,
+          details: { complete: evidence.complete, ...(evidence.duplicateOf ? { duplicateOf: evidence.duplicateOf } : {}) },
+        });
+      }
+    }
     logger?.info("tool.outcome", {
       source: observation.source,
       toolName: observation.toolName,
@@ -262,6 +292,26 @@ export function diagnosticsSnapshot(
   workspace: string | undefined,
   instanceId: string | undefined,
 ): Record<string, unknown> {
+  const evidence = observability.evidenceLedger?.snapshot();
+  const safeEvidence = evidence ? {
+    total: evidence.total,
+    successful: evidence.successful,
+    failed: evidence.failed,
+    unverified: evidence.unverified,
+    entries: evidence.entries.map((entry) => ({
+      evidenceId: entry.evidenceId,
+      toolCallId: entry.toolCallId,
+      canonicalTool: entry.canonicalTool,
+      status: entry.status,
+      ...(entry.failureKind ? { failureKind: entry.failureKind } : {}),
+      payloadHash: entry.payloadHash,
+      complete: entry.complete,
+      source: entry.source,
+      createdAt: entry.createdAt,
+      ...(entry.duplicateOf ? { duplicateOf: entry.duplicateOf } : {}),
+      ...(entry.correlation ? { correlation: entry.correlation } : {}),
+    })),
+  } : undefined;
   return {
     ok: true,
     appVersion: observability.appVersion,
@@ -272,7 +322,8 @@ export function diagnosticsSnapshot(
     workspaceConfigured: Boolean(workspace),
     instanceId,
     ...(observability.toolOutcomeMetrics ? { toolOutcomeMetrics: observability.toolOutcomeMetrics.snapshot() } : {}),
-    ...(observability.evidenceLedger ? { evidenceLedger: observability.evidenceLedger.snapshot() } : {}),
+    ...(safeEvidence ? { evidenceLedger: safeEvidence } : {}),
+    ...(observability.correlationLedger ? { correlation: observability.correlationLedger.snapshot() } : {}),
     logs: observability.logger.entries(),
   };
 }

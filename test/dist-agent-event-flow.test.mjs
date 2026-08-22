@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Window } from "happy-dom";
 import { describe, it } from "node:test";
+import { DETERMINISTIC_IDS, eventScriptFor } from "./fixtures/deterministic-event-script.mjs";
 
 const ROOT = resolve(process.cwd());
 const DIST_ROUTER = resolve(ROOT, "dist/server/agent-event-router.js");
@@ -191,5 +192,94 @@ describe("built server and dashboard event flow", () => {
       text: comparableText(node.textContent),
     }));
     assert.deepEqual(replaySnapshot, liveSnapshot);
+  });
+
+  it("runs the shared deterministic event script through built router and built dashboard step by step", async () => {
+    assert.ok(existsSync(DIST_ROUTER), "dist server router must exist; run npm run build first");
+    const { attachEngineEvents } = await import(`${pathToFileURL(DIST_ROUTER).href}?deterministic-flow=${Date.now()}`);
+    const serverFlow = makeServerFlow();
+    attachEngineEvents(serverFlow.engine, serverFlow.runtime, serverFlow.chat);
+    const script = eventScriptFor(serverFlow.sessionId, serverFlow.turnId);
+    const blockSnapshots = [];
+    const seqById = new Map();
+    for (const step of script) {
+      serverFlow.engine.emit(step.event);
+      const blocks = serverFlow.chat.blocks.slice().sort((left, right) => left.seq - right.seq);
+      for (const block of blocks) {
+        if (seqById.has(block.blockId)) assert.equal(block.seq, seqById.get(block.blockId), `${step.id}: built seq must stay stable`);
+        else seqById.set(block.blockId, block.seq);
+      }
+      blockSnapshots.push({ step: step.id, ids: blocks.map((block) => block.blockId), seq: blocks.map((block) => block.seq) });
+    }
+    const serverPayloads = payloads(serverFlow.chat);
+    const done = serverPayloads.find((payload) => payload.type === "done");
+    assert.ok(done);
+    assert.deepEqual(done.blocks.map((block) => block.blockId), [
+      DETERMINISTIC_IDS.firstThought,
+      DETERMINISTIC_IDS.tool,
+      DETERMINISTIC_IDS.secondThought,
+      DETERMINISTIC_IDS.text,
+    ]);
+    assert.deepEqual(blockSnapshots.find((entry) => entry.step === "text-end").ids, done.blocks.map((block) => block.blockId));
+
+    const win = loadDistWindow();
+    const doc = win.document;
+    const counters = { fullRenders: 0, scheduled: 0, closed: 0 };
+    win.App.ChatState.replaceMessages([{ role: "assistant", content: "", streaming: true, blocks: [] }]);
+    doc.getElementById("ms").innerHTML = win.App.Chat.msgs();
+    const root = doc.querySelector("#ms > .m");
+    const identities = new Map();
+    const mutations = { added: 0, removed: 0 };
+    const observer = new win.MutationObserver((records) => {
+      for (const record of records) {
+        mutations.added += record.addedNodes.length;
+        mutations.removed += record.removedNodes.length;
+      }
+    });
+    observer.observe(doc.getElementById("ms"), { childList: true, subtree: true });
+    const controller = new win.App.ChatViews.ChatSseControllerView({
+      scheduleMessagesRender: () => { counters.scheduled++; },
+      updateUI: () => {},
+      markLastMessageRendered: () => {},
+      renderMessages: () => { counters.fullRenders++; },
+      refreshComposer: () => {},
+      setAssistantError: () => {},
+      completeSend: () => {},
+      failSend: () => {},
+    }, {
+      chat: win.App.Chat,
+      chatState: win.App.ChatState,
+      chatStream: { isCurrent: () => true, setHandlers: () => true, close: () => { counters.closed++; } },
+      chatViews: win.App.ChatViews,
+    });
+    assert.equal(controller.bind(1), true);
+    for (const payload of serverPayloads) {
+      controller.handleMessage(1, { data: JSON.stringify(payload) });
+      if (payload.type !== "block") continue;
+      const node = doc.querySelector(`[data-block-id="${payload.block.blockId}"]`);
+      assert.ok(node, `${payload.block.blockId} must be mounted immediately after ${payload.block.type}`);
+      if (identities.has(payload.block.blockId)) assert.strictEqual(node, identities.get(payload.block.blockId), `${payload.block.blockId} identity must stay stable`);
+      else identities.set(payload.block.blockId, node);
+      assert.strictEqual(doc.querySelector("#ms > .m"), root, "assistant root must remain stable during stream");
+    }
+    observer.disconnect();
+    assert.equal(counters.fullRenders, 0);
+    assert.equal(counters.scheduled, 0);
+    assert.equal(counters.closed, 1);
+    assert.equal(mutations.removed, 0, "built live stream must not remove existing event nodes");
+    assert.deepEqual([...doc.querySelectorAll("#ms [data-block-id]")].map((node) => node.dataset.blockId), done.blocks.map((block) => block.blockId));
+
+    const liveSnapshot = [...doc.querySelectorAll("#ms [data-block-id]")].map((node) => ({
+      id: node.dataset.blockId,
+      text: node.textContent,
+    }));
+    const refreshed = loadDistWindow();
+    refreshed.App.ChatState.replaceMessages([{ role: "assistant", content: done.text, streaming: false, blocks: done.blocks }]);
+    refreshed.document.getElementById("ms").innerHTML = refreshed.App.Chat.msgs();
+    const refreshSnapshot = [...refreshed.document.querySelectorAll("#ms [data-block-id]")].map((node) => ({
+      id: node.dataset.blockId,
+      text: node.textContent,
+    }));
+    assert.deepEqual(refreshSnapshot, liveSnapshot, "Ctrl+R/session refresh replay must match the live deterministic DOM");
   });
 });

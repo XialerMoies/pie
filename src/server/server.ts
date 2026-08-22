@@ -61,6 +61,7 @@ import { CustomProviderService } from "../model-provider/custom-provider-service
 import { FileProviderReferenceMutationLock } from "../model-provider/provider-reference-lock.js";
 import { StructuredLogger, ToolOutcomeMetrics, createToolOutcomeObserver } from "./observability.js";
 import { EvidenceLedger } from "./evidence-ledger.js";
+import { CorrelationLedger } from "./correlation.js";
 import { createServerContext } from "./server-bootstrap.js";
 import { createHttpApp, openAppEventStream } from "./http-app.js";
 export { openAppEventStream } from "./http-app.js";
@@ -136,12 +137,14 @@ async function main() {
   const evidenceLedger = new EvidenceLedger({
     filePath: join(STARTUP.layout.instanceRoot, "evidence-ledger.jsonl"),
   });
+  const correlationLedger = new CorrelationLedger({ maxEntries: 1024 });
   const observability = {
     logger,
     appVersion: process.env.npm_package_version || "0.1.0",
     startedAt,
     toolOutcomeMetrics,
     evidenceLedger,
+    correlationLedger,
   };
   mark("server_start");
   console.log("Starting Pi server...");
@@ -188,7 +191,7 @@ async function main() {
   writeWorkspaceMetadata(DATA_DIR, STARTUP.workspace);
 
   // ─── 共享可变状态 ────────────────────────────────────────────
-  const chatStream: ChatStreamState = { textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "", response: null, turnId: "", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0, eventSeq: 0, eventHistory: [] };
+  const chatStream: ChatStreamState = { textBuffer: "", thinkingBuffer: "", currentTextSnapshot: "", currentThinkingSnapshot: "", response: null, turnId: "", traceId: "", traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0, eventSeq: 0, eventHistory: [], correlationLedger };
   const appEvents = new AppEventHub();
   appEvents.subscribeClientRemoved(cancelPermissionConfirmationsForResponse);
   const unsubscribeMcpEvents = attachMcpEvents(appEvents);
@@ -288,7 +291,8 @@ async function main() {
       };
     },
     delegateTasks: subagentBridge.runtimeConfig.delegateTasks,
-    toolOutcomeObserver: createToolOutcomeObserver(toolOutcomeMetrics, logger, evidenceLedger),
+    toolOutcomeObserver: createToolOutcomeObserver(toolOutcomeMetrics, logger, evidenceLedger, correlationLedger),
+    getCorrelationContext: () => chatStream.correlation ? { ...chatStream.correlation } : undefined,
     toolOutcomeSource: "live",
     evidenceLookup: (toolName, scope) => evidenceLedger.lookup(toolName, scope),
     skillService,

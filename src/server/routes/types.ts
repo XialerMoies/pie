@@ -18,13 +18,14 @@ import type { ServerObservability } from "../observability.js";
 import type { ServerContextGroups } from "../server-context.js";
 import type { SkillService } from "../../agent/skills/skill-service.js";
 import type { TaskLifecycleSnapshot, TaskRequirements } from "../task-lifecycle.js";
+import type { CorrelationLedger, CorrelationIds } from "../correlation.js";
 
 // ─── Trace Event 类型 ────────────────────────────────────
 
-export type TraceEvent =
-  | { type: "thinking"; status: "streaming" | "done"; text: string; turnId: string; id: string; seq?: number }
+export type TraceEvent = ({ type: "thinking"; status: "streaming" | "done"; text: string; turnId: string; id: string; seq?: number }
   | { type: "tool"; status: "running" | "success" | "error"; name: string; input?: unknown; output?: string; error?: string; metadata?: Record<string, unknown>; turnId: string; id: string; seq?: number }
-  | { type: "step"; status: "info" | "success" | "error"; text: string; turnId: string; id: string; seq?: number };
+  | { type: "step"; status: "info" | "success" | "error"; text: string; turnId: string; id: string; seq?: number }
+) & { traceId?: string };
 
 export interface ChatStreamEventFrame {
   id: number;
@@ -42,8 +43,7 @@ export interface ChatTextInputState {
 // ─── Assistant Block 协议 ─────────────────────────────────
 
 /** 在 assistant 气泡内线性排列的内容块，按 seq 排序 */
-export type AssistantBlock =
-  | { type: "thinking"; text: string; status: "streaming" | "done"; turnId: string; blockId: string; seq: number }
+export type AssistantBlock = ({ type: "thinking"; text: string; status: "streaming" | "done"; turnId: string; blockId: string; seq: number }
   | { type: "text"; text: string; turnId: string; blockId: string; seq: number }
   // B-5：tool 物理合并为一个 block（含 input/output/error，一个 seq）。
   // tool_use/tool_result 保留用于旧数据回放兼容。
@@ -51,7 +51,8 @@ export type AssistantBlock =
   | { type: "tool_use"; toolCallId: string; name: string; input?: unknown; output?: string; metadata?: Record<string, unknown>; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
   | { type: "tool_result"; toolUseId: string; output?: string; isError?: boolean; turnId: string; blockId: string; seq: number }
   | { type: "step"; text: string; status: "info" | "success" | "error"; turnId: string; blockId: string; seq: number }
-  | { type: "user_note"; noteId: string; mode: "steer" | "followUp"; text: string; status: "queued" | "delivered" | "failed"; turnId: string; blockId: string; seq: number };
+  | { type: "user_note"; noteId: string; mode: "steer" | "followUp"; text: string; status: "queued" | "delivered" | "failed"; turnId: string; blockId: string; seq: number }
+) & { traceId?: string };
 
 // ─── Chat Stream 状态 ────────────────────────────────────
 
@@ -64,6 +65,11 @@ export interface ChatStreamState {
   currentWorkspace?: string;
   /** 当前 turn 的 ID，每次 POST /api/chat 生成 */
   turnId: string;
+  /** Stable per-turn diagnostic correlation id. */
+  traceId: string;
+  sessionId?: string;
+  correlation?: CorrelationIds;
+  correlationLedger?: CorrelationLedger;
   /** 当前 turn 的 trace 顺序号 */
   traceSeq: number;
   /** 本轮已发出的 trace 事件（用于去重） */

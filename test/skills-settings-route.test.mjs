@@ -15,13 +15,14 @@ function response() {
 function context(overrides = {}) {
   let refreshes = 0;
   const skill = { id: "release-check", source: "user" };
+  const runtime = overrides.runtime || { refreshSystemPrompt: async () => { refreshes += 1; return { ok: true, revision: "rev-1" }; } };
   const service = {
     list: async () => ({ skills: [skill], diagnostics: [] }),
     rescan: async () => ({ skills: [skill], diagnostics: [] }),
     trust: async () => {}, untrust: async () => {}, enable: async () => {}, disable: async () => {}, remove: async () => {},
     ...overrides,
   };
-  return { ctx: { skillService: service, runtime: { refreshSystemPrompt: async () => { refreshes += 1; } } }, refreshes: () => refreshes };
+  return { ctx: { skillService: service, runtime }, refreshes: () => refreshes };
 }
 
 async function request(method, url, setup = {}) {
@@ -37,6 +38,7 @@ describe("skills settings route", () => {
     const rescanned = await request("POST", "/api/settings/skills/rescan");
     assert.equal(rescanned.status, 200);
     assert.equal(rescanned.refreshes, 1);
+    assert.deepEqual(rescanned.body.promptRefresh, { ok: true, revision: "rev-1" });
   });
 
   it("supports state actions and remove, then refreshes the prompt", async () => {
@@ -55,5 +57,14 @@ describe("skills settings route", () => {
     assert.equal((await request("POST", "/api/settings/skills/user/../trust")).status, 400);
     const conflict = await request("POST", "/api/settings/skills/user/release-check/enable", { enable: async () => { throw new Error("Skill is untrusted"); } });
     assert.equal(conflict.status, 409);
+  });
+
+  it("returns an explicit prompt refresh diagnostic instead of hiding a failed refresh", async () => {
+    const result = await request("POST", "/api/settings/skills/rescan", {
+      runtime: { refreshSystemPrompt: async () => ({ ok: false, code: "skill_snapshot_unavailable", message: "state unavailable" }) },
+    });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.promptRefresh.ok, false);
+    assert.equal(result.body.promptRefresh.code, "skill_snapshot_unavailable");
   });
 });

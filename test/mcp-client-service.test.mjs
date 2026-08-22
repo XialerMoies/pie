@@ -643,7 +643,8 @@ describe("tools MCP discovery concurrency", () => {
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
 
       assert.strictEqual(state.clients.attempts.length, 1, "initialized [] must be a valid cache hit");
-      assert.strictEqual(toolsModule._getMcpCacheLen(), 0);
+      const cachedTools = await toolsModule.getCustomToolsAsync(state.workspaces.same);
+      assert.ok(!cachedTools.some((tool) => tool.name.startsWith("mcp__")), "empty discovery must expose no MCP tools");
       assert.strictEqual(service.currentGeneration(), settledGeneration, "same workspace cache hits must keep generation");
     } finally {
       await cleanup(state);
@@ -734,7 +735,12 @@ describe("tools MCP discovery concurrency", () => {
         () => service.getServersStatus().some((status) => status.state === "error"),
         "partial discovery did not publish error status",
       );
-      await waitFor(() => toolsModule._getMcpCacheLen() === 1, "successful partial tool was not retained");
+      await waitFor(
+        () => service.getServersStatus().some((status) => status.state === "connected"),
+        "successful partial discovery did not publish a connected server",
+      );
+      const partialCachedTools = await toolsModule.getCustomToolsAsync(state.workspaces.mixed);
+      assert.ok(partialCachedTools.some((tool) => tool.name === "mcp__healthy__healthy_tool"), "successful partial tool was not retained");
 
       const allowTool = { authorizeTool: async () => ({ allow: true }) };
       const [partialSessionA, partialSessionB] = await Promise.all([
@@ -816,7 +822,8 @@ describe("tools MCP discovery concurrency", () => {
       assert.ok(service.currentGeneration() > pendingGeneration, "disconnect must advance generation first");
       state.clients.attempts[0].gate.resolve();
       await waitFor(() => state.clients.attempts[0].closed, "invalidated client must close on late completion");
-      assert.strictEqual(toolsModule._getMcpCacheLen(), 0);
+      const staleTools = await toolsModule.getCustomToolsAsync(state.workspaces.stale);
+      assert.ok(!staleTools.some((tool) => tool.name.startsWith("mcp__")), "invalidated discovery must expose no stale MCP tools");
       assert.deepStrictEqual(service.getServersStatus(), []);
 
       await toolsModule.getCustomToolsAsync(state.workspaces.stale);

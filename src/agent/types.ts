@@ -17,6 +17,7 @@
  * - inputSchema（Zod 类型校验）
  */
 import { createHash } from "node:crypto"
+import { canonicalToolName } from "./tool-identity.js"
 
 export type ShellDialect = "cmd" | "posix-bash" | "powershell"
 
@@ -335,11 +336,19 @@ export interface ToolContext {
   /** Host-owned observer for structured/legacy outcome migration telemetry. */
   toolOutcomeObserver?: ToolOutcomeObserver
   toolOutcomeSource?: ToolOutcomeSource
+  /** Host-owned correlation lookup; evaluated at tool execution time. */
+  getCorrelationContext?: () => ToolCorrelationContext | undefined
   /** Optional host-owned read-through cache for unchanged successful evidence. */
   evidenceLookup?: (toolName: string, scope: ToolEvidenceScope) => ToolEvidenceLookup | undefined
 }
 
 export type ToolOutcomeSource = "live" | "replay" | "test"
+
+export interface ToolCorrelationContext {
+  traceId: string
+  turnId?: string
+  sessionId?: string
+}
 
 export interface ToolEvidenceScope {
   workspace?: string
@@ -368,6 +377,7 @@ export interface ToolOutcomeObservation {
   payloadHash?: string
   complete?: boolean
   timestamp?: string
+  correlation?: ToolCorrelationContext
 }
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void
@@ -602,6 +612,8 @@ export interface ToolParameterSchema {
 export interface AgentTool {
   // ── PI 兼容字段（直接对应 ToolDefinition） ──
   name: string
+  /** Legacy invocation names; aliases are registry-only and never exposed to PI. */
+  aliases?: readonly string[]
   description: string
   parameters: ToolParameterSchema
   execute(args: Record<string, unknown>, ctx: ToolContext): Promise<AgentToolExecutionResult>
@@ -758,6 +770,7 @@ export interface ToolExecutionExtraContext {
   toolOutcomeObserver?: ToolContext["toolOutcomeObserver"]
   toolOutcomeSource?: ToolContext["toolOutcomeSource"]
   evidenceLookup?: ToolContext["evidenceLookup"]
+  getCorrelationContext?: ToolContext["getCorrelationContext"]
 }
 
 export function agentToolToPIToolDefinition(
@@ -787,6 +800,7 @@ export function agentToolToPIToolDefinition(
       _onUpdate?: (partialResult: unknown) => void,
     ) => {
       const args = params as Record<string, unknown>
+      const correlation = extraCtx?.getCorrelationContext?.()
       const requestScope: ToolEvidenceScope = {
         ...(workspace ? { workspace } : {}),
         ...((typeof args.target === "string" || typeof args.path === "string" || typeof args.file === "string")
@@ -809,6 +823,7 @@ export function agentToolToPIToolDefinition(
             source: extraCtx.toolOutcomeSource || "live", toolName: authorizedTool.name,
             toolCallId: _toolCallId, outcome: "success", legacy: false,
             requestScope, payloadSummary: text, payloadHash: cached.payloadHash, complete: true,
+            ...(correlation ? { correlation } : {}),
           })
           return {
             content: [{ type: "text" as const, text }],
@@ -854,6 +869,7 @@ export function agentToolToPIToolDefinition(
           requestScope,
           payloadSummary: normalized.text.slice(0, 240),
           complete: normalized.outcome.status === "success" && !normalized.legacy,
+          ...(correlation ? { correlation } : {}),
         })
         return {
           content: [{ type: "text" as const, text: normalized.text }],
@@ -891,6 +907,7 @@ export function agentToolToPIToolDefinition(
           requestScope,
           payloadSummary: message.slice(0, 240),
           complete: false,
+          ...(correlation ? { correlation } : {}),
         })
         throw error
       }
@@ -900,17 +917,48 @@ export function agentToolToPIToolDefinition(
 
 export class ToolRegistry {
   private tools = new Map<string, AgentTool>()
+  private aliases = new Map<string, string>()
 
-  /** 注册一个 Tool（同名幂等，不会覆盖） */
+  /** 注册一个 Tool（同名幂等；别名冲突 fail-closed） */
   register(tool: AgentTool): void {
     if (this.tools.has(tool.name)) return
-    this.tools.set(tool.name, defineAgentTool(tool))
+    const canonical = canonicalToolName(tool.name)
+    if (!canonical) throw new Error("Tool name cannot be empty")
+    if (this.tools.has(canonical) || this.aliases.has(canonical)) {
+      throw new Error(`Tool identity conflicts with an existing tool: ${canonical}`)
+    }
+    const aliases = [...new Set([...(tool.aliases || []), ...(canonical !== tool.name ? [tool.name] : [])])]
+      .map((alias) => String(alias || "").trim())
+      .filter((alias) => alias && alias !== canonical)
+    for (const alias of aliases) {
+      if (this.tools.has(alias) || this.aliases.has(alias)) {
+        throw new Error(`Tool alias conflicts with an existing tool: ${alias}`)
+      }
+    }
+    const normalizedTool = canonical === tool.name ? tool : { ...tool, name: canonical }
+    this.tools.set(canonical, defineAgentTool(normalizedTool))
+    for (const alias of aliases) this.aliases.set(alias, canonical)
   }
 
-  /** 按名称获取 Tool */
-  get(name: string): AgentTool | undefined {
-    return this.tools.get(name)
+  resolveName(name: string): string | undefined {
+    const raw = String(name || "").trim()
+    if (this.tools.has(raw)) return raw
+    const directAlias = this.aliases.get(raw)
+    if (directAlias) return directAlias
+    const candidate = canonicalToolName(raw)
+    if (this.tools.has(candidate)) return candidate
+    return this.aliases.get(candidate)
   }
+
+  /** 按名称获取 Tool；旧别名只在此注册表边界解析 */
+  get(name: string): AgentTool | undefined {
+    const canonical = this.resolveName(name)
+    return canonical ? this.tools.get(canonical) : undefined
+  }
+
+  getCanonicalName(name: string): string | undefined { return this.resolveName(name) }
+
+  getAliases(): ReadonlyMap<string, string> { return new Map(this.aliases) }
 
   /** 获取所有已注册的 Tool */
   getAll(): AgentTool[] {

@@ -1,6 +1,20 @@
 import { defineConfig } from "vite";
 import { resolve } from "path";
 
+const buildTarget = process.env.MY_CODE_AGENT_VITE_TARGET || "all";
+const workerNames = {
+  "worker:editor": "editor.worker",
+  "worker:typescript": "ts.worker",
+  "worker:json": "json.worker",
+  "worker:css": "css.worker",
+  "worker:html": "html.worker",
+} as const;
+const workerName = workerNames[buildTarget as keyof typeof workerNames];
+const buildWorker = Boolean(workerName);
+const workerInput = workerName
+  ? resolve(__dirname, `src/frontend/editor/workers/${workerName === "ts.worker" ? "typescript" : workerName.replace(".worker", "")}.ts`)
+  : undefined;
+
 export default defineConfig({
   root: "src/frontend",
   base: "./",
@@ -9,17 +23,23 @@ export default defineConfig({
   },
   build: {
     outDir: "../../dist/frontend",
-    emptyOutDir: true,
+    // The dashboard and Monaco graphs are built in separate processes. The
+    // second pass must retain the dashboard assets already emitted by Vite.
+    emptyOutDir: !buildWorker,
     cssCodeSplit: false,
+    minify: "esbuild",
+    // Gzip-size reporting retains every large worker chunk during the peak
+    // native-memory phase. CI already performs artifact-size checks in smoke.
+    reportCompressedSize: false,
     rollupOptions: {
-      input: {
-        dashboard: resolve(__dirname, "src/frontend/dashboard.html"),
-        "monaco-entry": resolve(__dirname, "src/frontend/editor/monaco-setup.ts"),
-      },
+      input: buildWorker
+        ? { [workerName!]: workerInput! }
+        : { dashboard: resolve(__dirname, "src/frontend/dashboard.html") },
       output: {
-        entryFileNames: (chunk) => chunk.name === "monaco-entry"
-          ? "js/monaco-entry.js"
+        entryFileNames: buildWorker
+          ? `assets/${workerName}.js`
           : "assets/[name]-[hash].js",
+        chunkFileNames: "assets/[name]-[hash].js",
       },
     },
   },
