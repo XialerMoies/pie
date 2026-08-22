@@ -710,7 +710,6 @@ async function doCompact(): Promise<void> {
           tokenChatState.replaceMessages(data2.messages.map((m: any) => ({
             role: m.role,
             content: m.content,
-            thinking: m.thinking || '',
             streaming: false,
             _compacted: m._compacted || false,
             turnId: m.turnId || undefined,

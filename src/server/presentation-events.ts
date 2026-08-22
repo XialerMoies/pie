@@ -13,7 +13,6 @@ export type PresentationEvent =
   | {
       type: "done";
       text: string;
-      thinking?: string;
       turnId: string;
       sessionId: string;
       status: "done" | "error";
@@ -28,9 +27,24 @@ export type PresentationEvent =
   | { type: "cancelled"; turnId: string; sessionId: string; reason?: string; correlation?: CorrelationIds }
   | { type: "queue_update"; steering: unknown[]; followUp: unknown[]; correlation?: CorrelationIds };
 
+function sanitizePresentationEvent(event: PresentationEvent): PresentationEvent {
+  if (event.type !== "done") return event;
+  // Runtime/provider compatibility objects may still carry internal fields at
+  // runtime even when TypeScript excludes them.  Strip them at the transport
+  // boundary so SSE history and reconnect replay cannot preserve a leak.
+  const {
+    thinking: _thinking,
+    trace: _trace,
+    event: _rawEvent,
+    ...safe
+  } = event as PresentationEvent & { thinking?: unknown; trace?: unknown; event?: unknown };
+  return safe as PresentationEvent;
+}
+
 /** Single write boundary for canonical user-visible chat events. */
 export function writePresentationEvent(state: ChatStreamState, event: PresentationEvent): number {
-  return writeChatEvent(state, state.correlation && !event.correlation
-    ? { ...event, correlation: state.correlation }
-    : event);
+  const safeEvent = sanitizePresentationEvent(event);
+  return writeChatEvent(state, state.correlation && !safeEvent.correlation
+    ? { ...safeEvent, correlation: state.correlation }
+    : safeEvent);
 }

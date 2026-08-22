@@ -49,6 +49,7 @@ describe("typescript routes", () => {
   let lastTsRequest = null;
   let isRunningCalls = 0;
   let diagnosticsCalls = 0;
+  let diagnosticsFailure = null;
   let organizeImportsResult = null;
 
   const sendRequest = async (cmd, args) => {
@@ -58,6 +59,7 @@ describe("typescript routes", () => {
       case "syntacticDiagnosticsSync":
         diagnosticsCalls++;
         await new Promise((resolve) => setTimeout(resolve, 20));
+        if (diagnosticsFailure) throw new Error(diagnosticsFailure);
         return [];
       case "completionInfo":
         return { entries: [] };
@@ -145,6 +147,7 @@ describe("typescript routes", () => {
     lastTsRequest = null;
     isRunningCalls = 0;
     diagnosticsCalls = 0;
+    diagnosticsFailure = null;
     organizeImportsResult = null;
     writeFileSync(TEST_FILE, "const test = 1;\n", "utf-8");
   });
@@ -158,6 +161,22 @@ describe("typescript routes", () => {
     assert.equal(first.status, 200);
     assert.equal(second.status, 200);
     assert.equal(diagnosticsCalls, 2, "two concurrent route calls should share one semantic+s syntactic pair");
+  });
+
+  it("returns a terminal timeout contract instead of empty diagnostics", async () => {
+    diagnosticsFailure = "tsserver request timeout: semanticDiagnosticsSync";
+    const result = await callHandler(
+      handleTypeScript,
+      "GET",
+      `/api/ts/diagnostics?file=${encodeURIComponent(TEST_FILE)}&projectRoot=${encodeURIComponent(TEST_WORKSPACE)}`,
+      undefined,
+      ctx,
+    );
+    const body = parseJSON(result.body);
+    assert.equal(result.status, 504);
+    assert.equal(body.status, "timeout");
+    assert.equal(body.code, "timeout");
+    assert.deepEqual(body.diagnostics, []);
   });
 
   after(() => {
@@ -290,7 +309,9 @@ describe("typescript routes", () => {
     );
     assert.strictEqual(result.handled, true);
     assert.strictEqual(result.status, 200);
-    assert.ok(Array.isArray(parseJSON(result.body)));
+    const diagnostics = parseJSON(result.body);
+    assert.equal(diagnostics.status, "ok");
+    assert.ok(Array.isArray(diagnostics.diagnostics));
   });
 
   it("applies code actions only after all target files pass authorization", async () => {

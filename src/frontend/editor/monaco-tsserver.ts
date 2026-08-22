@@ -58,16 +58,30 @@ export async function tsCloseFile(filePath: string): Promise<void> {
 }
 
 /** 获取诊断（原始数据） */
+const diagnosticsRequests = new Map<string, { controller: AbortController; generation: number }>();
+
+/** Per-file latest-wins diagnostics. A stale request is actively cancelled. */
 export async function tsDiagnostics(filePath: string): Promise<unknown[]> {
+  const absoluteFile = tsserverAbsPath(filePath);
+  const previous = diagnosticsRequests.get(absoluteFile);
+  previous?.controller.abort();
+  const controller = new AbortController();
+  const generation = (previous?.generation ?? 0) + 1;
+  diagnosticsRequests.set(absoluteFile, { controller, generation });
   try {
-    const params = new URLSearchParams({ file: tsserverAbsPath(filePath) });
+    const params = new URLSearchParams({ file: absoluteFile });
     const projectRoot = tsserverRoot();
     if (projectRoot) params.set("projectRoot", projectRoot);
-    const r = await fetch(`/api/ts/diagnostics?${params.toString()}`);
-    if (!r.ok) return [];
-    const data = await r.json();
-    if (data?.success === false) return [];
-    return data;
-  } catch { return []; }
+    const r = await fetch(`/api/ts/diagnostics?${params.toString()}`, { signal: controller.signal });
+    const data = await r.json().catch(() => null);
+    const current = diagnosticsRequests.get(absoluteFile);
+    if (!current || current.generation !== generation || controller.signal.aborted) return [];
+    if (data?.status !== "ok" || !Array.isArray(data.diagnostics)) return [];
+    return data.diagnostics;
+  } catch {
+    return [];
+  } finally {
+    if (diagnosticsRequests.get(absoluteFile)?.generation === generation) diagnosticsRequests.delete(absoluteFile);
+  }
 }
 

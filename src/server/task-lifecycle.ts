@@ -155,7 +155,10 @@ export class TaskLifecycle {
   }
 
   cancel(reason = "cancelled"): void {
-    if (this.#snapshot.status === "completed") return;
+    // A runtime-enforced block is stronger than a later provider cancellation.
+    // Preserve the original failure reason so cancellation cannot turn a
+    // denied/invalid request into an apparently user-cancelled turn.
+    if (this.#snapshot.status === "completed" || this.#snapshot.status === "blocked") return;
     this.#snapshot.status = "cancelled";
     this.#snapshot.reason = reason;
   }

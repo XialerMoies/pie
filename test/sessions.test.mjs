@@ -108,6 +108,8 @@ describe("parseSessionMessages", () => {
     assert.strictEqual(msgs.length, 2);
     assert.deepStrictEqual(msgs[1].blocks.map(b => b.type), ["thinking", "tool", "text"]);
     assert.deepStrictEqual(msgs[1].blocks.map(b => b.blockId), ["m1:thinking-0", "tool-call-1", "m1:text-1"]);
+    assert.strictEqual(msgs[1].thinking, undefined, "PI message thinking must stay out of the ordinary assistant payload");
+    assert.strictEqual(msgs[1].trace, undefined, "raw trace must stay out of the ordinary assistant payload");
   });
 
   it("assistant 消息先写入时仍能回挂后续 block", () => {
@@ -386,7 +388,7 @@ describe("parseSessionMessages", () => {
     assert.ok(msgs[0].content.includes("summary only"));
   });
 
-  it("compaction 后的 trace 不误挂到 compact 卡片", () => {
+  it("compaction 后的内部 trace 不进入普通 assistant 消息", () => {
     const c = [
       JSON.stringify({ type: "session", id: "s1" }),
       JSON.stringify({ type: "compaction", summary: "compact", tokensBefore: 500 }),
@@ -397,9 +399,10 @@ describe("parseSessionMessages", () => {
     assert.strictEqual(msgs.length, 2, "compact + assistant = 2 条");
     assert.strictEqual(msgs[0]._compacted, true);
     assert.strictEqual(msgs[0].trace, undefined, "trace 不应挂到 compact 卡片");
-    assert.ok(msgs[1].trace && msgs[1].trace.length > 0, "trace 应挂到真实 assistant");
-    assert.strictEqual(msgs[1].trace[0].type, "step");
-    assert.strictEqual(msgs[1].trace[0].text, "after compact");
+    assert.strictEqual(msgs[1].trace, undefined, "raw trace 不应挂到普通 assistant 消息");
+    assert.strictEqual(msgs[1].thinking, undefined, "thinking 不应挂到普通 assistant 消息");
+    assert.strictEqual(msgs[1].blocks?.[0]?.type, "step", "内部 trace 仍可转换为显式节点视图");
+    assert.strictEqual(msgs[1].blocks?.[0]?.text, "after compact");
   });
 
   it("assistant_block 生成 blocks 且含 text block", () => {

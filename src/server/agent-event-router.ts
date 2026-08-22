@@ -465,6 +465,7 @@ export function attachEngineEvents(
     "tool_failed", "terminal", "queue",
   ]);
   const taskLifecycle = new TaskLifecycle();
+  const abortRequestedTurns = new Set<string>();
 
   const recordCorrelation = (stage: "runtime.event" | "task.transition" | "session.persisted", eventType: string, details?: Record<string, unknown>, failureKind?: string): void => {
     const correlation = chatStream.correlation;
@@ -551,13 +552,14 @@ export function attachEngineEvents(
     const finalText = task.status === "blocked" && task.reason === "evidence_insufficient"
       ? `未验证：${fullText || "没有获得足够的成功证据。"}`
       : fullText || chatStream.textBuffer;
-    if (event.type === "turn.cancelled") {
+    // A cancellation requested by the runtime after a hard tool failure is
+    // presented as a failed/blocked turn, not as a successful user cancel.
+    if (event.type === "turn.cancelled" && task.status !== "blocked") {
       writePresentationEvent(chatStream, { type: "cancelled", turnId, sessionId, reason: event.reason });
     } else {
       writePresentationEvent(chatStream, {
         type: "done",
         text: finalText,
-        thinking: chatStream.thinkingBuffer || undefined,
         turnId,
         sessionId,
         status: event.type === "turn.completed" && task.status === "completed" ? "done" : "error",
@@ -607,6 +609,16 @@ export function attachEngineEvents(
       // must not recreate blocks after the stream has been finalized.
       return;
     }
+    // Once a tool failure has put the task in a terminal state, provider
+    // events arriving before the abort completes must not create more work,
+    // visible blocks, or evidence. Terminal turn events are still accepted so
+    // the normal persistence/presentation finalizer can run exactly once.
+    const lifecycleStatus = taskLifecycle.snapshot().status;
+    if (turnId
+      && lifecycleStatus !== "running"
+      && event.type !== "turn.completed"
+      && event.type !== "turn.failed"
+      && event.type !== "turn.cancelled") return;
     if (event.type === "turn.started") {
       if (chatStream.correlation?.turnId !== event.turnId) chatStream.traceId = `trace-${event.turnId || chatStream.turnId}`;
       chatStream.traceId ||= `trace-${event.turnId || chatStream.turnId}`;
@@ -699,11 +711,23 @@ export function attachEngineEvents(
         : typeof (permissionFailure as { message?: unknown } | undefined)?.message === "string"
           ? (permissionFailure as { message: string }).message
           : undefined;
-      if (event.type === "tool.completed") {
+      if (event.type === "tool.completed" && !failed) {
         const evidenceAvailable = Boolean(ctx?.observability?.evidenceLedger?.getSuccessfulFacts([event.toolCallId]).length);
         taskLifecycle.toolCompleted(event.toolCallId, evidenceAvailable);
       } else {
-        taskLifecycle.toolFailed(event.toolCallId, toolName, event.error);
+        const error = event.type === "tool.failed"
+          ? event.error
+          : {
+              category: "permission" as const,
+              kind: "permission_denied" as const,
+              code: typeof (permissionFailure as { code?: unknown } | undefined)?.code === "string"
+                ? (permissionFailure as { code: string }).code
+                : "permission_denied",
+              retryable: false,
+              message: failureMessage || "Permission denied",
+              details: permissionFailure,
+            };
+        taskLifecycle.toolFailed(event.toolCallId, toolName, error);
       }
       chatStream.taskLifecycle = taskLifecycle.snapshot();
       recordCorrelation("task.transition", event.type, { tool: toolName, toolCallId: event.toolCallId, status: failed ? "failed" : "completed" }, event.type === "tool.failed" ? event.error.kind : undefined);
@@ -720,6 +744,15 @@ export function attachEngineEvents(
         output: event.type === "tool.completed" ? event.output : undefined,
         error: failed ? failureMessage : undefined, metadata: event.metadata, turnId, id: `${event.toolCallId}@${turnId}`,
       }, { force: true, authorizeSessionWrite });
+      if (chatStream.taskLifecycle.status === "blocked" && turnId && !abortRequestedTurns.has(turnId)) {
+        abortRequestedTurns.add(turnId);
+        persistTaskLifecycle(runtime, chatStream.taskLifecycle, { authorizeSessionWrite });
+        try {
+          void Promise.resolve(engine.cancel(turnId)).catch(() => undefined);
+        } catch {
+          // The terminal provider event remains the fallback finalizer.
+        }
+      }
       return;
     }
     if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.cancelled") {

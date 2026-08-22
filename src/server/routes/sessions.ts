@@ -19,6 +19,21 @@ export { parseSessionMessages } from "./session-message-parser.js";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
+type CachedSessionRecord = {
+  size: number;
+  mtimeMs: number;
+  record: Record<string, unknown>;
+};
+
+// Cache parsed metadata by authorized file. JSONL remains the source of truth;
+// unchanged files are not read again on every sidebar refresh.
+const sessionListCache = new Map<string, Map<string, CachedSessionRecord>>();
+const sessionListScanLocks = new Map<string, Promise<void>>();
+
+async function yieldToEventLoop(): Promise<void> {
+  await new Promise<void>((resolveYield) => setImmediate(resolveYield));
+}
+
 function usesCanonicalWorkspaceData(ctx: ServerContext): boolean {
   return !!ctx.paths.STARTUP?.dataRoot;
 }
@@ -218,37 +233,74 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       const curSessionsDir = sessionsDirForWorkspace(ctx, currentWs || engine.session.workspace);
       const activeSession = { id: engine.session.id, file: engine.session.sessionFile };
       const runningSessionId = session.isStreaming ? curId : "";
+      let listPartial = false;
 
       // Helper to parse session from a dir
       async function readSessionsFromDir(dir: string): Promise<Array<Record<string, unknown>>> {
         if (!existsSync(dir)) return [];
+        const previousScan = sessionListScanLocks.get(dir);
+        if (previousScan) {
+          const previousCache = sessionListCache.get(dir);
+          if (previousCache && previousCache.size > 0) {
+            listPartial = true;
+            return ([...previousCache.values()]
+              .map(({ record }) => {
+                const id = String(record.id || "");
+                return { ...record, active: id === curId, isRunning: id === runningSessionId };
+              })
+              .sort((a: Record<string, unknown>, b: Record<string, unknown>) => String(b["updatedAt"] || b["createdAt"] || "").localeCompare(String(a["updatedAt"] || a["createdAt"] || ""))));
+          }
+          await previousScan;
+        }
+        let releaseScan!: () => void;
+        const currentScan = new Promise<void>((resolveScan) => { releaseScan = resolveScan; });
+        sessionListScanLocks.set(dir, currentScan);
+        try {
         const records: Array<Record<string, unknown>> = [];
-        for (const fullPath of await findAuthorizedJsonl(ctx, dir, "sessions.list")) {
+        const files = await findAuthorizedJsonl(ctx, dir, "sessions.list");
+        const cached = sessionListCache.get(dir) ?? new Map<string, CachedSessionRecord>();
+        sessionListCache.set(dir, cached);
+        const activePaths = new Set(files);
+        for (const stalePath of cached.keys()) {
+          if (!activePaths.has(stalePath)) cached.delete(stalePath);
+        }
+        let processed = 0;
+        for (const fullPath of files) {
           const stat = await statAsync(fullPath).catch(() => null);
-          const content = await readFileAsync(fullPath, "utf-8").catch(() => "");
-          if (!content) continue;
-          const lines = content.trim().split("\n");
-          const header = lines[0] ? JSON.parse(lines[0]) : {};
-          const id = header.id || basename(fullPath, ".jsonl");
-          const meta = readSessionMeta(lines);
-          const replySummary = meta.name ? "" : deriveReplySummary(lines);
-          const hasError = lines.some((line: string) => line.includes('"isError":true') || line.includes('"status":"error"') || line.includes('"error"'));
-          records.push({
-            id, name: meta.name || replySummary || "新会话", active: id === curId,
-            messageCount: lines.filter((l: string) => l.includes('"type":"message"')).length,
-            createdAt: stat?.birthtime?.toISOString() || header.timestamp || "",
-            updatedAt: stat?.mtime?.toISOString() || header.timestamp || "",
-            file: basename(fullPath),
-            workspace: header.workspace || "",
-            pinned: meta.pinned,
-            titleSource: meta.titleSource,
-            archived: Boolean(meta.archived),
-            hasError,
-            isRunning: id === runningSessionId,
-            branchFrom: meta.branchFrom,
-          });
+          if (!stat) continue;
+          const previous = cached.get(fullPath);
+          let record = previous?.record;
+          if (!previous || previous.size !== stat.size || previous.mtimeMs !== stat.mtimeMs) {
+            const content = await readFileAsync(fullPath, "utf-8").catch(() => "");
+            if (!content) continue;
+            const lines = content.trim().split("\n");
+            const header = lines[0] ? JSON.parse(lines[0]) : {};
+            const id = header.id || basename(fullPath, ".jsonl");
+            const meta = readSessionMeta(lines);
+            const replySummary = meta.name ? "" : deriveReplySummary(lines);
+            const hasError = lines.some((line: string) => line.includes('"isError":true') || line.includes('"status":"error"') || line.includes('"error"'));
+            record = {
+              id, name: meta.name || replySummary || "新会话",
+              messageCount: lines.filter((l: string) => l.includes('"type":"message"')).length,
+              createdAt: stat.birthtime?.toISOString() || header.timestamp || "",
+              updatedAt: stat.mtime?.toISOString() || header.timestamp || "",
+              file: basename(fullPath), workspace: header.workspace || "",
+              pinned: meta.pinned, titleSource: meta.titleSource,
+              archived: Boolean(meta.archived), hasError, branchFrom: meta.branchFrom,
+            };
+            cached.set(fullPath, { size: stat.size, mtimeMs: stat.mtimeMs, record });
+          }
+          if (!record) continue;
+          const id = String(record.id || "");
+          records.push({ ...record, active: id === curId, isRunning: id === runningSessionId });
+          processed++;
+          if (processed % 8 === 0) await yieldToEventLoop();
         }
         return records.sort((a: Record<string, unknown>, b: Record<string, unknown>) => String(b["updatedAt"] || b["createdAt"] || "").localeCompare(String(a["updatedAt"] || a["createdAt"] || "")));
+        } finally {
+          releaseScan();
+          if (sessionListScanLocks.get(dir) === currentScan) sessionListScanLocks.delete(dir);
+        }
       }
 
       const sessions = await readSessionsFromDir(curSessionsDir);
@@ -270,13 +322,13 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
         }
       }
 
-      res.writeHead(200, { "Content-Type": "application/json", ...cors });
-      res.end(JSON.stringify({ sessions, other, activeSessionId: activeSession?.id || null }));
+      res.writeHead(200, { "Content-Type": "application/json", ...cors, "X-Request-State": listPartial ? "partial" : "complete" });
+      res.end(JSON.stringify({ status: listPartial ? "partial" : "ok", partial: listPartial, sessions, other, activeSessionId: activeSession?.id || null }));
     } catch (err: unknown) {
       if (writeServerPermissionError(res, cors, err)) return true;
       if (writePathGuardError(res, cors, err)) return true;
-      res.writeHead(200, { ...cors });
-      res.end(JSON.stringify({ sessions: [], other: [], error: (err as Error).message }));
+      res.writeHead(503, { "Content-Type": "application/json", ...cors, "X-Request-State": "failed" });
+      res.end(JSON.stringify({ status: "failed", code: "sessions_failed", sessions: [], other: [], error: (err as Error).message }));
     }
     return true;
   }

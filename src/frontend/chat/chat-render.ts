@@ -148,8 +148,7 @@ function renderMessage(m: any, messageIndex = -1): string {
   }
 
   const content = m.content ? mdRender(m.content) : '';
-  const think = m.thinking ? `<details class="think"><summary>🤔 思考过程</summary>${mdRender(m.thinking)}</details>` : '';
-  return `<div class="m ${c}${m.error ? ' error' : ''}"${indexAttr}><div class="ml">${lb}</div>${error}${think}<div class="mt">${content}</div>${ty}</div>`;
+  return `<div class="m ${c}${m.error ? ' error' : ''}"${indexAttr}><div class="ml">${lb}</div>${error}<div class="mt">${content}</div>${ty}</div>`;
 }
 
 function msgs(): string {

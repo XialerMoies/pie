@@ -177,7 +177,7 @@ describe("built server and dashboard event flow", () => {
     assert.deepEqual([...doc.querySelectorAll("#ms [data-block-id]")].map((node) => node.dataset.blockId), [
       "thinking-dist-turn",
       "tool-dist-tool",
-      "text-dist-turn",
+      "text-trailing",
     ]);
 
     const liveSnapshot = [...doc.querySelectorAll("#ms [data-block-id]")].map((node) => ({

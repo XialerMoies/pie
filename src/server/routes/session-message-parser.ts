@@ -372,6 +372,13 @@ export function parseSessionMessages(content: string): SessionMessage[] {
     if (msg.role === "assistant" && (msg as any).blocks) {
       (msg as any).blocks = mergeBlockList((msg as any).blocks);
     }
+    // Thought/trace are internal diagnostics.  They may be used above to
+    // reconstruct the explicit node view for legacy records, but they must
+    // never escape as ordinary assistant-message fields during replay.
+    if (msg.role === "assistant") {
+      delete (msg as any).thinking;
+      delete (msg as any).trace;
+    }
   }
 
   for (const batch of subagentBatches) {

@@ -536,12 +536,12 @@ function branchSession(id: string): void {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id, workspace: ws }),
-  }).then(r => r.json()).then((data: { ok?: boolean; id?: string; activeSessionId?: string; messages?: Array<{ role: string; content: string; thinking?: string }>; error?: string }) => {
+  }).then(r => r.json()).then((data: { ok?: boolean; id?: string; activeSessionId?: string; messages?: Array<{ role: string; content: string }>; error?: string }) => {
     if (!data.ok || data.error) { toast('创建分支失败: ' + (data.error || ''), 'error'); return; }
     App.ChatStream.close();
     App.ChatState.setBusy(false);
     App.Chat?.resetMsgKeys?.();
-    App.ChatState.replaceMessages((data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, thinking: m.thinking || '', streaming: false, _compacted: (m as any)._compacted || false, turnId: (m as any).turnId || undefined, blocks: (m as any).blocks || undefined })));
+    App.ChatState.replaceMessages((data.messages || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, streaming: false, _compacted: (m as any)._compacted || false, turnId: (m as any).turnId || undefined, blocks: (m as any).blocks || undefined })));
     const activeId = data.activeSessionId || data.id || '';
     if (activeId) {
       

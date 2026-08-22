@@ -26,6 +26,17 @@ const cors = { "Access-Control-Allow-Origin": "*" };
 // queueing duplicate semantic and syntactic requests in the child process.
 const diagnosticsInFlight = new WeakMap<object, Map<string, Promise<unknown[]>>>();
 
+function diagnosticsFailure(err: unknown): { status: "pending" | "timeout" | "failed"; code: string; error: string } {
+  const message = err instanceof Error ? err.message : String(err || "diagnostics failed");
+  if (/queue is full|pending|project loading|not ready/i.test(message)) {
+    return { status: "pending", code: "diagnostics_pending", error: message };
+  }
+  if (/timeout|timed out/i.test(message)) {
+    return { status: "timeout", code: "timeout", error: message };
+  }
+  return { status: "failed", code: "diagnostics_failed", error: message };
+}
+
 async function getTsServer(ctx: import("./types.js").ServerContext): Promise<import("../ts-server.js").TsserverManager> {
   const tsServer = ctx.tsServer;
   if (!tsServer) throw new Error("TSServer not available");
@@ -81,22 +92,26 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       let pending = byFile.get(authorized.path);
       if (!pending) {
         pending = Promise.all([
-          ts.sendRequest("semanticDiagnosticsSync", { file: authorized.path }).catch(() => []),
-          ts.sendRequest("syntacticDiagnosticsSync", { file: authorized.path }).catch(() => []),
+          ts.sendRequest("semanticDiagnosticsSync", { file: authorized.path }),
+          ts.sendRequest("syntacticDiagnosticsSync", { file: authorized.path }),
         ]).then(([semantic, syntactic]) => [...(semantic || []), ...(syntactic || [])]);
         byFile.set(authorized.path, pending);
-        void pending.finally(() => {
+        void pending.then(() => {
+          if (byFile?.get(authorized.path) === pending) byFile.delete(authorized.path);
+        }, () => {
           if (byFile?.get(authorized.path) === pending) byFile.delete(authorized.path);
         });
       }
       const all = await pending;
-      res.writeHead(200, { "Content-Type": "application/json", ...cors });
-      res.end(JSON.stringify(all));
+      res.writeHead(200, { "Content-Type": "application/json", ...cors, "X-Request-State": "complete" });
+      res.end(JSON.stringify({ status: "ok", diagnostics: all }));
     } catch (err: unknown) {
       if (writeServerPermissionError(res, cors, err)) return true;
       if (writePathGuardError(res, cors, err)) return true;
-      res.writeHead(200, { ...cors });
-      res.end(JSON.stringify({ success: false, error: (err as Error).message }));
+      const failure = diagnosticsFailure(err);
+      const httpStatus = failure.status === "pending" ? 202 : failure.status === "timeout" ? 504 : 503;
+      res.writeHead(httpStatus, { "Content-Type": "application/json", ...cors, "X-Request-State": failure.status });
+      res.end(JSON.stringify({ ...failure, diagnostics: [] }));
     }
     return true;
   }

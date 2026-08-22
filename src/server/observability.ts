@@ -312,6 +312,13 @@ export function diagnosticsSnapshot(
       ...(entry.correlation ? { correlation: entry.correlation } : {}),
     })),
   } : undefined;
+  const safeLogs = observability.logger.entries().map((entry) => {
+    const fields = Object.fromEntries(Object.entries(entry.fields).filter(([key]) => [
+      "method", "url", "status", "durationMs", "source", "toolName",
+      "toolCallId", "outcome", "failureKind", "legacy", "legacyReason",
+    ].includes(key)));
+    return { ...entry, fields };
+  });
   return {
     ok: true,
     appVersion: observability.appVersion,
@@ -324,6 +331,6 @@ export function diagnosticsSnapshot(
     ...(observability.toolOutcomeMetrics ? { toolOutcomeMetrics: observability.toolOutcomeMetrics.snapshot() } : {}),
     ...(safeEvidence ? { evidenceLedger: safeEvidence } : {}),
     ...(observability.correlationLedger ? { correlation: observability.correlationLedger.snapshot() } : {}),
-    logs: observability.logger.entries(),
+    logs: safeLogs,
   };
 }

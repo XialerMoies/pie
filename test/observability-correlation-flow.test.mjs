@@ -127,7 +127,7 @@ describe("A-10 observability correlation cross-layer flow", () => {
     f.engine.emit(base(f, "turn-failure", 4, "turn.cancelled", { reason: "用户取消" }));
     const records = f.correlation.entries();
     assert.ok(records.some((record) => record.failureKind === "permission_denied"));
-    assert.ok(records.some((record) => record.stage === "task.transition" && record.status === "cancelled"));
+    assert.ok(records.some((record) => record.stage === "task.transition" && record.status === "blocked"), "hard tool failure remains blocked when provider cancellation arrives");
     assert.ok(f.evidence.entries().some((entry) => entry.duplicateOf));
     const diagnostics = diagnosticsSnapshot(f.ctx.observability, undefined, undefined, undefined);
     assert.equal(JSON.stringify(diagnostics).includes("secret-value"), false);

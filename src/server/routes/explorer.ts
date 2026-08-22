@@ -89,13 +89,13 @@ export const handleExplorer: RouteHandler = async (req, res, ctx) => {
         return a.name.localeCompare(b.name);
       });
 
-      res.writeHead(200, { "Content-Type": "application/json", ...cors });
-      res.end(JSON.stringify({ rootDir, relativePath: rawPath || "", items }));
+      res.writeHead(200, { "Content-Type": "application/json", ...cors, "X-Request-State": "complete" });
+      res.end(JSON.stringify({ status: "ok", rootDir, relativePath: rawPath || "", items }));
     } catch (err: unknown) {
       if (writeServerPermissionError(res, cors, err)) return true;
       if (writePathGuardError(res, cors, err)) return true;
-      res.writeHead(400, { ...cors });
-      res.end(JSON.stringify({ error: (err as Error).message }));
+      res.writeHead(503, { "Content-Type": "application/json", ...cors, "X-Request-State": "failed" });
+      res.end(JSON.stringify({ status: "failed", code: "explorer_failed", error: (err as Error).message }));
     }
     return true;
   }

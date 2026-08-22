@@ -34,8 +34,34 @@ describe("diagnostics route", () => {
     assert.equal(payload.ok, true);
     assert.equal(payload.appVersion, "0.1.0");
     assert.equal(payload.requestId, "req-1");
-    assert.equal(payload.logs[0].fields.apiKey, "[redacted]");
+    assert.equal(payload.logs[0].fields.apiKey, undefined);
+    assert.equal(JSON.stringify(payload).includes("secret"), false);
     assert.equal(JSON.stringify(payload).includes("C:\\Projects"), false);
+  });
+
+  it("exports metadata-only logs without Thought, tool payloads, or raw errors", async () => {
+    const res = response();
+    const logger = new StructuredLogger({ maxEntries: 2 });
+    logger.error("agent.internal", {
+      method: "POST",
+      url: "/api/chat",
+      thinking: "private chain of thought",
+      input: { command: "secret command" },
+      output: "secret output",
+      error: "raw provider failure",
+      status: 500,
+    });
+    await handleDiagnostics(
+      { url: "/api/diagnostics", method: "GET", headers: {} },
+      res,
+      { runtime: { currentWorkspace: "" }, paths: { STARTUP: { instanceId: "instance-1" } }, observability: { logger, appVersion: "0.1.0", startedAt: Date.now() } },
+    );
+    const payload = JSON.parse(res.body);
+    assert.deepEqual(payload.logs[0].fields, { method: "POST", url: "/api/chat", status: 500 });
+    const serialized = JSON.stringify(payload);
+    for (const forbidden of ["private chain of thought", "secret command", "secret output", "raw provider failure"]) {
+      assert.equal(serialized.includes(forbidden), false);
+    }
   });
 
   it("exports bounded tool outcome migration metrics", async () => {

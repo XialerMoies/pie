@@ -130,19 +130,19 @@ export const handleUiState: RouteHandler = async (req, res, ctx) => {
         : await authorizeWorkspacePath(ctx, requestedWorkspace, "ui-state.read.workspace", { required: true });
       if (usesCanonicalWorkspaceData(ctx) && workspace !== "_default") {
         const state = await readWorkspaceUiState(ctx, workspace);
-        res.writeHead(200, { "Content-Type": "application/json" });
+        res.writeHead(200, { "Content-Type": "application/json", "X-Request-State": "complete" });
         res.end(JSON.stringify(state));
         return true;
       }
       const { store } = await readAuthorizedStore(ctx, piConfigDir);
       const state = store.workspaces[workspace] || emptyState(workspace);
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, { "Content-Type": "application/json", "X-Request-State": "complete" });
       res.end(JSON.stringify(state));
     } catch (err) {
       if (writeServerPermissionError(res, {}, err)) return true;
       if (writePathGuardError(res, {}, err)) return true;
-      res.writeHead(400);
-      res.end(JSON.stringify({ error: (err as Error).message }));
+      res.writeHead(503, { "Content-Type": "application/json", "X-Request-State": "failed" });
+      res.end(JSON.stringify({ status: "failed", code: "ui_state_failed", error: (err as Error).message }));
     }
     return true;
   }
@@ -166,7 +166,7 @@ export const handleUiState: RouteHandler = async (req, res, ctx) => {
           "ui-state.save",
         )).path;
         writeStoreFile(filePath, parsed);
-        res.writeHead(200, { "Content-Type": "application/json" });
+        res.writeHead(200, { "Content-Type": "application/json", "X-Request-State": "complete" });
         res.end(JSON.stringify({ ok: true }));
         return true;
       }
@@ -175,13 +175,13 @@ export const handleUiState: RouteHandler = async (req, res, ctx) => {
       store.activeWorkspace = workspace;
       const filePath = (await authorizeRoutePath(ctx, piConfigDir, FILE_NAME, "write", "ui-state.save")).path;
       writeStoreFile(filePath, store);
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, { "Content-Type": "application/json", "X-Request-State": "complete" });
       res.end(JSON.stringify({ ok: true }));
     } catch (err) {
       if (writeServerPermissionError(res, {}, err)) return true;
       if (writePathGuardError(res, {}, err)) return true;
-      res.writeHead(400);
-      res.end(JSON.stringify({ error: "invalid JSON" }));
+      res.writeHead(400, { "Content-Type": "application/json", "X-Request-State": "failed" });
+      res.end(JSON.stringify({ status: "failed", code: "invalid_json", error: "invalid JSON" }));
     }
     return true;
   }

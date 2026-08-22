@@ -195,7 +195,10 @@ describe("chat event flow contract", () => {
   it("persists debug traces without publishing a second chat presentation stream", () => {
     const dir = mkdtempSync(join(tmpdir(), "chat-presentation-boundary-"));
     const sessionFile = join(dir, "session.jsonl");
-    writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "session-flow" }) + "\n");
+    writeFileSync(sessionFile, [
+      JSON.stringify({ type: "session", id: "session-flow" }),
+      JSON.stringify({ type: "message", id: "assistant-boundary", turnId: "turn-boundary", message: { role: "assistant", content: [{ type: "text", text: "正文" }] } }),
+    ].join("\n") + "\n");
     try {
       const engine = fakeEngine();
       const chat = stream();
@@ -211,6 +214,19 @@ describe("chat event flow contract", () => {
       const persisted = readFileSync(sessionFile, "utf8");
       assert.match(persisted, /"type":"trace"/, "debug trace must remain available to replay/diagnostics");
       assert.match(persisted, /"trace-tool@turn-boundary"/);
+
+      const done = live.find((event) => event.type === "done");
+      assert.ok(done);
+      assert.equal(Object.hasOwn(done, "thinking"), false, "Thought must not be duplicated as a terminal assistant field");
+      assert.equal(done.text, "正文");
+
+      const replay = parseSessionMessages(persisted);
+      const assistant = replay.find((message) => message.role === "assistant");
+      assert.ok(assistant);
+      assert.equal(Object.hasOwn(assistant, "thinking"), false, "refresh replay must not expose a legacy thinking field");
+      assert.equal(Object.hasOwn(assistant, "trace"), false, "refresh replay must not expose raw debug trace");
+      assert.equal(assistant.content, "正文");
+      assert.deepEqual(assistant.blocks?.map((block) => block.type), ["tool", "text"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

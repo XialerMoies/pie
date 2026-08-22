@@ -32,7 +32,6 @@ interface Message {
   role: 'user' | 'assistant';
   turnId?: string;
   content: string;
-  thinking?: string;
   streaming?: boolean;
   error?: ChatErrorState;
   blocks?: AssistantBlock[];
