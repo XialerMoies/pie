@@ -2900,17 +2900,28 @@ describe("explorer routes", () => {
 
 describe("search replace route", () => {
   it("POST /api/search/replace preview ok", async () => {
-    const ctx = mockContext();
-    const { status, body } = await callHandler(
-      handleSearch, "POST", "/api/search/replace",
-      { query: "function", replacement: "fn", root: ROOT, type: "text", previewOnly: true },
-      ctx,
-    );
-    assert.strictEqual(status, 200);
-    const data = parseJSON(body);
-    assert.strictEqual(data.preview, true);
-    assert.ok(typeof data.totalChanges === "number");
-    assert.ok(Array.isArray(data.files));
+    // Keep the route/integrated path real without making every run scan the
+    // whole repository (which made this test appear hung on large workspaces).
+    const root = mkdtempSync(resolve(tmpdir(), "pi-search-replace-"));
+    try {
+      writeFileSync(resolve(root, "src.txt"), "function one() {}\nfunction two() {}\n", "utf8");
+      mkdirSync(resolve(root, "nested"));
+      writeFileSync(resolve(root, "nested", "other.txt"), "no match here\n", "utf8");
+      const ctx = mockContext({ paths: { ...mockPaths(), APP_ROOT: root } });
+      const { status, body } = await callHandler(
+        handleSearch, "POST", "/api/search/replace",
+        { query: "function", replacement: "fn", root, type: "text", previewOnly: true },
+        ctx,
+      );
+      assert.strictEqual(status, 200);
+      const data = parseJSON(body);
+      assert.strictEqual(data.preview, true);
+      assert.strictEqual(data.totalChanges, 2);
+      assert.deepStrictEqual(data.files.map((file) => file.file), ["src.txt"]);
+      assert.strictEqual(readFileSync(resolve(root, "src.txt"), "utf8"), "function one() {}\nfunction two() {}\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("POST /api/search/replace missing query 400", async () => {
