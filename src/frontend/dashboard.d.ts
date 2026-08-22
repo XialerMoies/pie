@@ -38,7 +38,16 @@ interface Message {
   subagentEvents?: FrontendSubagentEvent[];
   subagentBatches?: FrontendSubagentBatch[];
   _compacted?: boolean;        // 服务端标记：来自 session JSONL 的 compaction 摘要
+  /** Legacy runtime fields retained while the global-script chat renderer migrates. */
+  thinking?: boolean;
+  _rv?: unknown;
 }
+
+type CommandConfirmChoice = 'once' | 'session' | 'workspace' | 'deny';
+type FrontendSubagentStatus = 'queued' | 'running' | 'success' | 'error' | 'interrupted';
+interface FrontendSubagentEvent { id: string; batchId: string; taskId: string; status: FrontendSubagentStatus; toolCallId?: string; }
+interface FrontendSubagentTask { taskId: string; status: FrontendSubagentStatus; events: FrontendSubagentEvent[]; }
+interface FrontendSubagentBatch { batchId: string; status: FrontendSubagentStatus; events: FrontendSubagentEvent[]; tasks: FrontendSubagentTask[]; }
 
 interface AssistantBlock {
   type: 'thinking' | 'text' | 'tool' | 'tool_use' | 'tool_result' | 'step' | 'user_note';
@@ -926,6 +935,14 @@ interface Window {
   emitSessionActivated?: SessionActivatedCallback;
   refreshPermissionsPanel?: (forceToast?: boolean) => Promise<void>;
 }
+
+// Legacy global-script bridge. These declarations are intentionally explicit;
+// module migration can remove them without changing the frontend typecheck scope.
+declare const App: any;
+declare function mark(name: string): void;
+declare function logTiming(): void;
+declare function placeContextMenu(menu: HTMLElement, x: number, y: number, opts?: { margin?: number; maxHeight?: number }): void;
+declare function reduceFrontendSubagentEvents(values: readonly unknown[]): FrontendSubagentBatch[];
 
 // 公共函数声明（在 HTML onclick 中用）
 declare function $(id: string): HTMLElement | null;

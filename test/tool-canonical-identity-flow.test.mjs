@@ -73,8 +73,15 @@ describe("A-05 canonical tool identity cross-layer flow", () => {
     const ledger = new EvidenceLedger();
     ledger.observe({ source: "live", toolName: "file_read", toolCallId: "call-file", outcome: "success", legacy: false,
       requestScope: { target: "fixture.txt" }, payloadSummary: "contents", complete: true });
+    const observability = { evidenceLedger: ledger };
     attachEngineEvents(engine, { session: { sessionFile: undefined, sessionManager: { flushed: false } } }, chat, {
-      appEvents: { publish() {} }, observability: { evidenceLedger: ledger },
+      groups: {
+        core: { engine, runtime: { session: engine.session }, chatStream: chat, appEvents: { publish() {} } },
+        security: {},
+        storage: { paths: { SESSIONS_DIR: "C:/workspace" } },
+        providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+        infra: { observability },
+      },
     });
 
     engine.emit("event", event("turn.started", 1));

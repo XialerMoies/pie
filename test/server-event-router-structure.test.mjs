@@ -10,6 +10,7 @@ const SSE_CONTROLLER = resolve(ROOT, "src", "frontend", "chat", "chat-sse-contro
 const TOOLS = resolve(ROOT, "src", "agent", "tools", "index.ts");
 const RUNTIME = resolve(ROOT, "src", "agent", "runtime.ts");
 const TYPES = resolve(ROOT, "src", "agent", "types.ts");
+const ELECTRON_MAIN = resolve(ROOT, "src", "electron", "electron-main.ts");
 
 describe("server agent event router structure", () => {
   it("keeps runtime session event handling outside the server bootstrap file", () => {
@@ -61,5 +62,12 @@ describe("server agent event router structure", () => {
     for (const file of ["test/mcp-client.test.mjs", "test/mcp-client-service.test.mjs"]) {
       assert.doesNotMatch(readFileSync(resolve(ROOT, file), "utf8"), /_getMcpCacheLen|_setMcpCache/);
     }
+  });
+
+  it("keeps Electron window state owned by WindowManager", () => {
+    const electronSource = readFileSync(ELECTRON_MAIN, "utf8");
+    assert.doesNotMatch(electronSource, /\bmainWindow\b/);
+    assert.match(electronSource, /windowManager\.createInitialWindow\(/);
+    assert.match(electronSource, /windowManager\.contextForSender\(/);
   });
 });

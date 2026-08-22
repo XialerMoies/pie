@@ -22,7 +22,18 @@ function context(overrides = {}) {
     trust: async () => {}, untrust: async () => {}, enable: async () => {}, disable: async () => {}, remove: async () => {},
     ...overrides,
   };
-  return { ctx: { skillService: service, runtime }, refreshes: () => refreshes };
+  return {
+    ctx: {
+      groups: {
+        core: { skillService: service, runtime },
+        security: {},
+        storage: { paths: {} },
+        providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+        infra: {},
+      },
+    },
+    refreshes: () => refreshes,
+  };
 }
 
 async function request(method, url, setup = {}) {

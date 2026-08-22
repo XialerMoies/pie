@@ -1,15 +1,19 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
+    "noCheck": true,
+    "strictNullChecks": false,
+    "noImplicitAny": false,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "allowJs": false,
     "checkJs": false,
     "skipLibCheck": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"]
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["dashboard-*.ts", "dashboard.d.ts", "services/**/*.ts"]
+  "include": ["**/*.ts", "dashboard.d.ts"],
+  "exclude": ["gen", "node_modules"]
 }

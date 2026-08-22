@@ -4,6 +4,18 @@ import assert from "node:assert/strict";
 import { handleDiagnostics } from "../src/server/routes/diagnostics.ts";
 import { StructuredLogger, ToolOutcomeMetrics } from "../src/server/observability.ts";
 
+function context({ runtime, observability, paths }) {
+  return {
+    groups: {
+      core: { runtime },
+      security: {},
+      storage: { paths },
+      providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+      infra: { observability },
+    },
+  };
+}
+
 function response() {
   return {
     statusCode: 0,
@@ -22,11 +34,7 @@ describe("diagnostics route", () => {
     const handled = await handleDiagnostics(
       { url: "/api/diagnostics", method: "GET", headers: { "x-request-id": "req-1" } },
       res,
-      {
-        runtime: { currentWorkspace: "C:\\Projects\\demo" },
-        paths: { STARTUP: { instanceId: "instance-1" } },
-        observability: { logger, appVersion: "0.1.0", startedAt: Date.now() - 1000 },
-      },
+      context({ runtime: { currentWorkspace: "C:\\Projects\\demo" }, paths: { STARTUP: { instanceId: "instance-1" } }, observability: { logger, appVersion: "0.1.0", startedAt: Date.now() - 1000 } }),
     );
     assert.equal(handled, true);
     assert.equal(res.statusCode, 200);
@@ -54,7 +62,7 @@ describe("diagnostics route", () => {
     await handleDiagnostics(
       { url: "/api/diagnostics", method: "GET", headers: {} },
       res,
-      { runtime: { currentWorkspace: "" }, paths: { STARTUP: { instanceId: "instance-1" } }, observability: { logger, appVersion: "0.1.0", startedAt: Date.now() } },
+      context({ runtime: { currentWorkspace: "" }, paths: { STARTUP: { instanceId: "instance-1" } }, observability: { logger, appVersion: "0.1.0", startedAt: Date.now() } }),
     );
     const payload = JSON.parse(res.body);
     assert.deepEqual(payload.logs[0].fields, { method: "POST", url: "/api/chat", status: 500 });
@@ -74,7 +82,7 @@ describe("diagnostics route", () => {
     await handleDiagnostics(
       { url: "/api/diagnostics", method: "GET", headers: {} },
       res,
-      { runtime: { currentWorkspace: "" }, paths: { STARTUP: { instanceId: "instance-1" } }, observability: { logger, appVersion: "0.1.0", startedAt: Date.now(), toolOutcomeMetrics } },
+      context({ runtime: { currentWorkspace: "" }, paths: { STARTUP: { instanceId: "instance-1" } }, observability: { logger, appVersion: "0.1.0", startedAt: Date.now(), toolOutcomeMetrics } }),
     );
     const payload = JSON.parse(res.body);
     assert.deepEqual(payload.toolOutcomeMetrics, {

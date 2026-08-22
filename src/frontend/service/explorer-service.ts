@@ -1,5 +1,5 @@
 // ExplorerService — API 调用 + 状态管理（服务层）
-/// <reference path="../../dashboard.d.ts" />
+/// <reference path="../dashboard.d.ts" />
 
 interface ExplorerServiceDependencies {
   preferences: AppPreferences;

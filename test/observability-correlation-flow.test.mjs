@@ -33,10 +33,15 @@ function flow() {
   const metrics = new ToolOutcomeMetrics();
   const observer = createToolOutcomeObserver(metrics, new StructuredLogger(), evidence, correlation);
   chat.correlationLedger = correlation;
+  const observability = { logger: new StructuredLogger(), appVersion: "test", startedAt: 1_700_000_000_000, toolOutcomeMetrics: metrics, evidenceLedger: evidence, correlationLedger: correlation };
   const ctx = {
-    appEvents: { publish() {} },
-    paths: { SESSIONS_DIR: "E:\\sessions" },
-    observability: { logger: new StructuredLogger(), appVersion: "test", startedAt: 1_700_000_000_000, toolOutcomeMetrics: metrics, evidenceLedger: evidence, correlationLedger: correlation },
+    groups: {
+      core: { engine, runtime, chatStream: chat, appEvents: { publish() {} } },
+      security: {},
+      storage: { paths: { SESSIONS_DIR: "E:\\sessions", APP_ROOT: "E:\\workspace" } },
+      providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+      infra: { observability },
+    },
   };
   attachEngineEvents(engine, runtime, chat, ctx);
   return { sessionId, chat, engine, runtime, correlation, evidence, metrics, observer, ctx };
@@ -95,7 +100,7 @@ describe("A-10 observability correlation cross-layer flow", () => {
     assert.equal(replay.length > 0, true);
     assert.equal(f.correlation.entries().some((record) => record.stage === "sse.replay" && record.replay), true);
 
-    const diagnostics = diagnosticsSnapshot(f.ctx.observability, "request-1", "E:\\workspace", "instance-1");
+    const diagnostics = diagnosticsSnapshot(f.ctx.groups.infra.observability, "request-1", "E:\\workspace", "instance-1");
     assert.equal(diagnostics.correlation.traces, 1);
     assert.equal(JSON.stringify(diagnostics).includes("事实已读取"), false);
     assert.equal(JSON.stringify(diagnostics).includes("secret-value"), false);
@@ -105,9 +110,11 @@ describe("A-10 observability correlation cross-layer flow", () => {
       end(value) { body = String(value || ""); },
     };
     await handleDiagnostics({ url: "/api/diagnostics", method: "GET", headers: {}, requestContext: { requestId: "request-1" } }, response, {
-      ...f.ctx,
-      runtime: { currentWorkspace: "E:\\workspace" },
-      paths: { ...f.ctx.paths, STARTUP: { instanceId: "instance-1" } },
+      groups: {
+        ...f.ctx.groups,
+        core: { ...f.ctx.groups.core, runtime: { currentWorkspace: "E:\\workspace" } },
+        storage: { ...f.ctx.groups.storage, paths: { ...f.ctx.groups.storage.paths, STARTUP: { instanceId: "instance-1" } } },
+      },
     });
     const routeDiagnostics = JSON.parse(body);
     assert.equal(routeDiagnostics.correlation.traces, 1);
@@ -129,7 +136,7 @@ describe("A-10 observability correlation cross-layer flow", () => {
     assert.ok(records.some((record) => record.failureKind === "permission_denied"));
     assert.ok(records.some((record) => record.stage === "task.transition" && record.status === "blocked"), "hard tool failure remains blocked when provider cancellation arrives");
     assert.ok(f.evidence.entries().some((entry) => entry.duplicateOf));
-    const diagnostics = diagnosticsSnapshot(f.ctx.observability, undefined, undefined, undefined);
+    const diagnostics = diagnosticsSnapshot(f.ctx.groups.infra.observability, undefined, undefined, undefined);
     assert.equal(JSON.stringify(diagnostics).includes("secret-value"), false);
     assert.equal(JSON.stringify(diagnostics).includes("E:\\secret"), false);
 

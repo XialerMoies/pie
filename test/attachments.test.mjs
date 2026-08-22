@@ -13,7 +13,6 @@ import { writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { makeReq, makeRes } from "./helpers/http.mjs";
 import { mockChatCtx } from "./helpers/context.mjs";
-import { PiAgentEngineAdapter } from "../src/agent-engine/index.ts";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -101,19 +100,7 @@ describe("Attachments — prompt 内容断言", () => {
     mkdirSync(subDir, { recursive: true });
     writeFileSync(resolve(subDir, "hello.txt"), "world content");
     const captured = [];
-    const ctx = {
-      runtime: { session: { model: {}, _cwd: tmpDir, prompt: async (msg) => { captured.push(msg); } }, currentWorkspace: tmpDir, switchWorkspace: async () => {}, onEvent: () => () => {} },
-      paths: { APP_ROOT: tmpDir },
-      chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" },
-      sseClients: [],
-      modelRegistry: {},
-      engine: new PiAgentEngineAdapter({
-        session: { model: {}, _cwd: tmpDir, prompt: async (msg) => { captured.push(msg); } },
-        currentWorkspace: tmpDir,
-        switchWorkspace: async () => {},
-        onEvent: () => () => {},
-      }),
-    };
+    const ctx = mockChatCtx(captured, tmpDir);
     const req = makeReq("POST", "/api/chat", {
       message: "看文件夹",
       workspace: tmpDir,

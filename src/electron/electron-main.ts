@@ -151,7 +151,6 @@ function hardenWindow(win: BrowserWindow): void {
 }
 
 // ─── Pi 服务器进程 ────────────────────────────────────────────────
-let mainWindow: BrowserWindow | null = null;
 let initialContext: WindowContext | null = null;
 let initialServerBinding: ServerBinding = createNoneServerBinding();
 let allowAppQuit = false;
@@ -410,9 +409,6 @@ function createManagedBrowserWindow(instanceId: string): BrowserWindow {
 
   win.once("focus", () => console.log("🔲 Window focused"));
 
-  win.on("closed", () => {
-    if (mainWindow === win) mainWindow = null;
-  });
   return win;
 }
 
@@ -430,7 +426,6 @@ function createWindow(): WindowContext {
     server: initialServerBinding,
   });
   e2eRuntime.recordContext(initialContext);
-  mainWindow = initialContext.window as BrowserWindow;
   return initialContext;
 }
 
