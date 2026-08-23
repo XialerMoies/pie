@@ -9,6 +9,7 @@ import { parseSessionMessages } from "../../src/server/routes/session-message-pa
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const CATALOG_PATH = join(import.meta.dirname, "agent-session-replay-fixtures.json");
+const ENGINEERING_RECORDINGS_PATH = join(import.meta.dirname, "agent-engineering-task-recordings.json");
 export const REPLAY_MODES = ["replay", "record", "refresh"];
 
 function stable(value) {
@@ -31,12 +32,17 @@ export function normalizeReplayValue(value) {
 
 export function loadReplayCatalog() {
   const jsonFiles = readdirSync(import.meta.dirname).filter((name) => name.endsWith(".json"));
-  assert.deepEqual(jsonFiles, ["agent-behavior-baseline.json", "agent-session-replay-fixtures.json"], "replay fixture inventory contains an undeclared JSON file");
-  const catalog = JSON.parse(readFileSync(CATALOG_PATH, "utf8"));
-  assert.equal(catalog.version, 1, "replay catalog version must be 1");
-  assert.deepEqual(catalog.normalization, { workspace: "<workspace>", timestamps: "logical-seq", ids: "fixture-stable" });
-  assert.ok(Array.isArray(catalog.scenarios) && catalog.scenarios.length >= 5, "replay catalog must contain the required scenarios");
+  assert.deepEqual(jsonFiles, ["agent-behavior-baseline.json", "agent-engineering-task-recordings.json", "agent-session-replay-fixtures.json"], "replay fixture inventory contains an undeclared JSON file");
+  const catalogs = [CATALOG_PATH, ENGINEERING_RECORDINGS_PATH].map((file) => JSON.parse(readFileSync(file, "utf8")));
+  for (const catalog of catalogs) {
+    assert.equal(catalog.version, 1, "replay catalog version must be 1");
+    assert.deepEqual(catalog.normalization, { workspace: "<workspace>", timestamps: "logical-seq", ids: "fixture-stable" });
+    assert.ok(Array.isArray(catalog.scenarios) && catalog.scenarios.length > 0, "replay catalog must contain scenarios");
+  }
+  const catalog = { ...catalogs[0], scenarios: catalogs.flatMap((entry) => entry.scenarios) };
+  assert.ok(catalog.scenarios.length >= 9, "replay catalog must contain baseline and engineering scenarios");
   const ids = new Set();
+  const engineeringClasses = new Set();
   for (const scenario of catalog.scenarios) {
     assert.match(scenario.id, /^[a-z0-9-]+$/u);
     assert.equal(ids.has(scenario.id), false, `duplicate replay fixture id: ${scenario.id}`);
@@ -58,9 +64,25 @@ export function loadReplayCatalog() {
     assert.deepEqual([...observedToolIds].sort(), [...declaredToolIds].sort(), `${scenario.id}: undeclared tool call drift`);
     const serialized = JSON.stringify(scenario);
     assert.doesNotMatch(serialized, /(?:sk-[A-Za-z0-9]{12,}|Bearer\s+|api[_-]?key)/iu, `${scenario.id}: fixture must not contain credentials`);
+    if (scenario.recording) {
+      assert.equal(scenario.recording.kind, "sanitized-engineering-task", `${scenario.id}: recording kind drift`);
+      assert.equal(scenario.recording.source, "local-project-session", `${scenario.id}: recording source drift`);
+      assert.ok(Array.isArray(scenario.recording.conversation) && scenario.recording.conversation.length >= 2, `${scenario.id}: recorded conversation missing`);
+      const context = scenario.recording.context;
+      assert.ok(Number.isSafeInteger(context?.messageCount) && context.messageCount >= scenario.recording.conversation.length, `${scenario.id}: invalid context message count`);
+      assert.ok(Number.isSafeInteger(context?.normalizedChars) && context.normalizedChars > 0, `${scenario.id}: invalid normalized context size`);
+      assert.ok(Number.isSafeInteger(context?.latestUserMessageIndex) && context.latestUserMessageIndex < context.messageCount, `${scenario.id}: latest instruction index invalid`);
+      const contract = scenario.recording.contract;
+      assert.ok(Array.isArray(contract?.allowedToolNames) && contract.allowedToolNames.length > 0, `${scenario.id}: allowed tools missing`);
+      assert.ok(Array.isArray(contract?.requiredToolNames), `${scenario.id}: required tools missing`);
+      assert.ok(Array.isArray(contract?.phaseOrder) && contract.phaseOrder.length > 0, `${scenario.id}: phase order missing`);
+      assert.ok(scenario.toolCalls.every((call) => Number.isSafeInteger(call.afterMessageIndex) && typeof call.phase === "string"), `${scenario.id}: recorded calls need message and phase ownership`);
+      engineeringClasses.add(scenario.recording.taskClass);
+    }
   }
   const required = ["task-a-skill-verification", "skill-facts-verification", "tool-failure-retry", "event-node-order", "refresh-recovery"];
   for (const id of required) assert.equal(ids.has(id), true, `missing required replay scenario: ${id}`);
+  assert.deepEqual([...engineeringClasses].sort(), ["ambiguous_instruction", "long_context", "multi_tool", "user_correction"], "engineering behavior classes drifted");
   return catalog;
 }
 
@@ -176,3 +198,4 @@ export function runReplayScenario(scenario, mode = replayMode()) {
 }
 
 export function fixturePath() { return CATALOG_PATH; }
+export function fixturePaths() { return [CATALOG_PATH, ENGINEERING_RECORDINGS_PATH]; }

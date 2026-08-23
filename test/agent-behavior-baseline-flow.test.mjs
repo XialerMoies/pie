@@ -7,7 +7,7 @@ describe("T-06 agent behavior baseline cross-layer flow", () => {
   it("evaluates every replay scenario beyond final text", () => {
     const report = evaluateBehavior();
     assert.equal(report.passed, true);
-    assert.equal(report.scenarios.length, 5);
+    assert.equal(report.scenarios.length, 9);
     for (const scenario of report.scenarios) {
       assert.equal(scenario.status, "pass", scenario.failures.join("; "));
       assert.equal(scenario.correct, true);
@@ -16,12 +16,41 @@ describe("T-06 agent behavior baseline cross-layer flow", () => {
       assert.equal(typeof scenario.retryDecision, "string");
       assert.ok(["done", "failed", "cancelled"].includes(scenario.terminalState));
       assert.ok(["unknown", "measured"].includes(scenario.tokenCountStatus));
+      assert.equal(scenario.instructionViolations.length, 0);
+      assert.equal(scenario.scopeViolations.length, 0);
+      assert.equal(scenario.latestInstructionHonored, true);
+      assert.equal(scenario.phaseOrderValid, true);
     }
   });
 
+  it("measures ambiguous, corrected, long-context and multi-tool engineering behavior", () => {
+    const report = evaluateBehavior();
+    const byClass = new Map(report.scenarios.map((scenario) => [scenario.taskClass, scenario]));
+    assert.deepEqual(
+      [...byClass.keys()].filter((key) => key !== "baseline").sort(),
+      ["ambiguous_instruction", "long_context", "multi_tool", "user_correction"],
+    );
+    assert.equal(byClass.get("user_correction").latestInstructionHonored, true);
+    assert.equal(byClass.get("long_context").contextMessageCount, 64);
+    assert.equal(byClass.get("long_context").normalizedContextChars, 48_200);
+    assert.ok(byClass.get("multi_tool").toolDiversity >= 4);
+    assert.equal(byClass.get("multi_tool").phaseOrderValid, true);
+  });
+
   it("fails closed for deterministic behavioral regressions", () => {
-    for (const fault of ["unrelated-read", "retry", "terminal", "leak", "missing-evidence", "memory"]) {
-      const child = spawnSync(process.execPath, ["--import", "tsx", "scripts/agent-behavior-report.mjs", "--check", "--scenario", "task-a-skill-verification", "--fault", fault], {
+    const faults = [
+      ["unrelated-read", "task-a-skill-verification"],
+      ["retry", "task-a-skill-verification"],
+      ["terminal", "task-a-skill-verification"],
+      ["leak", "task-a-skill-verification"],
+      ["missing-evidence", "task-a-skill-verification"],
+      ["memory", "task-a-skill-verification"],
+      ["instruction", "engineering-mid-turn-correction"],
+      ["scope", "engineering-mid-turn-correction"],
+      ["phase", "engineering-multi-tool-refactor"],
+    ];
+    for (const [fault, scenario] of faults) {
+      const child = spawnSync(process.execPath, ["--import", "tsx", "scripts/agent-behavior-report.mjs", "--check", "--scenario", scenario, "--fault", fault], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --max-old-space-size=2048`.trim() },

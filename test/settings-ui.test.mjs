@@ -71,6 +71,10 @@ before(async () => {
   global.ProviderCardListView = providerViews.ProviderCardListView;
   global.ProviderPickerView = providerViews.ProviderPickerView;
   global.OfficialProviderEditorView = providerViews.OfficialProviderEditorView;
+  const readerModule = await import("../src/frontend/dashboard/settings-custom-provider-form-reader.ts");
+  window.CustomProviderFormReader = readerModule.CustomProviderFormReader;
+  const elementsModule = await import("../src/frontend/dashboard/settings-custom-provider-form-elements.ts");
+  window.CustomProviderFormElements = elementsModule.CustomProviderFormElements;
   ({ CustomProviderFormView } = await import("../src/frontend/dashboard/settings-custom-provider-form.ts"));
   ({ SettingsCustomProviderEditor } = await import("../src/frontend/dashboard/settings-custom-provider-editor.ts"));
   await import("../src/frontend/dashboard/settings-provider-model.ts");
@@ -2209,7 +2213,11 @@ describe("settings DOM boundary", () => {
   });
 
   it("declares the settings refresh and embedded Permissions contracts", () => {
-    const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard.d.ts"), "utf8");
+    const source = [
+      "src/frontend/types/dashboard-runtime.d.ts",
+      "src/frontend/types/dashboard-components.d.ts",
+      "src/frontend/types/dashboard-globals.d.ts",
+    ].map(file => readFileSync(resolve(process.cwd(), file), "utf8")).join("\n");
 
     assert.match(source, /interface AppChatTimeline[\s\S]*?refreshSettings\(\): void;/);
     assert.match(source, /interface AppChat[\s\S]*?refreshReadingSettings\(\): void;/);

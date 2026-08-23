@@ -35,6 +35,10 @@ async function loadCustomProviderForm() {
   global.document = win.document;
   global.self = win;
   const { ListAddAction } = await import(`../src/frontend/ui/list-add-action.ts?form-${Date.now()}-${Math.random()}`);
+  const { CustomProviderFormReader } = await import(`../src/frontend/dashboard/settings-custom-provider-form-reader.ts?${Date.now()}-${Math.random()}`);
+  win.CustomProviderFormReader = CustomProviderFormReader;
+  const { CustomProviderFormElements } = await import(`../src/frontend/dashboard/settings-custom-provider-form-elements.ts?${Date.now()}-${Math.random()}`);
+  win.CustomProviderFormElements = CustomProviderFormElements;
   const moduleUrl = `../src/frontend/dashboard/settings-custom-provider-form.ts?${Date.now()}-${Math.random()}`;
   const { CustomProviderFormView } = await import(moduleUrl);
   return { CustomProviderFormView, ListAddAction, win };

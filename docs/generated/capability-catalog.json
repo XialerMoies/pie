@@ -880,35 +880,35 @@
     },
     {
       "file": "scripts/test-coverage.mjs",
-      "line": 11,
+      "line": 82,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 44,
+      "line": 47,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 53,
+      "line": 56,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 63,
+      "line": 66,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 79,
+      "line": 83,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"

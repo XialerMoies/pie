@@ -250,7 +250,7 @@ describe("frontend state ownership", () => {
         );
       }
     }
-    const declarations = readFileSync(resolve(root, "dashboard.d.ts"), "utf8");
+    const declarations = readFileSync(resolve(root, "types/dashboard-runtime.d.ts"), "utf8");
     for (const name of legacySessionGlobals) {
       assert.doesNotMatch(declarations, new RegExp(`declare function ${name}\\b`), `${name} must not be a global declaration`);
       assert.doesNotMatch(declarations, new RegExp(`\\b${name}\\?:`), `${name} must not be a Window property`);

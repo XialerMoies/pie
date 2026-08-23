@@ -427,7 +427,10 @@ describe("multi-instance launch and migration UX", () => {
 
   it("exposes the new-instance capability and settings status fields", () => {
     const preload = readFileSync(resolve("src/electron/preload.ts"), "utf8");
-    const declarations = readFileSync(resolve("src/frontend/dashboard.d.ts"), "utf8");
+    const declarations = [
+      "src/frontend/types/dashboard-core.d.ts",
+      "src/frontend/types/dashboard-globals.d.ts",
+    ].map(file => readFileSync(resolve(file), "utf8")).join("\n");
     const storageSettings = readFileSync(resolve("src/frontend/dashboard/settings-storage.ts"), "utf8");
     const electronMain = readFileSync(resolve("src/electron/electron-main.ts"), "utf8");
     const launchBridge = readFileSync(resolve("src/electron/desktop-launch.ts"), "utf8");

@@ -3,29 +3,7 @@
 type CustomProviderFormModel = CustomProviderDraft['models'][number];
 type CustomProviderFormMutationAction = 'save' | 'delete';
 
-const MODEL_DISCOVERY_SENTINEL: CustomProviderFormModel = {
-  id: '__model_discovery__',
-  name: 'Model discovery placeholder',
-  contextWindow: 1,
-  maxTokens: 1,
-  reasoning: false,
-  input: ['text'],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
-const CUSTOM_HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-const CUSTOM_FORBIDDEN_HEADERS = new Set([
-  'host',
-  'content-length',
-  'connection',
-  'transfer-encoding',
-  'proxy-authorization',
-  'proxy-authenticate',
-  'te',
-  'trailer',
-  'upgrade',
-]);
-const CUSTOM_ADVANCED_JSON_MAX_BYTES = 16 * 1024;
-const TOKENS_PER_CONTEXT_K = 1000;
+const CUSTOM_PROVIDER_FORM_TOKENS_PER_CONTEXT_K = 1000;
 function formElement<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -66,12 +44,12 @@ function emptyCustomProviderModel(id = ''): CustomProviderFormModel {
 }
 
 function contextWindowDisplayValue(value: number): string {
-  return String(value / TOKENS_PER_CONTEXT_K);
+  return String(value / CUSTOM_PROVIDER_FORM_TOKENS_PER_CONTEXT_K);
 }
 
 function contextWindowTokenValue(value: string): number {
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.round(parsed * TOKENS_PER_CONTEXT_K) : Number.NaN;
+  return Number.isFinite(parsed) ? Math.round(parsed * CUSTOM_PROVIDER_FORM_TOKENS_PER_CONTEXT_K) : Number.NaN;
 }
 
 function isEmptyModelPlaceholder(modelRow: HTMLElement): boolean {
@@ -79,26 +57,6 @@ function isEmptyModelPlaceholder(modelRow: HTMLElement): boolean {
     && !modelRow.querySelector<HTMLInputElement>('.cpe-model-name')?.value.trim()
     && contextWindowTokenValue(modelRow.querySelector<HTMLInputElement>('.cpe-model-context')?.value ?? '') === 128000
     && Number(modelRow.querySelector<HTMLInputElement>('.cpe-model-max')?.value ?? '') === 8192;
-}
-
-function isFiniteJsonValue(value: unknown): boolean {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isFiniteJsonValue);
-  if (typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) return false;
-  return Object.values(value as Record<string, unknown>).every(isFiniteJsonValue);
-}
-
-function readJsonObject(input: HTMLTextAreaElement | null, field: string): Record<string, unknown> | undefined {
-  const value = input?.value.trim() ?? '';
-  if (!value) return undefined;
-  const parsed = JSON.parse(value) as unknown;
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${field} 必须是 JSON 对象`);
-  if (!isFiniteJsonValue(parsed)) throw new Error(`${field} 必须只包含有限 JSON 值`);
-  if (new TextEncoder().encode(JSON.stringify(parsed)).byteLength > CUSTOM_ADVANCED_JSON_MAX_BYTES) {
-    throw new Error(`${field} 不能超过 16 KiB`);
-  }
-  return parsed as Record<string, unknown>;
 }
 
 function templateProtocol(template: CustomProviderTemplate | undefined): CustomProviderProtocol | '' {
@@ -111,13 +69,16 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
   private root: HTMLElement | null = null;
   private apiKeyCleared = false;
   private generatedId = true;
-  private modelSequence = 0;
+  private readonly elements: CustomProviderFormElements;
   private mutationControlStates: Map<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement, boolean> | null = null;
 
   constructor(
     private readonly options: CustomProviderFormOptions,
-    private readonly listAddAction: typeof ListAddAction,
-  ) {}
+    listAddAction: typeof ListAddAction,
+  ) {
+    const Elements = (window as any).CustomProviderFormElements as typeof CustomProviderFormElements;
+    this.elements = new Elements(options, listAddAction, () => this.refreshDynamicMetadata());
+  }
 
   mount(container: HTMLElement, revision: number): HTMLElement {
     const provider = this.options.provider;
@@ -142,26 +103,26 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     const form = formElement('div', 'cpe-form');
     const common = formElement('div', 'cpe-common');
     common.append(
-      this.field('名称', formInput('cpe-name', 'cpe-input', provider?.name ?? '')),
-      this.field('Base URL', formInput('cpe-base-url', 'cpe-input', provider?.baseUrl ?? '', 'url')),
-      this.authField(provider),
-      this.apiKeyField(provider),
+      this.elements.field('名称', formInput('cpe-name', 'cpe-input', provider?.name ?? '')),
+      this.elements.field('Base URL', formInput('cpe-base-url', 'cpe-input', provider?.baseUrl ?? '', 'url')),
+      this.elements.authField(provider),
+      this.elements.apiKeyField(provider),
     );
     const modelRows = formElement('div', 'cpe-model-rows');
     for (const model of provider?.models ?? [emptyCustomProviderModel()]) {
-      this.appendModelRow(modelRows, model);
+      this.elements.appendModelRow(modelRows, model);
     }
-    common.append(this.modelsField(modelRows));
+    common.append(this.elements.modelsField(modelRows));
 
     const advanced = formElement('details', 'cpe-advanced');
     advanced.open = false;
     advanced.append(formElement('summary', undefined, '高级设置'));
     const advancedBody = formElement('div', 'cpe-advanced-body');
     advancedBody.append(
-      this.field('Provider ID', formInput('cpe-id', 'cpe-input', provider?.id ?? '')),
-      this.protocolField(provider?.protocol ?? templateProtocol(this.options.template)),
-      this.field('模型发现路径', formInput('cpe-model-discovery', 'cpe-input', provider?.modelDiscovery ?? '')),
-      this.headersField(provider?.headers ?? []),
+      this.elements.field('Provider ID', formInput('cpe-id', 'cpe-input', provider?.id ?? '')),
+      this.elements.protocolField(provider?.protocol ?? templateProtocol(this.options.template)),
+      this.elements.field('模型发现路径', formInput('cpe-model-discovery', 'cpe-input', provider?.modelDiscovery ?? '')),
+      this.elements.headersField(provider?.headers ?? []),
     );
     advanced.append(advancedBody);
     form.append(common, advanced);
@@ -195,199 +156,14 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
   read(options: CustomProviderFormReadOptions): CustomProviderDraft | null {
     if (!this.root) return null;
     this.refreshDynamicMetadata();
-    const showErrors = options.showErrors;
-    const value = (selector: string) => this.root?.querySelector<HTMLInputElement>(selector)?.value.trim() ?? '';
-    const id = value('#cpe-id');
-    const name = value('#cpe-name');
-    const baseUrl = value('#cpe-base-url');
-    const modelDiscovery = value('#cpe-model-discovery');
-    const protocol = this.root.querySelector<HTMLSelectElement>('#cpe-protocol')?.value ?? '';
-    const authMode = this.root.querySelector<HTMLInputElement>('input[name="cpe-auth-mode"]:checked')?.value ?? '';
-    const effectiveModelDiscovery = modelDiscovery;
-    let valid = true;
-    const fail = (field: string, message: string) => {
-      valid = false;
-      if (showErrors) this.setFieldError(field, message, false);
-    };
-    if (!name) fail('name', '请输入名称');
-    if (!id) fail('id', '请输入 Provider ID');
-    if (!protocol) fail('protocol', '请选择协议');
-    if (!baseUrl) fail('baseUrl', '请输入 Base URL');
-    if (!authMode) fail('authMode', '请选择认证方式');
-    if (id && !/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-      fail('id', 'Provider ID 只能使用小写字母、数字和连字符');
-    }
-    if (baseUrl) {
-      try {
-        const parsed = new URL(baseUrl);
-        if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) throw new Error();
-      } catch {
-        fail('baseUrl', '请输入有效的 HTTP(S) URL');
-      }
-    }
-    if (baseUrl && effectiveModelDiscovery) {
-      try {
-        const base = new URL(baseUrl);
-        const parsed = new URL(effectiveModelDiscovery, base);
-        if (
-          !['http:', 'https:'].includes(parsed.protocol)
-          || !parsed.hostname
-          || parsed.username
-          || parsed.password
-          || parsed.origin !== base.origin
-        ) throw new Error();
-      } catch {
-        fail('modelDiscovery', '请输入同源 HTTP(S) URL 或安全相对路径');
-      }
-    }
-    if (!valid) return null;
-
-    const headers: CustomProviderDraft['headers'] = [];
-    const headerNames = new Set<string>();
-    const headerRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-header-row')];
-    const headerFieldIndexes = this.headerFieldIndexes(headerRows);
-    for (let index = 0; index < headerRows.length; index += 1) {
-      const row = headerRows[index];
-      const originalName = row.dataset.originalName ?? '';
-      if (row.dataset.removed === 'true') {
-        if (originalName) headers.push({ name: originalName, remove: true });
-        continue;
-      }
-      const configured = row.dataset.configured === 'true';
-      const headerName = configured
-        ? originalName
-        : row.querySelector<HTMLInputElement>('.cpe-header-name')?.value.trim() ?? '';
-      const normalizedName = headerName.toLowerCase();
-      const fieldIndex = headerFieldIndexes.get(row) ?? index;
-      let message = '';
-      if (!headerName) message = '请输入 Header name';
-      else if (!CUSTOM_HEADER_NAME_PATTERN.test(headerName) || CUSTOM_FORBIDDEN_HEADERS.has(normalizedName)) {
-        message = 'Header name 无效';
-      } else if (headerNames.has(normalizedName)) message = 'Header name 重复';
-      if (message) fail(`headers[${fieldIndex}].name`, message);
-      else headerNames.add(normalizedName);
-      const headerValue = row.querySelector<HTMLInputElement>('.cpe-header-value')?.value ?? '';
-      const hasHeaderValue = headerValue.trim().length > 0;
-      if (!configured && !hasHeaderValue) fail(`headers[${fieldIndex}].value`, '请输入 Header value');
-      if (!message && (configured || hasHeaderValue)) {
-        headers.push({ name: headerName, ...(hasHeaderValue ? { value: headerValue } : {}) });
-      }
-    }
-    if (!valid) return null;
-
-    const activeHeaderNames = new Set(
-      headers.filter(header => header.remove !== true).map(header => header.name.toLowerCase()),
-    );
-    const finalHeaders = headers.filter(header => (
-      header.remove !== true || !activeHeaderNames.has(header.name.toLowerCase())
-    ));
-
-    const modelRows = [...this.root.querySelectorAll<HTMLElement>('.cpe-model-row')];
-    const hasEmptyModelPlaceholder = modelRows.length === 1
-      && isEmptyModelPlaceholder(modelRows[0]);
-    if (
-      modelRows.length === 0
-      || ((options.purpose === 'test' || options.purpose === 'discover') && hasEmptyModelPlaceholder)
-    ) {
-      if (options.purpose === 'test' || options.purpose === 'discover') {
-        const apiKeyValue = value('#cpe-api-key');
-        return {
-          id,
-          name,
-          protocol: protocol as CustomProviderDraft['protocol'],
-          baseUrl,
-          authMode: authMode as CustomProviderDraft['authMode'],
-          ...(authMode === 'apiKey' && apiKeyValue ? { apiKey: apiKeyValue } : {}),
-          headers: finalHeaders,
-          models: [MODEL_DISCOVERY_SENTINEL],
-          ...(effectiveModelDiscovery ? { modelDiscovery: effectiveModelDiscovery } : {}),
-        };
-      }
-      if (showErrors) this.setFieldError('models', '至少添加一个模型', false);
-      return null;
-    }
-    const modelIds = new Set<string>();
-    const modelNames = new Set<string>();
-    const models: CustomProviderFormModel[] = [];
-    for (let index = 0; index < modelRows.length; index += 1) {
-      const modelRow = modelRows[index];
-      const field = (name: string) => `models[${index}].${name}`;
-      const modelId = modelRow.querySelector<HTMLInputElement>('.cpe-model-id')?.value.trim() ?? '';
-      const modelName = modelRow.querySelector<HTMLInputElement>('.cpe-model-name')?.value.trim() ?? '';
-      const contextWindow = contextWindowTokenValue(modelRow.querySelector<HTMLInputElement>('.cpe-model-context')?.value ?? '');
-      const maxTokens = Number(modelRow.querySelector<HTMLInputElement>('.cpe-model-max')?.value ?? '');
-      if (!modelId) fail(field('id'), '请输入 Model ID');
-      else if (modelIds.has(modelId)) fail(field('id'), 'Model ID 重复');
-      else modelIds.add(modelId);
-      const normalizedName = modelName.toLowerCase();
-      if (!modelName) fail(field('name'), '请输入模型名称');
-      else if (modelNames.has(normalizedName)) fail(field('name'), '模型名称重复');
-      else modelNames.add(normalizedName);
-      if (!Number.isInteger(contextWindow) || contextWindow <= 0) fail(field('contextWindow'), '上下文窗口必须是正整数');
-      if (!Number.isInteger(maxTokens) || maxTokens <= 0) fail(field('maxTokens'), '最大输出 tokens 必须是正整数');
-      else if (Number.isInteger(contextWindow) && contextWindow > 0 && maxTokens > contextWindow) {
-        fail(field('maxTokens'), '最大输出 tokens 不能超过上下文窗口');
-      }
-
-      const costFields = [
-        ['input', '.cpe-cost-input'],
-        ['output', '.cpe-cost-output'],
-        ['cacheRead', '.cpe-cost-cache-read'],
-        ['cacheWrite', '.cpe-cost-cache-write'],
-      ] as const;
-      const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-      for (const [costField, selector] of costFields) {
-        const amount = Number(modelRow.querySelector<HTMLInputElement>(selector)?.value ?? '');
-        if (!Number.isFinite(amount) || amount < 0) fail(field(`cost.${costField}`), '费用必须是非负数');
-        else cost[costField] = amount;
-      }
-
-      let samplingParams: Record<string, unknown> | undefined;
-      let compatibility: Record<string, unknown> | undefined;
-      for (const [advancedField, selector, label] of [
-        ['samplingParams', '.cpe-model-sampling', 'Sampling JSON'],
-        ['compatibility', '.cpe-model-compatibility', 'Compatibility JSON'],
-      ] as const) {
-        try {
-          const parsed = readJsonObject(modelRow.querySelector(selector), label);
-          if (advancedField === 'samplingParams') samplingParams = parsed;
-          else compatibility = parsed;
-        } catch (error) {
-          fail(field(advancedField), error instanceof Error ? error.message : `${label} 必须是 JSON 对象`);
-        }
-      }
-      models.push({
-        id: modelId,
-        name: modelName,
-        contextWindow,
-        maxTokens,
-        reasoning: modelRow.querySelector<HTMLInputElement>('.cpe-model-reasoning')?.checked ?? false,
-        input: modelRow.querySelector<HTMLInputElement>('.cpe-model-image')?.checked ? ['text', 'image'] : ['text'],
-        cost,
-        ...(samplingParams ? { samplingParams } : {}),
-        ...(compatibility ? { compatibility } : {}),
-      });
-    }
-    if (!valid) return null;
-
-    const apiKeyValue = value('#cpe-api-key');
-    if (authMode === 'apiKey' && !apiKeyValue && !this.apiKeyCleared && !this.options.provider?.apiKeyConfigured) {
-      if (showErrors) this.setFieldError('apiKey', '请输入 API Key', false);
-      return null;
-    }
-    return {
-      id,
-      name,
-      protocol: protocol as CustomProviderDraft['protocol'],
-      baseUrl,
-      authMode: authMode as CustomProviderDraft['authMode'],
-      ...(this.apiKeyCleared ? { apiKey: null } : authMode === 'apiKey' && apiKeyValue ? { apiKey: apiKeyValue } : {}),
-      headers: finalHeaders,
-      models,
-      ...(effectiveModelDiscovery ? { modelDiscovery: effectiveModelDiscovery } : {}),
-    };
+    const Reader = (window as any).CustomProviderFormReader as typeof CustomProviderFormReader;
+    return new Reader(
+      this.root,
+      this.options,
+      this.apiKeyCleared,
+      (field, message, focus) => this.setFieldError(field, message, focus),
+    ).read(options);
   }
-
   getRoot(): HTMLElement | null {
     return this.root;
   }
@@ -418,7 +194,7 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
       }
       const contextWindow = discovered.contextWindow ?? 128000;
       const maxTokens = Math.min(discovered.maxTokens ?? 8192, contextWindow);
-      this.appendModelRow(rows, {
+      this.elements.appendModelRow(rows, {
         id: discovered.id,
         name: discovered.name ?? discovered.id,
         contextWindow,
@@ -468,7 +244,11 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     }
     if (discovered.source) {
       const source = row.querySelector<HTMLElement>('.cpe-model-source') ?? formElement('div', 'cpe-model-source');
-      source.textContent = this.discoveredSourceLabel(discovered.source);
+      source.textContent = discovered.source === 'provider'
+        ? '能力与费用已从模型接口自动识别'
+        : discovered.source === 'provider+catalog'
+          ? '能力由模型接口与目录共同补全'
+          : '能力已从模型目录自动补全';
       if (!source.isConnected) row.querySelector('.cpe-model-main-error')?.after(source);
     }
   }
@@ -609,237 +389,6 @@ export class CustomProviderFormView implements SettingsCustomProviderFormView {
     for (const reference of references) list.append(formElement('li', undefined, reference));
     banner.append(list);
     banner.hidden = false;
-  }
-
-  private field(labelText: string, control: HTMLElement, errorField?: string): HTMLElement {
-    const field = formElement('label', 'cpe-field');
-    const fieldPath = errorField ?? this.fieldNameForControl(control.id);
-    control.dataset.fieldPath = fieldPath;
-    field.append(formElement('span', 'cpe-label', labelText), control);
-    const error = formElement('span', 'cpe-field-error');
-    error.dataset.fieldError = fieldPath;
-    field.append(error);
-    return field;
-  }
-
-  private fieldNameForControl(id: string): string {
-    if (id === 'cpe-name') return 'name';
-    if (id === 'cpe-id') return 'id';
-    if (id === 'cpe-base-url') return 'baseUrl';
-    if (id === 'cpe-model-discovery') return 'modelDiscovery';
-    if (id === 'cpe-protocol') return 'protocol';
-    return id;
-  }
-
-  private protocolField(selected: string): HTMLElement {
-    const select = formElement('select', 'cpe-input');
-    select.id = 'cpe-protocol';
-    const prompt = formElement('option', undefined, '选择协议');
-    prompt.value = '';
-    select.append(prompt);
-    for (const protocol of [...new Set(this.options.protocols)]) {
-      const option = formElement('option', undefined, protocol);
-      option.value = protocol;
-      option.selected = protocol === selected;
-      select.append(option);
-    }
-    select.value = this.options.protocols.includes(selected as CustomProviderProtocol) ? selected : '';
-    return this.field('协议', select, 'protocol');
-  }
-
-  private authField(provider: RedactedCustomProvider | null): HTMLElement {
-    const group = formElement('div', 'cpe-field cpe-auth-field');
-    group.append(formElement('span', 'cpe-label', '认证'));
-    const segmented = formElement('div', 'cpe-segmented');
-    const defaultMode = provider?.authMode ?? (this.options.template === 'openai' || this.options.template === 'anthropic' ? 'apiKey' : '');
-    for (const mode of ['none', 'apiKey'] as const) {
-      const label = formElement('label', 'cpe-segment');
-      const radio = formElement('input');
-      radio.id = mode;
-      radio.type = 'radio';
-      radio.name = 'cpe-auth-mode';
-      radio.value = mode;
-      radio.dataset.fieldPath = 'authMode';
-      radio.checked = defaultMode === mode;
-      label.append(radio, formElement('span', undefined, mode === 'none' ? 'None' : 'API Key'));
-      segmented.append(label);
-    }
-    group.append(segmented);
-    const error = formElement('span', 'cpe-field-error');
-    error.dataset.fieldError = 'authMode';
-    group.append(error);
-    return group;
-  }
-
-  private apiKeyField(provider: RedactedCustomProvider | null): HTMLElement {
-    const section = formElement('div', 'cpe-secret-section');
-    const line = formElement('div', 'cpe-secret-heading');
-    line.append(formElement('span', 'cpe-label', 'API Key'));
-    if (provider?.apiKeyConfigured) line.append(formElement('span', 'cpe-secret-status', '已保存'));
-    section.append(line);
-    const row = formElement('div', 'cpe-inline-row');
-    const input = formInput('cpe-api-key', 'cpe-input', '', 'password');
-    input.dataset.fieldPath = 'apiKey';
-    input.setAttribute('aria-label', 'API Key');
-    input.placeholder = provider?.apiKeyConfigured ? '留空保留已保存值' : '输入 API Key';
-    row.append(input);
-    if (provider?.apiKeyConfigured) {
-      const reveal = formButton('reveal-api-key', '👁', 'rp-key-toggle');
-      reveal.title = '显示 API Key';
-      reveal.setAttribute('aria-label', '显示 API Key');
-      row.append(reveal);
-    }
-    row.append(formButton('clear-api-key', '清除', 'cpe-button subtle'));
-    section.append(row);
-    const error = formElement('span', 'cpe-field-error');
-    error.dataset.fieldError = 'apiKey';
-    section.append(error);
-    return section;
-  }
-
-  private headersField(headers: RedactedCustomProvider['headers']): HTMLElement {
-    const section = formElement('section', 'cpe-section');
-    section.append(formElement('div', 'cpe-section-title', 'Headers'));
-    const rows = formElement('div', 'cpe-header-rows');
-    for (const header of headers) rows.append(this.createHeaderRow(header.name, header.configured));
-    section.append(rows);
-    const add = this.listAddAction.create({
-      label: '添加 Header',
-      onActivate: () => {
-        rows.append(this.createHeaderRow('', false));
-        this.refreshDynamicMetadata();
-      },
-    });
-    add.dataset.cpeAction = 'add-header';
-    section.append(add);
-    return section;
-  }
-
-  private createHeaderRow(name: string, configured: boolean): HTMLElement {
-    const row = formElement('div', 'cpe-header-row');
-    row.dataset.originalName = name;
-    row.dataset.configured = String(configured);
-    const nameInput = formInput('', 'cpe-input cpe-header-name', name);
-    nameInput.placeholder = 'Header name';
-    if (configured) {
-      nameInput.readOnly = true;
-      nameInput.title = '如需修改名称，请删除此 Header 后新增';
-      nameInput.setAttribute('aria-label', '已配置 Header 名称，只读');
-    }
-    const valueInput = formInput('', 'cpe-input cpe-header-value', '', 'password');
-    valueInput.placeholder = configured ? '留空保留已保存值' : 'Header value';
-    row.append(nameInput, valueInput);
-    if (configured) row.append(formElement('span', 'cpe-header-status', '已保存'));
-    const remove = formButton('remove-header', '删除', 'cpe-icon-button');
-    remove.title = '删除 Header';
-    remove.setAttribute('aria-label', '删除 Header');
-    row.append(remove);
-    const nameError = formElement('span', 'cpe-field-error cpe-header-error cpe-header-name-error');
-    const valueError = formElement('span', 'cpe-field-error cpe-header-error cpe-header-value-error');
-    nameError.hidden = true;
-    valueError.hidden = true;
-    row.append(nameError, valueError);
-    return row;
-  }
-
-  private modelsField(rows: HTMLElement): HTMLElement {
-    const section = formElement('section', 'cpe-section cpe-model-common-section');
-    section.append(formElement('div', 'cpe-section-title', '模型'), rows);
-    const error = formElement('span', 'cpe-field-error cpe-models-error');
-    error.dataset.fieldError = 'models';
-    section.append(error);
-    const add = this.listAddAction.create({
-      label: '添加模型',
-      onActivate: () => {
-        this.appendModelRow(rows, emptyCustomProviderModel());
-        this.refreshDynamicMetadata();
-      },
-    });
-    add.dataset.cpeAction = 'add-model';
-    section.append(add);
-    return section;
-  }
-
-  private appendModelRow(rows: HTMLElement, model: CustomProviderFormModel, source?: CustomProviderDiscoveredModel['source']): void {
-    const key = String(this.modelSequence++);
-    const row = formElement('div', 'cpe-model-row');
-    row.dataset.modelKey = key;
-    const main = formElement('div', 'cpe-model-main');
-    const id = formInput('', 'cpe-input cpe-model-id', model.id);
-    id.placeholder = 'Model ID';
-    const name = formInput('', 'cpe-input cpe-model-name', model.name);
-    name.placeholder = '显示名称';
-    const remove = formButton('remove-model', '删除', 'cpe-icon-button');
-    remove.title = '删除模型';
-    remove.setAttribute('aria-label', '删除模型');
-    main.append(id, name, remove);
-    row.append(main, formElement('span', 'cpe-field-error cpe-model-error cpe-model-main-error'));
-    if (source) {
-      row.append(formElement('div', 'cpe-model-source', this.discoveredSourceLabel(source)));
-    }
-    const limits = formElement('div', 'cpe-model-grid');
-    limits.append(
-      this.miniField('上下文窗口 (k)', 'cpe-model-context', contextWindowDisplayValue(model.contextWindow), 'number'),
-      this.miniField('最大输出 tokens', 'cpe-model-max', String(model.maxTokens), 'number'),
-      this.checkboxField('推理', 'cpe-model-reasoning', model.reasoning),
-      this.checkboxField('图片输入', 'cpe-model-image', model.input.includes('image')),
-    );
-    const advanced = formElement('details', 'cpe-model-advanced');
-    advanced.append(formElement('summary', undefined, '费用与高级参数'));
-    const advancedGrid = formElement('div', 'cpe-advanced-grid');
-    advancedGrid.append(
-      this.miniField('输入 USD / 1M', 'cpe-cost-input', String(model.cost.input), 'number'),
-      this.miniField('输出 USD / 1M', 'cpe-cost-output', String(model.cost.output), 'number'),
-      this.miniField('缓存读取 USD / 1M', 'cpe-cost-cache-read', String(model.cost.cacheRead), 'number'),
-      this.miniField('缓存写入 USD / 1M', 'cpe-cost-cache-write', String(model.cost.cacheWrite), 'number'),
-      this.jsonField('Sampling JSON', 'cpe-model-sampling', model.samplingParams),
-      this.jsonField('Compatibility JSON', 'cpe-model-compatibility', model.compatibility),
-    );
-    advanced.append(advancedGrid, formElement('span', 'cpe-field-error cpe-model-error cpe-model-advanced-error'));
-    row.append(
-      limits,
-      formElement('span', 'cpe-field-error cpe-model-error cpe-model-capability-error'),
-      advanced,
-    );
-    rows.append(row);
-  }
-
-  private discoveredSourceLabel(source: NonNullable<CustomProviderDiscoveredModel['source']>): string {
-    return source === 'provider'
-      ? '能力与费用已从模型接口自动识别'
-      : source === 'provider+catalog'
-        ? '能力由模型接口与目录共同补全'
-        : '能力已从模型目录自动补全';
-  }
-
-  private miniField(labelText: string, className: string, value: string, type: string): HTMLElement {
-    const label = formElement('label', 'cpe-mini-field');
-    const input = formInput('', `cpe-input ${className}`, value, type);
-    if (type === 'number') {
-      input.min = '0';
-      input.step = 'any';
-    }
-    label.append(formElement('span', undefined, labelText), input);
-    return label;
-  }
-
-  private checkboxField(labelText: string, className: string, checked: boolean): HTMLElement {
-    const label = formElement('label', 'cpe-check-field');
-    const input = formElement('input');
-    input.type = 'checkbox';
-    input.className = className;
-    input.checked = checked;
-    label.append(input, formElement('span', undefined, labelText));
-    return label;
-  }
-
-  private jsonField(labelText: string, className: string, value: Record<string, unknown> | undefined): HTMLElement {
-    const label = formElement('label', 'cpe-mini-field cpe-json-field');
-    const textarea = formElement('textarea', `cpe-input ${className}`);
-    textarea.rows = 3;
-    textarea.value = value ? JSON.stringify(value, null, 2) : '';
-    label.append(formElement('span', undefined, labelText), textarea);
-    return label;
   }
 
   private handleFormClick(event: MouseEvent): void {

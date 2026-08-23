@@ -142,6 +142,8 @@ const REQUIRED_BUNDLE_ENTRIES = [
   "gen/ui/list-add-action.js",
   "gen/dashboard/settings-provider-utils.js",
   "gen/dashboard/settings-provider-views.js",
+  "gen/dashboard/settings-custom-provider-form-reader.js",
+  "gen/dashboard/settings-custom-provider-form-elements.js",
   "gen/dashboard/settings-custom-provider-form.js",
   "gen/pane/permissions/permissions-views.js",
   "gen/pane/permissions/index.js",
@@ -206,6 +208,8 @@ const bundleOrder = [
   "gen/pane/permissions/index.js",
   "gen/dashboard/dashboard-menus.js",
   "gen/dashboard/settings-general.js",
+  "gen/dashboard/settings-custom-provider-form-reader.js",
+  "gen/dashboard/settings-custom-provider-form-elements.js",
   "gen/dashboard/settings-custom-provider-form.js",
   "gen/dashboard/settings-custom-provider-editor.js",
   "gen/dashboard/settings-provider-model.js",
@@ -234,6 +238,8 @@ const settingsBundleIndex = bundleOrder.indexOf("gen/dashboard/dashboard-setting
 const listAddActionBundleIndex = bundleOrder.indexOf("gen/ui/list-add-action.js");
 const providerUtilsBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-provider-utils.js");
 const providerViewsBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-provider-views.js");
+const customProviderFormReaderBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-custom-provider-form-reader.js");
+const customProviderFormElementsBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-custom-provider-form-elements.js");
 const customProviderFormBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-custom-provider-form.js");
 const customProviderEditorBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-custom-provider-editor.js");
 const providerSettingsBundleIndex = bundleOrder.indexOf("gen/dashboard/settings-provider-model.js");
@@ -244,7 +250,9 @@ if (
   || !(
     listAddActionBundleIndex < providerUtilsBundleIndex
     && providerUtilsBundleIndex < providerViewsBundleIndex
-    && providerViewsBundleIndex < customProviderFormBundleIndex
+    && providerViewsBundleIndex < customProviderFormReaderBundleIndex
+    && customProviderFormReaderBundleIndex < customProviderFormElementsBundleIndex
+    && customProviderFormElementsBundleIndex < customProviderFormBundleIndex
     && customProviderFormBundleIndex < customProviderEditorBundleIndex
     && customProviderEditorBundleIndex < providerSettingsBundleIndex
   )

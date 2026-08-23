@@ -18,6 +18,7 @@ export const ROUTE_FILES = [
   "workspace-session.test.mjs",
   "workspace-authorization.test.mjs",
   "server-startup-paths.test.mjs",
+  "server-process-readiness.test.mjs",
   "session-data-layout.test.mjs",
   "typescript-route.test.mjs",
   "chat-sse.test.mjs",

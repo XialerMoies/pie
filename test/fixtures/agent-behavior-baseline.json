@@ -1,6 +1,9 @@
 {
   "version": 1,
-  "generatedFrom": "test/fixtures/agent-session-replay-fixtures.json",
+  "generatedFrom": [
+    "test/fixtures/agent-session-replay-fixtures.json",
+    "test/fixtures/agent-engineering-task-recordings.json"
+  ],
   "scenarios": {
     "task-a-skill-verification": {
       "correct": true,
@@ -10,6 +13,9 @@
       "maxRetries": 0,
       "terminal": "done",
       "requiredEvidence": true,
+      "requiredInstructionCompliance": true,
+      "requiredScopeCompliance": true,
+      "requiredPhaseOrder": true,
       "maxPeakRssMb": 512,
       "allowExpectedChanges": []
     },
@@ -21,6 +27,9 @@
       "maxRetries": 0,
       "terminal": "done",
       "requiredEvidence": true,
+      "requiredInstructionCompliance": true,
+      "requiredScopeCompliance": true,
+      "requiredPhaseOrder": true,
       "maxPeakRssMb": 512,
       "allowExpectedChanges": []
     },
@@ -32,6 +41,9 @@
       "maxRetries": 1,
       "terminal": "done",
       "requiredEvidence": true,
+      "requiredInstructionCompliance": true,
+      "requiredScopeCompliance": true,
+      "requiredPhaseOrder": true,
       "maxPeakRssMb": 512,
       "allowExpectedChanges": []
     },
@@ -43,6 +55,9 @@
       "maxRetries": 0,
       "terminal": "done",
       "requiredEvidence": true,
+      "requiredInstructionCompliance": true,
+      "requiredScopeCompliance": true,
+      "requiredPhaseOrder": true,
       "maxPeakRssMb": 512,
       "allowExpectedChanges": []
     },
@@ -54,6 +69,73 @@
       "maxRetries": 0,
       "terminal": "done",
       "requiredEvidence": true,
+      "requiredInstructionCompliance": true,
+      "requiredScopeCompliance": true,
+      "requiredPhaseOrder": true,
+      "maxPeakRssMb": 512,
+      "allowExpectedChanges": []
+    },
+    "engineering-ambiguous-refactor": {
+      "correct": true,
+      "maxToolCalls": 6,
+      "maxUnrelatedReads": 0,
+      "maxRetries": 0,
+      "terminal": "done",
+      "requiredEvidence": true,
+      "requiredInstructionCompliance": true,
+      "requiredScopeCompliance": true,
+      "requiredPhaseOrder": true,
+      "minToolDiversity": 4,
+      "minContextMessages": 2,
+      "minContextChars": 640,
+      "maxPeakRssMb": 512,
+      "allowExpectedChanges": []
+    },
+    "engineering-mid-turn-correction": {
+      "correct": true,
+      "maxToolCalls": 3,
+      "maxUnrelatedReads": 0,
+      "maxRetries": 0,
+      "terminal": "done",
+      "requiredEvidence": true,
+      "requiredInstructionCompliance": true,
+      "requiredScopeCompliance": true,
+      "requiredPhaseOrder": true,
+      "minToolDiversity": 3,
+      "minContextMessages": 3,
+      "minContextChars": 920,
+      "maxPeakRssMb": 512,
+      "allowExpectedChanges": []
+    },
+    "engineering-long-context-latest-instruction": {
+      "correct": true,
+      "maxToolCalls": 2,
+      "maxUnrelatedReads": 0,
+      "maxRetries": 0,
+      "terminal": "done",
+      "requiredEvidence": true,
+      "requiredInstructionCompliance": true,
+      "requiredScopeCompliance": true,
+      "requiredPhaseOrder": true,
+      "minToolDiversity": 2,
+      "minContextMessages": 64,
+      "minContextChars": 48200,
+      "maxPeakRssMb": 512,
+      "allowExpectedChanges": []
+    },
+    "engineering-multi-tool-refactor": {
+      "correct": true,
+      "maxToolCalls": 7,
+      "maxUnrelatedReads": 0,
+      "maxRetries": 0,
+      "terminal": "done",
+      "requiredEvidence": true,
+      "requiredInstructionCompliance": true,
+      "requiredScopeCompliance": true,
+      "requiredPhaseOrder": true,
+      "minToolDiversity": 4,
+      "minContextMessages": 4,
+      "minContextChars": 1280,
       "maxPeakRssMb": 512,
       "allowExpectedChanges": []
     }

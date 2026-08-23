@@ -1,0 +1,216 @@
+{
+  "version": 1,
+  "normalization": { "workspace": "<workspace>", "timestamps": "logical-seq", "ids": "fixture-stable" },
+  "scenarios": [
+    {
+      "id": "engineering-ambiguous-refactor",
+      "recording": {
+        "kind": "sanitized-engineering-task",
+        "taskClass": "ambiguous_instruction",
+        "source": "local-project-session",
+        "recordedAt": "2026-08-23",
+        "context": { "messageCount": 2, "normalizedChars": 640, "latestUserMessageIndex": 1 },
+        "conversation": [
+          { "role": "assistant", "text": "dashboard.d.ts and settings-custom-provider-form.ts have become oversized shared boundaries." },
+          { "role": "user", "text": "搞定这两个" }
+        ],
+        "contract": {
+          "allowedToolNames": ["search", "file_read", "apply_patch", "command"],
+          "requiredToolNames": ["file_read", "apply_patch", "command"],
+          "allowedPathPrefixes": ["src/frontend/", "test/", "scripts/"],
+          "forbiddenPathPrefixes": ["src/server/", "src/agent/"],
+          "phaseOrder": ["inspect", "edit", "verify"]
+        }
+      },
+      "request": { "message": "搞定这两个", "workspace": "<workspace>" },
+      "modelResponses": [{ "provider": "replay", "requestId": "model-engineering-ambiguous-1", "text": "The two frontend boundaries were split and verified." }],
+      "toolCalls": [
+        { "id": "tool-ambiguous-search", "name": "search", "phase": "inspect", "afterMessageIndex": 1, "input": { "query": "dashboard declarations custom provider form", "path": "<workspace>/src/frontend" }, "output": "src/frontend/dashboard.d.ts\nsrc/frontend/dashboard/settings-custom-provider-form.ts" },
+        { "id": "tool-ambiguous-read-types", "name": "file_read", "phase": "inspect", "afterMessageIndex": 1, "input": { "path": "<workspace>/src/frontend/dashboard.d.ts" }, "output": "global dashboard declarations" },
+        { "id": "tool-ambiguous-read-form", "name": "file_read", "phase": "inspect", "afterMessageIndex": 1, "input": { "path": "<workspace>/src/frontend/dashboard/settings-custom-provider-form.ts" }, "output": "custom provider form coordinator" },
+        { "id": "tool-ambiguous-edit", "name": "apply_patch", "phase": "edit", "afterMessageIndex": 1, "input": { "paths": ["<workspace>/src/frontend/dashboard.d.ts", "<workspace>/src/frontend/dashboard/settings-custom-provider-form.ts"] }, "output": "split declarations and form responsibilities" },
+        { "id": "tool-ambiguous-test", "name": "command", "phase": "verify", "afterMessageIndex": 1, "input": { "command": "npm run test:frontend" }, "output": "frontend tests passed" },
+        { "id": "tool-ambiguous-build", "name": "command", "phase": "verify", "afterMessageIndex": 1, "input": { "command": "npm run build" }, "output": "build passed" }
+      ],
+      "events": [
+        { "version": 1, "type": "turn.started", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 1, "timestamp": 1 },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 2, "timestamp": 2, "toolCallId": "tool-ambiguous-search", "name": "search", "input": { "query": "dashboard declarations custom provider form", "path": "<workspace>/src/frontend" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 3, "timestamp": 3, "toolCallId": "tool-ambiguous-search", "name": "search", "output": "two targets", "evidenceFields": ["matches"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 4, "timestamp": 4, "toolCallId": "tool-ambiguous-read-types", "name": "file_read", "input": { "path": "<workspace>/src/frontend/dashboard.d.ts" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 5, "timestamp": 5, "toolCallId": "tool-ambiguous-read-types", "name": "file_read", "output": "declarations", "evidenceFields": ["content"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 6, "timestamp": 6, "toolCallId": "tool-ambiguous-read-form", "name": "file_read", "input": { "path": "<workspace>/src/frontend/dashboard/settings-custom-provider-form.ts" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 7, "timestamp": 7, "toolCallId": "tool-ambiguous-read-form", "name": "file_read", "output": "form", "evidenceFields": ["content"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 8, "timestamp": 8, "toolCallId": "tool-ambiguous-edit", "name": "apply_patch", "input": { "paths": ["<workspace>/src/frontend/dashboard.d.ts", "<workspace>/src/frontend/dashboard/settings-custom-provider-form.ts"] } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 9, "timestamp": 9, "toolCallId": "tool-ambiguous-edit", "name": "apply_patch", "output": "changed", "evidenceFields": ["diff"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 10, "timestamp": 10, "toolCallId": "tool-ambiguous-test", "name": "command", "input": { "command": "npm run test:frontend" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 11, "timestamp": 11, "toolCallId": "tool-ambiguous-test", "name": "command", "output": "passed", "evidenceFields": ["output", "exitCode"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 12, "timestamp": 12, "toolCallId": "tool-ambiguous-build", "name": "command", "input": { "command": "npm run build" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 13, "timestamp": 13, "toolCallId": "tool-ambiguous-build", "name": "command", "output": "passed", "evidenceFields": ["output", "exitCode"] },
+        { "version": 1, "type": "content.delta", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 14, "timestamp": 14, "messageSeq": 1, "contentIndex": 0, "phase": "start", "text": "The two frontend boundaries were split" },
+        { "version": 1, "type": "content.delta", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 15, "timestamp": 15, "messageSeq": 1, "contentIndex": 0, "phase": "delta", "text": " and verified." },
+        { "version": 1, "type": "content.delta", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 16, "timestamp": 16, "messageSeq": 1, "contentIndex": 0, "phase": "end", "text": "" },
+        { "version": 1, "type": "turn.completed", "sessionId": "session-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "seq": 17, "timestamp": 17 }
+      ],
+      "sessionJsonl": [
+        { "type": "session", "id": "session-engineering-ambiguous" },
+        { "type": "message", "id": "user-engineering-ambiguous", "message": { "role": "user", "content": [{ "type": "text", "text": "搞定这两个" }] } },
+        { "type": "message", "id": "assistant-engineering-ambiguous", "turnId": "turn-engineering-ambiguous", "message": { "role": "assistant", "content": [] } }
+      ],
+      "expected": { "terminal": "done", "text": "The two frontend boundaries were split and verified.", "blockTypes": ["tool", "tool", "tool", "tool", "tool", "tool", "text"] }
+    },
+    {
+      "id": "engineering-mid-turn-correction",
+      "recording": {
+        "kind": "sanitized-engineering-task",
+        "taskClass": "user_correction",
+        "source": "local-project-session",
+        "recordedAt": "2026-08-23",
+        "context": { "messageCount": 3, "normalizedChars": 920, "latestUserMessageIndex": 2 },
+        "conversation": [
+          { "role": "user", "text": "修复服务端和桌面端事件流，并整理路由。" },
+          { "role": "assistant", "text": "I will inspect both server and frontend paths." },
+          { "role": "user", "text": "先不要动服务端，只修前端事件节点并跑前端测试。" }
+        ],
+        "contract": {
+          "allowedToolNames": ["file_read", "apply_patch", "command"],
+          "requiredToolNames": ["file_read", "apply_patch", "command"],
+          "allowedPathPrefixes": ["src/frontend/", "test/"],
+          "forbiddenPathPrefixes": ["src/server/", "src/agent/"],
+          "phaseOrder": ["inspect", "edit", "verify"]
+        }
+      },
+      "request": { "message": "先不要动服务端，只修前端事件节点并跑前端测试。", "workspace": "<workspace>" },
+      "modelResponses": [{ "provider": "replay", "requestId": "model-engineering-correction-1", "text": "Only the frontend event node was changed and tested." }],
+      "toolCalls": [
+        { "id": "tool-correction-read", "name": "file_read", "phase": "inspect", "afterMessageIndex": 2, "input": { "path": "<workspace>/src/frontend/chat/chat-event-node.ts" }, "output": "frontend event node" },
+        { "id": "tool-correction-edit", "name": "apply_patch", "phase": "edit", "afterMessageIndex": 2, "input": { "path": "<workspace>/src/frontend/chat/chat-event-node.ts" }, "output": "frontend-only change" },
+        { "id": "tool-correction-test", "name": "command", "phase": "verify", "afterMessageIndex": 2, "input": { "command": "npm run test:frontend" }, "output": "frontend tests passed" }
+      ],
+      "events": [
+        { "version": 1, "type": "turn.started", "sessionId": "session-engineering-correction", "turnId": "turn-engineering-correction", "seq": 1, "timestamp": 1 },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-correction", "turnId": "turn-engineering-correction", "seq": 2, "timestamp": 2, "toolCallId": "tool-correction-read", "name": "file_read", "input": { "path": "<workspace>/src/frontend/chat/chat-event-node.ts" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-correction", "turnId": "turn-engineering-correction", "seq": 3, "timestamp": 3, "toolCallId": "tool-correction-read", "name": "file_read", "output": "frontend event node", "evidenceFields": ["content"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-correction", "turnId": "turn-engineering-correction", "seq": 4, "timestamp": 4, "toolCallId": "tool-correction-edit", "name": "apply_patch", "input": { "path": "<workspace>/src/frontend/chat/chat-event-node.ts" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-correction", "turnId": "turn-engineering-correction", "seq": 5, "timestamp": 5, "toolCallId": "tool-correction-edit", "name": "apply_patch", "output": "changed", "evidenceFields": ["diff"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-correction", "turnId": "turn-engineering-correction", "seq": 6, "timestamp": 6, "toolCallId": "tool-correction-test", "name": "command", "input": { "command": "npm run test:frontend" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-correction", "turnId": "turn-engineering-correction", "seq": 7, "timestamp": 7, "toolCallId": "tool-correction-test", "name": "command", "output": "passed", "evidenceFields": ["output", "exitCode"] },
+        { "version": 1, "type": "content.delta", "sessionId": "session-engineering-correction", "turnId": "turn-engineering-correction", "seq": 8, "timestamp": 8, "messageSeq": 1, "contentIndex": 0, "phase": "start", "text": "Only the frontend event node was changed" },
+        { "version": 1, "type": "content.delta", "sessionId": "session-engineering-correction", "turnId": "turn-engineering-correction", "seq": 9, "timestamp": 9, "messageSeq": 1, "contentIndex": 0, "phase": "delta", "text": " and tested." },
+        { "version": 1, "type": "content.delta", "sessionId": "session-engineering-correction", "turnId": "turn-engineering-correction", "seq": 10, "timestamp": 10, "messageSeq": 1, "contentIndex": 0, "phase": "end", "text": "" },
+        { "version": 1, "type": "turn.completed", "sessionId": "session-engineering-correction", "turnId": "turn-engineering-correction", "seq": 11, "timestamp": 11 }
+      ],
+      "sessionJsonl": [
+        { "type": "session", "id": "session-engineering-correction" },
+        { "type": "message", "id": "user-engineering-correction", "message": { "role": "user", "content": [{ "type": "text", "text": "先不要动服务端，只修前端事件节点并跑前端测试。" }] } },
+        { "type": "message", "id": "assistant-engineering-correction", "turnId": "turn-engineering-correction", "message": { "role": "assistant", "content": [] } }
+      ],
+      "expected": { "terminal": "done", "text": "Only the frontend event node was changed and tested.", "blockTypes": ["tool", "tool", "tool", "text"] }
+    },
+    {
+      "id": "engineering-long-context-latest-instruction",
+      "recording": {
+        "kind": "sanitized-engineering-task",
+        "taskClass": "long_context",
+        "source": "local-project-session",
+        "recordedAt": "2026-08-23",
+        "context": { "messageCount": 64, "normalizedChars": 48200, "latestUserMessageIndex": 63 },
+        "conversation": [
+          { "role": "assistant", "text": "Earlier turns discussed implementation, tests, commits and release checks; content was summarized during sanitization." },
+          { "role": "user", "text": "只更新 docs/任务清单.md，不改源码，不运行提交命令。" }
+        ],
+        "contract": {
+          "allowedToolNames": ["file_read", "apply_patch"],
+          "requiredToolNames": ["file_read", "apply_patch"],
+          "allowedPathPrefixes": ["docs/"],
+          "forbiddenPathPrefixes": ["src/", "test/", "scripts/"],
+          "forbiddenToolNames": ["command"],
+          "phaseOrder": ["inspect", "edit"]
+        }
+      },
+      "request": { "message": "只更新 docs/任务清单.md，不改源码，不运行提交命令。", "workspace": "<workspace>" },
+      "modelResponses": [{ "provider": "replay", "requestId": "model-engineering-long-context-1", "text": "Only the requested task document was updated; no source or commit command was touched." }],
+      "toolCalls": [
+        { "id": "tool-long-read", "name": "file_read", "phase": "inspect", "afterMessageIndex": 63, "input": { "path": "<workspace>/docs/任务清单.md" }, "output": "task list" },
+        { "id": "tool-long-edit", "name": "apply_patch", "phase": "edit", "afterMessageIndex": 63, "input": { "path": "<workspace>/docs/任务清单.md" }, "output": "document updated" }
+      ],
+      "events": [
+        { "version": 1, "type": "turn.started", "sessionId": "session-engineering-long", "turnId": "turn-engineering-long", "seq": 1, "timestamp": 1 },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-long", "turnId": "turn-engineering-long", "seq": 2, "timestamp": 2, "toolCallId": "tool-long-read", "name": "file_read", "input": { "path": "<workspace>/docs/任务清单.md" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-long", "turnId": "turn-engineering-long", "seq": 3, "timestamp": 3, "toolCallId": "tool-long-read", "name": "file_read", "output": "task list", "evidenceFields": ["content"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-long", "turnId": "turn-engineering-long", "seq": 4, "timestamp": 4, "toolCallId": "tool-long-edit", "name": "apply_patch", "input": { "path": "<workspace>/docs/任务清单.md" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-long", "turnId": "turn-engineering-long", "seq": 5, "timestamp": 5, "toolCallId": "tool-long-edit", "name": "apply_patch", "output": "updated", "evidenceFields": ["diff"] },
+        { "version": 1, "type": "content.delta", "sessionId": "session-engineering-long", "turnId": "turn-engineering-long", "seq": 6, "timestamp": 6, "messageSeq": 1, "contentIndex": 0, "phase": "start", "text": "Only the requested task document was updated;" },
+        { "version": 1, "type": "content.delta", "sessionId": "session-engineering-long", "turnId": "turn-engineering-long", "seq": 7, "timestamp": 7, "messageSeq": 1, "contentIndex": 0, "phase": "delta", "text": " no source or commit command was touched." },
+        { "version": 1, "type": "content.delta", "sessionId": "session-engineering-long", "turnId": "turn-engineering-long", "seq": 8, "timestamp": 8, "messageSeq": 1, "contentIndex": 0, "phase": "end", "text": "" },
+        { "version": 1, "type": "turn.completed", "sessionId": "session-engineering-long", "turnId": "turn-engineering-long", "seq": 9, "timestamp": 9 }
+      ],
+      "sessionJsonl": [
+        { "type": "session", "id": "session-engineering-long" },
+        { "type": "message", "id": "user-engineering-long", "message": { "role": "user", "content": [{ "type": "text", "text": "只更新 docs/任务清单.md，不改源码，不运行提交命令。" }] } },
+        { "type": "message", "id": "assistant-engineering-long", "turnId": "turn-engineering-long", "message": { "role": "assistant", "content": [] } }
+      ],
+      "expected": { "terminal": "done", "text": "Only the requested task document was updated; no source or commit command was touched.", "blockTypes": ["tool", "tool", "text"] }
+    },
+    {
+      "id": "engineering-multi-tool-refactor",
+      "recording": {
+        "kind": "sanitized-engineering-task",
+        "taskClass": "multi_tool",
+        "source": "local-project-session",
+        "recordedAt": "2026-08-23",
+        "context": { "messageCount": 4, "normalizedChars": 1280, "latestUserMessageIndex": 3 },
+        "conversation": [
+          { "role": "user", "text": "拆分 Agent runtime 和 types。" },
+          { "role": "assistant", "text": "I will identify ownership and existing tests." },
+          { "role": "user", "text": "对应测试必须包含集成和跨层流程。" },
+          { "role": "user", "text": "继续并完成构建验证。" }
+        ],
+        "contract": {
+          "allowedToolNames": ["search", "file_read", "apply_patch", "command"],
+          "requiredToolNames": ["search", "file_read", "apply_patch", "command"],
+          "allowedPathPrefixes": ["src/agent/", "test/", "scripts/"],
+          "forbiddenPathPrefixes": ["src/frontend/", "src/electron/"],
+          "phaseOrder": ["inspect", "edit", "verify"]
+        }
+      },
+      "request": { "message": "继续并完成构建验证。", "workspace": "<workspace>" },
+      "modelResponses": [{ "provider": "replay", "requestId": "model-engineering-multi-tool-1", "text": "The Agent boundaries were split, cross-layer tests passed, and the build completed." }],
+      "toolCalls": [
+        { "id": "tool-multi-search", "name": "search", "phase": "inspect", "afterMessageIndex": 3, "input": { "query": "AgentRuntime ToolContext", "path": "<workspace>/src/agent" }, "output": "runtime and contract owners" },
+        { "id": "tool-multi-read-runtime", "name": "file_read", "phase": "inspect", "afterMessageIndex": 3, "input": { "path": "<workspace>/src/agent/runtime.ts" }, "output": "runtime" },
+        { "id": "tool-multi-read-types", "name": "file_read", "phase": "inspect", "afterMessageIndex": 3, "input": { "path": "<workspace>/src/agent/types.ts" }, "output": "types" },
+        { "id": "tool-multi-edit", "name": "apply_patch", "phase": "edit", "afterMessageIndex": 3, "input": { "paths": ["<workspace>/src/agent/runtime.ts", "<workspace>/src/agent/types.ts", "<workspace>/test/agent-runtime-tool-boundary-flow.test.mjs"] }, "output": "boundaries split" },
+        { "id": "tool-multi-typecheck", "name": "command", "phase": "verify", "afterMessageIndex": 3, "input": { "command": "npm run typecheck" }, "output": "typecheck passed" },
+        { "id": "tool-multi-flow", "name": "command", "phase": "verify", "afterMessageIndex": 3, "input": { "command": "node scripts/tsx-test.mjs --test test/agent-runtime-tool-boundary-flow.test.mjs" }, "output": "cross-layer flow passed" },
+        { "id": "tool-multi-build", "name": "command", "phase": "verify", "afterMessageIndex": 3, "input": { "command": "npm run build" }, "output": "build passed" }
+      ],
+      "events": [
+        { "version": 1, "type": "turn.started", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 1, "timestamp": 1 },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 2, "timestamp": 2, "toolCallId": "tool-multi-search", "name": "search", "input": { "query": "AgentRuntime ToolContext", "path": "<workspace>/src/agent" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 3, "timestamp": 3, "toolCallId": "tool-multi-search", "name": "search", "output": "owners", "evidenceFields": ["matches"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 4, "timestamp": 4, "toolCallId": "tool-multi-read-runtime", "name": "file_read", "input": { "path": "<workspace>/src/agent/runtime.ts" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 5, "timestamp": 5, "toolCallId": "tool-multi-read-runtime", "name": "file_read", "output": "runtime", "evidenceFields": ["content"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 6, "timestamp": 6, "toolCallId": "tool-multi-read-types", "name": "file_read", "input": { "path": "<workspace>/src/agent/types.ts" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 7, "timestamp": 7, "toolCallId": "tool-multi-read-types", "name": "file_read", "output": "types", "evidenceFields": ["content"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 8, "timestamp": 8, "toolCallId": "tool-multi-edit", "name": "apply_patch", "input": { "paths": ["<workspace>/src/agent/runtime.ts", "<workspace>/src/agent/types.ts", "<workspace>/test/agent-runtime-tool-boundary-flow.test.mjs"] } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 9, "timestamp": 9, "toolCallId": "tool-multi-edit", "name": "apply_patch", "output": "changed", "evidenceFields": ["diff"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 10, "timestamp": 10, "toolCallId": "tool-multi-typecheck", "name": "command", "input": { "command": "npm run typecheck" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 11, "timestamp": 11, "toolCallId": "tool-multi-typecheck", "name": "command", "output": "passed", "evidenceFields": ["output", "exitCode"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 12, "timestamp": 12, "toolCallId": "tool-multi-flow", "name": "command", "input": { "command": "node scripts/tsx-test.mjs --test test/agent-runtime-tool-boundary-flow.test.mjs" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 13, "timestamp": 13, "toolCallId": "tool-multi-flow", "name": "command", "output": "passed", "evidenceFields": ["output", "exitCode"] },
+        { "version": 1, "type": "tool.started", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 14, "timestamp": 14, "toolCallId": "tool-multi-build", "name": "command", "input": { "command": "npm run build" } },
+        { "version": 1, "type": "tool.completed", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 15, "timestamp": 15, "toolCallId": "tool-multi-build", "name": "command", "output": "passed", "evidenceFields": ["output", "exitCode"] },
+        { "version": 1, "type": "content.delta", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 16, "timestamp": 16, "messageSeq": 1, "contentIndex": 0, "phase": "start", "text": "The Agent boundaries were split, cross-layer tests passed," },
+        { "version": 1, "type": "content.delta", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 17, "timestamp": 17, "messageSeq": 1, "contentIndex": 0, "phase": "delta", "text": " and the build completed." },
+        { "version": 1, "type": "content.delta", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 18, "timestamp": 18, "messageSeq": 1, "contentIndex": 0, "phase": "end", "text": "" },
+        { "version": 1, "type": "turn.completed", "sessionId": "session-engineering-multi", "turnId": "turn-engineering-multi", "seq": 19, "timestamp": 19 }
+      ],
+      "sessionJsonl": [
+        { "type": "session", "id": "session-engineering-multi" },
+        { "type": "message", "id": "user-engineering-multi", "message": { "role": "user", "content": [{ "type": "text", "text": "继续并完成构建验证。" }] } },
+        { "type": "message", "id": "assistant-engineering-multi", "turnId": "turn-engineering-multi", "message": { "role": "assistant", "content": [] } }
+      ],
+      "expected": { "terminal": "done", "text": "The Agent boundaries were split, cross-layer tests passed, and the build completed.", "blockTypes": ["tool", "tool", "tool", "tool", "tool", "tool", "tool", "text"] }
+    }
+  ]
+}

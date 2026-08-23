@@ -108,7 +108,7 @@ describe("Preferences facade", () => {
   });
 
   it("declares the complete typed preferences facade", () => {
-    const source = readFileSync(resolve(process.cwd(), "src/frontend/dashboard.d.ts"), "utf8");
+    const source = readFileSync(resolve(process.cwd(), "src/frontend/types/dashboard-core.d.ts"), "utf8");
     const declaration = source.slice(source.indexOf("interface AppPreferences"), source.indexOf("interface DashboardData"));
     for (const method of ["get", "set", "remove", "getBoolean", "setBoolean", "getNumber", "getJson", "setJson", "hydrate", "onHydrated", "isHydrated", "flush"]) {
       assert.match(declaration, new RegExp(`\\b${method}\\b`), `missing AppPreferences.${method}`);

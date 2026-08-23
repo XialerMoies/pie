@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "collector": "c8",
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/**/*.d.ts",
+    "src/frontend/gen/**",
+    "src/frontend/icons/**"
+  ],
+  "thresholds": {
+    "lines": 80,
+    "statements": 80,
+    "functions": 89,
+    "branches": 77.5
+  },
+  "baseline": {
+    "lines": 80.87,
+    "statements": 80.87,
+    "functions": 89.58,
+    "branches": 78.27
+  },
+  "maximumRegressionPoints": 0.75,
+  "requiredProducers": [
+    "unit",
+    "routes",
+    "frontend"
+  ],
+  "minimumRawFiles": 100,
+  "maximumRawMb": 1200
+}

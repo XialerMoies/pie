@@ -21,13 +21,6 @@
       "reason": "packaged Electron 当前发布门禁只在 Windows 产物环境运行",
       "owner": "desktop-platform",
       "expires": "2026-09-30"
-    },
-    {
-      "file": "scripts/test-coverage.mjs",
-      "kind": "coverage_exemption",
-      "reason": "项目当前没有默认覆盖率收集器；显式 MY_CODE_AGENT_COVERAGE_COMMAND 才启用，不能伪装成覆盖率通过",
-      "owner": "test-infrastructure",
-      "expires": "2026-09-30"
     }
   ]
 }

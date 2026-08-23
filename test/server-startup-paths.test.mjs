@@ -1,7 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { once } from "node:events";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
@@ -13,6 +12,7 @@ import {
 import { canonicalWorkspacePath } from "../src/data/data-layout.ts";
 import { handleDashboard } from "../src/server/routes/dashboard.ts";
 import { withServerGroups } from "./helpers/context.mjs";
+import { waitForServerBootstrap } from "./helpers/server-process-readiness.mjs";
 
 async function readBootstrap(paths) {
   const request = { url: "/api/bootstrap", method: "GET" };
@@ -41,26 +41,43 @@ function startServerProcess(workspace, dataRoot) {
     ], {
       cwd: process.cwd(),
       env: { ...process.env, NODE_OPTIONS: childNodeOptions, MY_CODE_AGENT_DESKTOP_TOKEN: "startup-test-token", PI_DEV_PORT: "0" },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
     let output = "";
     let errorOutput = "";
+    let settled = false;
     const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
       server.kill();
       rejectServer(new Error(`server startup timed out\n${output}\n${errorOutput}`));
     }, 30_000);
     server.stdout.on("data", (chunk) => {
       output += chunk.toString();
       const match = output.match(/SERVER_PORT:(\d+)/);
-      if (!match) return;
+      if (!match || settled) return;
+      settled = true;
       clearTimeout(timer);
-      resolveServer({ server, port: Number(match[1]), output });
+      resolveServer({
+        server,
+        port: Number(match[1]),
+        output: () => output,
+        errorOutput: () => errorOutput,
+      });
     });
     server.stderr.on("data", (chunk) => { errorOutput += chunk.toString(); });
     server.once("error", (error) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       rejectServer(error);
+    });
+    server.once("exit", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      rejectServer(new Error(`server exited before listen (${code ?? "null"}, ${signal || "none"})\n${output}\n${errorOutput}`));
     });
   });
 }
@@ -86,11 +103,24 @@ function writeStartupSettings(dataRoot, document) {
 
 async function stopServerProcess(server) {
   if (!server || server.exitCode !== null || server.signalCode !== null) return;
+  const waitForExit = (timeoutMs) => new Promise((resolveExit) => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolveExit(true);
+    };
+    const timer = setTimeout(() => {
+      server.off("exit", onExit);
+      resolveExit(false);
+    }, timeoutMs);
+    server.once("exit", onExit);
+  });
+  const gracefulExit = waitForExit(10_000);
+  server.stdin.write("PI_SERVER_SHUTDOWN\n");
+  server.stdin.end();
+  const exited = await gracefulExit;
+  if (exited) return;
   server.kill();
-  await Promise.race([
-    once(server, "exit"),
-    new Promise((resolveWait) => setTimeout(resolveWait, 10_000)),
-  ]);
+  await waitForExit(5_000);
 }
 
 describe("server startup paths", () => {
@@ -385,10 +415,17 @@ describe("server startup paths", () => {
     try {
       running = await startServerProcess(workspace, dataRoot);
       assert.ok(running.port > 0);
-      const response = await fetch(`http://127.0.0.1:${running.port}/api/bootstrap`, {
-        headers: { "X-My-Code-Agent-Token": "startup-test-token" },
+      const readiness = await waitForServerBootstrap({
+        child: running.server,
+        port: running.port,
+        token: "startup-test-token",
+        stdout: running.output,
+        stderr: running.errorOutput,
       });
+      const { response } = readiness;
       assert.strictEqual(response.status, 200);
+      assert.ok(readiness.attempts.length >= 1);
+      assert.strictEqual(readiness.attempts.at(-1).outcome, "success");
       const body = await response.json();
       assert.strictEqual(body.ok, true);
       assert.strictEqual(body.startup.workspace, resolve(workspace).toLowerCase());

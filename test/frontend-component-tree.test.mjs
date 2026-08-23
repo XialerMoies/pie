@@ -37,21 +37,51 @@ function assertDelegates(src, fn, view) {
 describe("frontend component tree boundaries", () => {
   it("keeps custom-provider form DOM and validation in a dedicated view", () => {
     const form = source("src/frontend/dashboard/settings-custom-provider-form.ts");
+    const reader = source("src/frontend/dashboard/settings-custom-provider-form-reader.ts");
+    const elements = source("src/frontend/dashboard/settings-custom-provider-form-elements.ts");
     const editor = source("src/frontend/dashboard/settings-custom-provider-editor.ts");
     assertClass(form, "CustomProviderFormView");
+    assertClass(reader, "CustomProviderFormReader");
+    assertClass(elements, "CustomProviderFormElements");
+    assert.match(form, /new Reader\(/);
+    assert.doesNotMatch(form, /CUSTOM_HEADER_NAME_PATTERN|readCustomProviderJsonObject/);
+    assert.doesNotMatch(reader, /document\.createElement|addEventListener|\bfetch\s*\(/);
+    assert.doesNotMatch(elements, /addEventListener|\bfetch\s*\(|\bApp\./);
     assert.doesNotMatch(form, /\bApp\./);
     assert.doesNotMatch(form, /\bfetch\s*\(/);
     assert.match(editor, /formType/);
     assert.doesNotMatch(editor, /createModelRow|createHeaderRow|readDraft\s*\(/);
+    assert.ok(form.split(/\r?\n/).length <= 650, "custom-provider form coordinator must remain below 650 lines");
+    assert.ok(reader.split(/\r?\n/).length <= 300, "custom-provider draft reader must remain focused");
+    assert.ok(elements.split(/\r?\n/).length <= 300, "custom-provider DOM elements owner must remain focused");
+  });
+
+  it("keeps dashboard declarations behind a thin compatibility entrypoint", () => {
+    const entry = source("src/frontend/dashboard.d.ts");
+    const references = [...entry.matchAll(/<reference path="\.\/types\/([^"]+\.d\.ts)"/g)].map(match => match[1]);
+    assert.deepEqual(references, [
+      "dashboard-core.d.ts",
+      "dashboard-providers.d.ts",
+      "dashboard-runtime.d.ts",
+      "dashboard-components.d.ts",
+      "dashboard-globals.d.ts",
+    ]);
+    assert.ok(entry.split(/\r?\n/).length <= 10, "dashboard.d.ts must stay a thin compatibility entrypoint");
+    for (const declaration of references) {
+      const declarationSource = source(`src/frontend/types/${declaration}`);
+      assert.ok(declarationSource.split(/\r?\n/).length <= 350, `${declaration} must keep a bounded domain surface`);
+    }
   });
 
   it("loads the custom-provider form before its editor and provider controller", () => {
     const compiler = source("scripts/compile-frontend-ts.mjs");
     const bundleOrder = stringArrayInitializer(compiler, "bundleOrder");
+    const readerIndex = bundleOrder.indexOf("gen/dashboard/settings-custom-provider-form-reader.js");
+    const elementsIndex = bundleOrder.indexOf("gen/dashboard/settings-custom-provider-form-elements.js");
     const formIndex = bundleOrder.indexOf("gen/dashboard/settings-custom-provider-form.js");
     const editorIndex = bundleOrder.indexOf("gen/dashboard/settings-custom-provider-editor.js");
     const providerIndex = bundleOrder.indexOf("gen/dashboard/settings-provider-model.js");
-    assert.ok(formIndex >= 0 && formIndex < editorIndex && editorIndex < providerIndex);
+    assert.ok(readerIndex >= 0 && readerIndex < elementsIndex && elementsIndex < formIndex && formIndex < editorIndex && editorIndex < providerIndex);
   });
 
   it("shares the DOM-backed ListAddAction across chat and subagent consumers", () => {

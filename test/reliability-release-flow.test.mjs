@@ -15,6 +15,7 @@ import { afterEach, describe, it } from "node:test";
 
 import { replayChatEvents, writeChatEvent } from "../src/server/chat-stream.ts";
 import { workspaceDataPaths, writeWorkspaceMetadata } from "../src/server/routes/session-dir.ts";
+import { waitForServerBootstrap } from "./helpers/server-process-readiness.mjs";
 
 const children = new Set();
 const servers = new Set();
@@ -79,6 +80,7 @@ function startServer({ workspace, dataRoot, instanceId, token }) {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let listenObserved = false;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -88,10 +90,33 @@ function startServer({ workspace, dataRoot, instanceId, token }) {
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
       const match = stdout.match(/SERVER_PORT:(\d+)/u);
-      if (!match || settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolveServer({ child, port: Number(match[1]), token, stdout: () => stdout, stderr: () => stderr });
+      if (!match || settled || listenObserved) return;
+      listenObserved = true;
+      const port = Number(match[1]);
+      void waitForServerBootstrap({
+        child,
+        port,
+        token,
+        stdout: () => stdout,
+        stderr: () => stderr,
+      }).then((readiness) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolveServer({
+          child,
+          port,
+          token,
+          stdout: () => stdout,
+          stderr: () => stderr,
+          readinessAttempts: readiness.attempts,
+        });
+      }, (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        rejectServer(error);
+      });
     });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
     child.once("error", (error) => {
@@ -113,10 +138,17 @@ function startServer({ workspace, dataRoot, instanceId, token }) {
 
 async function waitForExit(child, timeoutMs = 10_000) {
   if (child.exitCode !== null || child.signalCode !== null) return;
-  await Promise.race([
-    once(child, "exit"),
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`child ${child.pid} did not exit`)), timeoutMs)),
-  ]);
+  await new Promise((resolveExit, rejectExit) => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolveExit();
+    };
+    const timer = setTimeout(() => {
+      child.off("exit", onExit);
+      rejectExit(new Error(`child ${child.pid} did not exit`));
+    }, timeoutMs);
+    child.once("exit", onExit);
+  });
 }
 
 async function stopServer(server) {
@@ -222,6 +254,7 @@ describe("release reliability cross-layer flows", () => {
     assert.ok(seeded.bytes > 3 * 1024 * 1024, "fixture must exercise a multi-megabyte session");
     const token = "reliability-token";
     const first = await startServer({ ...fixture, instanceId: "reliability-crash", token });
+    assert.equal(first.readinessAttempts.at(-1)?.outcome, "success");
     const initial = await getSessions(first, fixture.workspace);
     assert.equal(initial.status, 200);
     assert.equal(initial.body.status, "ok");
@@ -229,6 +262,7 @@ describe("release reliability cross-layer flows", () => {
     await crashServer(first);
 
     const restarted = await startServer({ ...fixture, instanceId: "reliability-crash", token });
+    assert.equal(restarted.readinessAttempts.at(-1)?.outcome, "success");
     const recovered = await getSessions(restarted, fixture.workspace);
     assert.equal(recovered.status, 200);
     assert.equal(recovered.body.sessions.find((session) => session.id === seeded.id)?.messageCount, 1_500);

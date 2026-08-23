@@ -21,7 +21,7 @@ export function validateTestExceptions(entries = loadTestExceptions()) {
     for (const field of ["file", "kind", "reason", "owner", "expires"]) if (typeof entry[field] !== "string" || !entry[field].trim()) errors.push(`${key}: missing ${field}`);
     if (!/^\d{4}-\d{2}-\d{2}$/u.test(entry.expires ?? "")) errors.push(`${key}: expires must be YYYY-MM-DD`);
     else if (entry.expires < today) errors.push(`${key}: exception expired on ${entry.expires}`);
-    if (!["skip", "platform_exclusion", "live_opt_in", "coverage_exemption"].includes(entry.kind)) errors.push(`${key}: unsupported kind ${entry.kind}`);
+    if (!["skip", "platform_exclusion", "live_opt_in"].includes(entry.kind)) errors.push(`${key}: unsupported kind ${entry.kind}`);
     const sourcePath = resolve(ROOT, entry.file);
     if (!existsSync(sourcePath)) errors.push(`${key}: source file does not exist`);
     else {
@@ -29,7 +29,6 @@ export function validateTestExceptions(entries = loadTestExceptions()) {
       const marker = entry.kind === "live_opt_in" ? /t\.skip|PROVIDER_MATRIX_FILE/u
         : entry.kind === "platform_exclusion" ? /process\.platform/u
           : entry.kind === "skip" ? /\.skip\b|skip:/u
-            : entry.kind === "coverage_exemption" ? /MY_CODE_AGENT_COVERAGE_COMMAND/u
             : null;
       if (marker && !marker.test(source)) errors.push(`${key}: source has no ${entry.kind} marker`);
     }

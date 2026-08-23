@@ -8,6 +8,7 @@ import { Window } from "happy-dom";
 
 import {
   fixturePath,
+  fixturePaths,
   loadReplayCatalog,
   replayMode,
   runReplayScenario,
@@ -18,7 +19,8 @@ describe("T-01 replay-first Agent/Session flow", () => {
     const catalog = loadReplayCatalog();
     assert.equal(replayMode("replay"), "replay");
     assert.match(fixturePath(), /agent-session-replay-fixtures\.json$/u);
-    assert.equal(catalog.scenarios.length, 5);
+    assert.deepEqual(fixturePaths().map((path) => path.split(/[\\/]/u).at(-1)), ["agent-session-replay-fixtures.json", "agent-engineering-task-recordings.json"]);
+    assert.equal(catalog.scenarios.length, 9);
     for (const scenario of catalog.scenarios) {
       assert.equal(scenario.events[0].timestamp, 1, `${scenario.id}: logical timestamps must start at one`);
       assert.equal(scenario.events.at(-1).type, "turn.completed", `${scenario.id}: replay fixtures must have a successful terminal for this gate`);

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import process from "node:process";
 import { buildTestManifest } from "./test-manifest.mjs";
 import { validateTestExceptions } from "./test-exceptions.mjs";
@@ -8,6 +10,7 @@ import { validateTestExceptions } from "./test-exceptions.mjs";
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const defaultConcurrency = Number(process.env.MY_CODE_AGENT_GATE_CONCURRENCY || 1);
 const resourceBudgetMb = Number(process.env.MY_CODE_AGENT_GATE_BUDGET_MB || 3584);
+const coverageRawDirectory = resolve(process.cwd(), ".coverage", "raw");
 const profiles = {
   light: { memoryMb: 2048 },
   test: { memoryMb: Number(process.env.MY_CODE_AGENT_TEST_MEMORY_MB || 2048) },
@@ -21,9 +24,9 @@ export const GATES = [
   { name: "manifest", deps: ["governance"], profile: "light", command: process.execPath, args: ["scripts/test-manifest.mjs", "--check"] },
   { name: "report", deps: ["manifest"], profile: "light", command: process.execPath, args: ["scripts/test-report.mjs", "--check"] },
   { name: "typecheck", deps: ["manifest"], profile: "build", command: npmCommand, args: ["run", "typecheck"] },
-  { name: "unit", deps: ["report"], profile: "test", command: npmCommand, args: ["run", "test:unit"] },
-  { name: "routes", deps: ["report"], profile: "test", command: npmCommand, args: ["run", "test:routes"] },
-  { name: "frontend", deps: ["report"], profile: "test", command: npmCommand, args: ["run", "test:frontend"] },
+  { name: "unit", deps: ["report"], profile: "test", coverageProducer: true, command: npmCommand, args: ["run", "test:unit"] },
+  { name: "routes", deps: ["report"], profile: "test", coverageProducer: true, command: npmCommand, args: ["run", "test:routes"] },
+  { name: "frontend", deps: ["report"], profile: "test", coverageProducer: true, command: npmCommand, args: ["run", "test:frontend"] },
   { name: "css-vars", deps: ["frontend"], profile: "light", command: process.execPath, args: ["test/css-vars.mjs"] },
   { name: "replay", deps: ["routes"], profile: "test", command: process.execPath, args: ["scripts/tsx-test.mjs", "--test", "--test-concurrency=1", "test/agent-session-replay-first-flow.test.mjs"] },
   { name: "agent-eval", deps: ["report"], profile: "test", command: process.execPath, args: ["scripts/tsx-test.mjs", "--test", "--test-concurrency=1", "test/agent-behavior-baseline-flow.test.mjs"] },
@@ -68,12 +71,13 @@ function stopProcessTree(child) {
   }
 }
 
-function runGate(gate) {
+function runGate(gate, coverageEnabled = false) {
   const profile = profiles[gate.profile];
   const startedAt = Date.now();
   const env = {
     ...process.env,
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --max-old-space-size=${profile.memoryMb}`.trim(),
+    ...(coverageEnabled && gate.coverageProducer ? { NODE_V8_COVERAGE: coverageRawDirectory } : {}),
   };
   console.log(`[test-gates] start ${gate.name} deps=[${gate.deps.join(",") || "-"}] profile=${gate.profile} limit=${profile.memoryMb}MB`);
   const child = spawn(gate.command, gate.args, { cwd: process.cwd(), env, stdio: "inherit", shell: gate.command.endsWith(".cmd"), windowsHide: true });
@@ -102,6 +106,9 @@ function runGate(gate) {
     const durationMs = Date.now() - startedAt;
     const residualRssMb = await processTreeRssMb(child.pid);
     const result = { name: gate.name, code: code ?? 1, signal, durationMs, peakRssMb: Math.round(peak), residualRssMb: Math.round(residualRssMb), memoryLimitMb: profile.memoryMb, exceeded, firstExceededAtMs };
+    if (coverageEnabled && gate.coverageProducer && result.code === 0 && !signal && !exceeded) {
+      writeFileSync(resolve(coverageRawDirectory, `${gate.name}.complete`), `${JSON.stringify({ gate: gate.name, completed: true })}\n`, "utf8");
+    }
     console.log(`[test-gates] finish ${gate.name} status=${signal ? `signal:${signal}` : `exit:${result.code}`} peak=${result.peakRssMb}MB residual=${result.residualRssMb}MB duration=${(durationMs / 1000).toFixed(1)}s`);
     return result;
   });
@@ -147,6 +154,11 @@ export async function runGates({ gates = GATES, selected = null, concurrency = d
     if (requested) return wanted.has(gate.name) && (!gate.optional || requested.has(gate.name) || process.env.PROVIDER_MATRIX_FILE?.trim());
     return !gate.optional || process.env.PROVIDER_MATRIX_FILE?.trim();
   });
+  const coverageEnabled = active.some((gate) => gate.name === "coverage");
+  if (coverageEnabled) {
+    rmSync(resolve(process.cwd(), ".coverage"), { recursive: true, force: true });
+    mkdirSync(coverageRawDirectory, { recursive: true });
+  }
   const results = new Map();
   const running = new Map();
   let usedMemory = 0;
@@ -156,10 +168,10 @@ export async function runGates({ gates = GATES, selected = null, concurrency = d
       const memoryMb = profiles[gate.profile].memoryMb;
       if (running.size >= Math.max(1, concurrency) || usedMemory + memoryMb > resourceBudgetMb) continue;
       usedMemory += memoryMb;
-      const promise = runGate(gate).then(async (result) => {
+      const promise = runGate(gate, coverageEnabled).then(async (result) => {
         if ((result.code !== 0 || result.signal || result.exceeded) && shouldRetry(gate, lane, 1)) {
           console.error(`[test-gates] observation retry ${gate.name} (blocking lane never retries)`);
-          const retryResult = await runGate(gate);
+          const retryResult = await runGate(gate, coverageEnabled);
           retryResult.retryCount = 1;
           return retryResult;
         }
