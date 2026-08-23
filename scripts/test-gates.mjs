@@ -80,14 +80,21 @@ function runGate(gate) {
   let peak = 0;
   let exceeded = false;
   let firstExceededAtMs;
+  let monitorBusy = false;
   const monitor = setInterval(async () => {
+    if (monitorBusy) return;
+    monitorBusy = true;
     const usage = await processTreeRssMb(child.pid);
-    peak = Math.max(peak, usage);
-    if (!exceeded && usage >= profile.memoryMb) {
-      exceeded = true;
-      firstExceededAtMs = Date.now() - startedAt;
-      console.error(`[test-gates] LIMIT ${gate.name} RSS=${usage.toFixed(0)}MB/${profile.memoryMb}MB`);
-      stopProcessTree(child);
+    try {
+      peak = Math.max(peak, usage);
+      if (!exceeded && usage >= profile.memoryMb) {
+        exceeded = true;
+        firstExceededAtMs = Date.now() - startedAt;
+        console.error(`[test-gates] LIMIT ${gate.name} RSS=${usage.toFixed(0)}MB/${profile.memoryMb}MB`);
+        stopProcessTree(child);
+      }
+    } finally {
+      monitorBusy = false;
     }
   }, 250);
   return once(child, "close").then(async ([code, signal]) => {

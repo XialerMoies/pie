@@ -12,6 +12,7 @@ import {
 import { basename, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 
 import {
   previewLegacySessions,
@@ -69,6 +70,7 @@ class ChildProcessMock {
 
 function startServer({ workspace, dataRoot, instanceId, token }) {
   return new Promise((resolveServer, rejectServer) => {
+    const childNodeOptions = `${(process.env.NODE_OPTIONS || "").replace(/--max-old-space-size=\d+/gu, "").trim()} --max-old-space-size=512`.trim();
     const child = spawn(process.execPath, [
       "--import", "tsx", resolve("src/server/server.ts"),
       "--workspace", workspace,
@@ -76,7 +78,7 @@ function startServer({ workspace, dataRoot, instanceId, token }) {
       "--instance-id", instanceId,
     ], {
       cwd: process.cwd(),
-      env: { ...process.env, PI_DEV_PORT: "0", MY_CODE_AGENT_DESKTOP_TOKEN: token },
+      env: { ...process.env, NODE_OPTIONS: childNodeOptions, PI_DEV_PORT: "0", MY_CODE_AGENT_DESKTOP_TOKEN: token },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -122,7 +124,13 @@ async function stopServer(server) {
     new Promise((resolveExit) => server.child.once("exit", resolveExit)),
     new Promise((resolveWait) => setTimeout(resolveWait, 5_000)),
   ]);
-  if (server.child.exitCode === null) server.child.kill();
+  if (server.child.exitCode === null) {
+    server.child.kill();
+    await Promise.race([
+      once(server.child, "exit"),
+      new Promise((resolveWait) => setTimeout(resolveWait, 5_000)),
+    ]);
+  }
 }
 
 async function waitFor(predicate, message, timeoutMs = 5_000) {

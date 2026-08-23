@@ -36,14 +36,17 @@ function collectMetrics(scenario, result, expected, fault = null) {
   const unrelatedReads = calls.filter((call) => isRead(call) && !allowedIds.has(call.id)).length;
   const failureKinds = [...new Set(failedEvents.map((event) => event.error?.code || event.error?.category || "unknown"))];
   const terminalEvent = scenario.events.findLast((event) => event.type.startsWith("turn." ) && ["turn.completed", "turn.failed", "turn.cancelled"].includes(event.type));
-  const presentationText = JSON.stringify(result.live.presentation) + JSON.stringify(result.refresh);
+  const presentationText = JSON.stringify(result.live.presentation) + JSON.stringify(result.replay.presentation) + JSON.stringify(result.refresh);
   const evidenceFields = [...new Set(scenario.events.flatMap((event) => Array.isArray(event.evidenceFields) ? event.evidenceFields : []))];
   const resourcePeakKb = Number(process.resourceUsage?.().maxRSS || 0);
   const peakRssMb = Math.round((resourcePeakKb || process.memoryUsage().rss / 1024) / 1024);
+  const correct = result.live.text === scenario.expected.text
+    && result.replay.text === scenario.expected.text
+    && result.refresh.text === scenario.expected.text;
   const metrics = {
     id: scenario.id,
-    correct: result.live.text === scenario.expected.text && result.refresh.text === scenario.expected.text,
-    answerStatus: result.live.text === scenario.expected.text ? "correct" : "incorrect",
+    correct,
+    answerStatus: correct ? "correct" : "incorrect",
     toolCalls: calls.length,
     uniqueToolCalls: new Set(calls.map(targetKey)).size,
     unrelatedReads,

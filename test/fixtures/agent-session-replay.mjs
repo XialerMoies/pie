@@ -116,6 +116,12 @@ function replaySse(stream, cursor = 0) {
   return frames.map((frame) => JSON.parse(frame.split("data: ")[1]));
 }
 
+function terminalPresentation(frames, scenarioId) {
+  const done = frames.find((event) => event.type === "done");
+  assert.ok(done, `${scenarioId}: replay must contain a terminal presentation`);
+  return { text: done.text, blocks: logicalBlocks(done.blocks || []) };
+}
+
 export function runReplayScenario(scenario, mode = replayMode()) {
   const normalizedMode = replayMode(mode);
   const temp = mkdtempSync(join(tmpdir(), `agent-replay-${scenario.id}-`));
@@ -136,7 +142,9 @@ export function runReplayScenario(scenario, mode = replayMode()) {
     assert.equal(live.filter((event) => event.type === "done").length, 1, `${scenario.id}: terminal presentation must be single-shot`);
     assert.equal(done.text, scenario.expected.text, `${scenario.id}: terminal text drift`);
     assert.deepEqual(done.blocks.map((block) => block.type), scenario.expected.blockTypes, `${scenario.id}: presentation block type drift`);
-    assert.deepEqual(replaySse(stream, 0), live, `${scenario.id}: SSE replay drift`);
+    const replay = replaySse(stream, 0);
+    assert.deepEqual(replay, live, `${scenario.id}: SSE replay drift`);
+    const replayState = terminalPresentation(replay, scenario.id);
     const persisted = parseSessionMessages(readFileSync(sessionFile, "utf8"));
     const terminalTurnId = scenario.events.findLast((event) => event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.cancelled")?.turnId;
     const refreshed = persisted.find((message) => message.role === "assistant" && message.turnId === terminalTurnId)
@@ -149,6 +157,7 @@ export function runReplayScenario(scenario, mode = replayMode()) {
       id: scenario.id,
       mode: normalizedMode,
       live: { text: done.text, blocks: logicalBlocks(done.blocks), events: live.length, presentation: live },
+      replay: { ...replayState, events: replay.length, presentation: replay },
       refresh: { text: refreshText, blocks: logicalBlocks(refreshed.blocks) },
       reconnect: replaySse(stream, Math.max(0, live.length - 2)),
       intermediate,

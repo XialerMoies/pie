@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { once } from "node:events";
 
 import { getLocalApiBaseUrl } from "../src/agent/tools/local-api.ts";
 import { AppEventHub } from "../src/server/app-events.ts";
@@ -42,6 +43,7 @@ function makeResponse() {
 
 function startServer({ workspace, dataRoot, instanceId, token }) {
   return new Promise((resolveServer, rejectServer) => {
+    const childNodeOptions = `${(process.env.NODE_OPTIONS || "").replace(/--max-old-space-size=\d+/gu, "").trim()} --max-old-space-size=512`.trim();
     const child = spawn(process.execPath, [
       "--import", "tsx", resolve("src/server/server.ts"),
       "--workspace", workspace,
@@ -51,6 +53,7 @@ function startServer({ workspace, dataRoot, instanceId, token }) {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        NODE_OPTIONS: childNodeOptions,
         MY_CODE_AGENT_DESKTOP_TOKEN: token,
         PI_DEV_PORT: "0",
       },
@@ -109,9 +112,14 @@ function api(port, token, pathname, signal) {
 }
 
 afterEach(async () => {
-  for (const child of [...children]) {
+  await Promise.all([...children].map(async (child) => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
     try { child.kill(); } catch {}
-  }
+    await Promise.race([
+      once(child, "exit"),
+      new Promise((resolveWait) => setTimeout(resolveWait, 10_000)),
+    ]);
+  }));
   children.clear();
   while (roots.length) rmSync(roots.pop(), { recursive: true, force: true });
 });

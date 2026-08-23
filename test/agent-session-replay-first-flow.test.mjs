@@ -32,8 +32,10 @@ describe("T-01 replay-first Agent/Session flow", () => {
     for (const scenario of catalog.scenarios) {
       const result = runReplayScenario(scenario, "replay");
       assert.equal(result.mode, "replay");
-      assert.equal(result.live.text, result.refresh.text, `${scenario.id}: live and refresh text must converge`);
-      assert.deepEqual(result.live.blocks, result.refresh.blocks, `${scenario.id}: live and refresh blocks must converge`);
+      assert.equal(result.live.text, result.replay.text, `${scenario.id}: live and replay text must converge`);
+      assert.equal(result.replay.text, result.refresh.text, `${scenario.id}: replay and refresh text must converge`);
+      assert.deepEqual(result.live.blocks, result.replay.blocks, `${scenario.id}: live and replay blocks must converge`);
+      assert.deepEqual(result.replay.blocks, result.refresh.blocks, `${scenario.id}: replay and refresh blocks must converge`);
       assert.ok(result.reconnect.length > 0, `${scenario.id}: reconnect must replay a suffix`);
       assert.ok(result.intermediate.length === scenario.events.length, `${scenario.id}: every event must be observed`);
     }

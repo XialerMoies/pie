@@ -52,17 +52,24 @@ async function runFile(file, concurrency) {
   });
   let warned = false;
   let stopped = false;
+  let monitorBusy = false;
   const monitor = setInterval(async () => {
+    if (monitorBusy) return;
+    monitorBusy = true;
     const usage = await processTreeRssMb(child.pid);
-    if (!usage) return;
-    if (!warned && usage >= WARN_LIMIT_MB) {
-      warned = true;
-      console.error(`[test-routes] memory warning: ${file} RSS=${usage.toFixed(0)}MB / ${HARD_LIMIT_MB}MB`);
-    }
-    if (!stopped && usage >= HARD_LIMIT_MB) {
-      stopped = true;
-      console.error(`[test-routes] memory limit exceeded: ${file} RSS=${usage.toFixed(0)}MB / ${HARD_LIMIT_MB}MB`);
-      stopProcessTree(child);
+    try {
+      if (!usage) return;
+      if (!warned && usage >= WARN_LIMIT_MB) {
+        warned = true;
+        console.error(`[test-routes] memory warning: ${file} RSS=${usage.toFixed(0)}MB / ${HARD_LIMIT_MB}MB`);
+      }
+      if (!stopped && usage >= HARD_LIMIT_MB) {
+        stopped = true;
+        console.error(`[test-routes] memory limit exceeded: ${file} RSS=${usage.toFixed(0)}MB / ${HARD_LIMIT_MB}MB`);
+        stopProcessTree(child);
+      }
+    } finally {
+      monitorBusy = false;
     }
   }, 250);
   const [code, signal] = await once(child, "close");

@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
@@ -31,6 +32,7 @@ async function readBootstrap(paths) {
 
 function startServerProcess(workspace, dataRoot) {
   return new Promise((resolveServer, rejectServer) => {
+    const childNodeOptions = `${(process.env.NODE_OPTIONS || "").replace(/--max-old-space-size=\d+/gu, "").trim()} --max-old-space-size=512`.trim();
     const server = spawn(process.execPath, [
       "--import", "tsx", resolve("src/server/server.ts"),
       "--workspace", workspace,
@@ -38,7 +40,7 @@ function startServerProcess(workspace, dataRoot) {
       "--instance-id", "startup-test",
     ], {
       cwd: process.cwd(),
-      env: { ...process.env, MY_CODE_AGENT_DESKTOP_TOKEN: "startup-test-token", PI_DEV_PORT: "0" },
+      env: { ...process.env, NODE_OPTIONS: childNodeOptions, MY_CODE_AGENT_DESKTOP_TOKEN: "startup-test-token", PI_DEV_PORT: "0" },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -80,6 +82,15 @@ function writeStartupSettings(dataRoot, document) {
   const settingsFile = join(dataRoot, "user", "settings.json");
   mkdirSync(resolve(settingsFile, ".."), { recursive: true });
   writeFileSync(settingsFile, typeof document === "string" ? document : JSON.stringify(document));
+}
+
+async function stopServerProcess(server) {
+  if (!server || server.exitCode !== null || server.signalCode !== null) return;
+  server.kill();
+  await Promise.race([
+    once(server, "exit"),
+    new Promise((resolveWait) => setTimeout(resolveWait, 10_000)),
+  ]);
 }
 
 describe("server startup paths", () => {
@@ -385,7 +396,7 @@ describe("server startup paths", () => {
       assert.strictEqual(body.startup.instanceId, "startup-test");
       assert.match(body.startup.sessionsDir, /workspaces[\\/]\w+[\\/]sessions$/);
     } finally {
-      running?.server.kill();
+      await stopServerProcess(running?.server);
       rmSync(root, { recursive: true, force: true });
     }
   });

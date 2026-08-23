@@ -132,7 +132,7 @@ describe("application event stream ownership", () => {
     assert.match(runner, /runFile\(file, 1\)/);
     assert.match(runner, /processTreeRssMb/);
     assert.match(runner, /MY_CODE_AGENT_TEST_MEMORY_MB \|\| 2048/);
-    assert.deepEqual(manifest.suites.routesSerial, ["test/multi-instance-e2e.mjs", "test/workspace-lock.test.mjs"]);
+    assert.deepEqual(manifest.suites.routesSerial, ["test/multi-instance-e2e.mjs", "test/multi-instance-launch.test.mjs", "test/workspace-lock.test.mjs"]);
   });
 
   it("keeps build and runtime memory budgets separate and builds Monaco in its own graph", () => {

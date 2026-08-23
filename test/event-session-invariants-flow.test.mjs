@@ -48,9 +48,11 @@ describe("T-02 event/session invariant state machine", () => {
       assertInvariantReport(inspectEngineEventSequence(scenario.events), `${scenario.id}: engine events`);
       const result = runReplayScenario(scenario, "replay");
       assertInvariantReport(inspectPresentationBlocks(result.live.blocks), `${scenario.id}: live blocks`);
+      assertInvariantReport(inspectPresentationBlocks(result.replay.blocks), `${scenario.id}: replay blocks`);
       assertInvariantReport(inspectPresentationBlocks(result.refresh.blocks), `${scenario.id}: refresh blocks`);
       assertInvariantReport(inspectPresentationTransitions(result.intermediate), `${scenario.id}: block transitions`);
-      assertInvariantReport(inspectReplayConvergence(result.live.blocks, result.refresh.blocks), `${scenario.id}: replay convergence`);
+      assertInvariantReport(inspectReplayConvergence(result.live.blocks, result.replay.blocks), `${scenario.id}: live/replay convergence`);
+      assertInvariantReport(inspectReplayConvergence(result.replay.blocks, result.refresh.blocks), `${scenario.id}: replay/refresh convergence`);
     }
   });
 

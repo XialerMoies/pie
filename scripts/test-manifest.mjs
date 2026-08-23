@@ -12,7 +12,6 @@ export const ROUTE_FILES = [
   "server-security.test.mjs",
   "desktop-ipc.test.mjs",
   "multi-instance-security.test.mjs",
-  "multi-instance-launch.test.mjs",
   "server-permission-service.test.mjs",
   "root-registry.test.mjs",
   "sessions.test.mjs",
@@ -31,6 +30,7 @@ export const ROUTE_FILES = [
   "agent-runtime-tool-boundary-flow.test.mjs",
   "agent-session-replay-first-flow.test.mjs",
   "agent-behavior-baseline-flow.test.mjs",
+  "reliability-release-flow.test.mjs",
   "event-session-invariants-flow.test.mjs",
   "failure-artifact-flow.test.mjs",
   "attachments.test.mjs",
@@ -40,7 +40,7 @@ export const ROUTE_FILES = [
   "execution-contract-flow.test.mjs",
 ];
 
-export const SERIAL_ROUTE_FILES = ["multi-instance-e2e.mjs", "workspace-lock.test.mjs"];
+export const SERIAL_ROUTE_FILES = ["multi-instance-e2e.mjs", "multi-instance-launch.test.mjs", "workspace-lock.test.mjs"];
 
 export const FRONTEND_FILES = [
   "frontend-xss-sinks.test.mjs",
