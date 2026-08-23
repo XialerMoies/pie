@@ -9,6 +9,7 @@ import { writePathGuardError } from "./path-guard.js";
 import { WorkspaceLockConflictError } from "../workspace-lock.js";
 import { authorizeWorkspacePath, switchAuthorizedWorkspace } from "./workspace-authorization.js";
 import { replayChatEvents, resetChatEventHistory, writeChatEvent, writeChatStreamBaseline } from "../chat-stream.js";
+import { runPackagedReplayTurn } from "../packaged-replay-provider.js";
 import { serverConfirmationRegistry } from "../confirmation-registry.js";
 import { expandTaskRequirements, formatExecutionContractGuidance, inferTaskRequirements } from "../task-lifecycle.js";
 import { randomUUID } from "node:crypto";
@@ -17,22 +18,31 @@ const COMMAND_CONFIRM_TIMEOUT_MS = 120_000;
 const MODEL_PROVIDER_SYNC_ERROR = "模型提供商同步失败，请重试。";
 
 const E2E_LONG_TOOL_MESSAGE = "__my_code_agent_e2e_long_tool__";
+const E2E_CANCEL_TOOL_MESSAGE = "__my_code_agent_e2e_cancel_tool__";
+const E2E_REPLAY_MESSAGE = "__my_code_agent_e2e_replay__";
+const e2eCancelledStreams = new WeakSet<ChatStreamState>();
 
 function waitForE2EProbe(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function runE2ELongToolTurn(chatStream: ChatStreamState): Promise<void> {
+async function runE2ELongToolTurn(chatStream: ChatStreamState, cancellationProbe = false): Promise<void> {
+  e2eCancelledStreams.delete(chatStream);
   const turnId = chatStream.turnId;
   const traceId = chatStream.traceId;
-  const toolCallId = `e2e-tool-${Date.now().toString(36)}`;
-  const thinkingBlock = { type: "thinking" as const, status: "streaming" as const, text: "准备长工具", turnId, traceId, blockId: "e2e-thought", seq: 1 };
-  const toolBlock = { type: "tool" as const, status: "running" as const, name: "command", input: { command: "long-e2e-command" }, toolCallId, turnId, traceId, blockId: "e2e-tool", seq: 2 };
-  const textBlock = { type: "text" as const, text: "长工具执行完成", turnId, traceId, blockId: "e2e-text", seq: 3 };
+  const prefix = cancellationProbe ? "cancel-e2e" : "e2e";
+  const toolCallId = `${prefix}-tool-${Date.now().toString(36)}`;
+  const thinkingBlock = { type: "thinking" as const, status: "streaming" as const, text: cancellationProbe ? "准备取消长工具" : "准备长工具", turnId, traceId, blockId: `${prefix}-thought`, seq: 1 };
+  const toolBlock = { type: "tool" as const, status: "running" as const, name: "command", input: { command: cancellationProbe ? "cancel-e2e-command" : "long-e2e-command" }, toolCallId, turnId, traceId, blockId: `${prefix}-tool`, seq: 2 };
+  const textBlock = { type: "text" as const, text: cancellationProbe ? "取消场景不应出现的迟到正文" : "长工具执行完成", turnId, traceId, blockId: `${prefix}-text`, seq: 3 };
   writeChatEvent(chatStream, { type: "block", block: thinkingBlock });
   writeChatEvent(chatStream, { type: "block", block: toolBlock });
   // Keep the tool block open long enough to overlap the independent desktop requests.
   await waitForE2EProbe(1_200);
+  // The renderer closes its SSE connection before calling the normal abort
+  // endpoint. Do not publish a synthetic late terminal frame after that turn
+  // has been cancelled by the packaged-flow probe.
+  if (e2eCancelledStreams.delete(chatStream) || !chatStream.response) return;
   const completedTool = { ...toolBlock, status: "success" as const, output: "long tool result" };
   const completedThought = { ...thinkingBlock, status: "done" as const };
   const terminalBlocks = [completedThought, completedTool, textBlock];
@@ -94,7 +104,9 @@ export function cancelCommandConfirmationsForResponse(response: import("http").S
 }
 
 export const handleChat: RouteHandler = (req, res, ctx) => {
-  const { url, method } = req;
+  const requestUrl = new URL(req.url || "/", "http://127.0.0.1");
+  const url = requestUrl.pathname;
+  const { method } = req;
   const cors = { "Access-Control-Allow-Origin": "*" };
   const { runtime, chatStream } = ctx.groups.core;
   const { paths: p } = ctx.groups.storage;
@@ -166,6 +178,9 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
   // Stop is separate from the send/note action while the composer remains usable.
   if (url === "/api/chat/abort" && method === "POST") {
     try {
+      if (process.env.NODE_ENV === "test" && process.env.MY_CODE_AGENT_E2E_CONCURRENCY === "1") {
+        e2eCancelledStreams.add(chatStream);
+      }
       void engine.cancel(chatStream.turnId || undefined);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ ok: true }));
@@ -238,12 +253,21 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
           || inferTaskRequirements(requestMessage);
         chatStream.taskLifecycle = undefined;
         if (workspace) chatStream.currentWorkspace = workspace;
-        if (process.env.MY_CODE_AGENT_E2E_CONCURRENCY === "1" && requestMessage === E2E_LONG_TOOL_MESSAGE) {
-          void runE2ELongToolTurn(chatStream).catch((error: unknown) => {
+        if (process.env.NODE_ENV === "test" && process.env.MY_CODE_AGENT_E2E_CONCURRENCY === "1" && (requestMessage === E2E_LONG_TOOL_MESSAGE || requestMessage === E2E_CANCEL_TOOL_MESSAGE)) {
+          const cancellationProbe = requestMessage === E2E_CANCEL_TOOL_MESSAGE;
+          void runE2ELongToolTurn(chatStream, cancellationProbe).catch((error: unknown) => {
             writeChatEvent(chatStream, { type: "error", message: error instanceof Error ? error.message : String(error) });
           });
           res.writeHead(200, { "Content-Type": "application/json", ...cors });
-          res.end(JSON.stringify({ ok: true, e2e: "long_tool" }));
+          res.end(JSON.stringify({ ok: true, e2e: cancellationProbe ? "cancel_tool" : "long_tool" }));
+          return;
+        }
+        if (process.env.NODE_ENV === "test" && process.env.MY_CODE_AGENT_E2E_REPLAY === "1" && requestMessage === E2E_REPLAY_MESSAGE) {
+          void runPackagedReplayTurn(runtime, chatStream).catch((error: unknown) => {
+            writeChatEvent(chatStream, { type: "error", message: error instanceof Error ? error.message : String(error) });
+          });
+          res.writeHead(200, { "Content-Type": "application/json", ...cors });
+          res.end(JSON.stringify({ ok: true, e2e: "replay" }));
           return;
         }
         // 处理引用文件附件
@@ -327,6 +351,7 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
     });
     const lastEventId = req.headers["last-event-id"];
     const reconnecting = typeof lastEventId === "string" && lastEventId.length > 0;
+    const freshTurn = requestUrl.searchParams.get("freshTurn") === "1";
     if (chatStream.response && chatStream.response !== res && !reconnecting) {
       cancelCommandConfirmationsForResponse(chatStream.response);
     }
@@ -340,7 +365,7 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
       // Replay only a buffered terminal event. Replaying the whole history on
       // a fresh connection would duplicate already-rendered deltas/blocks.
       const lastEvent = chatStream.eventHistory?.at(-1);
-      if (lastEvent && /"type":"(?:error|done|cancelled)"/.test(lastEvent.data)) {
+      if (!freshTurn && lastEvent && /"type":"(?:error|done|cancelled)"/.test(lastEvent.data)) {
         try { res.write(lastEvent.data); } catch { /* Client disconnected during setup. */ }
       }
     }

@@ -844,6 +844,13 @@
       "owner": "tooling"
     },
     {
+      "file": "scripts/replay-failure-artifact.mjs",
+      "line": 18,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
       "file": "scripts/test-build.mjs",
       "line": 19,
       "api": "spawn",
@@ -872,8 +879,36 @@
       "owner": "tooling"
     },
     {
-      "file": "scripts/test-parallel.mjs",
-      "line": 36,
+      "file": "scripts/test-coverage.mjs",
+      "line": 11,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-gates.mjs",
+      "line": 43,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-gates.mjs",
+      "line": 52,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-gates.mjs",
+      "line": 62,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-gates.mjs",
+      "line": 78,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"

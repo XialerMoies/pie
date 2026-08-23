@@ -217,12 +217,12 @@ export const strReplaceEditorTool: AgentTool = defineAgentTool({
   resultFormat: "structured",
   execute: async ({ file_path, old_string, new_string, replace_all, edits }, ctx) => {
     const fp = String(file_path ?? "");
-    if (!fp) return "file_path 不能为空。";
+    if (!fp) return structuredToolError("file_path 不能为空。", "invalid_file_path");
     const root = ctx.workspace || "";
-    if (!root) return "当前没有活跃 workspace。";
+    if (!root) return structuredToolError("当前没有活跃 workspace。", "workspace_required");
 
     let absPath: string;
-    try { absPath = guardToolPath(root, fp); } catch (e: any) { return e.message; }
+    try { absPath = guardToolPath(root, fp); } catch (e: any) { return structuredToolError(e.message, "path_guard_failed", { path: fp }); }
 
     // 空 old_string 曾表示创建文件；该职责现在只属于 file_write。
     if (old_string === "" && new_string !== undefined && new_string !== null) {
@@ -237,14 +237,14 @@ export const strReplaceEditorTool: AgentTool = defineAgentTool({
     const newStr = useEdits ? "" : String(new_string ?? "");
 
     if (!useEdits && !oldStr) return structuredToolError("old_string 不能为空；创建新文件请使用 file_write。", "invalid_old_string", { path: fp });
-    if (!useEdits && oldStr === newStr) return "old_string 和 new_string 相同，无需修改。";
+    if (!useEdits && oldStr === newStr) return structuredToolResult("old_string 和 new_string 相同，无需修改。", { path: fp, operation: "noop", changed: false });
 
     // 文件存在性
-    if (!existsSync(absPath)) return `文件不存在: ${fp}`;
-    try { absPath = await authorizeToolPath(ctx, root, absPath, "read", "agent.str_replace.read"); } catch (e: any) { return e.message; }
+    if (!existsSync(absPath)) return structuredToolError(`文件不存在: ${fp}`, "file_not_found", { path: fp });
+    try { absPath = await authorizeToolPath(ctx, root, absPath, "read", "agent.str_replace.read"); } catch (e: any) { return structuredToolError(e.message, "path_authorization_denied", { path: fp }); }
     const st = statSync(absPath);
-    if (!st.isFile()) return `不是文件: ${fp}`;
-    if (st.size > MAX_FILE_SIZE) return `文件过大（>1MB），无法编辑。`;
+    if (!st.isFile()) return structuredToolError(`不是文件: ${fp}`, "not_a_file", { path: fp });
+    if (st.size > MAX_FILE_SIZE) return structuredToolError("文件过大（>1MB），无法编辑。", "file_too_large", { path: fp, maxBytes: MAX_FILE_SIZE });
 
     const beforeMtime = statSync(absPath).mtimeMs;
 
@@ -266,11 +266,11 @@ export const strReplaceEditorTool: AgentTool = defineAgentTool({
       const deOld = desanitize(oldStr);
       const actualOld = findActualString(content, deOld) || (content.includes(deOld) ? deOld : null);
       if (actualOld === null) {
-        return `未找到匹配文本。请重新读取文件确认当前内容，或扩大 old_string 的上下文范围。\n${oldStr.slice(0, 200)}`;
+        return structuredToolError(`未找到匹配文本。请重新读取文件确认当前内容，或扩大 old_string 的上下文范围。\n${oldStr.slice(0, 200)}`, "replacement_not_found", { path: fp });
       }
       const matches = content.split(actualOld).length - 1;
       if (matches > 1 && !replace_all) {
-        return `找到 ${matches} 处匹配，但 replace_all 未开启。请扩大 old_string 惟一化，或设 replace_all: true。`;
+        return structuredToolError(`找到 ${matches} 处匹配，但 replace_all 未开启。请扩大 old_string 惟一化，或设 replace_all: true。`, "replacement_ambiguous", { path: fp, matches });
       }
       const actualNew = preserveQuoteStyle(deOld, actualOld, newStr);
       editsToApply = [{ old_string: actualOld, new_string: actualNew, replace_all: replace_all === true }];
@@ -283,20 +283,20 @@ export const strReplaceEditorTool: AgentTool = defineAgentTool({
       updated = r.content;
       applied = r.applied;
       if (r.missed?.length) {
-        return `以下编辑项在文件中未找到匹配：${r.missed.join(", ")}。请检查后重试。`;
+        return structuredToolError(`以下编辑项在文件中未找到匹配：${r.missed.join(", ")}。请检查后重试。`, "replacement_not_found", { path: fp, missed: r.missed });
       }
     } catch (e: any) {
-      return e.message || "替换失败：编辑项之间存在冲突。";
+      return structuredToolError(e.message || "替换失败：编辑项之间存在冲突。", "replacement_conflict", { path: fp });
     }
-    if (applied === 0) return "没有匹配的替换项，请检查 old_string 是否正确。";
+    if (applied === 0) return structuredToolError("没有匹配的替换项，请检查 old_string 是否正确。", "replacement_not_found", { path: fp });
 
     // mtime 自检（允许 2ms 误差，防 Windows 文件系统缓存精度问题）
     const afterMtime = statSync(absPath).mtimeMs;
-    if (Math.abs(afterMtime - beforeMtime) > 2) return `文件自读取后被外部修改，请重新读取后再编辑。`;
+    if (Math.abs(afterMtime - beforeMtime) > 2) return structuredToolError("文件自读取后被外部修改，请重新读取后再编辑。", "file_changed_during_edit", { path: fp });
 
     // 保持 CRLF 并写盘
     const output = hadCRLF ? updated.replaceAll("\n", "\r\n") : updated;
-    try { absPath = await authorizeToolPath(ctx, root, absPath, "write", "agent.str_replace.write"); } catch (e: any) { return e.message; }
+    try { absPath = await authorizeToolPath(ctx, root, absPath, "write", "agent.str_replace.write"); } catch (e: any) { return structuredToolError(e.message, "path_authorization_denied", { path: fp }); }
     writeFileSync(absPath, output, "utf-8");
 
     const totalLines = updated.split("\n").length;

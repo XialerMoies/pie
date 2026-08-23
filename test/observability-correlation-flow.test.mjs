@@ -124,9 +124,9 @@ describe("A-10 observability correlation cross-layer flow", () => {
     const f = flow();
     f.chat.traceId = "trace-failure";
     f.chat.correlation = { traceId: "trace-failure", turnId: "turn-failure", sessionId: f.sessionId };
-    f.observer({ source: "live", toolName: "probe_read", toolCallId: "call-failed", outcome: "failed", failureKind: "permission_denied", legacy: false, requestScope: { target: "E:\\secret", argsFingerprint: "hash" }, payloadSummary: "Bearer secret-value", complete: false, correlation: f.chat.correlation });
-    f.observer({ source: "live", toolName: "probe_read", toolCallId: "call-duplicate", outcome: "success", legacy: false, requestScope: { target: "E:\\safe", argsFingerprint: "same" }, payloadSummary: "ok", complete: true, correlation: f.chat.correlation });
-    f.observer({ source: "live", toolName: "probe_read", toolCallId: "call-duplicate-2", outcome: "success", legacy: false, requestScope: { target: "E:\\safe", argsFingerprint: "same" }, payloadSummary: "ok", complete: true, correlation: f.chat.correlation });
+    f.observer({ source: "live", toolName: "probe_read", toolCallId: "call-failed", outcome: "failed", failureKind: "permission_denied", requestScope: { target: "E:\\secret", argsFingerprint: "hash" }, payloadSummary: "Bearer secret-value", complete: false, correlation: f.chat.correlation });
+    f.observer({ source: "live", toolName: "probe_read", toolCallId: "call-duplicate", outcome: "success", requestScope: { target: "E:\\safe", argsFingerprint: "same" }, payloadSummary: "ok", complete: true, correlation: f.chat.correlation });
+    f.observer({ source: "live", toolName: "probe_read", toolCallId: "call-duplicate-2", outcome: "success", requestScope: { target: "E:\\safe", argsFingerprint: "same" }, payloadSummary: "ok", complete: true, correlation: f.chat.correlation });
 
     f.engine.emit(base(f, "turn-failure", 1, "turn.started"));
     f.engine.emit(base(f, "turn-failure", 2, "tool.started", { toolCallId: "call-failed", name: "probe_read", input: { target: "secret" } }));

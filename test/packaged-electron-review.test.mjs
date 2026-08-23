@@ -113,3 +113,15 @@ test("packaged E2E has no unvalidated phase protocol", () => {
   assert.ok(manifest.suites.unit.includes("test/packaged-electron-poll.test.mjs"));
   assert.ok(manifest.suites.unit.includes("test/packaged-electron-review.test.mjs"));
 });
+
+test("packaged failure artifacts use the real catch path and public replay driver", () => {
+  const probe = readFileSync(new URL("../src/electron/electron-packaged-e2e-probe.ts", import.meta.url), "utf8");
+  const harness = readFileSync(new URL("./packaged-electron.e2e.mjs", import.meta.url), "utf8");
+  const replay = readFileSync(new URL("../scripts/replay-failure-artifact.mjs", import.meta.url), "utf8");
+
+  assert.match(probe, /MY_CODE_AGENT_E2E_EXPECT_FAILURE_ARTIFACT/u);
+  assert.match(probe, /failureEvidence/u);
+  assert.match(harness, /writeFailureArtifact/u);
+  assert.match(harness, /settledGolden/u);
+  assert.match(replay, /MY_CODE_AGENT_E2E_EXPECT_FAILURE_ARTIFACT/u);
+});

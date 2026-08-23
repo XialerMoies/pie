@@ -447,7 +447,7 @@ function bind(): void {
     updateUI(); chatScrollToLatest({ force: true });
     const _ws = dashboardChatState.getWorkspacePath();
     dashboardChatStream.close();
-    const gen = dashboardChatStream.open();
+    const gen = dashboardChatStream.open({}, { freshTurn: true });
     const activeTabId = chatGetActiveSessionTabId();
     activeSendContext = activeTabId && !chatIsDraftSessionId(activeTabId)
       ? { sessionId: activeTabId, persistent: true }
@@ -456,6 +456,16 @@ function bind(): void {
         : { sessionId: '', persistent: false };
 
     void (async () => {
+      const streamReady = await dashboardChatStream.waitUntilOpen?.(gen, 5_000) ?? true;
+      if (!streamReady || !dashboardChatStream.isCurrent(gen) || !dashboardChatRuntimeState.isBusy()) {
+        if (dashboardChatStream.isCurrent(gen) && dashboardChatRuntimeState.isBusy()) {
+          setAssistantError('连接失败', '对话流未能建立，请重新发送。', 'SSE connection did not become ready');
+          dashboardChatRuntimeState.setBusy(false);
+          dashboardChatStream.close();
+          updateUI();
+        }
+        return;
+      }
       const prepared = await ensureSessionForSend();
       if (!dashboardChatStream.isCurrent(gen) || !dashboardChatRuntimeState.isBusy()) return;
       activeSendContext = prepared;

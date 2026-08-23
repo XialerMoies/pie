@@ -146,19 +146,13 @@ export interface ServerObservability {
 
 export interface ToolOutcomeToolMetric {
   total: number;
-  structured: number;
-  legacy: number;
   failures: number;
 }
 
 export interface ToolOutcomeMetricsSnapshot {
   total: number;
-  structured: number;
-  legacy: number;
-  missingOutcome: number;
-  invalidOutcome: number;
   failures: number;
-  bySource: Record<string, { total: number; structured: number; legacy: number; missingOutcome: number; invalidOutcome: number; failures: number }>;
+  bySource: Record<string, { total: number; failures: number }>;
   byTool: Record<string, ToolOutcomeToolMetric>;
   unobservedTools?: string[];
 }
@@ -166,12 +160,8 @@ export interface ToolOutcomeMetricsSnapshot {
 /** Bounded, process-local counters for the outcome migration. */
 export class ToolOutcomeMetrics {
   #total = 0;
-  #structured = 0;
-  #legacy = 0;
-  #missingOutcome = 0;
-  #invalidOutcome = 0;
   #failures = 0;
-  #sources = new Map<string, { total: number; structured: number; legacy: number; missingOutcome: number; invalidOutcome: number; failures: number }>();
+  #sources = new Map<string, { total: number; failures: number }>();
   #tools = new Map<string, ToolOutcomeToolMetric>();
   #expectedTools = new Set<string>();
   #maxKeys: number;
@@ -181,30 +171,19 @@ export class ToolOutcomeMetrics {
   }
 
   observe(observation: ToolOutcomeObservation): void {
-    const legacy = observation.legacy === true;
     const failed = observation.outcome === "failed";
     this.#total += 1;
-    if (legacy) this.#legacy += 1;
-    else this.#structured += 1;
     if (failed) this.#failures += 1;
-    if (observation.legacyReason === "missing_outcome") this.#missingOutcome += 1;
-    if (observation.legacyReason === "invalid_outcome") this.#invalidOutcome += 1;
 
     const source = observation.source || "live";
-    const sourceMetric = this.#sources.get(source) || { total: 0, structured: 0, legacy: 0, missingOutcome: 0, invalidOutcome: 0, failures: 0 };
+    const sourceMetric = this.#sources.get(source) || { total: 0, failures: 0 };
     sourceMetric.total += 1;
-    if (legacy) sourceMetric.legacy += 1;
-    else sourceMetric.structured += 1;
-    if (observation.legacyReason === "missing_outcome") sourceMetric.missingOutcome += 1;
-    if (observation.legacyReason === "invalid_outcome") sourceMetric.invalidOutcome += 1;
     if (failed) sourceMetric.failures += 1;
     if (this.#sources.has(source) || this.#sources.size < this.#maxKeys) this.#sources.set(source, sourceMetric);
 
     const toolName = this.#tools.has(observation.toolName) || this.#tools.size < this.#maxKeys ? observation.toolName : "<other>";
-    const toolMetric = this.#tools.get(toolName) || { total: 0, structured: 0, legacy: 0, failures: 0 };
+    const toolMetric = this.#tools.get(toolName) || { total: 0, failures: 0 };
     toolMetric.total += 1;
-    if (legacy) toolMetric.legacy += 1;
-    else toolMetric.structured += 1;
     if (failed) toolMetric.failures += 1;
     this.#tools.set(toolName, toolMetric);
   }
@@ -212,10 +191,6 @@ export class ToolOutcomeMetrics {
   snapshot(): ToolOutcomeMetricsSnapshot {
     return {
       total: this.#total,
-      structured: this.#structured,
-      legacy: this.#legacy,
-      missingOutcome: this.#missingOutcome,
-      invalidOutcome: this.#invalidOutcome,
       failures: this.#failures,
       bySource: Object.fromEntries([...this.#sources.entries()].map(([key, value]) => [key, { ...value }])),
       byTool: Object.fromEntries([...this.#tools.entries()].map(([key, value]) => [key, { ...value }])),
@@ -227,12 +202,6 @@ export class ToolOutcomeMetrics {
     this.#expectedTools = new Set(names.filter((name) => typeof name === "string" && name.length > 0));
   }
 
-  assertLiveClean(): void {
-    const live = this.#sources.get("live");
-    if (live?.legacy || live?.missingOutcome || live?.invalidOutcome) {
-      throw new Error(`live tool outcome compatibility hits: legacy=${live?.legacy || 0}, missing=${live?.missingOutcome || 0}, invalid=${live?.invalidOutcome || 0}`);
-    }
-  }
 }
 
 export function createToolOutcomeObserver(
@@ -254,7 +223,6 @@ export function createToolOutcomeObserver(
         source: observation.source,
         ...(evidence ? { evidenceId: evidence.evidenceId } : {}),
         details: {
-          legacy: observation.legacy,
           complete: observation.complete !== false,
           ...(evidence?.duplicateOf ? { duplicateOf: evidence.duplicateOf } : {}),
         },
@@ -277,12 +245,7 @@ export function createToolOutcomeObserver(
       toolCallId: observation.toolCallId,
       outcome: observation.outcome,
       ...(observation.failureKind ? { failureKind: observation.failureKind } : {}),
-      legacy: observation.legacy,
-      ...(observation.legacyReason ? { legacyReason: observation.legacyReason } : {}),
     });
-    if (process.env.MY_CODE_AGENT_TOOL_OUTCOME_STRICT === "1" && observation.source === "live") {
-      metrics.assertLiveClean();
-    }
   };
 }
 
@@ -317,7 +280,7 @@ export function diagnosticsSnapshot(
   const safeLogs = observability.logger.entries().map((entry) => {
     const fields = Object.fromEntries(Object.entries(entry.fields).filter(([key]) => [
       "method", "url", "status", "durationMs", "source", "toolName",
-      "toolCallId", "outcome", "failureKind", "legacy", "legacyReason",
+      "toolCallId", "outcome", "failureKind",
     ].includes(key)));
     return { ...entry, fields };
   });

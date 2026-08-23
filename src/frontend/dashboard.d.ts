@@ -450,7 +450,8 @@ interface ChatStreamHandlers {
   onOpen?: (event: Event) => void;
 }
 interface AppChatStream {
-  open(handlers?: ChatStreamHandlers): number;
+  open(handlers?: ChatStreamHandlers, options?: { freshTurn?: boolean }): number;
+  waitUntilOpen(generation: number, timeoutMs?: number): Promise<boolean>;
   setHandlers(generation: number, handlers: ChatStreamHandlers): boolean;
   close(): void;
   isCurrent(generation: number): boolean;

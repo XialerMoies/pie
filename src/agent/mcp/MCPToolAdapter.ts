@@ -230,6 +230,7 @@ export function createMcpToolAdapter(opts: McpToolAdapterOptions): AgentTool {
         text: formatMcpContent(content as any[]),
         data: result.structuredContent !== undefined ? result.structuredContent : normalizeMcpData(content as unknown[]),
         diagnostics: [],
+        outcome: { status: "success" },
         metadata,
       }
     },

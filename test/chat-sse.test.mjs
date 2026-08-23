@@ -83,6 +83,27 @@ describe("Chat SSE", () => {
     assert.match(res._body, /prompt failed/);
   });
 
+  it("freshTurn SSE 不把上一轮终止事件注入新发送", async () => {
+    const chatStream = {
+      textBuffer: "",
+      thinkingBuffer: "",
+      response: null,
+      currentWorkspace: "",
+      eventSeq: 1,
+      eventHistory: [{ id: 1, data: 'id: 1\ndata: {"type":"done","text":"stale reply"}\n\n' }],
+    };
+    const ctx = {
+      runtime: { session: { model: {} }, currentWorkspace: "", switchWorkspace: async () => {}, onEvent: () => () => {} },
+      paths: { APP_ROOT: ROOT },
+      chatStream,
+      sseClients: [],
+    };
+    const res = makeResWithEvents();
+    await handleChat(makeReq("GET", "/api/chat/stream?freshTurn=1"), res, ctx);
+    assert.match(res._body, /"type":"stream_ready"/);
+    assert.doesNotMatch(res._body, /stale reply/);
+  });
+
   it("POST /api/chat 清空 buffer", async () => {
     const chatStream = { textBuffer: "旧数据", thinkingBuffer: "", response: null, currentWorkspace: "" };
     const ctx = {

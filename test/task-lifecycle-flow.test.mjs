@@ -44,7 +44,7 @@ describe("A-04 task lifecycle cross-layer flow", () => {
     const requirements = inferTaskRequirements("请检查并验证目标文件的状态");
     assert.deepEqual(requirements, { kind: "verification", requiresEvidence: true, minSuccessfulEvidence: 1 });
     const flow = wire(requirements);
-    flow.ledger.observe({ source: "live", toolName: "read", toolCallId: "call-1", outcome: "success", legacy: false,
+    flow.ledger.observe({ source: "live", toolName: "read", toolCallId: "call-1", outcome: "success",
       requestScope: { target: "fixture.txt" }, payloadSummary: "verified", complete: true });
     flow.engine.emit("event", base("turn.started", 1));
     flow.engine.emit("event", base("tool.started", 2, { toolCallId: "call-1", name: "read", input: { target: "fixture.txt" } }));
@@ -78,10 +78,10 @@ describe("A-04 task lifecycle cross-layer flow", () => {
     const requirements = inferTaskRequirements("请检查 agent/skills/skill-verification/SKILL.md 的状态和内容");
     const ledger = new EvidenceLedger();
     const flow = wire(requirements, ledger);
-    ledger.observe({ source: "live", toolName: "skill_facts", toolCallId: "facts-1", outcome: "success", legacy: false,
+    ledger.observe({ source: "live", toolName: "skill_facts", toolCallId: "facts-1", outcome: "success",
       requestScope: { target: "agent/skills/skill-verification/SKILL.md" }, payloadSummary: "facts", complete: true,
       evidenceFields: ["trust", "enabled", "parse"] });
-    ledger.observe({ source: "live", toolName: "file_read", toolCallId: "read-1", outcome: "success", legacy: false,
+    ledger.observe({ source: "live", toolName: "file_read", toolCallId: "read-1", outcome: "success",
       requestScope: { target: "agent/skills/skill-verification/SKILL.md" }, payloadSummary: "content", complete: true,
       evidenceFields: ["content"] });
     flow.engine.emit("event", base("turn.started", 1));

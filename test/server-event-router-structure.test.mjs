@@ -50,15 +50,16 @@ describe("server agent event router structure", () => {
   it("keeps test-only cache hooks and duplicate context aliases out of production", () => {
     const toolsSource = readFileSync(TOOLS, "utf8");
     const runtimeSource = readFileSync(RUNTIME, "utf8");
+    const runtimeConfigSource = readFileSync(resolve(ROOT, "src/agent/runtime-config.ts"), "utf8");
     assert.doesNotMatch(toolsSource, /_getMcpCacheLen|_setMcpCache|type ExtraCtx\s*=/);
     assert.doesNotMatch(runtimeSource, /type RuntimeToolExtraContext\s*=\s*Pick/);
     assert.match(toolsSource, /ToolExecutionExtraContext/);
-    assert.match(runtimeSource, /ToolExecutionExtraContext/);
+    assert.match(runtimeConfigSource, /ToolExecutionExtraContext/);
     const typesSource = readFileSync(TYPES, "utf8");
     assert.match(typesSource, /export type ToolHostContext = Omit<ToolContext/);
     assert.match(typesSource, /export type ToolExecutionExtraContext = Partial<ToolHostContext>/);
     assert.doesNotMatch(runtimeSource, /type RuntimeToolExtraContext\s*=/);
-    assert.match(runtimeSource, /RuntimeConfig extends ToolHostContext/);
+    assert.match(runtimeConfigSource, /RuntimeConfig extends ToolHostContext/);
     for (const file of ["test/mcp-client.test.mjs", "test/mcp-client-service.test.mjs"]) {
       assert.doesNotMatch(readFileSync(resolve(ROOT, file), "utf8"), /_getMcpCacheLen|_setMcpCache/);
     }

@@ -296,7 +296,7 @@ describe("A-17 execution contract cross-layer flow", () => {
         const emit = (event) => { for (const listener of listeners) listener({ ...base, seq: calls.length + 1, ...event }); };
         emit({ type: "turn.started" });
         calls.push("skill_facts");
-        ledger.observe({ source: "live", toolName: "skill_facts", toolCallId: "facts-1", outcome: "success", legacy: false, requestScope: { target: "agent/skills/skill-verification/SKILL.md" }, payloadSummary: "facts", complete: true, evidenceFields: ["trust", "enabled"] });
+        ledger.observe({ source: "live", toolName: "skill_facts", toolCallId: "facts-1", outcome: "success", requestScope: { target: "agent/skills/skill-verification/SKILL.md" }, payloadSummary: "facts", complete: true, evidenceFields: ["trust", "enabled"] });
         emit({ type: "tool.started", toolCallId: "facts-1", name: "skill_facts", input: { id: "skill-verification" } });
         emit({ type: "tool.completed", toolCallId: "facts-1", name: "skill_facts", output: "trust=trusted enabled=true parse=valid", metadata: { evidenceFields: ["trust", "enabled"] } });
         emit({ type: "content.delta", text: "状态看起来正常" });
@@ -390,7 +390,7 @@ describe("A-17 execution contract cross-layer flow", () => {
         emit({ type: "turn.started" });
         calls.push("skill_facts");
         const fields = promptCount === 1 ? ["trust", "enabled"] : ["trust", "enabled", "parse"];
-        ledger.observe({ source: "live", toolName: "skill_facts", toolCallId: `facts-${promptCount}`, outcome: "success", legacy: false,
+        ledger.observe({ source: "live", toolName: "skill_facts", toolCallId: `facts-${promptCount}`, outcome: "success",
           requestScope: { target: "agent/skills/skill-verification/SKILL.md" }, payloadSummary: "facts", complete: true, evidenceFields: fields });
         emit({ type: "tool.started", toolCallId: `facts-${promptCount}`, name: "skill_facts", input: { id: "skill-verification" } });
         emit({ type: "tool.completed", toolCallId: `facts-${promptCount}`, name: "skill_facts", output: "facts", metadata: { evidenceFields: fields } });

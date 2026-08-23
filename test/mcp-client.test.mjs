@@ -340,7 +340,8 @@ describe("agentToolToPiTool", () => {
       parameters: { type: "object", properties: { name: { type: "string" } } },
       isReadOnly: true,
       isConcurrencySafe: true,
-      execute: async (args) => `Hello ${args.name}`,
+      resultFormat: "structured",
+      execute: async (args) => ({ text: `Hello ${args.name}`, data: null, outcome: { status: "success" } }),
     };
 
     const piTool = piHelper.agentToolToPiTool(agentTool);
@@ -356,13 +357,15 @@ describe("agentToolToPiTool", () => {
       description: "",
       parameters: { type: "object", properties: {} },
       isReadOnly: true,
-      execute: async () => "result text",
+      resultFormat: "structured",
+      execute: async () => ({ text: "result text", data: null, outcome: { status: "success" } }),
     };
     const piTool = piHelper.agentToolToPiTool(agentTool);
     const result = await piTool.execute("call1", {});
     assert.ok(Array.isArray(result.content));
     assert.strictEqual(result.content[0].text, "result text");
-    assert.deepStrictEqual(result.details, {});
+    assert.equal(result.details.outcome.status, "success");
+    assert.equal(result.details.data, null);
   });
 
   it("preserves structured result metadata in PI details and trace events", async () => {
@@ -372,8 +375,10 @@ describe("agentToolToPiTool", () => {
       description: "",
       parameters: { type: "object", properties: {} },
       isReadOnly: true,
+      resultFormat: "structured",
       execute: async () => ({
         text: "structured text",
+        outcome: { status: "success" },
         metadata: { provenance: { source: "test" }, count: 2 },
       }),
     };
@@ -381,17 +386,10 @@ describe("agentToolToPiTool", () => {
     const result = await piTool.execute("call-structured", {});
 
     assert.strictEqual(result.content[0].text, "structured text");
-    assert.deepStrictEqual(result.details, { provenance: { source: "test" }, count: 2 });
-    assert.deepStrictEqual(events.at(-1), {
-      type: "tool_execution_end",
-      toolCallId: "call-structured",
-      toolName: "structured",
-      result: "structured text",
-      metadata: { provenance: { source: "test" }, count: 2 },
-      outcome: { status: "success" },
-      legacy: true,
-      isError: false,
-    });
+    assert.equal(result.details.provenance.source, "test");
+    assert.equal(result.details.count, 2);
+    assert.deepEqual(events.at(-1).outcome, { status: "success" });
+    assert.equal("legacy" in events.at(-1), false);
   });
 
   it("execute 异常时透传错误", async () => {
@@ -400,6 +398,7 @@ describe("agentToolToPiTool", () => {
       description: "",
       parameters: { type: "object", properties: {} },
       isReadOnly: true,
+      resultFormat: "structured",
       execute: async () => { throw new Error("tool failed"); },
     };
     const piTool = piHelper.agentToolToPiTool(agentTool);
@@ -417,9 +416,10 @@ describe("agentToolToPiTool", () => {
       description: "",
       parameters: { type: "object", properties: {} },
       isReadOnly: true,
+      resultFormat: "structured",
       execute: async (_args, ctx) => {
         seenCtx = ctx;
-        return "ok";
+        return { text: "ok", data: null, outcome: { status: "success" } };
       },
     };
 
@@ -445,9 +445,10 @@ describe("agentToolToPiTool", () => {
       riskLevel: "high",
       workspaceBounded: false,
       permissionSource: "mcp.s.t",
+      resultFormat: "structured",
       execute: async () => {
         executed = true;
-        return "ok";
+        return { text: "ok", data: null, outcome: { status: "success" } };
       },
     };
 
@@ -506,11 +507,12 @@ describe("agentToolToPiTool", () => {
       isReadOnly: true,
       needsPermission: false,
       operations: ["read"],
+      resultFormat: "structured",
       riskLevel: "low",
       workspaceBounded: true,
       execute: async () => {
         executed = true;
-        return "ok";
+        return { text: "ok", data: null, outcome: { status: "success" } };
       },
     };
 

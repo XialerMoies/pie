@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomUUID } from "node:crypto"
-import { defineAgentTool, structuredToolResult, type AgentTool, type ToolContext } from "../types.js"
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool, type ToolContext } from "../types.js"
 import { getCurrentRuntime } from "../globals.js"
 import { authorizeToolPath } from "./path-authorization.js"
 import {
@@ -74,8 +74,8 @@ function metadataFor(name: string, scope: MemoryScope, content: string, previous
   }
 }
 
-function invalidNameResult(name: string): string {
-  return `无效的记忆名称"${name}"。名称只允许字母、数字、点、下划线、短横线，最长 64 字符。`
+function invalidNameResult(name: string) {
+  return structuredToolError(`无效的记忆名称"${name}"。名称只允许字母、数字、点、下划线、短横线，最长 64 字符。`, "invalid_memory_name")
 }
 
 const scopeSchema = { type: "string", enum: ["user", "workspace"], description: "记忆作用域；默认 user。" }
@@ -90,11 +90,11 @@ export const readMemoryTool: AgentTool = defineAgentTool({
     try {
       const selectedScope = scopeOf(scope); const root = rootFor(ctx, selectedScope); maybeMigrate(selectedScope, root)
       const filePath = join(root, `${n}.md`)
-      if (!existsSync(filePath)) return `未找到记忆"${n}"。用 write_memory 创建一条新的。`
+      if (!existsSync(filePath)) return structuredToolError(`未找到记忆"${n}"。用 write_memory 创建一条新的。`, "memory_not_found")
       const authorizedFile = await authorizeMemoryPath(ctx, root, filePath, "read", "agent.memory.read")
       const content = readFileSync(authorizedFile, "utf8")
       return structuredToolResult(content, { name: n, scope: selectedScope, path: authorizedFile, content, operation: "read" })
-    } catch (error) { return error instanceof Error ? error.message : String(error) }
+    } catch (error) { return structuredToolError(error instanceof Error ? error.message : String(error), "memory_read_failed") }
   },
 })
 
@@ -116,7 +116,7 @@ export const writeMemoryTool: AgentTool = defineAgentTool({
       await persistIndex(ctx, root, index)
       const runtime = getCurrentRuntime(); if (runtime) await runtime.refreshSystemPrompt()
       return structuredToolResult(`记忆"${n}"已更新。`, { name: n, scope: selectedScope, path: authorizedFile, operation, bytes: Buffer.byteLength(String(content), "utf8") })
-    } catch (error) { return error instanceof Error ? error.message : String(error) }
+    } catch (error) { return structuredToolError(error instanceof Error ? error.message : String(error), "memory_write_failed") }
   },
 })
 
@@ -126,7 +126,7 @@ export const listMemoryTool: AgentTool = defineAgentTool({
   isReadOnly: true, isConcurrencySafe: true, operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: false, resultFormat: "structured",
   execute: async ({ scope }, ctx) => {
     try { const selectedScope = scopeOf(scope); const root = rootFor(ctx, selectedScope); maybeMigrate(selectedScope, root); const index = loadIndex(root, selectedScope); const entries = index.entries.filter((entry) => entry.enabled); return structuredToolResult(entries.map((entry) => `${entry.name}: ${entry.summary || "无摘要"}`).join("\n") || "暂无记忆。", { scope: selectedScope, entries }) }
-    catch (error) { return error instanceof Error ? error.message : String(error) }
+    catch (error) { return structuredToolError(error instanceof Error ? error.message : String(error), "memory_list_failed") }
   },
 })
 
@@ -136,8 +136,8 @@ export const deleteMemoryTool: AgentTool = defineAgentTool({
   isReadOnly: false, isDestructive: true, isConcurrencySafe: false, operations: ["remove", "write"], riskLevel: "medium", needsPermission: false, workspaceBounded: false, resultFormat: "structured",
   execute: async ({ name, scope }, ctx) => {
     const n = String(name ?? ""); if (!validMemoryName(n)) return invalidNameResult(n)
-    try { const selectedScope = scopeOf(scope); const root = rootFor(ctx, selectedScope); const filePath = join(root, `${n}.md`); if (!existsSync(filePath)) return `未找到记忆"${n}"。`; const authorizedFile = await authorizeMemoryPath(ctx, root, filePath, "remove", "agent.memory.delete"); unlinkSync(authorizedFile); const index = loadIndex(root, selectedScope); index.entries = index.entries.filter((entry) => entry.name !== n); await persistIndex(ctx, root, index); const runtime = getCurrentRuntime(); if (runtime) await runtime.refreshSystemPrompt(); return structuredToolResult(`记忆"${n}"已删除。`, { name: n, scope: selectedScope, operation: "delete" }) }
-    catch (error) { return error instanceof Error ? error.message : String(error) }
+    try { const selectedScope = scopeOf(scope); const root = rootFor(ctx, selectedScope); const filePath = join(root, `${n}.md`); if (!existsSync(filePath)) return structuredToolError(`未找到记忆"${n}"。`, "memory_not_found"); const authorizedFile = await authorizeMemoryPath(ctx, root, filePath, "remove", "agent.memory.delete"); unlinkSync(authorizedFile); const index = loadIndex(root, selectedScope); index.entries = index.entries.filter((entry) => entry.name !== n); await persistIndex(ctx, root, index); const runtime = getCurrentRuntime(); if (runtime) await runtime.refreshSystemPrompt(); return structuredToolResult(`记忆"${n}"已删除。`, { name: n, scope: selectedScope, operation: "delete" }) }
+    catch (error) { return structuredToolError(error instanceof Error ? error.message : String(error), "memory_delete_failed") }
   },
 })
 
@@ -147,7 +147,7 @@ export const setMemoryEnabledTool: AgentTool = defineAgentTool({
   isReadOnly: false, isDestructive: false, isConcurrencySafe: false, operations: ["write"], riskLevel: "low", needsPermission: false, workspaceBounded: false, resultFormat: "structured",
   execute: async ({ name, scope, enabled }, ctx) => {
     const n = String(name ?? ""); if (!validMemoryName(n)) return invalidNameResult(n)
-    try { const selectedScope = scopeOf(scope); const root = rootFor(ctx, selectedScope); const index = loadIndex(root, selectedScope); const entry = index.entries.find((item) => item.name === n); if (!entry) return `未找到记忆"${n}"。`; entry.enabled = Boolean(enabled); entry.updatedAt = new Date().toISOString(); await persistIndex(ctx, root, index); const runtime = getCurrentRuntime(); if (runtime) await runtime.refreshSystemPrompt(); return structuredToolResult(`记忆"${n}"已${entry.enabled ? "启用" : "禁用"}。`, { name: n, scope: selectedScope, enabled: entry.enabled }) }
-    catch (error) { return error instanceof Error ? error.message : String(error) }
+    try { const selectedScope = scopeOf(scope); const root = rootFor(ctx, selectedScope); const index = loadIndex(root, selectedScope); const entry = index.entries.find((item) => item.name === n); if (!entry) return structuredToolError(`未找到记忆"${n}"。`, "memory_not_found"); entry.enabled = Boolean(enabled); entry.updatedAt = new Date().toISOString(); await persistIndex(ctx, root, index); const runtime = getCurrentRuntime(); if (runtime) await runtime.refreshSystemPrompt(); return structuredToolResult(`记忆"${n}"已${entry.enabled ? "启用" : "禁用"}。`, { name: n, scope: selectedScope, enabled: entry.enabled }) }
+    catch (error) { return structuredToolError(error instanceof Error ? error.message : String(error), "memory_toggle_failed") }
   },
 })

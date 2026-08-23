@@ -25,6 +25,69 @@ export async function waitForRendererReady(win: BrowserWindow): Promise<void> {
   throw new Error(`Renderer did not finish dashboard bootstrap within 30 seconds: ${JSON.stringify(snapshot)}`);
 }
 
+/** Capture metadata-only renderer evidence for a cross-layer failure artifact.
+ * Message text, thinking content, tool arguments and form values are excluded. */
+export async function capturePackagedFailureEvidence(
+  win: BrowserWindow,
+): Promise<Record<string, unknown>> {
+  const evidence = await win.webContents.executeJavaScript(`(async () => {
+    const messages = window.App?.ChatState?.getMessages?.() || [];
+    const eventTrace = [];
+    for (const [messageIndex, message] of messages.entries()) {
+      for (const block of message.blocks || []) {
+        eventTrace.push({
+          messageIndex,
+          type: block.type || 'unknown',
+          status: block.status || null,
+          blockId: block.blockId || null,
+          seq: Number.isFinite(block.seq) ? block.seq : null,
+          toolCallId: block.toolCallId || null,
+        });
+      }
+    }
+    const nodes = Array.from(document.querySelectorAll('[id], [role], [aria-busy], [data-block-id]')).slice(0, 2_048).map((node) => ({
+      tag: node.tagName.toLowerCase(),
+      id: node.id || null,
+      role: node.getAttribute('role'),
+      ariaBusy: node.getAttribute('aria-busy'),
+      ariaHidden: node.getAttribute('aria-hidden'),
+      blockId: node.getAttribute('data-block-id'),
+      disabled: 'disabled' in node ? Boolean(node.disabled) : null,
+      hidden: node instanceof HTMLElement ? (node.hidden || getComputedStyle(node).display === 'none') : null,
+    }));
+    let correlation = { unavailable: true };
+    try {
+      const response = await fetch('/api/diagnostics', { cache: 'no-store' });
+      const payload = await response.json();
+      correlation = payload?.correlation || correlation;
+    } catch {}
+    return {
+      eventTrace,
+      domAria: {
+        readyState: document.readyState,
+        activeElementId: document.activeElement?.id || null,
+        messageCount: messages.length,
+        nodes,
+      },
+      requestCorrelation: correlation,
+    };
+  })()`, true);
+  const redactionStyleId = "my-code-agent-e2e-screenshot-redaction";
+  await win.webContents.executeJavaScript(`(() => {
+    const style = document.createElement('style');
+    style.id = ${JSON.stringify(redactionStyleId)};
+    style.textContent = 'body *, body *::before, body *::after { color: transparent !important; text-shadow: none !important; caret-color: transparent !important; background-image: none !important; } input, textarea, [contenteditable] { visibility: hidden !important; } svg, img, canvas, video { visibility: hidden !important; }';
+    document.head.appendChild(style);
+  })()`, true);
+  let screenshotBase64 = "";
+  try {
+    screenshotBase64 = (await win.webContents.capturePage()).toPNG().toString("base64");
+  } finally {
+    await win.webContents.executeJavaScript(`document.getElementById(${JSON.stringify(redactionStyleId)})?.remove()`, true).catch(() => {});
+  }
+  return { ...evidence, screenshotBase64 };
+}
+
 export async function runRendererCookieIsolationProbe(
   first: BrowserWindow,
   second: BrowserWindow,
@@ -178,7 +241,7 @@ export async function runPackagedConcurrencyProbe(
     const chat = window.App?.Chat;
     chatState?.replaceMessages?.([]);
     chat?.updateUI?.();
-    const messageContainer = document.querySelector('#ms');
+    let messageContainer = document.querySelector('#ms');
     if (!messageContainer) throw new Error('chat message container is unavailable');
     messageContainer.innerHTML = '';
     let assistantRoot = null;
@@ -236,6 +299,13 @@ export async function runPackagedConcurrencyProbe(
     }
     const records = await (independent || Promise.all(requests.map(([name, url]) => timedFetch(name, url))));
     observer.disconnect();
+    const loadingDeadline = performance.now() + 3_000;
+    while (performance.now() < loadingDeadline) {
+      const sessionLoading = document.querySelector('#sl')?.classList.contains('is-loading') || /加载中/.test(document.querySelector('#sl')?.textContent || '');
+      const settingsLoading = /加载中/.test(document.querySelector('#mc-settings')?.textContent || '');
+      if (!sessionLoading && !settingsLoading) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     const loadingStates = {
       sessionListLoading: document.querySelector('#sl')?.classList.contains('is-loading') || /加载中/.test(document.querySelector('#sl')?.textContent || ''),
       settingsLoading: /加载中/.test(document.querySelector('#mc-settings')?.textContent || ''),
@@ -255,6 +325,206 @@ export async function runPackagedConcurrencyProbe(
       settingsOpened,
       loadingStates,
       withinDeadline: terminalAt !== null,
+    };
+  })()`, true);
+}
+
+/** Exercise the real packaged dashboard against the test-only replay provider.
+ * The provider is selected by the renderer's normal send path; this probe then
+ * verifies live DOM identity, SSE reconnect replay, and a real page reload. */
+export async function runPackagedReplayProviderProbe(
+  win: BrowserWindow,
+): Promise<Record<string, unknown>> {
+  const live = await win.webContents.executeJavaScript(`(async () => {
+    const chatState = window.App?.ChatState;
+    const chat = window.App?.Chat;
+    const messageContainer = document.querySelector('#ms');
+    const input = document.querySelector('#ci');
+    const send = document.querySelector('#cs');
+    if (!messageContainer || !(input instanceof HTMLTextAreaElement) || !(send instanceof HTMLElement)) throw new Error('replay chat controls are unavailable');
+    document.querySelector('.modal-close')?.click?.();
+    document.querySelector('[data-side="chat"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const readyDeadline = performance.now() + 5_000;
+    while (performance.now() < readyDeadline && chatState?.isBusy?.()) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (chatState?.isBusy?.()) throw new Error('replay composer did not become ready after the preceding turn');
+    // The preceding terminal frame can still have a queued animation-frame
+    // render after its text first appears. Let that settle before establishing
+    // the replay flow's empty baseline.
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    chatState?.replaceMessages?.([]);
+    chat?.updateUI?.();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (messageContainer.querySelector('[data-block-id]')) throw new Error('replay baseline retained nodes from the preceding turn');
+    const identities = {};
+    const order = [];
+    const mutations = { removed: 0, rootReplaced: false };
+    let root = null;
+    const observer = new MutationObserver((records) => {
+      for (const record of records) mutations.removed += [...record.removedNodes].filter((node) => node.nodeType === 1 && node.matches?.('[data-block-id]')).length;
+      if (root && messageContainer.querySelector('.m') !== root) mutations.rootReplaced = true;
+    });
+    observer.observe(messageContainer, { childList: true, subtree: true });
+    input.value = '__my_code_agent_e2e_replay__';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    if (send.hasAttribute('disabled')) throw new Error('replay composer did not enable after entering the provider message');
+    const started = performance.now();
+    send.click();
+    let terminalAt = null;
+    while (performance.now() - started < 15_000) {
+      for (const node of messageContainer.querySelectorAll('[data-block-id]')) {
+        const id = node.dataset.blockId;
+        if (!id) continue;
+        if (!identities[id]) { identities[id] = node; order.push(id); root ||= messageContainer.querySelector('.m'); }
+        else if (identities[id] !== node) mutations.removed += 1;
+      }
+      if (order.includes('replay-text') && messageContainer.textContent?.includes('Replay answer')) { terminalAt = performance.now(); break; }
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    const replayResponse = await fetch('/api/chat/stream', { headers: { 'Last-Event-ID': '0' }, cache: 'no-store' });
+    const reader = replayResponse.body?.getReader();
+    let replayBody = '';
+    const replayDeadline = performance.now() + 3_000;
+    while (reader && performance.now() < replayDeadline && !replayBody.includes('replay-text')) {
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise((resolve) => setTimeout(() => resolve({ done: true, value: undefined }), 250)),
+      ]);
+      if (chunk?.done) break;
+      if (chunk?.value) replayBody += new TextDecoder().decode(chunk.value);
+    }
+    try { await reader?.cancel(); } catch {}
+    let activeSessionId = null;
+    try {
+      const sessionsResponse = await fetch('/api/sessions?other=1', { cache: 'no-store' });
+      const sessionsPayload = await sessionsResponse.json();
+      activeSessionId = sessionsPayload?.activeSessionId || sessionsPayload?.sessions?.[0]?.id || null;
+    } catch {}
+    observer.disconnect();
+    return {
+      order,
+      liveSnapshot: [...messageContainer.querySelectorAll('[data-block-id]')].map((node) => ({ id: node.dataset.blockId, text: node.textContent })),
+      terminalAt: terminalAt === null ? null : terminalAt - started,
+      rootStable: !mutations.rootReplaced,
+      removedExisting: mutations.removed,
+      reconnectStatus: replayResponse.status,
+      reconnectMatches: replayBody.includes('replay-text') && replayBody.includes('Replay answer'),
+      activeSessionId,
+      withinDeadline: terminalAt !== null,
+    };
+  })()`, true);
+
+  await win.webContents.reload();
+  await waitForRendererReady(win);
+  const refreshed = await win.webContents.executeJavaScript(`(async () => {
+    const expected = ${JSON.stringify((live as { liveSnapshot?: unknown }).liveSnapshot || [])};
+    const sessionId = ${JSON.stringify((live as { activeSessionId?: unknown }).activeSessionId || null)};
+    if (sessionId && window.App?.SessionActivation?.activateById) await window.App.SessionActivation.activateById(sessionId, { silent: true });
+    const deadline = performance.now() + 10_000;
+    let snapshot = [];
+    while (performance.now() < deadline) {
+      snapshot = [...document.querySelectorAll('#ms [data-block-id]')].map((node) => ({ id: node.dataset.blockId, text: node.textContent }));
+      if (snapshot.some((entry) => entry.id === 'replay-text')) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const matched = JSON.stringify(snapshot) === JSON.stringify(expected);
+    if (!matched || !sessionId || !window.App?.Session?.newSession || !window.App?.SessionActivation?.activateById) {
+      return { snapshot, matched, draftCleared: false, sessionSwitchMatches: false };
+    }
+    window.App.Session.newSession();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const draftCleared = document.querySelectorAll('#ms [data-block-id]').length === 0;
+    await window.App.SessionActivation.activateById(sessionId, { silent: true });
+    const switchDeadline = performance.now() + 10_000;
+    let switchedSnapshot = [];
+    while (performance.now() < switchDeadline) {
+      switchedSnapshot = [...document.querySelectorAll('#ms [data-block-id]')].map((node) => ({ id: node.dataset.blockId, text: node.textContent }));
+      if (switchedSnapshot.some((entry) => entry.id === 'replay-text')) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return {
+      snapshot,
+      matched,
+      draftCleared,
+      sessionSwitchMatches: JSON.stringify(switchedSnapshot) === JSON.stringify(expected),
+    };
+  })()`, true);
+  return {
+    ...live,
+    refreshSnapshot: refreshed.snapshot,
+    refreshMatches: refreshed.matched,
+    draftCleared: refreshed.draftCleared,
+    sessionSwitchMatches: refreshed.sessionSwitchMatches,
+  };
+}
+
+/** Cancel a real long-tool send through the packaged UI and verify that the
+ * abort request completes and no late terminal frame mutates the cancelled DOM. */
+export async function runPackagedCancellationProbe(
+  win: BrowserWindow,
+): Promise<Record<string, unknown>> {
+  return win.webContents.executeJavaScript(`(async () => {
+    const chatState = window.App?.ChatState;
+    const chat = window.App?.Chat;
+    let messageContainer = document.querySelector('#ms');
+    if (!chatState || !chat || !messageContainer) {
+      throw new Error('cancellation controls are unavailable');
+    }
+    await window.App?.Session?.whenReady?.();
+    const readyDeadline = performance.now() + 5_000;
+    while (performance.now() < readyDeadline && chatState.isBusy()) await new Promise((resolve) => setTimeout(resolve, 25));
+    if (chatState.isBusy()) throw new Error('cancellation composer did not become ready');
+    chatState.replaceMessages([]);
+    chat.updateUI?.();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    let input = null;
+    let send = null;
+    const bindingDeadline = performance.now() + 5_000;
+    while (performance.now() < bindingDeadline) {
+      input = document.querySelector('#ci');
+      send = document.querySelector('#cs');
+      if (input instanceof HTMLTextAreaElement && send instanceof HTMLButtonElement) {
+        input.value = '__my_code_agent_e2e_cancel_tool__';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        if (!send.disabled) break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (!(input instanceof HTMLTextAreaElement) || !(send instanceof HTMLButtonElement) || send.disabled) {
+      throw new Error('cancellation composer did not bind before the deadline');
+    }
+    document.querySelector('[data-side="chat"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    input = document.querySelector('#ci');
+    send = document.querySelector('#cs');
+    messageContainer = document.querySelector('#ms');
+    if (!(input instanceof HTMLTextAreaElement) || !(send instanceof HTMLButtonElement) || !messageContainer) {
+      throw new Error('cancellation controls were replaced without a usable chat pane');
+    }
+    input.value = '__my_code_agent_e2e_cancel_tool__';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    if (send.disabled) throw new Error('cancellation send remained disabled in the active chat pane');
+    send.click();
+    const toolDeadline = performance.now() + 10_000;
+    while (performance.now() < toolDeadline && !messageContainer.querySelector('[data-block-id="cancel-e2e-tool"]')) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    const toolMounted = Boolean(messageContainer.querySelector('[data-block-id="cancel-e2e-tool"]'));
+    const stop = document.querySelector('#chat-stop');
+    if (!(stop instanceof HTMLElement) || !stop.isConnected || getComputedStyle(stop).display === 'none') {
+      throw new Error('active cancellation control is unavailable');
+    }
+    stop.click();
+    const snapshotAfterAbort = [...messageContainer.querySelectorAll('[data-block-id]')].map((node) => ({ id: node.dataset.blockId, text: node.textContent }));
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const lateSnapshot = [...messageContainer.querySelectorAll('[data-block-id]')].map((node) => ({ id: node.dataset.blockId, text: node.textContent }));
+    return {
+      toolMounted,
+      busyAfterAbort: chatState.isBusy(),
+      stopHidden: getComputedStyle(stop).display === 'none',
+      lateTerminalVisible: messageContainer.textContent?.includes('取消场景不应出现的迟到正文') || false,
+      domStableAfterAbort: JSON.stringify(snapshotAfterAbort) === JSON.stringify(lateSnapshot),
     };
   })()`, true);
 }

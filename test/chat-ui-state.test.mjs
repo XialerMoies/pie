@@ -4,7 +4,12 @@ import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 
 function attachEventListeners(source) {
-  source.addEventListener = (type, listener) => { source[`on${type}`] = listener; };
+  source.addEventListener = (type, listener) => {
+    source[`on${type}`] = listener;
+    if (type === "open") queueMicrotask(() => {
+      if (source[`on${type}`] === listener) listener(new Event("open"));
+    });
+  };
   source.removeEventListener = (type, listener) => {
     if (source[`on${type}`] === listener) source[`on${type}`] = null;
   };
@@ -280,6 +285,32 @@ describe("chat ui state", () => {
     assert.strictEqual(panel.innerHTML, firstHtml);
 
     env.win.Element.prototype.replaceWith = origReplaceWith;
+  });
+
+  it("聊天面板 DOM 重建后重新绑定 composer 控件", () => {
+    let inputEvents = 0;
+    const composer = env.win.App.ChatViews.createComposer({
+      isBusy: () => false,
+      onInput: () => { inputEvents += 1; },
+      onSubmit: () => {},
+      onSubmitNote: () => {},
+      onAbort: () => {},
+    });
+    composer.bind();
+
+    env.doc.getElementById("ci").remove();
+    env.doc.getElementById("cs").remove();
+    const input = env.doc.createElement("textarea");
+    input.id = "ci";
+    const send = env.doc.createElement("button");
+    send.id = "cs";
+    env.doc.body.append(input, send);
+
+    composer.bind();
+    input.value = "new pane message";
+    input.dispatchEvent(new env.win.Event("input", { bubbles: true }));
+
+    assert.strictEqual(inputEvents, 1, "重建后的输入框必须绑定到现有 composer");
   });
 
   it("输入框随内容增高但在上限后改为内部滚动", () => {

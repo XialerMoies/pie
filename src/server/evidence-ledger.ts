@@ -67,7 +67,7 @@ export class EvidenceLedger {
     const createdAt = observation.timestamp || new Date(this.#clock()).toISOString();
     const scope = scopeOf(observation);
     const status: EvidenceStatus = observation.outcome === "success"
-      ? (observation.complete === false || observation.legacy ? "unverified" : "success")
+      ? (observation.complete === false ? "unverified" : "success")
       : "failed";
     const payloadHash = observation.payloadHash || hash({
       tool: observation.toolName,

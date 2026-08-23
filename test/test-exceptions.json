@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "file": "test/provider-live-matrix.test.mjs",
+      "kind": "live_opt_in",
+      "reason": "真实供应商需要显式凭据和 PROVIDER_MATRIX_FILE，默认回归使用 keyless replay",
+      "owner": "agent-platform",
+      "expires": "2026-09-30"
+    },
+    {
+      "file": "test/custom-provider-store.test.mjs",
+      "kind": "platform_exclusion",
+      "reason": "Windows 不提供 POSIX permission bits；保留跨平台配置和存储流程覆盖",
+      "owner": "desktop-platform",
+      "expires": "2026-09-30"
+    },
+    {
+      "file": "test/packaged-electron.e2e.mjs",
+      "kind": "platform_exclusion",
+      "reason": "packaged Electron 当前发布门禁只在 Windows 产物环境运行",
+      "owner": "desktop-platform",
+      "expires": "2026-09-30"
+    },
+    {
+      "file": "scripts/test-coverage.mjs",
+      "kind": "coverage_exemption",
+      "reason": "项目当前没有默认覆盖率收集器；显式 MY_CODE_AGENT_COVERAGE_COMMAND 才启用，不能伪装成覆盖率通过",
+      "owner": "test-infrastructure",
+      "expires": "2026-09-30"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "chatEventFlow": {
+    "blockIds": ["packaged-thought-1", "packaged-tool", "packaged-thought-2", "packaged-text"],
+    "assistantRootStable": true,
+    "refreshMatches": true
+  },
+  "replayProvider": {
+    "blockIds": ["replay-thought", "replay-tool", "replay-text"],
+    "rootStable": true,
+    "refreshMatches": true,
+    "sessionSwitchMatches": true
+  },
+  "cancellation": {
+    "busyAfterAbort": false,
+    "stopHidden": true,
+    "lateTerminalVisible": false,
+    "domStableAfterAbort": true
+  },
+  "concurrency": {
+    "requestCount": 7,
+    "nodeOrder": ["e2e-thought", "e2e-tool", "e2e-text"],
+    "stableNodeIdentity": true,
+    "removedExisting": 0,
+    "loading": false
+  }
+}

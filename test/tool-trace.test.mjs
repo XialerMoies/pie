@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ToolRegistry, structuredToolError } from "../src/agent/types.ts";
+import { ToolRegistry, structuredToolError, structuredToolResult } from "../src/agent/types.ts";
 import { ToolOutcomeMetrics, createToolOutcomeObserver } from "../src/server/observability.ts";
 
 const toolsRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "agent", "tools");
@@ -29,18 +29,20 @@ describe("custom tool trace emitter", () => {
       execute: async (args, ctx) => {
         assert.strictEqual(ctx.toolCallId, "call-1");
         assert.deepStrictEqual(args, { value: 1 });
-        return "ok";
+        return structuredToolResult("ok", { value: args.value });
       },
       isReadOnly: true,
+      resultFormat: "structured",
     });
 
     const [tool] = registry.toPITools("/repo", (event) => events.push(event));
     const result = await tool.execute("call-1", { value: 1 });
 
-    assert.deepStrictEqual(result, { content: [{ type: "text", text: "ok" }], details: {} });
+    assert.deepStrictEqual(result.content, [{ type: "text", text: "ok" }]);
+    assert.deepStrictEqual(result.details.data, { value: 1 });
     assert.deepStrictEqual(events, [
       { type: "tool_execution_start", toolCallId: "call-1", toolName: "demo-tool", args: { value: 1 } },
-      { type: "tool_execution_end", toolCallId: "call-1", toolName: "demo-tool", result: "ok", outcome: { status: "success" }, legacy: true, isError: false },
+      { type: "tool_execution_end", toolCallId: "call-1", toolName: "demo-tool", result: "ok", data: { value: 1 }, diagnostics: [], metadata: events[1].metadata, outcome: { status: "success" }, isError: false },
     ]);
   });
 
@@ -55,6 +57,7 @@ describe("custom tool trace emitter", () => {
         throw new Error("boom");
       },
       isReadOnly: true,
+      resultFormat: "structured",
     });
 
     const [tool] = registry.toPITools("/repo", (event) => events.push(event));
@@ -80,9 +83,10 @@ describe("custom tool trace emitter", () => {
       execute: async (args, ctx) => {
         ctx.onUpdate?.("step1\n");
         ctx.onUpdate?.("step2\n");
-        return "done";
+        return structuredToolResult("done", null);
       },
       isReadOnly: true,
+      resultFormat: "structured",
     });
 
     const [tool] = registry.toPITools("/repo", (event) => events.push(event));
@@ -92,7 +96,7 @@ describe("custom tool trace emitter", () => {
       { type: "tool_execution_start", toolCallId: "call-3", toolName: "stream-tool", args: {} },
       { type: "tool_execution_update", toolCallId: "call-3", toolName: "stream-tool", partialResult: "step1\n" },
       { type: "tool_execution_update", toolCallId: "call-3", toolName: "stream-tool", partialResult: "step2\n" },
-      { type: "tool_execution_end", toolCallId: "call-3", toolName: "stream-tool", result: "done", outcome: { status: "success" }, legacy: true, isError: false },
+      { type: "tool_execution_end", toolCallId: "call-3", toolName: "stream-tool", result: "done", data: null, diagnostics: [], metadata: events[3].metadata, outcome: { status: "success" }, isError: false },
     ]);
   });
 
@@ -108,16 +112,16 @@ describe("custom tool trace emitter", () => {
     assert.ok(chunks.some((c) => c.includes("hello-stream")), "chunks 应包含实际输出");
   });
 
-  it("records legacy and structured outcomes at the single PI adapter boundary", async () => {
+  it("rejects undeclared and accepts structured outcomes at the single PI adapter boundary", async () => {
     const registry = new ToolRegistry();
     const metrics = new ToolOutcomeMetrics();
     const observations = [];
     const observer = (observation) => { observations.push(observation); createToolOutcomeObserver(metrics)(observation); };
     registry.register({
-      name: "legacy-tool",
-      description: "legacy fixture",
+      name: "undeclared-tool",
+      description: "undeclared fixture",
       parameters: { type: "object", properties: {} },
-      execute: async () => "legacy result",
+      execute: async () => structuredToolResult("should not run", null),
       isReadOnly: true,
     });
     registry.register({
@@ -129,44 +133,39 @@ describe("custom tool trace emitter", () => {
       resultFormat: "structured",
     });
     const tools = registry.toPITools("/repo", undefined, { toolOutcomeObserver: observer, toolOutcomeSource: "test" });
-    await tools[0].execute("legacy-call", {});
+    await assert.rejects(() => tools[0].execute("undeclared-call", {}), (error) => error.code === "tool_result_contract_required");
     await tools[1].execute("structured-call", {});
     assert.equal(observations.length, 2);
-    assert.deepEqual(observations.map((entry) => ({ source: entry.source, toolName: entry.toolName, outcome: entry.outcome, legacy: entry.legacy, legacyReason: entry.legacyReason })), [
-      { source: "test", toolName: "legacy-tool", outcome: "success", legacy: true, legacyReason: "string_result" },
-      { source: "test", toolName: "structured-tool", outcome: "failed", legacy: false, legacyReason: undefined },
+    assert.deepEqual(observations.map((entry) => ({ source: entry.source, toolName: entry.toolName, outcome: entry.outcome })), [
+      { source: "test", toolName: "undeclared-tool", outcome: "failed" },
+      { source: "test", toolName: "structured-tool", outcome: "failed" },
     ]);
-    assert.deepEqual(metrics.snapshot().bySource.test, { total: 2, structured: 1, legacy: 1, missingOutcome: 0, invalidOutcome: 0, failures: 1 });
+    assert.deepEqual(metrics.snapshot().bySource.test, { total: 2, failures: 2 });
   });
 
-  it("normalizes structured results through ToolRegistry", async () => {
+  it("passes structured results through ToolRegistry without compatibility fields", async () => {
     const registry = new ToolRegistry();
     const events = [];
     registry.register({
       name: "structured-tool",
       description: "demo",
       parameters: { type: "object", properties: {} },
-      execute: async () => ({ text: "ok", metadata: { rows: 3 } }),
+      execute: async () => structuredToolResult("ok", null, [], { rows: 3 }),
       isReadOnly: true,
+      resultFormat: "structured",
     });
 
     const [tool] = registry.toPITools("/repo", (event) => events.push(event));
     const result = await tool.execute("call-structured", {});
 
-    assert.deepStrictEqual(result, {
-      content: [{ type: "text", text: "ok" }],
-      details: { rows: 3 },
-    });
-    assert.deepStrictEqual(events.at(-1), {
-      type: "tool_execution_end",
-      toolCallId: "call-structured",
-      toolName: "structured-tool",
-      result: "ok",
-      metadata: { rows: 3 },
-      outcome: { status: "success" },
-      legacy: true,
-      isError: false,
-    });
+    assert.deepStrictEqual(result.content, [{ type: "text", text: "ok" }]);
+    assert.equal(result.details.rows, 3);
+    assert.equal(events.at(-1).type, "tool_execution_end");
+    assert.equal(events.at(-1).result, "ok");
+    assert.deepEqual(events.at(-1).metadata.rows, 3);
+    assert.deepEqual(events.at(-1).outcome, { status: "success" });
+    assert.equal(events.at(-1).isError, false);
+    assert.equal("legacy" in events.at(-1), false);
   });
 
   it("emits an explicit failure outcome for structured tool errors", async () => {
@@ -240,13 +239,13 @@ describe("custom tool trace emitter", () => {
       resultFormat: "structured",
     });
     const [tool] = registry.toPITools("/repo", (event) => events.push(event));
-    await tool.execute("call-malformed", {});
+    await assert.rejects(() => tool.execute("call-malformed", {}), (error) => error.code === "tool_result_contract_required");
     assert.deepEqual(events.at(-1).outcome, {
       status: "failed",
       failure: {
         kind: "validation_error",
-        code: "invalid_tool_outcome",
-        message: "Tool returned an invalid outcome envelope",
+        code: "tool_result_contract_required",
+        message: "Tool result must include a valid outcome envelope",
       },
     });
     assert.equal(events.at(-1).isError, true);
@@ -267,10 +266,11 @@ describe("custom tool trace emitter", () => {
       parameters: { type: "object", properties: {} },
       execute: async (_args, ctx) => {
         assert.deepStrictEqual(ctx.authorizationDecision, decision);
-        return { text: "ok", metadata: { authorization: ctx.authorizationDecision } };
+        return structuredToolResult("ok", null, [], { authorization: ctx.authorizationDecision });
       },
       isReadOnly: true,
       needsPermission: true,
+      resultFormat: "structured",
     });
 
     const [tool] = registry.toPITools("/repo", (event) => events.push(event), {

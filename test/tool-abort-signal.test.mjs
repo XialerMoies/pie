@@ -124,7 +124,7 @@ describe("tool AbortSignal propagation", () => {
     let receivedSignal;
     const definition = agentToolToPIToolDefinition(readOnlyTool(async (_args, ctx) => {
       receivedSignal = ctx.signal;
-      return { text: "ok", data: {}, metadata: {} };
+      return { text: "ok", data: {}, metadata: {}, outcome: { status: "success" } };
     }));
 
     await definition.execute("call-1", {}, controller.signal, () => {});

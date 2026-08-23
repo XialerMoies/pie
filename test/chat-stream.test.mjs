@@ -66,4 +66,32 @@ describe("ChatStream lifecycle", () => {
     assert.equal(second.listeners.size, 0);
     assert.equal(win.__state, undefined);
   });
+
+  it("gates a send until the current EventSource is open", async () => {
+    await import(`../src/frontend/services/chat-stream.ts?ready-${Date.now()}-${Math.random()}`);
+    const generation = win.App.ChatStream.open({}, { freshTurn: true });
+    assert.equal(streams[0].url, "/api/chat/stream?freshTurn=1");
+    let settled = false;
+    const ready = win.App.ChatStream.waitUntilOpen(generation, 1_000).then((value) => {
+      settled = true;
+      return value;
+    });
+
+    await Promise.resolve();
+    assert.equal(settled, false);
+    streams[0].emit("open");
+    assert.equal(await ready, true);
+    assert.equal(await win.App.ChatStream.waitUntilOpen(generation, 1), true);
+  });
+
+  it("fails readiness for replaced generations and timeouts", async () => {
+    await import(`../src/frontend/services/chat-stream.ts?not-ready-${Date.now()}-${Math.random()}`);
+    const firstGeneration = win.App.ChatStream.open();
+    const firstReady = win.App.ChatStream.waitUntilOpen(firstGeneration, 1_000);
+    const secondGeneration = win.App.ChatStream.open();
+
+    assert.equal(await firstReady, false);
+    assert.equal(await win.App.ChatStream.waitUntilOpen(firstGeneration, 1), false);
+    assert.equal(await win.App.ChatStream.waitUntilOpen(secondGeneration, 5), false);
+  });
 });

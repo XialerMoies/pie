@@ -30,7 +30,8 @@ class ChatComposerView {
   }
 
   bind(): void {
-    if (this.input) return;
+    if (this.input?.isConnected && this.sendButton?.isConnected) return;
+    if (this.input || this.sendButton || this.cleanups.length > 0) this.dispose();
     const input = $('ci') as HTMLTextAreaElement | null;
     const sendButton = $('cs') as HTMLButtonElement | null;
     if (!input || !sendButton) return;

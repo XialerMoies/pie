@@ -24,9 +24,10 @@ export const gitLogTool: AgentTool = defineAgentTool({
     const res = await localApiFetch(url, ctx)
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
     if (!res.ok || data.error) {
-      return data.error === "not_a_repo"
-        ? "当前目录不是 Git 仓库。"
-        : `获取 Git 日志失败：${data.message || data.error || res.status}`
+      return structuredToolError(
+        data.error === "not_a_repo" ? "当前目录不是 Git 仓库。" : `获取 Git 日志失败：${data.message || data.error || res.status}`,
+        data.error === "not_a_repo" ? { kind: "not_found", code: "not_a_repo" } : { kind: res.status === 403 ? "permission_denied" : "execution_error", code: "git_log_failed", details: { status: res.status } },
+      )
     }
 
     if (!data || typeof data !== "object" || !Array.isArray(data.entries)) {
@@ -37,7 +38,7 @@ export const gitLogTool: AgentTool = defineAgentTool({
     }
 
     const entries = data.entries
-    if (entries.length === 0) return "没有提交记录。"
+    if (entries.length === 0) return structuredToolResult("没有提交记录。", { ...data, entries, count: 0, requestedCount: count })
 
     const lines: string[] = []
     lines.push(`📋 最近 ${entries.length} 次提交（${data.gitRoot || ""}）`)

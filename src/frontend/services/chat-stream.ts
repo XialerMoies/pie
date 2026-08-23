@@ -14,6 +14,10 @@ interface ChatStreamHandlers {
 interface ChatStreamEntry {
   source: EventSource;
   generation: number;
+  opened: boolean;
+  readySettled: boolean;
+  ready: Promise<boolean>;
+  resolveReady: (opened: boolean) => void;
   handlers: ChatStreamHandlers;
   listeners: {
     message: (event: MessageEvent) => void;
@@ -27,6 +31,10 @@ let activeChatStream: ChatStreamEntry | null = null;
 
 function disposeChatStream(entry: ChatStreamEntry | null): void {
   if (!entry) return;
+  if (!entry.readySettled) {
+    entry.readySettled = true;
+    entry.resolveReady(false);
+  }
   entry.source.removeEventListener('message', entry.listeners.message);
   entry.source.removeEventListener('error', entry.listeners.error);
   entry.source.removeEventListener('open', entry.listeners.open);
@@ -34,14 +42,20 @@ function disposeChatStream(entry: ChatStreamEntry | null): void {
 }
 
 const chatStreamApi: AppChatStream = {
-  open(handlers: ChatStreamHandlers = {}): number {
+  open(handlers: ChatStreamHandlers = {}, options: { freshTurn?: boolean } = {}): number {
     disposeChatStream(activeChatStream);
     activeChatStream = null;
     const currentGeneration = ++chatStreamGeneration;
-    const source = new EventSource('/api/chat/stream');
+    const source = new EventSource(options.freshTurn ? '/api/chat/stream?freshTurn=1' : '/api/chat/stream');
+    let resolveReady!: (opened: boolean) => void;
+    const ready = new Promise<boolean>((resolve) => { resolveReady = resolve; });
     const entry = {
       source,
       generation: currentGeneration,
+      opened: false,
+      readySettled: false,
+      ready,
+      resolveReady,
       handlers,
       listeners: {} as ChatStreamEntry['listeners'],
     } as ChatStreamEntry;
@@ -56,12 +70,31 @@ const chatStreamApi: AppChatStream = {
     };
     entry.listeners.open = (event: Event) => {
       if (activeChatStream !== entry) return;
+      entry.opened = true;
+      if (!entry.readySettled) {
+        entry.readySettled = true;
+        entry.resolveReady(true);
+      }
       entry.handlers.onOpen?.(event);
     };
     source.addEventListener('message', entry.listeners.message);
     source.addEventListener('error', entry.listeners.error);
     source.addEventListener('open', entry.listeners.open);
     return currentGeneration;
+  },
+  async waitUntilOpen(candidate: number, timeoutMs = 5_000): Promise<boolean> {
+    const entry = activeChatStream;
+    if (!entry || entry.generation !== candidate) return false;
+    if (entry.opened) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        entry.ready,
+        new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   },
   setHandlers(candidate: number, handlers: ChatStreamHandlers): boolean {
     if (!activeChatStream || activeChatStream.generation !== candidate) return false;

@@ -41,10 +41,10 @@ export const fileWriteTool: AgentTool = defineAgentTool({
     const fp = String(file_path ?? "");
     const cnt = String(content ?? "");
 
-    if (!fp) return "file_path 不能为空。";
+    if (!fp) return structuredToolError("file_path 不能为空。", "invalid_file_path");
 
     const root = ctx.workspace || "";
-    if (!root) return "当前没有活跃 workspace。";
+    if (!root) return structuredToolError("当前没有活跃 workspace。", "workspace_required");
 
     let absPath: string;
     let isNew: boolean;

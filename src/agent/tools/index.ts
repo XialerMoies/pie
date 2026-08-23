@@ -11,10 +11,8 @@
 import {
   ToolRegistry,
   agentToolToPIToolDefinition,
-  type AgentTool,
-  type ToolExecutionExtraContext,
-  type ToolTraceEmitter,
-} from "../types.js"
+} from "../tool-registry.js"
+import type { AgentTool, ToolExecutionExtraContext, ToolTraceEmitter } from "../types.js"
 import { canonicalToolName } from "../tool-identity.js"
 import { gitStatusTool } from "./git-status.js"
 import { searchTool } from "./search.js"

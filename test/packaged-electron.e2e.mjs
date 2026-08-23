@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { firstTimingAtOrAfter } from "./helpers/electron-e2e-result.mjs";
 import { inspectPackagedE2EPoll } from "./helpers/packaged-electron-poll.mjs";
+import { validateFailureArtifact, writeFailureArtifact } from "./helpers/failure-artifact.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const executable = resolve(ROOT, "release", "win-unpacked", "MyCodeAgent.exe");
@@ -20,11 +21,14 @@ const tempRoot = mkdtempSync(join(ROOT, ".tmp-packaged-e2e-"));
 const dataDir = join(tempRoot, "data");
 const electronUserDataDir = join(tempRoot, "electron-user-data");
 const resultFile = join(tempRoot, "result.json");
+const failureArtifactDir = resolve(process.env.MY_CODE_AGENT_FAILURE_ARTIFACT_DIR || join(tempRoot, "failure-artifact"));
+const settledGolden = JSON.parse(readFileSync(resolve(ROOT, "test", "fixtures", "golden", "packaged-electron-settled-v1.json"), "utf8"));
 const children = new Set();
 let output = "";
 let passed = false;
 let secondLaunchChild = null;
 const memoryLimitMb = Number(process.env.MY_CODE_AGENT_TEST_MEMORY_MB || 2048);
+const expectFailureArtifact = process.env.MY_CODE_AGENT_E2E_EXPECT_FAILURE_ARTIFACT === "1";
 let peakRssMb = 0;
 let memoryExceeded = false;
 let memoryMonitor = null;
@@ -260,11 +264,108 @@ function assertPackagedConcurrencyResult(result) {
   }
 }
 
+function assertPackagedReplayProviderResult(result) {
+  const replay = result.replayProvider;
+  assert.ok(replay && typeof replay === "object", "packaged replay provider result is missing");
+  assert.deepEqual(replay.order, ["replay-thought", "replay-tool", "replay-text"]);
+  assert.equal(replay.withinDeadline, true, "replay provider did not reach terminal DOM state");
+  assert.equal(replay.rootStable, true);
+  assert.equal(replay.removedExisting, 0);
+  assert.equal(replay.reconnectStatus, 200);
+  assert.equal(replay.reconnectMatches, true);
+  assert.equal(replay.refreshMatches, true);
+  assert.deepEqual(replay.refreshSnapshot, replay.liveSnapshot);
+  assert.equal(replay.draftCleared, true);
+  assert.equal(replay.sessionSwitchMatches, true);
+  assert.equal(typeof replay.terminalAt, "number");
+}
+
+function assertPackagedCancellationResult(result) {
+  const cancellation = result.cancellation;
+  assert.ok(cancellation && typeof cancellation === "object", "packaged cancellation result is missing");
+  assert.equal(cancellation.toolMounted, true);
+  assert.equal(cancellation.busyAfterAbort, false);
+  assert.equal(cancellation.stopHidden, true);
+  assert.equal(cancellation.lateTerminalVisible, false);
+  assert.equal(cancellation.domStableAfterAbort, true);
+}
+
+function settledSnapshot(result) {
+  return {
+    version: 1,
+    chatEventFlow: {
+      blockIds: result.chatEventFlow?.blockIds,
+      assistantRootStable: result.chatEventFlow?.assistantRootStable,
+      refreshMatches: result.chatEventFlow?.refreshMatches,
+    },
+    replayProvider: {
+      blockIds: result.replayProvider?.order,
+      rootStable: result.replayProvider?.rootStable,
+      refreshMatches: result.replayProvider?.refreshMatches,
+      sessionSwitchMatches: result.replayProvider?.sessionSwitchMatches,
+    },
+    cancellation: {
+      busyAfterAbort: result.cancellation?.busyAfterAbort,
+      stopHidden: result.cancellation?.stopHidden,
+      lateTerminalVisible: result.cancellation?.lateTerminalVisible,
+      domStableAfterAbort: result.cancellation?.domStableAfterAbort,
+    },
+    concurrency: {
+      requestCount: result.concurrency?.requestCount,
+      nodeOrder: result.concurrency?.nodeOrder,
+      stableNodeIdentity: result.concurrency?.stableNodeIdentity,
+      removedExisting: result.concurrency?.mutationSummary?.removedExisting,
+      loading: Boolean(result.concurrency?.loadingStates?.sessionListLoading || result.concurrency?.loadingStates?.settingsLoading || result.concurrency?.loadingStates?.workspaceLoading),
+    },
+  };
+}
+
+function writeAndReplayArtifact(result, fallbackFailure) {
+  const probe = result?.artifactProbe || result?.failureEvidence || {};
+  const screenshot = typeof probe.screenshotBase64 === "string" ? Buffer.from(probe.screenshotBase64, "base64") : Buffer.alloc(0);
+  const artifact = writeFailureArtifact(failureArtifactDir, {
+    failure: probe.failure || result?.error || { code: "packaged_e2e_failure", message: fallbackFailure?.message || "Packaged Electron E2E failed" },
+    testConfig: {
+      workspace: ".",
+      platform: process.platform,
+      nodeVersion: process.version,
+      provider: "keyless-replay",
+      memoryLimitMb,
+      executable: "release/win-unpacked/MyCodeAgent.exe",
+      failureMode: expectFailureArtifact ? "artifact-probe" : "artifact-probe",
+    },
+    eventTrace: probe.eventTrace || [],
+    requestCorrelation: probe.requestCorrelation || {},
+    session: probe.session || [],
+    domAria: probe.domAria || {},
+    consoleNetwork: probe.consoleNetwork || { diagnostics: result?.diagnostics || [], output },
+    process: {
+      electronPid: result?.electronPid || child?.pid || null,
+      peakRssMb,
+      memoryLimitMb,
+      memoryExceeded,
+      serverPids: (result?.windows || []).map((window) => window.serverPid).filter(Number.isInteger),
+    },
+    screenshot,
+    replay: { driver: "packaged-electron", invocation: "npm run test:artifact:replay -- <artifact-dir>" },
+  });
+  validateFailureArtifact(artifact);
+  const replay = spawnSync(process.execPath, [resolve(ROOT, "scripts", "replay-failure-artifact.mjs"), artifact, "--validate-only"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  assert.equal(replay.status, 0, replay.stderr || replay.stdout);
+  return artifact;
+}
+
 function assertSingleProcessMultiWindowResult(result) {
   assert.equal(result.ok, true, `packaged probe failed: ${JSON.stringify(result, null, 2)}`);
   assertExistingSecurityProbe(result);
   assertPackagedChatEventFlow(result);
   assertPackagedConcurrencyResult(result);
+  assertPackagedReplayProviderResult(result);
+  assertPackagedCancellationResult(result);
   assertNoRawTokenFields(result);
 
   assert.equal(Number.isInteger(result.electronPid), true);
@@ -343,6 +444,7 @@ function assertSingleProcessMultiWindowResult(result) {
 
 let child;
 let failure;
+let observedResult = null;
 try {
   child = spawn(executable, [
     `--user-data-dir=${electronUserDataDir}`,
@@ -358,6 +460,8 @@ try {
       NODE_ENV: "test",
       MY_CODE_AGENT_E2E_RESULT_FILE: resultFile,
       MY_CODE_AGENT_E2E_DATA_DIR: dataDir,
+      MY_CODE_AGENT_E2E_REPLAY: "1",
+      MY_CODE_AGENT_E2E_CONCURRENCY: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -367,21 +471,40 @@ try {
   startMemoryMonitor();
 
   const result = await waitForResult(child);
+  observedResult = result;
   if (memoryExceeded) throw new Error(`packaged Electron exceeded ${memoryLimitMb}MB RSS (peak ${peakRssMb}MB)`);
-  const measured = assertSingleProcessMultiWindowResult(result);
-  assert.equal(result.electronPid, child.pid, "result must identify the first executable's Electron main process");
-  assert.ok(secondLaunchChild, "the harness did not launch a second executable");
-  await waitForExit(secondLaunchChild, 15_000);
-  assert.equal(secondLaunchChild.exitCode, 0);
-  assert.notEqual(secondLaunchChild.pid, result.electronPid);
-  children.delete(secondLaunchChild);
-  await waitForExit(child, 30_000);
-  children.delete(child);
-  assert.equal(child.exitCode, 0);
-  passed = true;
-  console.log("packaged Electron single-process multi-window E2E passed", JSON.stringify(measured));
+  if (expectFailureArtifact) {
+    assert.equal(result.ok, false, "fault injection must enter the packaged Electron failure path");
+    assert.equal(result.error?.code, "e2e_artifact_probe");
+    writeAndReplayArtifact(result);
+    await waitForExit(child, 30_000);
+    children.delete(child);
+    assert.equal(child.exitCode, 0);
+    passed = true;
+    console.log("packaged Electron failure artifact E2E passed", JSON.stringify({ peakRssMb, memoryLimitMb }));
+  } else {
+    const measured = assertSingleProcessMultiWindowResult(result);
+    assert.deepEqual(settledSnapshot(result), settledGolden, "packaged settled-state golden drift");
+    writeAndReplayArtifact(result);
+    assert.equal(result.electronPid, child.pid, "result must identify the first executable's Electron main process");
+    assert.ok(secondLaunchChild, "the harness did not launch a second executable");
+    await waitForExit(secondLaunchChild, 15_000);
+    assert.equal(secondLaunchChild.exitCode, 0);
+    assert.notEqual(secondLaunchChild.pid, result.electronPid);
+    children.delete(secondLaunchChild);
+    await waitForExit(child, 30_000);
+    children.delete(child);
+    assert.equal(child.exitCode, 0);
+    passed = true;
+    console.log("packaged Electron single-process multi-window E2E passed", JSON.stringify(measured));
+  }
 } catch (error) {
   failure = error;
+  try {
+    writeAndReplayArtifact(observedResult, error);
+  } catch (artifactError) {
+    failure = new AggregateError([error, artifactError], "packaged Electron E2E failed and its failure artifact could not be written");
+  }
 } finally {
   const cleanupErrors = [];
   for (const runningChild of [...children]) {
@@ -403,7 +526,7 @@ try {
   memoryMonitor = null;
   if (!passed) {
     writeFileSync(join(tempRoot, "electron-output.log"), output, "utf8");
-    console.error(`packaged Electron E2E artifacts retained at ${tempRoot}`);
+    console.error(`packaged Electron E2E artifacts retained at ${failureArtifactDir}`);
   } else {
     await removeTempRoot();
   }

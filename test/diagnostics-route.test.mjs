@@ -72,13 +72,13 @@ describe("diagnostics route", () => {
     }
   });
 
-  it("exports bounded tool outcome migration metrics", async () => {
+  it("exports bounded structured tool outcome metrics", async () => {
     const res = response();
     const logger = new StructuredLogger({ maxEntries: 10 });
     const toolOutcomeMetrics = new ToolOutcomeMetrics();
-    toolOutcomeMetrics.observe({ source: "live", toolName: "file_read", toolCallId: "call-1", outcome: "success", legacy: false });
-    toolOutcomeMetrics.observe({ source: "live", toolName: "explorer_list", toolCallId: "call-2", outcome: "success", legacy: true, legacyReason: "missing_outcome" });
-    toolOutcomeMetrics.observe({ source: "replay", toolName: "file_read", toolCallId: "old-1", outcome: "failed", failureKind: "not_found", legacy: true, legacyReason: "string_result" });
+    toolOutcomeMetrics.observe({ source: "live", toolName: "file_read", toolCallId: "call-1", outcome: "success" });
+    toolOutcomeMetrics.observe({ source: "live", toolName: "explorer_list", toolCallId: "call-2", outcome: "success" });
+    toolOutcomeMetrics.observe({ source: "replay", toolName: "file_read", toolCallId: "old-1", outcome: "failed", failureKind: "not_found" });
     await handleDiagnostics(
       { url: "/api/diagnostics", method: "GET", headers: {} },
       res,
@@ -87,28 +87,24 @@ describe("diagnostics route", () => {
     const payload = JSON.parse(res.body);
     assert.deepEqual(payload.toolOutcomeMetrics, {
       total: 3,
-      structured: 1,
-      legacy: 2,
-      missingOutcome: 1,
-      invalidOutcome: 0,
       failures: 1,
       bySource: {
-        live: { total: 2, structured: 1, legacy: 1, missingOutcome: 1, invalidOutcome: 0, failures: 0 },
-        replay: { total: 1, structured: 0, legacy: 1, missingOutcome: 0, invalidOutcome: 0, failures: 1 },
+        live: { total: 2, failures: 0 },
+        replay: { total: 1, failures: 1 },
       },
       byTool: {
-        file_read: { total: 2, structured: 1, legacy: 1, failures: 1 },
-        explorer_list: { total: 1, structured: 0, legacy: 1, failures: 0 },
+        file_read: { total: 2, failures: 1 },
+        explorer_list: { total: 1, failures: 0 },
       },
     });
   });
 
-  it("fails the strict live gate only for compatibility hits", () => {
+  it("does not expose migration counters or compatibility gates", () => {
     const metrics = new ToolOutcomeMetrics();
-    metrics.observe({ source: "live", toolName: "legacy", toolCallId: "call-1", outcome: "success", legacy: true, legacyReason: "string_result" });
-    assert.throws(() => metrics.assertLiveClean(), /compatibility hits/);
-    const replay = new ToolOutcomeMetrics();
-    replay.observe({ source: "replay", toolName: "legacy", toolCallId: "old-1", outcome: "success", legacy: true, legacyReason: "string_result" });
-    assert.doesNotThrow(() => replay.assertLiveClean());
+    metrics.observe({ source: "live", toolName: "file_read", toolCallId: "call-1", outcome: "success" });
+    const snapshot = metrics.snapshot();
+    assert.equal("legacy" in snapshot, false);
+    assert.equal("missingOutcome" in snapshot, false);
+    assert.equal("invalidOutcome" in snapshot, false);
   });
 });

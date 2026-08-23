@@ -7,7 +7,7 @@
 import { existsSync, writeFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { defineAgentTool, structuredToolResult, type AgentTool } from "../types.js";
+import { defineAgentTool, structuredToolError, structuredToolResult, type AgentTool } from "../types.js";
 import { getCurrentRuntime } from "../globals.js";
 import { authorizeToolPath } from "./path-authorization.js";
 
@@ -48,7 +48,7 @@ export const writeAgentMdTool: AgentTool = defineAgentTool({
       authorizedFile = await authorizeToolPath(ctx, root, agentMdPath, operation, `agent.agent_md.${operation}`);
       writeFileSync(authorizedFile, String(content), "utf-8");
     } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+      return structuredToolError(error instanceof Error ? error.message : String(error), "agent_md_write_failed");
     }
     // 刷新系统 prompt 使当前对话立即生效
     const runtime = getCurrentRuntime();

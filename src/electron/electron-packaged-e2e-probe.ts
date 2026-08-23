@@ -8,8 +8,11 @@ import {
 } from "./e2e-diagnostics.js";
 import type { createElectronE2ERuntime } from "./electron-e2e-runtime.js";
 import {
+  capturePackagedFailureEvidence,
   collectRendererE2EResult,
+  runPackagedCancellationProbe,
   runPackagedConcurrencyProbe,
+  runPackagedReplayProviderProbe,
   runPackagedChatEventFlowProbe,
   runRendererCookieIsolationProbe,
   waitForRendererReady,
@@ -20,6 +23,46 @@ import type { ServerBinding } from "./server-binding.js";
 import type { WindowContext, WorkspaceOpenAction } from "./window-manager.js";
 
 type ElectronE2ERuntime = ReturnType<typeof createElectronE2ERuntime>;
+
+function collectSanitizedSessionEvidence(root: string): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  const visit = (directory: string): void => {
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const target = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(target);
+      else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        let lines: string[] = [];
+        try { lines = fs.readFileSync(target, "utf8").split(/\r?\n/u).filter(Boolean); } catch { continue; }
+        for (const [line, raw] of lines.entries()) {
+          try {
+            const value = JSON.parse(raw) as Record<string, any>;
+            const block = value.block && typeof value.block === "object" ? value.block : null;
+            records.push({
+              file: path.relative(root, target).replaceAll("\\", "/"),
+              line: line + 1,
+              type: typeof value.type === "string" ? value.type : null,
+              role: typeof value.role === "string" ? value.role : null,
+              turnId: typeof value.turnId === "string" ? value.turnId : null,
+              block: block ? {
+                type: typeof block.type === "string" ? block.type : null,
+                status: typeof block.status === "string" ? block.status : null,
+                blockId: typeof block.blockId === "string" ? block.blockId : null,
+                seq: Number.isFinite(block.seq) ? block.seq : null,
+                toolCallId: typeof block.toolCallId === "string" ? block.toolCallId : null,
+              } : null,
+            });
+          } catch {
+            records.push({ file: path.relative(root, target).replaceAll("\\", "/"), line: line + 1, type: "invalid_json" });
+          }
+        }
+      }
+    }
+  };
+  visit(root);
+  return records.slice(-4_096);
+}
 
 interface PackagedE2EWindowManager {
   openWorkspace(context: WindowContext, workspace: string): Promise<WorkspaceOpenAction>;
@@ -64,6 +107,12 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
     if (!options.enabled || started) return;
     started = true;
     const initialServerBinding = options.initialServerBinding();
+    let renderer: Record<string, unknown> | null = null;
+    let chatEventFlow: Record<string, unknown> | null = null;
+    let cancellation: Record<string, unknown> | null = null;
+    let concurrency: Record<string, unknown> | null = null;
+    let replayProvider: Record<string, unknown> | null = null;
+    let rendererFailureEvidence: Record<string, unknown> | null = null;
     try {
       await waitForRendererReady(win);
       const origin = await waitForServerOrigin(initialServerBinding);
@@ -88,9 +137,18 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
       fs.writeFileSync(path.join(externalRoot, "ipc.txt"), "ipc-outside", "utf-8");
       fs.writeFileSync(path.join(siblingWorkspace, "read.txt"), "sibling-read", "utf-8");
 
-      const renderer = await collectRendererE2EResult(win, path.join(externalRoot, "ipc.txt"));
-      const chatEventFlow = await runPackagedChatEventFlowProbe(win);
-      const concurrency = await runPackagedConcurrencyProbe(win);
+      renderer = await collectRendererE2EResult(win, path.join(externalRoot, "ipc.txt"));
+      chatEventFlow = await runPackagedChatEventFlowProbe(win);
+      cancellation = await runPackagedCancellationProbe(win);
+      concurrency = await runPackagedConcurrencyProbe(win);
+      replayProvider = await runPackagedReplayProviderProbe(win);
+      // Capture while the replay turn and its correlation ledger still belong
+      // to the active server. Later workspace switches intentionally replace
+      // that server and would erase the failure-local protocol evidence.
+      rendererFailureEvidence = await capturePackagedFailureEvidence(win);
+      if (process.env.MY_CODE_AGENT_E2E_EXPECT_FAILURE_ARTIFACT === "1") {
+        throw Object.assign(new Error("Injected packaged artifact failure"), { code: "E2E_ARTIFACT_PROBE" });
+      }
       const textIconStatus = await requestStatus(`${origin}/icons/file_type_text.svg`);
       const unauthorizedApiStatus = await requestStatus(`${origin}/api/dashboard`);
       const wrongTokenApi = await requestJson(initialServerBinding, "/api/dashboard", "GET", undefined, {
@@ -274,6 +332,15 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
       if (!secondLaunch) throw new Error("Second executable handoff diagnostic is missing");
 
       const diagnostics = options.e2eRuntime.snapshot([contextA, reopenedB]);
+      const artifactProbe = {
+        failure: { code: "injected_settled_failure", message: "Injected settled-state artifact probe" },
+        ...rendererFailureEvidence,
+        session: collectSanitizedSessionEvidence(e2eRoot),
+        consoleNetwork: {
+          diagnostics: options.e2eRuntime.diagnostics,
+          requests: (concurrency as { requestRecords?: unknown })?.requestRecords || [],
+        },
+      };
       options.e2eRuntime.writeResult({
         ok: true,
         packaged: options.packaged,
@@ -282,6 +349,9 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
         renderer,
         chatEventFlow,
         concurrency,
+        replayProvider,
+        cancellation,
+        artifactProbe,
         textIconStatus,
         unauthorizedApiStatus,
         wrongTokenApiStatus: wrongTokenApi.status,
@@ -336,6 +406,10 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
     } catch (error) {
       const snapshot = options.e2eRuntime.failureSnapshot();
       const redactions = options.e2eRuntime.failureRedactions();
+      let rendererEvidence: Record<string, unknown> = rendererFailureEvidence || {};
+      if (!rendererFailureEvidence) {
+        try { rendererEvidence = await capturePackagedFailureEvidence(win); } catch { /* renderer may already be gone */ }
+      }
       const failureDiagnostic = createElectronE2EFailureDiagnostic({
         error,
         diagnostics: options.e2eRuntime.diagnostics,
@@ -345,6 +419,15 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
       options.e2eRuntime.writeResult({
         ok: false,
         ...failureDiagnostic,
+        failureEvidence: {
+          ...rendererEvidence,
+          session: collectSanitizedSessionEvidence(options.e2eDataRoot || options.dataRoot),
+          consoleNetwork: {
+            diagnostics: failureDiagnostic.diagnostics,
+            requests: (concurrency as { requestRecords?: unknown } | null)?.requestRecords || [],
+          },
+          settled: { renderer, chatEventFlow, cancellation, concurrency, replayProvider },
+        },
         secondLaunches: options.secondLaunchRecords().map((launch) => ({
           electronPid: launch.electronPid,
           handledAt: launch.handledAt,
