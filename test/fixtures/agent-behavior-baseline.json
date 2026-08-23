@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "generatedFrom": "test/fixtures/agent-session-replay-fixtures.json",
+  "scenarios": {
+    "task-a-skill-verification": {
+      "correct": true,
+      "allowedToolIds": ["tool-task-a-read"],
+      "maxToolCalls": 1,
+      "maxUnrelatedReads": 0,
+      "maxRetries": 0,
+      "terminal": "done",
+      "requiredEvidence": true,
+      "maxPeakRssMb": 512,
+      "allowExpectedChanges": []
+    },
+    "skill-facts-verification": {
+      "correct": true,
+      "allowedToolIds": ["tool-facts-read"],
+      "maxToolCalls": 1,
+      "maxUnrelatedReads": 0,
+      "maxRetries": 0,
+      "terminal": "done",
+      "requiredEvidence": true,
+      "maxPeakRssMb": 512,
+      "allowExpectedChanges": []
+    },
+    "tool-failure-retry": {
+      "correct": true,
+      "allowedToolIds": ["tool-retry-first", "tool-retry-second"],
+      "maxToolCalls": 2,
+      "maxUnrelatedReads": 0,
+      "maxRetries": 1,
+      "terminal": "done",
+      "requiredEvidence": true,
+      "maxPeakRssMb": 512,
+      "allowExpectedChanges": []
+    },
+    "event-node-order": {
+      "correct": true,
+      "allowedToolIds": ["tool-order"],
+      "maxToolCalls": 1,
+      "maxUnrelatedReads": 0,
+      "maxRetries": 0,
+      "terminal": "done",
+      "requiredEvidence": true,
+      "maxPeakRssMb": 512,
+      "allowExpectedChanges": []
+    },
+    "refresh-recovery": {
+      "correct": true,
+      "allowedToolIds": ["tool-refresh"],
+      "maxToolCalls": 1,
+      "maxUnrelatedReads": 0,
+      "maxRetries": 0,
+      "terminal": "done",
+      "requiredEvidence": true,
+      "maxPeakRssMb": 512,
+      "allowExpectedChanges": []
+    }
+  }
+}

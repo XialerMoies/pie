@@ -20,6 +20,10 @@ function hasExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
+function delay(ms) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+}
+
 function waitForChildExit(child, timeoutMs = 10_000) {
   if (hasExited(child)) return Promise.resolve();
   return new Promise((resolveExit, rejectExit) => {
@@ -138,18 +142,34 @@ async function stopServer(server) {
 }
 
 async function api(server, pathname, options = {}) {
-  const response = await fetch(`http://127.0.0.1:${server.port}${pathname}`, {
+  const request = {
     method: options.method || "GET",
     headers: {
       "X-My-Code-Agent-Token": server.token,
       ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
-  const text = await response.text();
-  let body = null;
-  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
-  return { status: response.status, body };
+  };
+  const retryable = request.method === "GET" || request.method === "HEAD";
+  const deadline = Date.now() + 3_000;
+  let lastError;
+  while (Date.now() < deadline) {
+    if (hasExited(server.child)) {
+      throw new Error(`server exited before ${pathname}\n${server.stdout()}\n${server.stderr()}`, { cause: lastError });
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.port}${pathname}`, request);
+      const text = await response.text();
+      let body = null;
+      try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+      return { status: response.status, body };
+    } catch (error) {
+      lastError = error;
+      if (!retryable) throw error;
+      await delay(50);
+    }
+  }
+  throw new Error(`request ${pathname} did not become available within 3000ms\n${server.stdout()}\n${server.stderr()}`, { cause: lastError });
 }
 
 function assertSameWorkspace(actual, expected) {

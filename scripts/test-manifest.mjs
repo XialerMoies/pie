@@ -30,6 +30,7 @@ export const ROUTE_FILES = [
   "agent-event-persistence-flow.test.mjs",
   "agent-runtime-tool-boundary-flow.test.mjs",
   "agent-session-replay-first-flow.test.mjs",
+  "agent-behavior-baseline-flow.test.mjs",
   "event-session-invariants-flow.test.mjs",
   "failure-artifact-flow.test.mjs",
   "attachments.test.mjs",

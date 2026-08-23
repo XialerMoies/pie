@@ -51,11 +51,25 @@ export async function writeInstanceMetadata(filePath: string, metadata: Instance
   const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await writeFile(tempPath, JSON.stringify(metadata, null, 2), { encoding: "utf8", flag: "wx" });
-    await rename(tempPath, filePath);
+    await renameWithTransientRetry(tempPath, filePath);
   } finally {
     await unlink(tempPath).catch((error: any) => {
       if (error?.code !== "ENOENT") throw error;
     });
+  }
+}
+
+async function renameWithTransientRetry(source: string, destination: string): Promise<void> {
+  const delays = [0, 10, 25, 50, 100];
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (delays[attempt] > 0) await new Promise((resolveDelay) => setTimeout(resolveDelay, delays[attempt]));
+    try {
+      await rename(source, destination);
+      return;
+    } catch (error: any) {
+      const transient = process.platform === "win32" && ["EPERM", "EACCES", "EBUSY"].includes(error?.code);
+      if (!transient || attempt === delays.length - 1) throw error;
+    }
   }
 }
 

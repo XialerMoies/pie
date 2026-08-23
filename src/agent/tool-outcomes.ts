@@ -211,7 +211,7 @@ function toolResultContractError(message: string): Error & { code: string } {
 
 export type ToolFailure = Extract<ToolOutcome, { status: "failed" }>['failure']
 
-export function classifyThrownToolFailure(error: unknown): ToolFailure {
+export function classifyThrownToolFailure(error: unknown, signal?: AbortSignal): ToolFailure {
   const record = error && typeof error === "object"
     ? error as { name?: unknown; code?: unknown; cause?: unknown; message?: unknown }
     : undefined
@@ -223,6 +223,13 @@ export function classifyThrownToolFailure(error: unknown): ToolFailure {
     : undefined
   const causeCode = typeof cause?.code === "string" ? cause.code : ""
   const causeMessage = typeof cause?.message === "string" ? cause.message : ""
+
+  // Undici may surface an abort racing a socket teardown as `TypeError: fetch failed`.
+  // The caller-owned signal is authoritative for this boundary, so preserve the
+  // cancellation terminal state instead of misclassifying it as transport failure.
+  if (signal?.aborted) {
+    return { kind: "cancelled", code: "tool_cancelled", message: "Tool execution cancelled" }
+  }
 
   if (code === "tool_result_contract_required") {
     return { kind: "validation_error", code, message }

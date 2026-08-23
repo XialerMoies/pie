@@ -31,7 +31,7 @@ export function normalizeReplayValue(value) {
 
 export function loadReplayCatalog() {
   const jsonFiles = readdirSync(import.meta.dirname).filter((name) => name.endsWith(".json"));
-  assert.deepEqual(jsonFiles, ["agent-session-replay-fixtures.json"], "replay fixture inventory contains an undeclared JSON file");
+  assert.deepEqual(jsonFiles, ["agent-behavior-baseline.json", "agent-session-replay-fixtures.json"], "replay fixture inventory contains an undeclared JSON file");
   const catalog = JSON.parse(readFileSync(CATALOG_PATH, "utf8"));
   assert.equal(catalog.version, 1, "replay catalog version must be 1");
   assert.deepEqual(catalog.normalization, { workspace: "<workspace>", timestamps: "logical-seq", ids: "fixture-stable" });

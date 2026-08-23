@@ -26,6 +26,7 @@ export const GATES = [
   { name: "frontend", deps: ["report"], profile: "test", command: npmCommand, args: ["run", "test:frontend"] },
   { name: "css-vars", deps: ["frontend"], profile: "light", command: process.execPath, args: ["test/css-vars.mjs"] },
   { name: "replay", deps: ["routes"], profile: "test", command: process.execPath, args: ["scripts/tsx-test.mjs", "--test", "--test-concurrency=1", "test/agent-session-replay-first-flow.test.mjs"] },
+  { name: "agent-eval", deps: ["report"], profile: "test", command: process.execPath, args: ["scripts/tsx-test.mjs", "--test", "--test-concurrency=1", "test/agent-behavior-baseline-flow.test.mjs"] },
   { name: "coverage", deps: ["unit", "routes", "frontend"], profile: "test", command: process.execPath, args: ["scripts/test-coverage.mjs"] },
   { name: "build", deps: ["typecheck", "unit", "routes", "frontend", "css-vars", "replay", "coverage"], profile: "build", command: npmCommand, args: ["run", "build"] },
   { name: "build-flow", deps: ["build"], profile: "test", command: npmCommand, args: ["run", "test:build"] },

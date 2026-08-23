@@ -156,7 +156,7 @@ export function agentToolToPIToolDefinition(tool: AgentTool, workspace?: string,
         return { content: [{ type: "text" as const, text: normalized.text }], details: { ...normalizedMetadata, data: normalized.data ?? null, diagnostics: normalized.diagnostics || [], outcome: normalized.outcome } }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        const failure = classifyThrownToolFailure(error)
+        const failure = classifyThrownToolFailure(error, signal)
         const metadata = error && typeof error === "object" && "metadata" in error && (error as { metadata?: unknown }).metadata && typeof (error as { metadata?: unknown }).metadata === "object" ? (error as { metadata: Record<string, unknown> }).metadata : undefined
         emitTrace?.({ type: "tool_execution_end", toolCallId: _toolCallId, toolName: authorizedTool.name, result: message, ...(metadata ? { metadata } : {}), outcome: { status: "failed", failure }, isError: true })
         extraCtx?.toolOutcomeObserver?.({ source: extraCtx.toolOutcomeSource || "live", toolName: authorizedTool.name, toolCallId: _toolCallId, outcome: "failed", failureKind: failure.kind, requestScope, payloadSummary: message.slice(0, 240), complete: false, ...(correlation ? { correlation } : {}) })

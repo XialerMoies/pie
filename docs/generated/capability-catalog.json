@@ -887,28 +887,28 @@
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 43,
+      "line": 44,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 52,
+      "line": 53,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 62,
+      "line": 63,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 78,
+      "line": 79,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
