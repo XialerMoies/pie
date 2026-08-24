@@ -8,7 +8,7 @@ import {
   defineAgentTool,
   structuredToolResult,
 } from "../src/agent/types.ts";
-import { authorizeExecutionContractAttempt, expandTaskRequirements, inferTaskRequirements } from "../src/server/task-lifecycle.ts";
+import { authorizeExecutionContractAttempt, expandTaskRequirements, inferTaskRequirements, markFactVerificationStep } from "../src/server/task-lifecycle.ts";
 import { formatExecutionContractGuidance } from "../src/server/task-lifecycle.ts";
 import { skillFactsTool } from "../src/agent/tools/skill-facts.ts";
 import { fileReadTool } from "../src/agent/tools/file-read.ts";
@@ -52,6 +52,35 @@ describe("A-17/AP-12 execution contract cross-layer flow", () => {
     assert.deepEqual(requirements.contract?.allowedTools, ["file_read", "skill_facts"]);
     assert.deepEqual(requirements.contract?.instructionSources, ["agent/skills/checkpoint-a-verification/SKILL.md"]);
     assert.equal(requirements.contract?.onMissingEvidence, "report_unverified");
+  });
+
+  it("builds independent contracts for combined tasks A+B+C and enforces each task sequence", () => {
+    const message = [
+      "任务 A：请按 checkpoint-a-verification 检查 agent/skills/skill-verification/SKILL.md 的状态和内容，只报告实际读取到的事实。",
+      "任务 B：请按 checkpoint-a-verification 检查用户级记忆中的一个条目，说明作用域、启用状态和证据来源。",
+      "任务 C：请按 checkpoint-a-verification 检查当前工作区的一个记忆条目，说明作用域、启用状态和证据来源。",
+    ].join("\\n");
+    const requirements = inferTaskRequirements(message);
+    assert.equal(requirements.contract?.kind, "fact_verification_batch");
+    assert.deepEqual(requirements.contract?.tasks?.map((task) => task.id), ["A", "B", "C"]);
+    assert.match(formatExecutionContractGuidance(requirements), /B: first call list_memory/);
+    assert.match(formatExecutionContractGuidance(requirements), /C: first call list_memory/);
+
+    const attempts = new Set();
+    const progress = new Map();
+    const blocked = authorizeExecutionContractAttempt(requirements.contract, undefined, attempts, "read_memory", { target: "memory:user/checkpoint-user-preference", argsFingerprint: "read-before-list" }, undefined, progress);
+    assert.equal(blocked.allowed, false);
+    assert.equal(blocked.reason, "sequence_required");
+
+    const listed = authorizeExecutionContractAttempt(requirements.contract, undefined, attempts, "list_memory", { target: "memory:user", argsFingerprint: "list-user" }, undefined, progress);
+    assert.equal(listed.allowed, true);
+    markFactVerificationStep(progress, requirements.contract, "list_memory", { scope: "user" });
+    const read = authorizeExecutionContractAttempt(requirements.contract, undefined, attempts, "read_memory", { target: "memory:user/checkpoint-user-preference", argsFingerprint: "read-user" }, undefined, progress);
+    assert.equal(read.allowed, true);
+
+    const workspaceReadBeforeList = authorizeExecutionContractAttempt(requirements.contract, undefined, attempts, "read_memory", { target: "memory:workspace/checkpoint-workspace-rule", argsFingerprint: "read-workspace-before-list" }, undefined, progress);
+    assert.equal(workspaceReadBeforeList.allowed, false);
+    assert.equal(workspaceReadBeforeList.reason, "sequence_required");
   });
 
   it("requires only complete content for an ordinary file fact check", () => {
@@ -570,6 +599,75 @@ describe("A-17/AP-12 execution contract cross-layer flow", () => {
     await new Promise((resolve) => server.close(resolve));
   });
 
+  it("drives combined A+B+C through HTTP/SSE with per-task evidence and no source rejection", async () => {
+    const ledger = new EvidenceLedger();
+    const listeners = new Set();
+    let promptMessage = "";
+    const engine = {
+      session: { id: "batch-fact-session", workspace: process.cwd(), isStreaming: false, isCompacting: false },
+      subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+      syncModelProviders: async () => 0,
+      prompt: async ({ message }) => {
+        promptMessage = message;
+        const base = { version: 1, sessionId: "batch-fact-session", turnId: "batch-fact-turn", timestamp: Date.now() };
+        let seq = 1;
+        const emit = (event) => { for (const listener of listeners) listener({ ...base, seq: seq++, ...event }); };
+        const calls = [
+          ["batch-a-read", "file_read", "agent/skills/skill-verification/SKILL.md", ["content"], { path: "agent/skills/skill-verification/SKILL.md" }],
+          ["batch-a-facts", "skill_facts", "agent/skills/skill-verification/SKILL.md", ["trust", "enabled", "parse"], { id: "skill-verification" }],
+          ["batch-b-list", "list_memory", "memory:user", ["scope", "entry", "enabled", "source"], { scope: "user" }],
+          ["batch-b-read", "read_memory", "memory:user/checkpoint-user-preference", ["scope", "entry", "enabled", "source", "content"], { name: "checkpoint-user-preference", scope: "user" }],
+          ["batch-c-list", "list_memory", "memory:workspace", ["scope", "entry", "enabled", "source"], { scope: "workspace" }],
+          ["batch-c-read", "read_memory", "memory:workspace/checkpoint-workspace-rule", ["scope", "entry", "enabled", "source", "content"], { name: "checkpoint-workspace-rule", scope: "workspace" }],
+        ];
+        emit({ type: "turn.started" });
+        for (const [toolCallId, name, target, evidenceFields, input] of calls) {
+          ledger.observe({ source: "live", toolName: name, toolCallId, outcome: "success", requestScope: { target }, payloadSummary: "evidence", complete: true, evidenceFields });
+          emit({ type: "tool.started", toolCallId, name, input });
+          emit({ type: "tool.completed", toolCallId, name, output: "evidence", metadata: { evidenceFields } });
+        }
+        emit({ type: "content.delta", text: "A、B、C 均已完成核验。" });
+        emit({ type: "turn.completed" });
+      },
+    };
+    const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: process.cwd(), traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0, eventSeq: 0, eventHistory: [] };
+    const runtime = { session: engine.session, currentWorkspace: process.cwd(), switchWorkspace: async () => {}, onEvent: () => () => {} };
+    const ctx = withServerGroups({ engine, runtime, chatStream, sseClients: [], observability: { evidenceLedger: ledger },
+      paths: { APP_ROOT: process.cwd(), DATA_DIR: process.cwd(), PI_CONFIG_DIR: process.cwd(), SESSIONS_DIR: process.cwd(), FRONTEND_DIR: process.cwd(), FRONTEND_SRC_DIR: process.cwd(), HAS_BUILT_FRONTEND: false } });
+    attachEngineEvents(engine, runtime, chatStream, ctx);
+    const server = createServer((req, res) => { void dispatchRoute(req, res, ctx); });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+    const message = [
+      "任务 A：请按 checkpoint-a-verification 检查 agent/skills/skill-verification/SKILL.md 的状态和内容，只报告实际读取到的事实。",
+      "任务 B：请按 checkpoint-a-verification 检查用户级记忆中的一个条目，说明作用域、启用状态和证据来源。",
+      "任务 C：请按 checkpoint-a-verification 检查当前工作区的一个记忆条目，说明作用域、启用状态和证据来源。",
+    ].join("\\n");
+    const ssePromise = new Promise((resolve, reject) => {
+      const request = http.get({ hostname: "127.0.0.1", port, path: "/api/chat/stream" });
+      let body = "";
+      request.on("response", (response) => { response.setEncoding("utf8"); response.on("data", (chunk) => { body += chunk; }); response.on("end", () => resolve(body)); });
+      request.on("error", reject);
+    });
+    const post = await new Promise((resolve, reject) => {
+      const request = http.request({ hostname: "127.0.0.1", port, path: "/api/chat", method: "POST", headers: { "content-type": "application/json" } }, (response) => { response.resume(); response.on("end", () => resolve(response.statusCode)); });
+      request.on("error", reject); request.end(JSON.stringify({ message }));
+    });
+    await ssePromise;
+    assert.equal(post, 200);
+    assert.match(promptMessage, /fact_verification_batch/);
+    assert.match(promptMessage, /B: first call list_memory/);
+    assert.match(promptMessage, /C: first call list_memory/);
+    const events = chatStream.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1]));
+    const done = events.find((event) => event.type === "done");
+    assert.equal(done.status, "done");
+    assert.equal(done.task.status, "completed");
+    assert.deepEqual(done.task.missingEvidence, []);
+    assert.equal(done.task.metrics.toolCalls, 6);
+    assert.equal(done.task.metrics.blockedAttempts, 0);
+    await new Promise((resolve) => server.close(resolve));
+  });
+
   it("keeps a standard low-confidence check open across HTTP, tools, SSE, and terminal metrics", async () => {
     const listeners = new Set();
     let promptMessage = "";
@@ -672,7 +770,7 @@ describe("A-17/AP-12 execution contract cross-layer flow", () => {
     await new Promise((resolve) => server.close(resolve));
   });
 
-  it("keeps an empty user-memory verification terminal out of the generic reply-failed UI", async () => {
+  it("keeps a source-not-allowed contract stop out of the generic reply-failed UI", async () => {
     const ledger = new EvidenceLedger();
     const listeners = new Set();
     const engine = {
@@ -687,14 +785,13 @@ describe("A-17/AP-12 execution contract cross-layer flow", () => {
           requestScope: { target: "memory:user" }, payloadSummary: "暂无记忆。", complete: true, evidenceFields: ["scope"] });
         emit({ type: "tool.started", toolCallId: "memory-list-1", name: "list_memory", input: { scope: "user" } }, 2);
         emit({ type: "tool.completed", toolCallId: "memory-list-1", name: "list_memory", output: "暂无记忆。", metadata: { evidenceFields: ["scope"] } }, 3);
-        // This reproduces the old runaway fallback: a missing target after an
-        // empty scope must become an honest unverified report, not a generic
-        // "回复失败" terminal.
-        emit({ type: "tool.started", toolCallId: "explorer-fallback", name: "explorer_list", input: { path: ".pi" } }, 4);
-        emit({ type: "tool.failed", toolCallId: "explorer-fallback", name: "explorer_list",
-          error: { category: "provider", kind: "not_found", code: "target_not_found", message: "目录不存在", retryable: false } }, 5);
+        // A host contract rejection is an honest unverified report, not a
+        // generic "回复失败" terminal.
+        emit({ type: "tool.started", toolCallId: "out-of-scope", name: "file_read", input: { path: "vite.config.ts" } }, 4);
+        emit({ type: "tool.failed", toolCallId: "out-of-scope", name: "file_read",
+          error: { category: "validation", kind: "validation_error", code: "execution_contract_violation", message: "未执行：事实核验契约禁止读取该来源。", retryable: false, details: { reason: "source_not_allowed" } } }, 5);
         emit({ type: "content.delta", text: "没有可供核验的用户级记忆条目。" }, 6);
-        emit({ type: "turn.failed", error: { category: "provider", kind: "not_found", code: "target_not_found", message: "目录不存在", retryable: false } }, 7);
+        emit({ type: "turn.failed", error: { category: "validation", kind: "validation_error", code: "execution_contract_violation", message: "未执行：事实核验契约禁止读取该来源。", retryable: false, details: { reason: "source_not_allowed" } } }, 7);
       },
     };
     const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: process.cwd(), traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0, eventSeq: 0, eventHistory: [],
@@ -726,7 +823,8 @@ describe("A-17/AP-12 execution contract cross-layer flow", () => {
     assert.ok(done);
     assert.equal(done.status, "done");
     assert.equal(done.task.status, "blocked");
-    assert.equal(done.task.reason, "target_not_found_is_not_retryable_without_a_new_target");
+    assert.equal(done.task.reason, "source_not_allowed");
+    assert.equal(done.blocks.find((block) => block.type === "step" && block.status === "error")?.text, "validation_error：source_not_allowed");
     assert.match(done.text, /^未验证：/);
     assert.equal("error" in done, false);
     await new Promise((resolve) => server.close(resolve));

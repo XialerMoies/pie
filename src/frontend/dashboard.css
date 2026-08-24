@@ -304,6 +304,10 @@ body{background:var(--bg);height:100vh}
 .trace-error .trace-dot{background:var(--rs)}
 .trace-thinking .trace-dot{background:var(--tm)}
 .trace-thinking.trace-streaming .trace-dot{animation:trace-pulse 1.5s ease-in-out infinite}
+.trace-error-node{padding:10px 0 4px;margin-top:2px}
+.trace-error-node::after{display:none!important}
+.trace-error-rule{height:1px;width:100%;background:rgba(248,113,113,.32);margin:0 0 8px}
+.trace-error-text{color:var(--rs);font-family:var(--fm);font-size:.72rem;line-height:1.5;overflow-wrap:anywhere;word-break:break-word}
 .assistant-block.block-event{animation:trace-in .2s ease-out}
 @keyframes trace-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 .trace-running .trace-title{color:var(--em)}
@@ -419,26 +423,6 @@ body{background:var(--bg);height:100vh}
 .block-text-event .trace-text-body pre{margin:6px 0}
 .block-trace{margin:0}
 .block-trace .block-event{position:relative;min-width:0}
-.m.error{align-items:flex-start}
-.msg-error{margin:2px 0 10px;border:1px solid rgba(248,113,113,.35);border-radius:10px;background:rgba(248,113,113,.08);overflow:hidden;max-width:100%}
-.msg-error summary{cursor:pointer;list-style:none;display:flex;flex-direction:column;gap:3px;padding:10px 12px;outline:none}
-.msg-error summary::-webkit-details-marker{display:none}
-.msg-error-title{font-family:var(--fb);font-size:.8rem;font-weight:700;color:var(--rs);line-height:1.4}
-.msg-error-summary{font-size:.72rem;line-height:1.5;color:rgba(248,113,113,.92);overflow-wrap:anywhere;word-break:break-word}
-.msg-error-body{padding:0 12px 12px;display:flex;flex-direction:column;gap:10px}
-.msg-error-message{font-size:.76rem;line-height:1.6;color:var(--tx);overflow-wrap:anywhere;word-break:break-word}
-.msg-error-block{display:flex;flex-direction:column;gap:4px}
-.msg-error-label{font-size:.62rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--tm);font-family:var(--fd)}
-.msg-error-text{font-size:.74rem;line-height:1.6;color:var(--ts);overflow-wrap:anywhere;word-break:break-word}
-.msg-error-steps{margin:0;padding-left:16px;color:var(--ts);font-size:.74rem;line-height:1.6}
-.msg-error-steps li+li{margin-top:2px}
-.msg-error-raw{border:1px solid var(--bd);border-radius:8px;background:rgba(0,0,0,.12);overflow:hidden}
-.msg-error-raw summary{cursor:pointer;list-style:none;padding:8px 10px;font-size:.68rem;font-family:var(--fb);color:var(--ts)}
-.msg-error-raw summary::-webkit-details-marker{display:none}
-.msg-error-raw pre{margin:0;padding:9px 11px;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--fm);font-size:.68rem;line-height:1.55;color:var(--ts)}
-.msg-error-actions{display:flex;flex-wrap:wrap;gap:6px}
-.msg-error-btn{padding:4px 10px;border:1px solid var(--bd);border-radius:6px;background:var(--bc);color:var(--ts);font-size:.7rem;font-family:var(--fb);cursor:pointer;transition:all .1s}
-.msg-error-btn:hover{background:var(--bh);color:var(--tx);border-color:var(--am)}
 .ty{display:flex;align-items:center;gap:3px;padding:6px 0 2px}
 /* B-7：事件流消息中等待效果右移 22px 对齐事件流内容区。
    .m padding-left 12px + .trace padding-left 22px = 内容区起点 34px；

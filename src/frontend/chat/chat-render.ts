@@ -69,10 +69,6 @@ function mdRender(text: string): string {
   }
 }
 
-function renderErrorCard(error: ChatErrorState): string {
-  return chatViews.ChatErrorView.render(error);
-}
-
 chatViews.configure({ renderMarkdown: mdRender });
 chatViews.ChatEventNodeView.configure({ renderMarkdown: mdRender });
 function renderBlocks(blocks: any[], subagentBatches?: readonly FrontendSubagentBatch[]): string {
@@ -129,10 +125,29 @@ function blockId(block: any): string {
   return chatViews.ChatEventNodeView.blockId(block);
 }
 
+function blocksWithTerminalError(message: any): any[] {
+  const blocks = Array.isArray(message.blocks) ? [...message.blocks] : [];
+  if (!message.error || blocks.some((block) => block.type === 'step' && (block.variant === 'error' || block.status === 'error'))) {
+    return blocks;
+  }
+  if (blocks.length === 0 && message.content) {
+    blocks.push({ type: 'text', text: message.content, blockId: 'legacy-error-text', seq: 1 });
+  }
+  const seq = blocks.reduce((max, block) => Math.max(max, Number(block.seq) || 0), 0) + 1;
+  blocks.push({
+    type: 'step',
+    status: 'error',
+    variant: 'error',
+    text: `${message.error.title || 'error'}：${message.error.reason || message.error.message || 'unknown_error'}`,
+    blockId: 'legacy-error-terminal',
+    seq,
+  });
+  return blocks;
+}
+
 function renderMessage(m: any, messageIndex = -1): string {
   const c = m.role + (m.streaming ? ' go' : ''), lb = m.role === 'user' ? '你' : 'Pi';
   const ty = m.streaming ? `<div class="ty"><span class="ty-d"></span><span class="ty-d"></span><span class="ty-d"></span></div>` : '';
-  const error = m.error ? renderErrorCard(m.error) : '';
   const indexAttr = Number.isInteger(messageIndex) && messageIndex >= 0
     ? ` data-message-index="${messageIndex}"`
     : '';
@@ -143,12 +158,13 @@ function renderMessage(m: any, messageIndex = -1): string {
     return `<div class="compact-summary"${indexAttr}>${content}</div>`;
   }
 
-  if (m.blocks && m.blocks.length > 0) {
-    return `<div class="m ${c}${m.error ? ' error' : ''}"${indexAttr}><div class="ml">${lb}</div><div class="mt block-flow">${renderBlocks(m.blocks, m.subagentBatches)}</div>${error}${ty}</div>`;
+  const displayBlocks = blocksWithTerminalError(m);
+  if (displayBlocks.length > 0) {
+    return `<div class="m ${c}"${indexAttr}><div class="ml">${lb}</div><div class="mt block-flow">${renderBlocks(displayBlocks, m.subagentBatches)}</div>${ty}</div>`;
   }
 
   const content = m.content ? mdRender(m.content) : '';
-  return `<div class="m ${c}${m.error ? ' error' : ''}"${indexAttr}><div class="ml">${lb}</div><div class="mt">${content}</div>${error}${ty}</div>`;
+  return `<div class="m ${c}"${indexAttr}><div class="ml">${lb}</div><div class="mt">${content}</div>${ty}</div>`;
 }
 
 function msgs(): string {

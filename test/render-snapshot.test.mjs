@@ -267,49 +267,6 @@ describe("chat component views", () => {
     }
   });
 
-  it("ChatErrorView keeps action ownership local and releases it on dispose", () => {
-    const host = doc.createElement("div");
-    const calls = [];
-    const view = new win.App.ChatViews.ChatErrorView({ title: "Failed", message: "Try again" }, {
-      retry: () => calls.push("retry"),
-      copy: () => calls.push("copy"),
-      refresh: () => calls.push("refresh"),
-      settings: () => calls.push("settings"),
-    });
-    const root = view.mount(host);
-
-    for (const action of ["retry", "copy", "refresh", "settings"]) {
-      root.querySelector(`[data-chat-error-action="${action}"]`).click();
-    }
-    assert.deepStrictEqual(calls, ["retry", "copy", "refresh", "settings"]);
-
-    view.update({ title: "Still failed", message: "Updated" });
-    assert.strictEqual(host.firstElementChild, root);
-    assert.ok(root.textContent.includes("Updated"));
-    view.dispose();
-    assert.strictEqual(host.childElementCount, 0);
-  });
-
-  it("ChatErrorView renders only explicitly allowed recovery actions", () => {
-    const dangerous = win.App.ChatViews.ChatErrorView.render({
-      title: "高风险操作已拦截",
-      message: "安全策略已阻止高风险操作。",
-      actions: ["copy"],
-    });
-    const recoverable = win.App.ChatViews.ChatErrorView.render({
-      title: "权限确认不可用",
-      message: "权限确认通道不可用，操作已安全拒绝。",
-      actions: ["reconnect", "permissions", "copy"],
-    });
-
-    assert.match(dangerous, /data-chat-error-action="copy"/);
-    assert.doesNotMatch(dangerous, /data-chat-error-action="retry"/);
-    assert.doesNotMatch(dangerous, /data-chat-error-action="settings"/);
-    assert.match(recoverable, /data-chat-error-action="reconnect"/);
-    assert.match(recoverable, /data-chat-error-action="permissions"/);
-    assert.match(recoverable, />重新连接</);
-    assert.match(recoverable, />查看权限</);
-  });
 });
 
 describe("msgs() 渲染", () => {
@@ -391,7 +348,7 @@ describe("msgs() 渲染", () => {
     assert.ok(!html.includes("task track"), "不显示 trace 相关标记");
   });
 
-  it("错误卡片展示原因、下一步和操作按钮", () => {
+  it("错误状态渲染为事件流底部的错误节点", () => {
     state.M = [{
       role: "assistant",
       content: "",
@@ -407,44 +364,12 @@ describe("msgs() 渲染", () => {
 
     const html = win.msgs();
 
-    assert.ok(html.includes("发送失败"), "显示错误标题");
-    assert.ok(html.includes("可能原因"), "显示原因区块");
-    assert.ok(html.includes("下一步操作"), "显示下一步区块");
-    assert.ok(html.includes("重新发送"), "显示重新发送按钮");
-    assert.ok(html.includes("复制错误"), "显示复制错误按钮");
-    assert.ok(html.includes("刷新工作区"), "显示刷新工作区按钮");
-    assert.ok(html.includes("打开设置"), "显示打开设置按钮");
-
-    const host = doc.createElement("div");
-    host.innerHTML = html;
-    doc.body.appendChild(host);
-    assert.strictEqual(host.querySelectorAll("[onclick], [onchange], [oninput]").length, 0);
-
-    const calls = [];
-    const originals = {
-      retryLastTurn: win.App.Chat.retryLastTurn,
-      copyLastError: win.App.Chat.copyLastError,
-      refreshWorkspaceState: win.App.Chat.refreshWorkspaceState,
-      openSettingsModal: win.App.Settings.openSettingsModal,
-    };
-    win.App.Chat.retryLastTurn = () => calls.push("retry");
-    win.App.Chat.copyLastError = () => { calls.push("copy"); return Promise.resolve(); };
-    win.App.Chat.refreshWorkspaceState = () => calls.push("refresh");
-    win.App.Settings.openSettingsModal = () => calls.push("settings");
-    for (const action of ["retry", "copy", "refresh", "settings"]) {
-      host.querySelector(`[data-chat-error-action="${action}"]`)?.click();
-    }
-    assert.deepStrictEqual(calls, ["retry", "copy", "refresh", "settings"]);
-    Object.assign(win.App.Chat, {
-      retryLastTurn: originals.retryLastTurn,
-      copyLastError: originals.copyLastError,
-      refreshWorkspaceState: originals.refreshWorkspaceState,
-    });
-    win.App.Settings.openSettingsModal = originals.openSettingsModal;
-    host.remove();
+    assert.ok(html.includes("发送失败：请求 `/api/chat` 失败"), "显示错误类型和原因");
+    assert.ok(html.includes("trace-error-rule"), "显示事件流分隔线");
+    assert.ok(!html.includes("msg-error"), "不生成错误卡片");
   });
 
-  it("错误卡片位于事件流底部且不重复摘要正文", () => {
+  it("错误节点位于事件流底部且不重复摘要正文", () => {
     state.M = [{
       role: "assistant",
       streaming: false,
@@ -456,10 +381,10 @@ describe("msgs() 渲染", () => {
     host.innerHTML = win.msgs();
     const message = host.querySelector(".m");
     assert.ok(message);
-    const children = [...message.children];
-    assert.ok(children.indexOf(message.querySelector(".mt")) < children.indexOf(message.querySelector(".msg-error")), "错误卡片应位于事件流之后");
-    const html = message.querySelector(".msg-error")?.outerHTML || "";
-    assert.strictEqual((html.match(/当前回复未能完成。/g) || []).length, 1, "错误摘要不应在展开正文中重复");
+    const html = message.querySelector(".mt")?.outerHTML || "";
+    assert.ok(html.includes("trace-error-rule"), "错误节点位于事件流底部");
+    assert.ok(html.includes("回复失败：当前回复未能完成。"), "错误节点包含类型和原因");
+    assert.ok(!html.includes("msg-error"), "不生成错误卡片");
   });
 
   it("block tool_use 渲染为工具节点", () => {
@@ -726,6 +651,18 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes("trace-error"), "错误状态 class");
     assert.ok(html.includes("ERROR"), "失败结果显示 ERROR 标签");
     assert.ok(html.includes("文件不存在"), "错误信息显示");
+  });
+
+  it("错误终态使用事件流分隔线而不是错误卡片", () => {
+    state.M = [{
+      role: "assistant",
+      blocks: [{ type: "step", status: "error", variant: "error", text: "validation_error：source_not_allowed", blockId: "error-1", seq: 1 }],
+    }];
+    const html = win.msgs();
+    assert.ok(html.includes("trace-error-node"));
+    assert.ok(html.includes("trace-error-rule"));
+    assert.ok(html.includes("validation_error：source_not_allowed"));
+    assert.ok(!html.includes("msg-error"));
   });
 
   it("流式 text block 原位更新且不重绘消息列表", () => {

@@ -138,12 +138,17 @@ export function agentToolToPIToolDefinition(tool: AgentTool, workspace?: string,
         const target = (requestScope.target || "").replace(/\\/g, "/")
         return targetMatches(target, source)
       }))
-      if (contract?.kind === "fact_verification" && contract.targets?.length) {
+      const factVerificationContract = contract?.kind === "fact_verification" || contract?.kind === "fact_verification_batch";
+      if (factVerificationContract && contract.targets?.length) {
         const target = requestScope.target || ""
         if (extraCtx?.authorizeExecutionContract) {
           // The complete server host owns contract authorization. Keeping one
           // decision point prevents adapter and server policy from drifting.
           executionContractDecision = extraCtx.authorizeExecutionContract(authorizedTool.name, args, requestScope)
+        } else if (contract.kind === "fact_verification_batch") {
+          // Batch contracts require the host callback to select the matching
+          // task. A low-level adapter must not widen one task into another.
+          executionContractDecision = { allowed: false, code: "execution_contract_violation", reason: "batch_host_authorization_required", retryable: false }
         } else {
           // Low-level/embedded hosts still fail closed when they expose a hard
           // contract without installing the authoritative callback.
@@ -170,7 +175,7 @@ export function agentToolToPIToolDefinition(tool: AgentTool, workspace?: string,
         // A fresh fact-verification turn must inspect the current source. The
         // general evidence cache has no source revision/mtime proof and cannot
         // safely satisfy a later verification request.
-        const cached = contract?.kind === "fact_verification"
+        const cached = factVerificationContract
           ? undefined
           : extraCtx?.evidenceLookup?.(authorizedTool.name, requestScope)
         if (cached) {
@@ -182,7 +187,7 @@ export function agentToolToPIToolDefinition(tool: AgentTool, workspace?: string,
         const onUpdate = (chunk: string) => emitTrace?.({ type: "tool_execution_update", toolCallId: _toolCallId, toolName: authorizedTool.name, partialResult: chunk })
         const toolContext: ToolContext = { cwd: workspace || "", sessionId: "", workspace, toolCallId: _toolCallId, signal, onUpdate, getExecutionContract: extraCtx?.getExecutionContract, ...extraCtx }
         const normalized = assertStructuredToolResult(await authorizedTool.execute(args, toolContext))
-        const instructionSource = contract?.kind === "fact_verification" && sourceMatches(contract.instructionSources)
+        const instructionSource = factVerificationContract && sourceMatches(contract.instructionSources)
         const normalizedMetadata = instructionSource ? Object.fromEntries(Object.entries(normalized.metadata || {}).filter(([key]) => key !== "evidenceFields")) : (normalized.metadata || {})
         emitTrace?.({ type: "tool_execution_end", toolCallId: _toolCallId, toolName: authorizedTool.name, result: normalized.text, data: normalized.data, diagnostics: normalized.diagnostics, ...(Object.keys(normalizedMetadata).length > 0 ? { metadata: normalizedMetadata } : {}), outcome: normalized.outcome, isError: normalized.outcome.status === "failed" })
         extraCtx?.toolOutcomeObserver?.({ source: extraCtx.toolOutcomeSource || "live", toolName: authorizedTool.name, toolCallId: _toolCallId, outcome: normalized.outcome.status, ...(normalized.outcome.status === "failed" ? { failureKind: normalized.outcome.failure.kind } : {}), requestScope, payloadSummary: normalized.text.slice(0, 240), complete: normalized.outcome.status === "success", ...(contract && executionContractDecision ? { executionContract: { allowed: true, revision: contract.revision } } : {}), evidenceFields: Array.isArray(normalizedMetadata.evidenceFields) ? normalizedMetadata.evidenceFields.filter((field): field is string => typeof field === "string").slice(0, 32) : undefined, ...(correlation ? { correlation } : {}) })

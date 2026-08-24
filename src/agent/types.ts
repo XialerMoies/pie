@@ -378,7 +378,18 @@ export type ToolHostContext = Omit<ToolContext,
   | "authorizationDecision"
 >
 
-export type ExecutionContractKind = "fact_verification" | "implementation" | "diagnosis" | "exploration" | "conversation"
+export type ExecutionContractKind = "fact_verification" | "fact_verification_batch" | "implementation" | "diagnosis" | "exploration" | "conversation"
+
+export interface FactVerificationTaskContract {
+  id: string
+  targets: readonly string[]
+  /** Host-owned instruction files that explain procedure but never satisfy evidence. */
+  instructionSources?: readonly string[]
+  allowedSources: readonly string[]
+  allowedTools: readonly string[]
+  requiredEvidence: readonly string[]
+  sequence?: readonly string[]
+}
 
 export interface ExecutionContract {
   kind: ExecutionContractKind
@@ -386,6 +397,8 @@ export interface ExecutionContract {
   /** Host-owned instruction files may be read to understand the requested check,
    * but their contents can never satisfy the task's evidence fields. */
   instructionSources?: readonly string[]
+  /** Independent bounded checks in a combined fact-verification turn. */
+  tasks?: readonly FactVerificationTaskContract[]
   allowedSources?: readonly string[]
   allowedTools?: readonly string[]
   requiredEvidence?: readonly string[]

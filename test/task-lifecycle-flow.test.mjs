@@ -135,6 +135,43 @@ describe("A-04 task lifecycle cross-layer flow", () => {
     assert.equal("error" in done, false);
   });
 
+  it("completes combined A+B+C verification with independent evidence namespaces and ordered memory reads", () => {
+    const message = [
+      "任务 A：请按 checkpoint-a-verification 检查 agent/skills/skill-verification/SKILL.md 的状态和内容，只报告实际读取到的事实。",
+      "任务 B：请按 checkpoint-a-verification 检查用户级记忆中的一个条目，说明作用域、启用状态和证据来源。",
+      "任务 C：请按 checkpoint-a-verification 检查当前工作区的一个记忆条目，说明作用域、启用状态和证据来源。",
+    ].join("\\n");
+    const requirements = inferTaskRequirements(message);
+    assert.equal(requirements.contract?.kind, "fact_verification_batch");
+    const ledger = new EvidenceLedger();
+    const flow = wire(requirements, ledger);
+    const evidence = [
+      ["a-read", "file_read", "agent/skills/skill-verification/SKILL.md", ["content"], { path: "agent/skills/skill-verification/SKILL.md" }],
+      ["a-facts", "skill_facts", "agent/skills/skill-verification/SKILL.md", ["trust", "enabled", "parse"], { id: "skill-verification" }],
+      ["b-list", "list_memory", "memory:user", ["scope", "entry", "enabled", "source"], { scope: "user" }],
+      ["b-read", "read_memory", "memory:user/checkpoint-user-preference", ["scope", "entry", "enabled", "source", "content"], { name: "checkpoint-user-preference", scope: "user" }],
+      ["c-list", "list_memory", "memory:workspace", ["scope", "entry", "enabled", "source"], { scope: "workspace" }],
+      ["c-read", "read_memory", "memory:workspace/checkpoint-workspace-rule", ["scope", "entry", "enabled", "source", "content"], { name: "checkpoint-workspace-rule", scope: "workspace" }],
+    ];
+    flow.engine.emit("event", base("turn.started", 1));
+    let seq = 2;
+    for (const [id, name, target, fields, input] of evidence) {
+      ledger.observe({ source: "live", toolName: name, toolCallId: id, outcome: "success", requestScope: { target }, payloadSummary: "evidence", complete: true, evidenceFields: fields });
+      flow.engine.emit("event", base("tool.started", seq++, { toolCallId: id, name, input }));
+      flow.engine.emit("event", base("tool.completed", seq++, { toolCallId: id, name, output: "evidence", metadata: { evidenceFields: fields } }));
+    }
+    flow.engine.emit("event", base("content.delta", seq++, { text: "A、B、C 均已核验。" }));
+    flow.engine.emit("event", base("turn.completed", seq));
+
+    const done = flow.stream.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1])).find((payload) => payload.type === "done");
+    assert.equal(done.status, "done");
+    assert.equal(done.task.status, "completed");
+    assert.deepEqual(done.task.missingEvidence, []);
+    assert.equal(done.task.metrics.toolCalls, 6);
+    assert.equal(done.task.metrics.evidenceSatisfied, true);
+    assert.equal(done.task.metrics.blockedAttempts, 0);
+  });
+
   it("persists the terminal task contract for refresh/replay inspection", async () => {
     const root = await mkdtemp(join(tmpdir(), "mca-a04-task-"));
     const sessionFile = join(root, "session.jsonl");

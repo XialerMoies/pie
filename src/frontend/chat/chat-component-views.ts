@@ -5,13 +5,6 @@ interface ChatViewDependencies {
   fileDiff: AppFileDiff;
 }
 
-interface ChatErrorActions {
-  retry?: () => void;
-  copy?: () => void | Promise<void>;
-  refresh?: () => void;
-  settings?: () => void;
-}
-
 interface EditedFileSummary {
   filePath: string;
   linesAdded: number;
@@ -290,70 +283,6 @@ class EditSummaryView {
 }
 
 
-class ChatErrorView {
-  private root: HTMLElement | null = null;
-  private error: ChatErrorState;
-  private readonly actions: ChatErrorActions;
-  private readonly onClick = (event: Event) => {
-    const target = (event.target as Element | null)?.closest<HTMLElement>('[data-chat-error-action]');
-    if (!target || !this.root?.contains(target)) return;
-    event.stopPropagation();
-    const action = target.dataset.chatErrorAction as keyof ChatErrorActions;
-    void this.actions[action]?.();
-  };
-
-  constructor(error: ChatErrorState, actions: ChatErrorActions = {}) {
-    this.error = error;
-    this.actions = actions;
-  }
-
-  static render(error: ChatErrorState): string {
-    const nextSteps = Array.isArray(error.nextSteps) ? error.nextSteps.filter(Boolean) : [];
-    const raw = error.raw ? `<details class="msg-error-raw"><summary>错误详情</summary><pre>${E(error.raw)}</pre></details>` : '';
-    const reason = error.reason ? `<div class="msg-error-block"><div class="msg-error-label">可能原因</div><div class="msg-error-text">${E(error.reason)}</div></div>` : '';
-    const steps = nextSteps.length > 0
-      ? `<div class="msg-error-block"><div class="msg-error-label">下一步操作</div><ul class="msg-error-steps">${nextSteps.map(step => `<li>${E(step)}</li>`).join('')}</ul></div>`
-      : '';
-    const defaultActions: ChatErrorAction[] = ['retry', 'copy', 'refresh', 'settings'];
-    const actionLabels: Record<ChatErrorAction, string> = {
-      retry: '重新发送',
-      copy: '复制错误',
-      refresh: '刷新工作区',
-      settings: '打开设置',
-      reconnect: '重新连接',
-      permissions: '查看权限',
-    };
-    const actions = Array.from(new Set(error.actions || defaultActions));
-    const actionButtons = actions.length > 0
-      ? `<div class="msg-error-actions">${actions.map(action => `<button type="button" class="msg-error-btn" data-chat-error-action="${E(action)}">${E(actionLabels[action] || action)}</button>`).join('')}</div>`
-      : '';
-    return `<details class="msg-error"><summary><span class="msg-error-title">${E(error.title || '发生了错误')}</span><span class="msg-error-summary">${E(error.message || '点击查看详情')}</span></summary><div class="msg-error-body">${reason}${steps}${raw}${actionButtons}</div></details>`;
-  }
-
-  mount(container: HTMLElement): HTMLElement {
-    if (this.root) return this.root;
-    this.root = chatViewElementFromHtml(ChatErrorView.render(this.error), 'ChatErrorView');
-    this.root.addEventListener('click', this.onClick);
-    container.appendChild(this.root);
-    return this.root;
-  }
-
-  update(error: ChatErrorState): void {
-    const open = (this.root as HTMLDetailsElement | null)?.open ?? false;
-    this.error = error;
-    if (!this.root) return;
-    chatViewReplaceRoot(this.root, chatViewElementFromHtml(ChatErrorView.render(error), 'ChatErrorView'));
-    (this.root as HTMLDetailsElement).open = open;
-  }
-
-  dispose(): void {
-    this.root?.removeEventListener('click', this.onClick);
-    this.root?.remove();
-    this.root = null;
-  }
-}
-
-
 function chatViewRefreshEditSummary(flow: HTMLElement, blocks: any[]): void {
   const trace = flow.querySelector<HTMLElement>('.trace.block-trace');
   if (!trace) return;
@@ -401,20 +330,6 @@ function chatViewBindDelegatedActions(): void {
       void chatViewOpenDiffFile(diffPath.dataset.diffFilePath || '');
       return;
     }
-    const errorAction = target?.closest<HTMLElement>('[data-chat-error-action]');
-    if (!errorAction) return;
-    const app = (window as any).App;
-    switch (errorAction.dataset.chatErrorAction) {
-      case 'retry': app?.Chat?.retryLastTurn?.(); break;
-      case 'copy': void app?.Chat?.copyLastError?.(); break;
-      case 'refresh': app?.Chat?.refreshWorkspaceState?.(); break;
-      case 'settings': app?.Settings?.openSettingsModal?.(); break;
-      case 'reconnect': app?.Chat?.reconnect?.(); break;
-      case 'permissions':
-        app?.Settings?.openSettingsModal?.();
-        app?.Settings?.switchSettingsModal?.('permissions');
-        break;
-    }
   });
 }
 
@@ -425,10 +340,8 @@ if (chatViewsApp) {
     configure: chatViewConfigure,
     EditedFileRowView,
     EditSummaryView,
-    ChatErrorView,
     renderEditSummary: EditSummaryView.render,
     refreshEditSummary: chatViewRefreshEditSummary,
-    renderErrorCard: ChatErrorView.render,
   };
 }
 chatViewBindDelegatedActions();

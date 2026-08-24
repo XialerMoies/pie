@@ -210,4 +210,42 @@ describe("chat SSE controller event flow", () => {
       ["retry", "copy"],
     ]);
   });
+
+  it("renders contract failures as one error event node instead of an assistant error card", () => {
+    reset();
+    let failure;
+    let completed = 0;
+    const controller = global.window.App.ChatViews.createSseController({
+      scheduleMessagesRender: () => {},
+      updateUI: () => {},
+      markLastMessageRendered: () => {},
+      renderMessages: () => {},
+      refreshComposer: () => {},
+      setAssistantError: (...args) => { failure = args; },
+      completeSend: () => { completed += 1; },
+      failSend: () => { throw new Error("contract failure must not use failSend"); },
+    });
+
+    controller.bind(12);
+    handlers.onMessage({ data: JSON.stringify({
+      type: "done",
+      status: "error",
+      turnId: "contract-turn",
+      error: "source_not_allowed",
+      task: { status: "blocked", reason: "source_not_allowed", retryDecisions: [{ category: "validation_error" }] },
+      blocks: [],
+    }) });
+
+    assert.equal(failure, undefined);
+    assert.equal(completed, 1);
+    assert.deepStrictEqual(messages[0].blocks.at(-1), {
+      type: "step",
+      status: "error",
+      variant: "error",
+      text: "validation_error：source_not_allowed",
+      turnId: "contract-turn",
+      blockId: "error-contract-turn",
+      seq: 1,
+    });
+  });
 });

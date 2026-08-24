@@ -307,6 +307,7 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         chatStream.thinkingBlockGenerations = {};
         chatStream.emittedTraces = new Set();
         chatStream.executionContractAttempts = new Set();
+        chatStream.executionContractProgress = new Map();
         chatStream.executionPolicyMetrics = { unrelatedAttempts: 0, blockedAttempts: 0 };
         const requestMessage = typeof message === "string" ? message : "";
         chatStream.taskRequirements = expandTaskRequirements(chatStream.taskRequirements, requestMessage, engine.session.profile?.id)

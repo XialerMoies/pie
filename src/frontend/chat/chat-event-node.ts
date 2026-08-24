@@ -135,6 +135,9 @@ function chatEventNodeRenderTraceItem(t: any, defaultOpen?: boolean): string {
     return `<details class="trace-node trace-tool trace-${status} trace-details"${collapsed ? '' : ' open'}><summary class="trace-summary"><div class="trace-dot"></div>${head}</summary><div class="trace-body">${eventContent}</div></details>`;
   }
   if (t.type === 'step') {
+    if (t.variant === 'error' || t.status === 'error') {
+      return `<div class="trace-node trace-error-node trace-error"><div class="trace-error-rule"></div><div class="trace-error-text">${E(t.text || '')}</div></div>`;
+    }
     return `<div class="trace-node trace-step trace-${t.status || 'info'}"><div class="trace-dot"></div><div class="trace-body"><div class="trace-title"><span class="trace-summary-title">${E(t.text || '')}</span></div></div></div>`;
   }
   if (t.type === 'user_note') {

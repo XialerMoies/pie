@@ -20,6 +20,7 @@ interface ChatSseEvent {
   failure?: PermissionFailurePayload;
   status?: 'done' | 'error';
   error?: string;
+  task?: { status?: string; reason?: string; retryDecisions?: Array<{ category?: string }> };
 }
 
 interface ChatSseControllerDependencies {
@@ -43,6 +44,22 @@ function permissionFailureToChatError(failure: PermissionFailurePayload): ChatEr
     raw: failure.reason,
     actions,
   };
+}
+
+const CONTRACT_ERROR_REASONS = new Set([
+  'source_not_allowed',
+  'tool_not_allowed',
+  'sequence_required',
+  'duplicate_attempt',
+  'execution_contract_source_not_allowed',
+  'execution_contract_tool_not_allowed',
+]);
+
+function contractErrorNode(data: ChatSseEvent): { text: string; reason: string } | undefined {
+  const reason = data.task?.reason || data.error || '';
+  if (!CONTRACT_ERROR_REASONS.has(reason)) return undefined;
+  const type = data.task?.retryDecisions?.at(-1)?.category || 'validation_error';
+  return { text: `${type}：${reason}`, reason };
 }
 
 class ChatSseControllerView {
@@ -231,6 +248,32 @@ class ChatSseControllerView {
     if (typeof data.text === 'string') last.content = data.text;
     if (Array.isArray(data.blocks)) last.blocks = data.blocks;
     const reason = data.error || data.message || 'Agent turn failed';
+    const contractNode = contractErrorNode(data);
+    if (contractNode) {
+      const blocks = Array.isArray(last.blocks) ? last.blocks : (last.blocks = []);
+      if (!blocks.some((block: any) => block.type === 'step' && block.blockId === `error-${data.turnId || 'terminal'}`)) {
+        const seq = blocks.reduce((max: number, block: any) => Math.max(max, Number(block.seq) || 0), 0) + 1;
+        blocks.push({
+          type: 'step',
+          status: 'error',
+          variant: 'error',
+          text: contractNode.text,
+          turnId: data.turnId,
+          blockId: `error-${data.turnId || 'terminal'}`,
+          seq,
+        });
+      }
+      last.error = undefined;
+      last.streaming = false;
+      last._rv = (last._rv || 0) + 1;
+      this.dependencies.chatState.setBusy(false);
+      this.dependencies.chatStream.close();
+      this.callbacks.renderMessages();
+      this.callbacks.refreshComposer();
+      this.callbacks.completeSend(data.sessionId || '', data.text || '');
+      sb('ms');
+      return;
+    }
     const hasSpecificReason = reason !== 'Agent turn failed';
     this.finalizeOpenBlocks(last, reason);
     this.callbacks.setAssistantError(

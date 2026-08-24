@@ -307,7 +307,8 @@ async function main() {
       const contract = chatStream.taskRequirements?.contract;
       const attempts = chatStream.executionContractAttempts || (chatStream.executionContractAttempts = new Set());
       const metrics = chatStream.executionPolicyMetrics || (chatStream.executionPolicyMetrics = { unrelatedAttempts: 0, blockedAttempts: 0 });
-      return authorizeExecutionContractAttempt(contract, chatStream.taskLifecycle, attempts, toolName, scope, metrics);
+      const progress = chatStream.executionContractProgress || (chatStream.executionContractProgress = new Map());
+      return authorizeExecutionContractAttempt(contract, chatStream.taskLifecycle, attempts, toolName, scope, metrics, progress);
     },
     skillService,
   }));

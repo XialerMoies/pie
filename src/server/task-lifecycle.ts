@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { EngineErrorInfo } from "../agent-engine/contracts.js";
 import { RetryPolicy, type RetryDecision } from "./retry-policy.js";
 import type { CorrelationIds } from "./correlation.js";
-import type { ExecutionContract, ExecutionContractDecision, ToolEvidenceScope } from "../agent/types.js";
+import type { ExecutionContract, ExecutionContractDecision, FactVerificationTaskContract, ToolEvidenceScope } from "../agent/types.js";
 
 export type TaskPhase = "discovering" | "verifying" | "answering";
 export type TaskStatus = "running" | "completed" | "failed" | "blocked" | "cancelled";
@@ -88,6 +88,102 @@ function sourceMatches(target: string, source: string): boolean {
     || (normalizedSource.startsWith("memory:") && normalizedTarget.startsWith(`${normalizedSource}/`));
 }
 
+export function isFactVerificationContract(
+  contract: ExecutionContract | undefined,
+): contract is ExecutionContract & { kind: "fact_verification" | "fact_verification_batch" } {
+  return contract?.kind === "fact_verification" || contract?.kind === "fact_verification_batch"
+}
+
+function toolTarget(toolName: string, input: unknown): string {
+  const args = input && typeof input === "object" ? input as Record<string, unknown> : {};
+  if (typeof args.target === "string" || typeof args.path === "string" || typeof args.file === "string") {
+    return String(args.target || args.path || args.file).replace(/\\/g, "/").slice(0, 512);
+  }
+  if (toolName === "skill_facts" && typeof args.id === "string") {
+    return `${args.source === "user" ? "user/skills" : "agent/skills"}/${args.id}/SKILL.md`.slice(0, 512);
+  }
+  if (toolName === "list_memory" || toolName === "read_memory") {
+    return `memory:${args.scope === "workspace" ? "workspace" : "user"}${toolName === "read_memory" && typeof args.name === "string" ? `/${args.name}` : ""}`;
+  }
+  return "";
+}
+
+function batchTaskFor(contract: ExecutionContract, toolName: string, target: string): FactVerificationTaskContract | undefined {
+  if (contract.kind !== "fact_verification_batch") return undefined;
+  return contract.tasks?.find((task) => task.allowedTools.includes(toolName)
+    && (task.targets.some((source) => sourceMatches(target, source))
+      || task.allowedSources.some((source) => sourceMatches(target, source))));
+}
+
+export function markFactVerificationStep(
+  progress: Map<string, Set<string>> | undefined,
+  contract: ExecutionContract | undefined,
+  toolName: string,
+  input: unknown,
+): void {
+  if (!progress || !contract || contract.kind !== "fact_verification_batch") return;
+  const task = batchTaskFor(contract, toolName, toolTarget(toolName, input));
+  if (!task || !task.sequence?.includes(toolName)) return;
+  const completed = progress.get(task.id) || new Set<string>();
+  completed.add(toolName);
+  progress.set(task.id, completed);
+}
+
+export function namespaceFactEvidence(
+  contract: ExecutionContract | undefined,
+  toolName: string,
+  input: unknown,
+  fields: readonly string[],
+): string[] {
+  if (!contract || contract.kind !== "fact_verification_batch") return [...fields];
+  const task = batchTaskFor(contract, toolName, toolTarget(toolName, input));
+  return task ? fields.map((field) => `${task.id}.${field}`) : [];
+}
+
+function buildFactVerificationBatchTasks(text: string, target: string | undefined, skillTarget: boolean): FactVerificationTaskContract[] {
+  const hasUserTask = /任务\s*B[：:]?[\s\S]*(?:用户级|用户|user)[^\n\r]*(?:记忆|memory)/i.test(text)
+    || /(?:用户级|用户|user)[^\n\r]*(?:记忆|memory)/i.test(text);
+  const hasWorkspaceTask = /任务\s*C[：:]?[\s\S]*(?:当前工作区|工作区|workspace)[^\n\r]*(?:记忆|memory)/i.test(text)
+    || /(?:当前工作区|工作区|workspace)[^\n\r]*(?:记忆|memory)/i.test(text);
+  if (!target || !skillTarget || !hasUserTask || !hasWorkspaceTask) return [];
+  const skillTask: FactVerificationTaskContract = {
+    id: "A",
+    targets: [target],
+    instructionSources: text.includes("checkpoint-a-verification") && target.includes("skill-verification")
+      ? ["agent/skills/checkpoint-a-verification/SKILL.md"]
+      : [],
+    allowedSources: [target, "data/user/skill-state.json"],
+    allowedTools: ["file_read", "skill_facts"],
+    requiredEvidence: ["content", "trust", "enabled", "parse"],
+    sequence: ["file_read", "skill_facts"],
+  };
+  const memoryTask = (id: string, scope: "user" | "workspace"): FactVerificationTaskContract => ({
+    id,
+    targets: [`memory:${scope}`],
+    allowedSources: [`memory:${scope}`],
+    allowedTools: ["list_memory", "read_memory"],
+    requiredEvidence: ["scope", "entry", "enabled", "source", "content"],
+    sequence: ["list_memory", "read_memory"],
+  });
+  return [skillTask, memoryTask("B", "user"), memoryTask("C", "workspace")];
+}
+
+function batchFactVerificationContract(tasks: readonly FactVerificationTaskContract[]): ExecutionContract {
+  return {
+    kind: "fact_verification_batch",
+    tasks,
+    targets: tasks.flatMap((task) => task.targets),
+    instructionSources: tasks.flatMap((task) => task.instructionSources || []),
+    allowedSources: [...new Set(tasks.flatMap((task) => task.allowedSources))],
+    allowedTools: [...new Set(tasks.flatMap((task) => task.allowedTools))],
+    requiredEvidence: tasks.flatMap((task) => task.requiredEvidence.map((field) => `${task.id}.${field}`)),
+    completionCondition: "evidence_satisfied",
+    onMissingEvidence: "report_unverified",
+    maxUnrelatedAttempts: 0,
+    revision: 1,
+  };
+}
+
 export function inferTaskRequirements(message: string, profileId?: string): TaskRequirements {
   const text = message || "";
   const targetMatches = [...text.matchAll(/(?:`|\b)((?:agent|src|data|docs|test)[/\\][^`\s\r\n]+)(?:`|\b)/gi)];
@@ -99,6 +195,7 @@ export function inferTaskRequirements(message: string, profileId?: string): Task
       ? "workspace"
       : undefined;
   const skillTarget = Boolean(target && /(?:^|\/)skills\/[^/]+\/SKILL\.md$/i.test(target));
+  const batchTasks = buildFactVerificationBatchTasks(text, target, skillTarget);
   const factProfile = profileId === "fact-verification";
   const openWork = OPEN_WORK_REQUEST.test(text);
   const checkpointRequest = CHECKPOINT_REQUEST.test(text);
@@ -132,7 +229,9 @@ export function inferTaskRequirements(message: string, profileId?: string): Task
       }
     : undefined;
   const contract: ExecutionContract | undefined = highConfidence
-    ? (!supportedFactRequest
+    ? (batchTasks.length > 1
+      ? batchFactVerificationContract(batchTasks)
+      : !supportedFactRequest
       ? {
           kind: "fact_verification",
           targets: ["profile:fact-verification"],
@@ -190,7 +289,7 @@ export function inferTaskRequirements(message: string, profileId?: string): Task
 export function formatExecutionContractGuidance(requirements: TaskRequirements | undefined): string {
   const policy = requirements?.verificationPolicy;
   const contract = requirements?.contract
-  if (!contract || contract.kind !== "fact_verification") {
+  if (!isFactVerificationContract(contract)) {
     if (policy?.mode !== "soft") return "";
     const preferredTools = policy.preferredTools.length > 0 ? policy.preferredTools.join(", ") : "the most direct read-only tool";
     const preferredSources = policy.preferredSources.length > 0 ? ` Start with: ${policy.preferredSources.join(", ")}.` : "";
@@ -198,6 +297,21 @@ export function formatExecutionContractGuidance(requirements: TaskRequirements |
       "[Host verification guidance: soft]",
       `Prefer ${preferredTools} for the first direct check.${preferredSources}`,
       "Stop once the requested facts are supported. You may inspect other relevant sources when the task genuinely requires it.",
+    ].join("\n");
+  }
+  if (contract.kind === "fact_verification_batch") {
+    const taskGuidance = (contract.tasks || []).map((task) => {
+      const target = task.targets[0] || "the requested source";
+      const memoryMatch = /^memory:(user|workspace)$/i.exec(target);
+      return memoryMatch
+        ? `${task.id}: first call list_memory with scope=${memoryMatch[1].toLowerCase()}, then read_memory for the returned entry.`
+        : `${task.id}: first read ${target} with file_read, then call skill_facts when its status fields are required.`;
+    }).join("\n");
+    return [
+      "[Host execution contract: fact_verification_batch]",
+      taskGuidance,
+      "Each task has an independent evidence scope. Complete each task sequence before reporting its facts.",
+      "Do not use explorer_list, search, command, hash, or unrelated sources. Missing fields must be reported as 未验证.",
     ].join("\n");
   }
   const target = contract.targets?.[0] || "the requested source"
@@ -244,12 +358,18 @@ export function authorizeExecutionContractAttempt(
   toolName: string,
   scope: ToolEvidenceScope,
   metrics?: ExecutionPolicyMetrics,
+  progress?: Map<string, Set<string>>,
 ): ExecutionContractDecision {
-  if (!contract || contract.kind !== "fact_verification") return { allowed: true };
+  if (!isFactVerificationContract(contract)) return { allowed: true };
   const target = scope.target || "";
-  const sourceAllowed = !contract.allowedSources?.length
-    || contract.allowedSources.some((source) => sourceMatches(target, source))
-    || contract.instructionSources?.some((source) => sourceMatches(target, source));
+  const task = contract.kind === "fact_verification_batch" ? batchTaskFor(contract, toolName, target) : undefined;
+  const allowedSources = task?.allowedSources || contract.allowedSources;
+  const instructionSources = task?.instructionSources || contract.instructionSources;
+  const allowedTools = task?.allowedTools || contract.allowedTools;
+  const sourceAllowed = Boolean(task || contract.kind !== "fact_verification_batch")
+    && (!allowedSources?.length
+      || allowedSources.some((source) => sourceMatches(target, source))
+      || instructionSources?.some((source) => sourceMatches(target, source)));
   if (!sourceAllowed) {
     if (metrics) {
       metrics.unrelatedAttempts += 1;
@@ -257,12 +377,24 @@ export function authorizeExecutionContractAttempt(
     }
     return { allowed: false, code: "execution_contract_violation", reason: "source_not_allowed", retryable: false };
   }
-  if (contract.allowedTools?.length && !contract.allowedTools.includes(toolName)) {
+  if (allowedTools?.length && !allowedTools.includes(toolName)) {
     if (metrics) {
       metrics.unrelatedAttempts += 1;
       metrics.blockedAttempts += 1;
     }
     return { allowed: false, code: "execution_contract_violation", reason: "tool_not_allowed", retryable: false };
+  }
+  const sequence = task?.sequence;
+  if (task && sequence?.length) {
+    const step = sequence.indexOf(toolName);
+    const previous = step > 0 ? sequence[step - 1] : undefined;
+    if (previous && !progress?.get(task.id)?.has(previous)) {
+      if (metrics) {
+        metrics.unrelatedAttempts += 1;
+        metrics.blockedAttempts += 1;
+      }
+      return { allowed: false, code: "execution_contract_violation", reason: "sequence_required", retryable: false };
+    }
   }
   if (contract.requiredEvidence?.length && lifecycle?.missingEvidence?.length === 0) {
     if (metrics) metrics.blockedAttempts += 1;

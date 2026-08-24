@@ -556,7 +556,7 @@ describe("chat ui state", () => {
     assert.strictEqual(last.streaming, false);
   });
 
-  it("failed terminal events stop the stream and keep the assistant error", () => {
+  it("failed terminal events stop the stream and append an error event node", () => {
     const streams = [];
     class MockEventSource {
       constructor() {
@@ -582,8 +582,9 @@ describe("chat ui state", () => {
     assert.strictEqual(env.win.App.ChatState.isBusy(), false);
     assert.strictEqual(streams[0].closed, true);
     assert.strictEqual(last.streaming, false);
-    assert.match(last.error?.message || '', /provider failed/);
-    assert.strictEqual(last.error?.raw, "provider failed");
+    const errorBlock = last.blocks?.at(-1);
+    assert.strictEqual(errorBlock?.variant, "error");
+    assert.match(errorBlock?.text || '', /provider failed/);
   });
 
   it("business error events stop the streaming assistant state", () => {
@@ -612,7 +613,9 @@ describe("chat ui state", () => {
     assert.strictEqual(env.win.App.ChatState.isBusy(), false);
     assert.strictEqual(streams[0].closed, true);
     assert.strictEqual(last.streaming, false);
-    assert.strictEqual(last.error?.reason, "fetch failed");
+    const errorBlock = last.blocks?.at(-1);
+    assert.strictEqual(errorBlock?.variant, "error");
+    assert.match(errorBlock?.text || '', /fetch failed/);
   });
 
   it("business errors finalize tool blocks that were still running", () => {
@@ -722,8 +725,9 @@ describe("chat ui state", () => {
     assert.strictEqual(env.win.App.ChatState.isBusy(), false);
     assert.strictEqual(streams[0].closed, true);
     assert.strictEqual(last.streaming, false);
-    assert.strictEqual(last.error?.title, "高风险操作已拦截");
-    assert.deepStrictEqual(last.error?.actions, ["copy"]);
+    const errorBlock = last.blocks?.at(-1);
+    assert.strictEqual(errorBlock?.variant, "error");
+    assert.match(errorBlock?.text || '', /高风险操作已拦截/);
   });
 
   it("terminal provider sync SSE errors clear busy state and close the stream", () => {

@@ -336,15 +336,28 @@ function bind(): void {
 
   let renderFrame: number | null = null;
 
-  function makeErrorState(title: string, message: string, reason?: string, nextSteps?: string[], raw?: string, actions?: ChatErrorAction[]): ChatErrorState {
-    return { title, message, reason, nextSteps, raw, actions };
-  }
-
-  function setAssistantError(title: string, message: string, reason?: string, nextSteps?: string[], raw?: string, actions?: ChatErrorAction[]): void {
+  function setAssistantError(title: string, message: string, reason?: string, _nextSteps?: string[], _raw?: string, _actions?: ChatErrorAction[]): void {
     const messages = dashboardChatRuntimeState.getMessages();
     const last = messages[messages.length - 1];
     if (!last) return;
-    last.error = makeErrorState(title, message, reason, nextSteps, raw, actions);
+    const errorText = `${title || 'error'}：${reason || message || 'unknown_error'}`;
+    const blocks = Array.isArray(last.blocks) ? last.blocks : (last.blocks = []);
+    const blockId = `error-${last.turnId || 'terminal'}`;
+    if (!blocks.some((block) => block.type === 'step' && block.blockId === blockId)) {
+      const seq = blocks.reduce((max, block) => Math.max(max, Number(block.seq) || 0), 0) + 1;
+      blocks.push({
+        type: 'step',
+        status: 'error',
+        variant: 'error',
+        text: errorText,
+        turnId: last.turnId,
+        blockId,
+        seq,
+      });
+    }
+    // Error details remain available to the retry/copy state owner, but are
+    // rendered as the terminal event node rather than a separate card.
+    last.error = undefined;
     last.streaming = false;
     last.thinking = '';
     last._rv = (last._rv || 0) + 1;

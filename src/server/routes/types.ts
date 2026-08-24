@@ -11,7 +11,7 @@ import type { CorrelationLedger, CorrelationIds } from "../correlation.js";
 
 export type TraceEvent = ({ type: "thinking"; status: "streaming" | "done"; text: string; turnId: string; id: string; seq?: number }
   | { type: "tool"; status: "running" | "success" | "error"; name: string; input?: unknown; output?: string; error?: string; metadata?: Record<string, unknown>; turnId: string; id: string; seq?: number }
-  | { type: "step"; status: "info" | "success" | "error"; text: string; turnId: string; id: string; seq?: number }
+  | { type: "step"; status: "info" | "success" | "error"; text: string; turnId: string; id: string; seq?: number; variant?: "error" }
 ) & { traceId?: string };
 
 export interface ChatStreamEventFrame {
@@ -37,7 +37,7 @@ export type AssistantBlock = ({ type: "thinking"; text: string; status: "streami
   | { type: "tool"; toolCallId: string; name: string; input?: unknown; output?: string; error?: string; metadata?: Record<string, unknown>; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
   | { type: "tool_use"; toolCallId: string; name: string; input?: unknown; output?: string; metadata?: Record<string, unknown>; status: "running" | "success" | "error"; turnId: string; blockId: string; seq: number }
   | { type: "tool_result"; toolUseId: string; output?: string; isError?: boolean; turnId: string; blockId: string; seq: number }
-  | { type: "step"; text: string; status: "info" | "success" | "error"; turnId: string; blockId: string; seq: number }
+  | { type: "step"; text: string; status: "info" | "success" | "error"; turnId: string; blockId: string; seq: number; variant?: "error" }
   | { type: "user_note"; noteId: string; mode: "steer" | "followUp"; text: string; status: "queued" | "delivered" | "failed"; turnId: string; blockId: string; seq: number }
 ) & { traceId?: string };
 
@@ -87,6 +87,8 @@ export interface ChatStreamState {
   taskLifecycle?: TaskLifecycleSnapshot;
   /** Per-turn contract attempts; strict verification must not re-run identical sources. */
   executionContractAttempts?: Set<string>;
+  /** Successful ordered steps for each task in a batch verification contract. */
+  executionContractProgress?: Map<string, Set<string>>;
   /** Host-side counters for attempts rejected before tool execution. */
   executionPolicyMetrics?: ExecutionPolicyMetrics;
 }

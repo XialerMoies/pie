@@ -5,7 +5,7 @@ import { AssistantDomainReducer } from "./assistant-domain-reducer.js";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "fs";
 import type { AssistantBlock, ChatStreamState, ChatTextInputState, ServerContext, TraceEvent } from "./routes/types.js";
 import { writePresentationEvent } from "./presentation-events.js";
-import { TaskLifecycle } from "./task-lifecycle.js";
+import { markFactVerificationStep, namespaceFactEvidence, TaskLifecycle } from "./task-lifecycle.js";
 import type { TaskLifecycleSnapshot } from "./task-lifecycle.js";
 import { canonicalToolName } from "../agent/tool-identity.js";
 
@@ -540,6 +540,24 @@ export function attachEngineEvents(
     else taskLifecycle.cancel(event.reason || "cancelled");
     chatStream.taskLifecycle = taskLifecycle.snapshot();
     const terminalReason = chatStream.taskLifecycle.reason || (event.type === "turn.failed" ? event.error.message : undefined) || "turn_ended_before_tool_completed";
+    const terminalRetry = chatStream.taskLifecycle.retryDecisions.at(-1);
+    const terminalErrorType = event.type === "turn.failed"
+      ? event.error.kind || event.error.category
+      : terminalRetry?.category || (chatStream.taskLifecycle.status === "blocked" ? "validation_error" : "runtime_error");
+    // Errors are part of the event stream. Keep one compact, replayable node
+    // instead of relying on a separate assistant error card for contract or
+    // runtime terminal states.
+    if (chatStream.taskLifecycle.status === "blocked" || chatStream.taskLifecycle.status === "failed") {
+      emitBlock(runtime, chatStream, {
+        type: "step",
+        text: `${terminalErrorType}：${terminalReason}`,
+        status: "error",
+        variant: "error",
+        turnId,
+        blockId: `error-${turnId}`,
+        seq: nextBlockSeq(chatStream),
+      });
+    }
     for (const block of openToolBlocks) {
       if (block.type === "tool") {
         emitBlock(runtime, chatStream, { ...block, status: "error", error: terminalReason }, { persist: false });
@@ -576,9 +594,11 @@ export function attachEngineEvents(
       .map((block) => block.text)
       .join("\n\n");
     const task = taskLifecycle.snapshot();
-    const strictVerification = chatStream.taskRequirements?.contract?.kind === "fact_verification"
+    const strictVerification = (chatStream.taskRequirements?.contract?.kind === "fact_verification"
+      || chatStream.taskRequirements?.contract?.kind === "fact_verification_batch")
       || chatStream.taskRequirements?.requiresEvidence === true;
-    const factVerification = chatStream.taskRequirements?.contract?.kind === "fact_verification";
+    const factVerification = chatStream.taskRequirements?.contract?.kind === "fact_verification"
+      || chatStream.taskRequirements?.contract?.kind === "fact_verification_batch";
     const finalText = strictVerification && task.status !== "completed"
       ? `未验证：${task.missingEvidence?.length ? `缺少证据字段：${task.missingEvidence.join("、")}` : task.reason || "没有获得足够的成功证据。"}`
       : fullText || chatStream.textBuffer;
@@ -589,6 +609,14 @@ export function attachEngineEvents(
       task.reason === "evidence_unverified"
       || task.reason === "evidence_insufficient"
       || task.reason === "target_not_found_is_not_retryable_without_a_new_target"
+      // A hard contract can intentionally stop an out-of-scope or duplicate
+      // attempt. That is an honest unverified result, not a provider failure.
+      || task.reason === "source_not_allowed"
+      || task.reason === "tool_not_allowed"
+      || task.reason === "sequence_required"
+      || task.reason === "duplicate_attempt"
+      || task.reason === "execution_contract_source_not_allowed"
+      || task.reason === "execution_contract_tool_not_allowed"
     );
     // A cancellation requested by the runtime after a hard tool failure is
     // presented as a failed/blocked turn, not as a successful user cancel.
@@ -765,7 +793,9 @@ export function attachEngineEvents(
         const evidenceFields = Array.isArray(event.metadata?.evidenceFields)
           ? event.metadata.evidenceFields.filter((field): field is string => typeof field === "string")
           : [];
-        taskLifecycle.toolCompleted(event.toolCallId, evidenceAvailable, evidenceFields);
+        const scopedEvidenceFields = namespaceFactEvidence(chatStream.taskRequirements?.contract, toolName, block?.input, evidenceFields);
+        taskLifecycle.toolCompleted(event.toolCallId, evidenceAvailable, scopedEvidenceFields);
+        markFactVerificationStep(chatStream.executionContractProgress, chatStream.taskRequirements?.contract, toolName, block?.input);
       } else {
         const error = event.type === "tool.failed"
           ? event.error

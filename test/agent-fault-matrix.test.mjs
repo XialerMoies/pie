@@ -86,7 +86,8 @@ describe("agent fault matrix flows", () => {
     const payloadsAfterTerminal = payloads(testFlow.chat);
     const done = payloadsAfterTerminal.find((payload) => payload.type === "done");
     assert.ok(done);
-    assert.deepEqual(done.blocks.map((block) => block.type), ["thinking", "tool", "text"]);
+    assert.deepEqual(done.blocks.map((block) => block.type), ["thinking", "tool", "text", "step"]);
+    assert.equal(done.blocks.find((block) => block.type === "step")?.status, "error");
     assert.equal(done.blocks.filter((block) => block.blockId === "tool-duplicate").length, 1);
     assert.equal(done.blocks.find((block) => block.type === "thinking").text, "先");
     assert.equal(payloadsAfterTerminal.filter((payload) => payload.type === "done").length, 1);

@@ -59,14 +59,12 @@ interface AppChatViews {
   EditSummaryView: new (blocks: any[], expanded?: boolean) => ChatComponentView<any[]>;
   SubagentTaskView: new (task: FrontendSubagentTask, index?: number) => ChatComponentView<FrontendSubagentTask>;
   SubagentBatchView: new (batch: FrontendSubagentBatch) => ChatComponentView<FrontendSubagentBatch>;
-  ChatErrorView: new (error: ChatErrorState, actions?: Record<string, () => void | Promise<void>>) => ChatComponentView<ChatErrorState>;
   renderEditSummary(blocks: any[], expanded?: boolean): string;
   refreshEditSummary(flow: HTMLElement, blocks: any[]): void;
   renderSubagentBatches(batches: readonly FrontendSubagentBatch[] | undefined, toolCallId?: string): string;
   refreshSubagentBatches(root: HTMLElement, batches: readonly FrontendSubagentBatch[] | undefined, toolCallId?: string): boolean;
   renderSubagentDelegation(data: SubagentDelegationData): string;
   refreshSubagentDelegation(root: HTMLElement, data: SubagentDelegationData): boolean;
-  renderErrorCard(error: ChatErrorState): string;
   permissionFailureToChatError?(failure: PermissionFailurePayload): ChatErrorState;
   ChatEventNodeView: AppChatEventNodeView;
 }
