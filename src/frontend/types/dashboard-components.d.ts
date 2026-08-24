@@ -81,6 +81,7 @@ interface AppChatEventNodeView {
 }
 interface ChatComposerCallbacks {
   isBusy: () => boolean;
+  getInputHistory?: () => string[];
   onInput: (input: HTMLTextAreaElement) => void;
   onSubmit: (text: string) => void;
   onSubmitNote: (text: string, mode: 'steer' | 'followUp') => void;

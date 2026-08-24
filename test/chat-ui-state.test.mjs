@@ -313,6 +313,30 @@ describe("chat ui state", () => {
     assert.strictEqual(inputEvents, 1, "重建后的输入框必须绑定到现有 composer");
   });
 
+  it("输入框上/下方向键切换已发送文本并可恢复当前草稿", () => {
+    env.win.App.ChatState.replaceMessages([
+      { role: "user", content: "第一条" },
+      { role: "assistant", content: "答复一" },
+      { role: "user", content: "第二条" },
+      { role: "assistant", content: "答复二" },
+    ]);
+    const input = env.doc.getElementById("ci");
+    input.value = "当前草稿";
+    input.setSelectionRange(4, 4);
+
+    const key = (name) => input.dispatchEvent(new env.win.KeyboardEvent("keydown", {
+      key: name, bubbles: true, cancelable: true,
+    }));
+    key("ArrowUp");
+    assert.strictEqual(input.value, "第二条");
+    key("ArrowUp");
+    assert.strictEqual(input.value, "第一条");
+    key("ArrowDown");
+    assert.strictEqual(input.value, "第二条");
+    key("ArrowDown");
+    assert.strictEqual(input.value, "当前草稿");
+  });
+
   it("输入框随内容增高但在上限后改为内部滚动", () => {
     const input = env.doc.getElementById("ci");
     let measuredHeight = 196;

@@ -319,6 +319,10 @@ function bind(): void {
 
   chatComposerView = dashboardChatViews.createComposer({
     isBusy: () => dashboardChatRuntimeState.isBusy(),
+    getInputHistory: () => dashboardChatRuntimeState.getMessages()
+      .filter((message) => message.role === 'user' && typeof message.content === 'string')
+      .map((message) => message.content.trim())
+      .filter(Boolean),
     onInput: (input) => {
       const fn = dashboardChatChat.handleSlash;
       if (fn) fn(input);
