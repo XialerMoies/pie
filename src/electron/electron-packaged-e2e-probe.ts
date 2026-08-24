@@ -112,6 +112,7 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
     let cancellation: Record<string, unknown> | null = null;
     let concurrency: Record<string, unknown> | null = null;
     let replayProvider: Record<string, unknown> | null = null;
+    let profileCatalog: Record<string, unknown> | null = null;
     let rendererFailureEvidence: Record<string, unknown> | null = null;
     try {
       await waitForRendererReady(win);
@@ -142,6 +143,7 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
       cancellation = await runPackagedCancellationProbe(win);
       concurrency = await runPackagedConcurrencyProbe(win);
       replayProvider = await runPackagedReplayProviderProbe(win);
+      profileCatalog = await requestJson(initialServerBinding, "/api/profiles");
       // Capture while the replay turn and its correlation ledger still belong
       // to the active server. Later workspace switches intentionally replace
       // that server and would erase the failure-local protocol evidence.
@@ -350,6 +352,7 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
         chatEventFlow,
         concurrency,
         replayProvider,
+        profileCatalog,
         cancellation,
         artifactProbe,
         textIconStatus,

@@ -32,6 +32,7 @@ import {
   parseDesktopLaunchRequest,
   createLegacyLaunchWaiterRegistry,
 } from "../src/electron/desktop-launch.ts";
+import { waitForServerBootstrap } from "./helpers/server-process-readiness.mjs";
 
 function fixture(name) {
   const root = mkdtempSync(join(tmpdir(), `multi-instance-launch-${name}-`));
@@ -85,6 +86,7 @@ function startServer({ workspace, dataRoot, instanceId, token }) {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let readinessStarted = false;
     let timer;
     const settle = (callback) => {
       if (settled) return false;
@@ -103,8 +105,22 @@ function startServer({ workspace, dataRoot, instanceId, token }) {
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
       const match = stdout.match(/SERVER_PORT:(\d+)/);
-      if (!match) return;
-      settle(() => resolveServer({ child, port: Number(match[1]), token }));
+      if (!match || readinessStarted) return;
+      readinessStarted = true;
+      const port = Number(match[1]);
+      void waitForServerBootstrap({
+        child,
+        port,
+        token,
+        stdout: () => stdout,
+        stderr: () => stderr,
+        timeoutMs: 30_000,
+        requestTimeoutMs: 1_000,
+        intervalMs: 25,
+      }).then(
+        () => { settle(() => resolveServer({ child, port, token })); },
+        (error) => { rejectStartup(error); },
+      );
     });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
     child.once("error", (error) => rejectStartup(error));

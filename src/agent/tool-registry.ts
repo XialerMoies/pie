@@ -92,6 +92,11 @@ export function defineAgentTool(tool: AgentTool): AgentTool {
   return authorizedTool
 }
 
+/**
+ * Native PI conversion primitive owned by ToolPresentation.
+ * Production assembly must call nativeToolPresentation; this function remains
+ * exported only for low-level compatibility tests and the adapter itself.
+ */
 export function agentToolToPIToolDefinition(tool: AgentTool, workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext) {
   const authorizedTool = defineAgentTool(tool)
   const subagentDefinitions = authorizedTool.name === "delegate_tasks" ? extraCtx?.getSubagentDefinitions?.() ?? [] : []
@@ -126,12 +131,22 @@ export function agentToolToPIToolDefinition(tool: AgentTool, workspace?: string,
       }))
       if (contract?.kind === "fact_verification" && contract.targets?.length) {
         const target = requestScope.target || ""
-        const instructionSource = sourceMatches(contract.instructionSources)
-        const sourceAllowed = !contract.allowedSources?.length || sourceMatches(contract.allowedSources) || instructionSource
-        const toolAllowed = !contract.allowedTools?.length || contract.allowedTools.includes(authorizedTool.name)
-        executionContractDecision = extraCtx?.authorizeExecutionContract?.(authorizedTool.name, args, requestScope)
-        if (!sourceAllowed || !toolAllowed || executionContractDecision?.allowed === false) {
-          const reason = executionContractDecision?.reason || (!sourceAllowed ? "source_not_allowed" : "tool_not_allowed")
+        if (extraCtx?.authorizeExecutionContract) {
+          // The complete server host owns contract authorization. Keeping one
+          // decision point prevents adapter and server policy from drifting.
+          executionContractDecision = extraCtx.authorizeExecutionContract(authorizedTool.name, args, requestScope)
+        } else {
+          // Low-level/embedded hosts still fail closed when they expose a hard
+          // contract without installing the authoritative callback.
+          const instructionSource = sourceMatches(contract.instructionSources)
+          const sourceAllowed = !contract.allowedSources?.length || sourceMatches(contract.allowedSources) || instructionSource
+          const toolAllowed = !contract.allowedTools?.length || contract.allowedTools.includes(authorizedTool.name)
+          executionContractDecision = sourceAllowed && toolAllowed
+            ? { allowed: true }
+            : { allowed: false, code: "execution_contract_violation", reason: sourceAllowed ? "tool_not_allowed" : "source_not_allowed", retryable: false }
+        }
+        if (executionContractDecision.allowed === false) {
+          const reason = executionContractDecision.reason || "execution_contract_violation"
           const message = reason === "evidence_satisfied" ? "未执行：事实核验所需证据已齐全，必须停止继续调查。" : `未执行：事实核验契约禁止${reason === "source_not_allowed" ? "读取该来源" : "使用该工具"}。`
           const contractCode = executionContractDecision?.code === "execution_contract_complete" ? "execution_contract_complete" as const : "execution_contract_violation" as const
           const failure: ToolOutcome = { status: "failed", failure: { kind: "validation_error", code: contractCode, message, details: { reason, revision: contract.revision, target: target.slice(0, 512) } } }
@@ -214,5 +229,6 @@ export class ToolRegistry {
     }
     return this.getAll().filter((tool) => requested.has(tool.name))
   }
+  /** @deprecated Use nativeToolPresentation.present() for model-facing assembly. */
   toPITools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, names: "*" | readonly string[] = "*") { return this.project(names).map((tool) => agentToolToPIToolDefinition(tool, workspace, emitTrace, extraCtx)) as any }
 }

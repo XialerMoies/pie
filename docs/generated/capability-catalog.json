@@ -1444,6 +1444,13 @@
     },
     {
       "method": "GET",
+      "path": "/api/profiles",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "profiles"
+    },
+    {
+      "method": "GET",
       "path": "/api/search*",
       "handler": "handleSearch",
       "source": "src/server/routes/search.ts",
@@ -1522,6 +1529,13 @@
     {
       "method": "POST",
       "path": "/api/sessions/pin",
+      "handler": "handleSessions",
+      "source": "src/server/routes/sessions.ts",
+      "category": "sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/profile",
       "handler": "handleSessions",
       "source": "src/server/routes/sessions.ts",
       "category": "sessions"

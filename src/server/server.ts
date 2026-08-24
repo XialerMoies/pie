@@ -69,6 +69,7 @@ export { openAppEventStream } from "./http-app.js";
 import { createServerLifecycle } from "./server-lifecycle.js";
 import { SkillService } from "../agent/skills/skill-service.js";
 import { toolRegistry } from "../agent/tools/index.js";
+import { assertProfileCatalogsReady } from "../agent/profile-catalog.js";
 import { setLocalApiToken } from "../agent/tools/local-api.js";
 
 import { attachEngineEvents, recordUserNoteBlock } from "./agent-event-router.js";
@@ -130,6 +131,7 @@ async function releaseActiveWorkspaceLock(): Promise<void> {
 // ─── 启动 Pi ──────────────────────────────────────────────────────
 async function main() {
   const startedAt = Date.now();
+  assertProfileCatalogsReady();
   const logger = new StructuredLogger({
     filePath: join(STARTUP.layout.instanceRoot, "server.log.jsonl"),
   });
@@ -300,7 +302,8 @@ async function main() {
     authorizeExecutionContract: (toolName, _input, scope) => {
       const contract = chatStream.taskRequirements?.contract;
       const attempts = chatStream.executionContractAttempts || (chatStream.executionContractAttempts = new Set());
-      return authorizeExecutionContractAttempt(contract, chatStream.taskLifecycle, attempts, toolName, scope);
+      const metrics = chatStream.executionPolicyMetrics || (chatStream.executionPolicyMetrics = { unrelatedAttempts: 0, blockedAttempts: 0 });
+      return authorizeExecutionContractAttempt(contract, chatStream.taskLifecycle, attempts, toolName, scope, metrics);
     },
     skillService,
   }));

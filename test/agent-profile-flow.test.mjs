@@ -117,6 +117,7 @@ describe("AP-01 profile registry and projection", () => {
       revision: 1,
       description: "test",
       toolNames: [],
+      presentation: "native",
       promptSections: [],
       allowMcp: false,
       includeSkills: false,

@@ -526,6 +526,8 @@ export function attachEngineEvents(
         ...(entry.evidenceFields?.length ? { evidenceFields: entry.evidenceFields } : {}),
       }));
     const evidenceCount = evidence?.length ?? 0;
+    taskLifecycle.recordPolicyMetrics(chatStream.executionPolicyMetrics);
+    if (event.type === "turn.completed") taskLifecycle.recordUsage(event.usage);
     if (event.type === "turn.completed") {
       if (openToolBlocks.length === 0) taskLifecycle.complete(hasOriginalFinalText, evidenceCount);
     } else if (event.type === "turn.failed") {
@@ -681,6 +683,8 @@ export function attachEngineEvents(
       return;
     }
     if (event.type === "usage.updated") {
+      taskLifecycle.recordUsage(event.usage);
+      chatStream.taskLifecycle = taskLifecycle.snapshot();
       const now = Date.now();
       if (now - lastStreamingUsagePublishAt >= 500) {
         lastStreamingUsagePublishAt = now;
@@ -716,6 +720,7 @@ export function attachEngineEvents(
     }
     if (event.type === "tool.started" && turnId) {
       const toolName = canonicalToolName(event.name);
+      taskLifecycle.recordPolicyMetrics(chatStream.executionPolicyMetrics);
       taskLifecycle.toolStarted(event.toolCallId, toolName, event.input);
       chatStream.taskLifecycle = taskLifecycle.snapshot();
       recordCorrelation("task.transition", event.type, { tool: toolName, toolCallId: event.toolCallId });
@@ -771,6 +776,7 @@ export function attachEngineEvents(
             };
         taskLifecycle.toolFailed(event.toolCallId, toolName, error);
       }
+      taskLifecycle.recordPolicyMetrics(chatStream.executionPolicyMetrics);
       chatStream.taskLifecycle = taskLifecycle.snapshot();
       recordCorrelation("task.transition", event.type, { tool: toolName, toolCallId: event.toolCallId, status: failed ? "failed" : "completed" }, event.type === "tool.failed" ? event.error.kind : undefined);
       emitBlock(runtime, chatStream, {

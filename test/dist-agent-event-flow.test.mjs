@@ -75,6 +75,17 @@ function comparableText(text) {
 }
 
 describe("built server and dashboard event flow", () => {
+  it("loads the generated profile catalog from the built agent modules", async () => {
+    const distCatalogModule = resolve(ROOT, "dist/agent/profile-catalog.js");
+    assert.ok(existsSync(distCatalogModule), "dist profile catalog module must exist; run npm run build first");
+    const { buildAllProfileCatalogs } = await import(`${pathToFileURL(distCatalogModule).href}?profile-catalog=${Date.now()}`);
+    const built = buildAllProfileCatalogs();
+    const generated = JSON.parse(readFileSync(resolve(ROOT, "docs/generated/profile-catalog.json"), "utf8")).profiles;
+    assert.deepEqual(built, generated);
+    assert.deepEqual(built.map((catalog) => catalog.id), ["fact-verification", "minimal", "standard"]);
+    assert.ok(built.every((catalog) => catalog.tools.every((tool) => tool.executable)));
+  });
+
   it("injects built server events into the built dashboard and preserves live/replay state", async () => {
     assert.ok(existsSync(DIST_ROUTER), "dist server router must exist; run npm run build first");
     const { attachEngineEvents } = await import(`${pathToFileURL(DIST_ROUTER).href}?dist-flow=${Date.now()}`);

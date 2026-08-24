@@ -18,12 +18,20 @@ import type { SkillFactSnapshot } from "./skills/skill-service.js"
 import { formatSkillPrompt } from "./skills/skill-prompt.js"
 import {
   agentProfileSelection,
+  agentProfileRef,
+  agentProfileRegistry,
+  persistAgentProfileLifecycle,
   persistAgentProfileSelection,
+  readAgentProfileLifecycle,
   readAgentProfileSelection,
+  resolveAgentProfileRef,
   resolveAgentProfile,
   resolveAgentProfileSelection,
   type AgentProfile,
   type AgentProfileId,
+  type AgentProfileLifecycleAction,
+  type AgentProfileLifecycleFact,
+  type AgentProfileRef,
   type AgentProfileSelection,
 } from "./agent-profile.js"
 
@@ -62,6 +70,7 @@ interface SessionRecoveryPoint {
   workspace: string
   sessionFile?: string
   profileId?: AgentProfileId
+  profileRef?: AgentProfileRef
 }
 
 function sameRuntimePath(left: string | undefined, right: string): boolean {
@@ -101,6 +110,8 @@ export class AgentRuntime {
   private _skillPromptStatus?: SkillPromptStatus
   private _skillPromptRefreshTail: Promise<void> = Promise.resolve()
   private _activeProfile: AgentProfile = resolveAgentProfile("standard")
+  private _activeProfileRef: AgentProfileRef = agentProfileRef(this._activeProfile)
+  private _activeProfileLifecycle?: AgentProfileLifecycleFact
 
   private constructor() {}
 
@@ -233,7 +244,7 @@ export class AgentRuntime {
    * 与 switchWorkspace 不同：相同 workspace 下切换不同 session 文件。
    * 同 workspace 不断 MCP，保持缓存有效。
    */
-  async openSession(sessionFile: string, workspace: string): Promise<void> {
+  async openSession(sessionFile: string, workspace: string, lifecycleAction: AgentProfileLifecycleAction = "resume"): Promise<void> {
     // 相同参数在本 runtime 内复用同一个排队任务，不影响其他 runtime 实例。
     const key = normalizePermissionPath(sessionFile) + "::" + normalizePermissionPath(workspace)
     const pendingOpens = this._pendingOpens ??= new Map<string, Promise<void>>()
@@ -244,7 +255,7 @@ export class AgentRuntime {
       return
     }
 
-    const promise = this._enqueueSessionTransition(() => this._doOpenSession(sessionFile, workspace))
+    const promise = this._enqueueSessionTransition(() => this._doOpenSession(sessionFile, workspace, lifecycleAction))
     pendingOpens.set(key, promise)
     try {
       await promise
@@ -254,7 +265,7 @@ export class AgentRuntime {
   }
 
   /** 在串行队列中打开 session，执行时再判断最终 runtime 状态。 */
-  private async _doOpenSession(sessionFile: string, workspace: string): Promise<void> {
+  private async _doOpenSession(sessionFile: string, workspace: string, lifecycleAction: AgentProfileLifecycleAction = "resume"): Promise<void> {
     if (sameRuntimePath(this._session?.sessionFile, sessionFile)
       && sameRuntimePath(this.currentWorkspace, workspace)) {
       console.log(`[runtime] ⏭ Skipping duplicate openSession: "${sessionFile}"`)
@@ -264,7 +275,7 @@ export class AgentRuntime {
     this.resetSessionPermissions()
     // 记录是否同 workspace（在更新 currentWorkspace 之前判断）
     const sameWs = sameRuntimePath(this.currentWorkspace, workspace)
-    await this._replaceSessionWithRollback(workspace, sameWs, sessionFile)
+    await this._replaceSessionWithRollback(workspace, sameWs, sessionFile, undefined, undefined, undefined, lifecycleAction)
     console.log(`[runtime] ✅ Session opened: "${sessionFile}"`)
   }
 
@@ -294,6 +305,41 @@ export class AgentRuntime {
   /** Last skill fact snapshot status used by the active system prompt. */
   getSkillPromptStatus(): SkillPromptStatus | undefined {
     return this._skillPromptStatus ? { ...this._skillPromptStatus } : undefined
+  }
+
+  /** Current session's immutable profile generation and last lifecycle fact. */
+  get activeProfileLifecycle(): AgentProfileLifecycleFact | undefined {
+    return this._activeProfileLifecycle ? structuredClone(this._activeProfileLifecycle) : undefined
+  }
+
+  /**
+   * Switch only an empty session. The operation is a normal session transition,
+   * so all tool assembly and rollback behavior remains serialized with open/new.
+   */
+  async switchProfile(profileId: string): Promise<AgentProfileSelection> {
+    const requested = resolveAgentProfile(profileId)
+    return this._enqueueSessionTransition(async () => {
+      const messages = this._session?.messages
+      if ((Array.isArray(messages) && messages.length > 0)
+        || (this._session && this._session.sessionManager.buildSessionContext().messages.length > 0)) {
+        throw new Error("Cannot switch agent profile in a non-empty session")
+      }
+      if (this._activeProfile.id === requested.id
+        && this._activeProfile.revision === requested.revision
+        && this._activeProfileRef.generation === agentProfileRef(requested).generation) {
+        return agentProfileSelection(this._activeProfile)
+      }
+      await this._replaceSessionWithRollback(
+        this.currentWorkspace,
+        true,
+        this._session?.sessionFile,
+        false,
+        requested.id,
+        requested,
+        "switch",
+      )
+      return agentProfileSelection(this._activeProfile)
+    })
   }
 
   /** Immutable profile snapshot for the active session. */
@@ -495,6 +541,7 @@ export class AgentRuntime {
       workspace: this.currentWorkspace,
       sessionFile: previousSession?.sessionFile,
       profileId: this._activeProfile?.id,
+      profileRef: this._activeProfileRef,
     }
     this._session = undefined
     try { previousSession?.abort() } catch {}
@@ -521,13 +568,15 @@ export class AgentRuntime {
     sessionFile?: string,
     forceNew?: boolean,
     profileId?: string,
+    profileOverride?: AgentProfile,
+    lifecycleAction?: AgentProfileLifecycleAction,
   ): Promise<void> {
     this._sessionSwitching = true
     try {
       const recoveryPoint = await this._saveAndDispose(keepMcp)
       this.currentWorkspace = workspace
       try {
-        await this._initSession(workspace, sessionFile, forceNew, profileId)
+        await this._initSession(workspace, sessionFile, forceNew, profileId, profileOverride, lifecycleAction)
       } catch (error) {
         await this._restoreSession(recoveryPoint)
         throw error
@@ -566,7 +615,8 @@ export class AgentRuntime {
     this._session = undefined
 
     try {
-      await this._initSession(recoveryPoint.workspace, recoveryPoint.sessionFile, undefined, recoveryPoint.profileId)
+      const restoredProfile = recoveryPoint.profileRef ? resolveAgentProfileRef(recoveryPoint.profileRef) : undefined
+      await this._initSession(recoveryPoint.workspace, recoveryPoint.sessionFile, undefined, recoveryPoint.profileId, restoredProfile, "resume")
       this._rebindEvents()
     } catch (rollbackError) {
       this._session = undefined
@@ -590,7 +640,14 @@ export class AgentRuntime {
     subscription.currentUnsub = nextUnsub
   }
 
-  private async _initSession(cwd: string, existingSessionFile?: string, forceNew?: boolean, requestedProfileId?: string): Promise<void> {
+  private async _initSession(
+    cwd: string,
+    existingSessionFile?: string,
+    forceNew?: boolean,
+    requestedProfileId?: string,
+    profileOverride?: AgentProfile,
+    lifecycleAction?: AgentProfileLifecycleAction,
+  ): Promise<void> {
     const { agentDir, sessionsDir, authFile, modelsFile } = this.config
 
     this.modelRuntime = await ModelRuntime.create({ authPath: authFile, modelsPath: modelsFile })
@@ -622,15 +679,34 @@ export class AgentRuntime {
       }
     }
 
-    const persistedSelection = readAgentProfileSelection(this.sessionManager.getEntries())
-    const profile = persistedSelection
-      ? resolveAgentProfileSelection(persistedSelection)
-      : created
-        ? resolveAgentProfile(requestedProfileId || this.config.profileId)
-        : resolveAgentProfile("standard")
+    const entries = this.sessionManager.getEntries()
+    const persistedSelection = readAgentProfileSelection(entries)
+    const persistedLifecycle = readAgentProfileLifecycle(entries)
+    const profile = profileOverride
+      ?? (persistedLifecycle?.status === "applied" && persistedLifecycle.effective
+        ? resolveAgentProfileRef(persistedLifecycle.effective)
+        : persistedSelection
+          ? resolveAgentProfileSelection(persistedSelection)
+          : created
+            ? resolveAgentProfile(requestedProfileId || this.config.profileId)
+            : resolveAgentProfile("standard"))
     this._activeProfile = profile
-    if (created) persistAgentProfileSelection(this.sessionManager, profile)
-
+    this._activeProfileRef = profileOverride
+      ? agentProfileRef(profileOverride)
+      : persistedLifecycle?.status === "applied" && persistedLifecycle.effective
+        ? persistedLifecycle.effective
+        : agentProfileRef(profile)
+    const action = lifecycleAction ?? (created ? "create" : "resume")
+    const profileSnapshot = agentProfileRegistry.resolveRef(this._activeProfileRef)
+    const lifecycle: AgentProfileLifecycleFact = {
+      requested: profileOverride ? agentProfileRef(profileOverride) : this._activeProfileRef,
+      effective: this._activeProfileRef,
+      source: profileSnapshot.source,
+      fingerprint: profileSnapshot.fingerprint,
+      action,
+      status: "applied",
+      timestamp: new Date().toISOString(),
+    }
     const systemPrompt = await this._buildSystemPrompt(cwd, profile)
     const loader = new DefaultResourceLoader({
       cwd,
@@ -664,6 +740,11 @@ export class AgentRuntime {
 
     toolTrace.bindSource(session)
     this.session = session
+    // Persist only after prompt, tools, and the PI session have all assembled.
+    // A failed switch must not leave an applied lifecycle fact on disk.
+    if (created) persistAgentProfileSelection(this.sessionManager, profile)
+    persistAgentProfileLifecycle(this.sessionManager, lifecycle)
+    this._activeProfileLifecycle = lifecycle
   }
 }
 

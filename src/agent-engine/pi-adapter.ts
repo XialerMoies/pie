@@ -34,7 +34,9 @@ type RuntimeLike = Pick<
   | "switchWorkspace"
   | "openSession"
   | "createNewSession"
+  | "switchProfile"
   | "activeProfile"
+  | "activeProfileLifecycle"
   | "syncModelProviders"
   | "dispose"
 >;
@@ -104,6 +106,7 @@ export class PiAgentEngineAdapter implements AgentEngine {
         .map((tool) => typeof tool.name === "string" ? tool.name : "")
         .filter(Boolean),
       profile: { ...profile },
+      ...(this.#runtime.activeProfileLifecycle ? { profileLifecycle: this.#runtime.activeProfileLifecycle } : {}),
     };
   }
 
@@ -176,8 +179,8 @@ export class PiAgentEngineAdapter implements AgentEngine {
     this.#emitSessionChanged();
   }
 
-  async openSession(sessionFile: string, workspace: string): Promise<void> {
-    await this.#runtime.openSession(sessionFile, workspace);
+  async openSession(sessionFile: string, workspace: string, lifecycleAction: "resume" | "fork" = "resume"): Promise<void> {
+    await this.#runtime.openSession(sessionFile, workspace, lifecycleAction);
     this.#resetTurn();
     this.#emitSessionChanged();
   }
@@ -187,6 +190,13 @@ export class PiAgentEngineAdapter implements AgentEngine {
     this.#resetTurn();
     this.#emitSessionChanged();
     return id;
+  }
+
+  async switchProfile(profileId: string): Promise<{ id: string; revision: number }> {
+    const profile = await this.#runtime.switchProfile(profileId);
+    this.#resetTurn();
+    this.#emitSessionChanged();
+    return profile;
   }
 
   async setModel(provider: string, modelId: string): Promise<void> {

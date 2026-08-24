@@ -41,14 +41,17 @@ function wire(requirements, ledger = new EvidenceLedger(), sessionFile) {
 
 describe("A-04 task lifecycle cross-layer flow", () => {
   it("moves discovering → verifying → answering and completes only with ledger evidence", () => {
-    const requirements = inferTaskRequirements("请检查并验证目标文件的状态");
-    assert.deepEqual(requirements, { kind: "verification", requiresEvidence: true, minSuccessfulEvidence: 1 });
+    const requirements = inferTaskRequirements("请检查并验证 docs/任务清单.md 的状态，只报告实际读取到的事实");
+    assert.equal(requirements.kind, "verification");
+    assert.equal(requirements.requiresEvidence, true);
+    assert.equal(requirements.minSuccessfulEvidence, 1);
+    assert.equal(requirements.verificationPolicy?.mode, "hard");
     const flow = wire(requirements);
     flow.ledger.observe({ source: "live", toolName: "read", toolCallId: "call-1", outcome: "success",
       requestScope: { target: "fixture.txt" }, payloadSummary: "verified", complete: true });
     flow.engine.emit("event", base("turn.started", 1));
     flow.engine.emit("event", base("tool.started", 2, { toolCallId: "call-1", name: "read", input: { target: "fixture.txt" } }));
-    flow.engine.emit("event", base("tool.completed", 3, { toolCallId: "call-1", name: "read", output: "verified" }));
+    flow.engine.emit("event", base("tool.completed", 3, { toolCallId: "call-1", name: "read", output: "verified", metadata: { evidenceFields: ["content"] } }));
     flow.engine.emit("event", base("content.delta", 4, { text: "文件状态正常" }));
     flow.engine.emit("event", base("turn.completed", 5));
 
@@ -58,6 +61,9 @@ describe("A-04 task lifecycle cross-layer flow", () => {
     assert.equal(done.task.phase, "answering");
     assert.equal(done.task.status, "completed");
     assert.equal(done.task.successfulEvidence, 1);
+    assert.equal(done.task.metrics.toolCalls, 1);
+    assert.equal(done.task.metrics.evidenceSatisfied, true);
+    assert.equal(done.task.metrics.finalStatus, "completed");
     assert.equal(done.evidence.length, 1);
   });
 
@@ -75,7 +81,7 @@ describe("A-04 task lifecycle cross-layer flow", () => {
   });
 
   it("completes a contract only when every required evidence field is observed", () => {
-    const requirements = inferTaskRequirements("请检查 agent/skills/skill-verification/SKILL.md 的状态和内容");
+    const requirements = inferTaskRequirements("请按 checkpoint-a-verification 检查 agent/skills/skill-verification/SKILL.md 的状态和内容");
     const ledger = new EvidenceLedger();
     const flow = wire(requirements, ledger);
     ledger.observe({ source: "live", toolName: "skill_facts", toolCallId: "facts-1", outcome: "success",
@@ -96,6 +102,13 @@ describe("A-04 task lifecycle cross-layer flow", () => {
     assert.equal(done.task.status, "completed");
     assert.deepEqual(done.task.satisfiedEvidence, ["content", "trust", "enabled", "parse"]);
     assert.deepEqual(done.task.missingEvidence, []);
+    assert.equal(done.task.metrics.toolCalls, 2);
+    assert.equal(done.task.metrics.unrelatedAttempts, 0);
+    assert.equal(done.task.metrics.blockedAttempts, 0);
+    assert.equal(done.task.metrics.evidenceSatisfied, true);
+    assert.equal(done.task.metrics.finalStatus, "completed");
+    assert.equal(done.task.metrics.userExpansion, false);
+    assert.ok(done.task.metrics.durationMs >= 0);
   });
 
   it("creates a scoped memory contract and reports an empty scope as unverified", () => {
@@ -134,6 +147,7 @@ describe("A-04 task lifecycle cross-layer flow", () => {
     const taskRecord = records.find((record) => record.type === "task_lifecycle");
     assert.equal(taskRecord.task.status, "blocked");
     assert.equal(taskRecord.task.reason, "evidence_insufficient");
+    assert.equal(taskRecord.task.metrics.finalStatus, "blocked");
   });
 
   it("allows a changed retry but blocks repeated retry of the same failed request", () => {

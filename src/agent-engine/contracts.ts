@@ -88,6 +88,15 @@ export interface EngineSessionSnapshot {
   messagesCount?: number;
   tools?: string[];
   profile?: { id: string; revision: number };
+  profileLifecycle?: {
+    requested: { id: string; revision: number; generation: number };
+    effective?: { id: string; revision: number; generation: number };
+    source: "builtin" | "workspace" | "user";
+    action: "create" | "resume" | "switch" | "fork";
+    status: "applied" | "rejected" | "rolled_back";
+    reason?: string;
+    timestamp: string;
+  };
 }
 
 export interface EngineEventBase {
@@ -138,8 +147,9 @@ export interface AgentEngine {
   cancel(turnId?: string): Promise<boolean>;
   compact(focus?: string): Promise<void>;
   switchWorkspace(workspace: string): Promise<void>;
-  openSession(sessionFile: string, workspace: string): Promise<void>;
+  openSession(sessionFile: string, workspace: string, lifecycleAction?: "resume" | "fork"): Promise<void>;
   createNewSession(profileId?: string): Promise<string>;
+  switchProfile(profileId: string): Promise<{ id: string; revision: number }>;
   setModel(provider: string, modelId: string): Promise<void>;
   setThinkingLevel(level: string): Promise<void>;
   syncModelProviders(): Promise<number>;

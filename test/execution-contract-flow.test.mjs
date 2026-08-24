@@ -43,7 +43,7 @@ function toolHarness(contract, authorizeExecutionContract) {
   return { piTool, traces, outcomes, get executions() { return executions; } };
 }
 
-describe("A-17 execution contract cross-layer flow", () => {
+describe("A-17/AP-12 execution contract cross-layer flow", () => {
   it("derives a bounded fact-verification contract from task A", () => {
     const requirements = inferTaskRequirements("请按 checkpoint-a-verification 检查 agent/skills/skill-verification/SKILL.md 的状态和内容");
     assert.equal(requirements.kind, "verification");
@@ -73,7 +73,9 @@ describe("A-17 execution contract cross-layer flow", () => {
     assert.deepStrictEqual(bounded.contract?.targets, ["docs/任务清单.md"]);
     assert.deepStrictEqual(bounded.contract?.allowedTools, ["file_read"]);
     assert.deepStrictEqual(bounded.contract?.requiredEvidence, ["content"]);
-    assert.equal(expandTaskRequirements(bounded, "继续查实现源码", "fact-verification"), undefined);
+    const expanded = expandTaskRequirements(bounded, "继续查实现源码", "fact-verification");
+    assert.equal(expanded?.contract?.revision, 2);
+    assert.equal(expanded?.userExpansion, true);
   });
 
   it("provides a bounded first-step control frame without widening evidence scope", () => {
@@ -97,14 +99,29 @@ describe("A-17 execution contract cross-layer flow", () => {
   it("does not impose a fact contract on implementation or diagnosis requests", () => {
     assert.equal(inferTaskRequirements("请检查 src/server/agent-event-router.ts 并修复事件流 bug").contract, undefined);
     assert.equal(inferTaskRequirements("请读取 src/server/agent-event-router.ts").contract, undefined);
+    assert.equal(inferTaskRequirements("请分析这段聊天为什么会反复执行：请按 checkpoint-a-verification 检查 agent/skills/skill-verification/SKILL.md").contract, undefined);
+  });
+
+  it("keeps low-confidence standard checks open and uses guidance instead of a whitelist", () => {
+    const requirements = inferTaskRequirements("请检查 src/server/agent-event-router.ts 的状态");
+    assert.equal(requirements.requiresEvidence, false);
+    assert.equal(requirements.contract, undefined);
+    assert.equal(requirements.verificationPolicy?.mode, "soft");
+    assert.deepEqual(requirements.verificationPolicy?.preferredTools, ["file_read"]);
+    const guidance = formatExecutionContractGuidance(requirements);
+    assert.match(guidance, /Host verification guidance: soft/);
+    assert.match(guidance, /may inspect other relevant sources/i);
+    assert.doesNotMatch(guidance, /Do not use/);
   });
 
   it("creates a new open-work contract revision only after explicit user expansion", () => {
-    const requirements = inferTaskRequirements("请检查 agent/skills/skill-verification/SKILL.md 的状态");
+    const requirements = inferTaskRequirements("请按 checkpoint-a-verification 检查 agent/skills/skill-verification/SKILL.md 的状态");
     const expanded = expandTaskRequirements(requirements, "继续查 parse 的实现源码");
     assert.equal(expanded?.contract?.kind, "diagnosis");
     assert.equal(expanded?.contract?.revision, 2);
     assert.equal(expanded?.contract?.allowedSources, undefined);
+    assert.equal(expanded?.userExpansion, true);
+    assert.equal(expandTaskRequirements(requirements, "继续"), undefined);
     assert.equal(expandTaskRequirements(requirements, "好的，谢谢"), undefined);
   });
 
@@ -175,6 +192,21 @@ describe("A-17 execution contract cross-layer flow", () => {
     assert.equal(result.details.retryable, false);
     assert.equal(harness.outcomes.at(-1).failureKind, "validation_error");
     assert.equal(harness.traces.at(-1).outcome.failure.code, "execution_contract_violation");
+  });
+
+  it("uses the host contract callback as the single authoritative hard decision", async () => {
+    const contract = {
+      kind: "fact_verification",
+      targets: ["agent/skills/skill-verification/SKILL.md"],
+      allowedSources: ["agent/skills/skill-verification/SKILL.md"],
+      allowedTools: ["file_read"],
+      completionCondition: "evidence_satisfied",
+      revision: 1,
+    };
+    const harness = toolHarness(contract, () => ({ allowed: true }));
+    const result = await harness.piTool.execute("host-authorized", { path: "vite.config.ts" });
+    assert.equal(harness.executions, 1);
+    assert.match(result.content[0].text, /vite.config.ts/);
   });
 
   it("allows a declared source and leaves open tasks unrestricted", async () => {
@@ -369,7 +401,7 @@ describe("A-17 execution contract cross-layer flow", () => {
   });
 
   it("stops a strict contract before a tool call once all evidence fields are complete", () => {
-    const contract = inferTaskRequirements("请检查 agent/skills/skill-verification/SKILL.md 的状态和内容").contract;
+    const contract = inferTaskRequirements("请按 checkpoint-a-verification 检查 agent/skills/skill-verification/SKILL.md 的状态和内容").contract;
     const attempts = new Set();
     const decision = authorizeExecutionContractAttempt(contract, {
       status: "running", missingEvidence: [], phase: "answering", turnId: "turn", kind: "verification",
@@ -378,6 +410,27 @@ describe("A-17 execution contract cross-layer flow", () => {
     assert.equal(decision.allowed, false);
     assert.equal(decision.code, "execution_contract_complete");
     assert.equal(attempts.size, 0);
+  });
+
+  it("records blocked and unrelated hard-contract attempts separately", () => {
+    const contract = inferTaskRequirements("请按 checkpoint-a-verification 检查 agent/skills/skill-verification/SKILL.md 的状态和内容").contract;
+    const attempts = new Set();
+    const metrics = { unrelatedAttempts: 0, blockedAttempts: 0 };
+    const unrelated = authorizeExecutionContractAttempt(contract, undefined, attempts, "file_read", {
+      target: "vite.config.ts", argsFingerprint: "unrelated",
+    }, metrics);
+    assert.equal(unrelated.allowed, false);
+    assert.deepEqual(metrics, { unrelatedAttempts: 1, blockedAttempts: 1 });
+
+    const first = authorizeExecutionContractAttempt(contract, undefined, attempts, "file_read", {
+      target: "agent/skills/skill-verification/SKILL.md", argsFingerprint: "same",
+    }, metrics);
+    const duplicate = authorizeExecutionContractAttempt(contract, undefined, attempts, "file_read", {
+      target: "agent/skills/skill-verification/SKILL.md", argsFingerprint: "same",
+    }, metrics);
+    assert.equal(first.allowed, true);
+    assert.equal(duplicate.code, "duplicate_attempt");
+    assert.deepEqual(metrics, { unrelatedAttempts: 1, blockedAttempts: 2 });
   });
 
   it("keeps the completed-contract code consistent across the tool outcome", async () => {
@@ -514,6 +567,62 @@ describe("A-17 execution contract cross-layer flow", () => {
     });
     assert.match(replayBody, /"type":"done"/);
     assert.match(replayBody, /"reason":"evidence_unverified"/);
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  it("keeps a standard low-confidence check open across HTTP, tools, SSE, and terminal metrics", async () => {
+    const listeners = new Set();
+    let promptMessage = "";
+    const engine = {
+      session: { id: "ap12-soft-session", workspace: process.cwd(), isStreaming: false, isCompacting: false, profile: { id: "standard", revision: 1 } },
+      subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+      syncModelProviders: async () => 0,
+      prompt: async ({ message }) => {
+        promptMessage = message;
+        const base = { version: 1, sessionId: "ap12-soft-session", turnId: "ap12-soft-turn", timestamp: Date.now() };
+        const emit = (event, seq) => { for (const listener of listeners) listener({ ...base, seq, ...event }); };
+        emit({ type: "turn.started" }, 1);
+        emit({ type: "tool.started", toolCallId: "read-soft", name: "file_read", input: { path: "src/server/task-lifecycle.ts" } }, 2);
+        emit({ type: "tool.completed", toolCallId: "read-soft", name: "file_read", output: "source" }, 3);
+        emit({ type: "tool.started", toolCallId: "search-soft", name: "search", input: { query: "requiresEvidence" } }, 4);
+        emit({ type: "tool.completed", toolCallId: "search-soft", name: "search", output: "matches" }, 5);
+        emit({ type: "content.delta", text: "检查完成，相关实现需要两处来源。" }, 6);
+        emit({ type: "turn.completed", usage: {
+          input: 10, output: 5, cacheRead: 2, cacheWrite: 1, reasoning: 3,
+          source: "exact", cost: { status: "unknown" },
+        } }, 7);
+      },
+    };
+    const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: process.cwd(), traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0, eventSeq: 0, eventHistory: [] };
+    const runtime = { session: engine.session, currentWorkspace: process.cwd(), switchWorkspace: async () => {}, onEvent: () => () => {} };
+    const ctx = withServerGroups({ engine, runtime, chatStream, sseClients: [], paths: { APP_ROOT: process.cwd(), DATA_DIR: process.cwd(), PI_CONFIG_DIR: process.cwd(), SESSIONS_DIR: process.cwd(), FRONTEND_DIR: process.cwd(), FRONTEND_SRC_DIR: process.cwd(), HAS_BUILT_FRONTEND: false } });
+    attachEngineEvents(engine, runtime, chatStream, ctx);
+    const server = createServer((req, res) => { void dispatchRoute(req, res, ctx); });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+    const ssePromise = new Promise((resolve, reject) => {
+      const request = http.get({ hostname: "127.0.0.1", port, path: "/api/chat/stream" });
+      let body = "";
+      request.on("response", (response) => { response.setEncoding("utf8"); response.on("data", (chunk) => { body += chunk; }); response.on("end", () => resolve(body)); });
+      request.on("error", reject);
+    });
+    const status = await new Promise((resolve, reject) => {
+      const request = http.request({ hostname: "127.0.0.1", port, path: "/api/chat", method: "POST", headers: { "content-type": "application/json" } }, (response) => { response.resume(); response.on("end", () => resolve(response.statusCode)); });
+      request.on("error", reject);
+      request.end(JSON.stringify({ message: "请检查 src/server/task-lifecycle.ts 的状态" }));
+    });
+    await ssePromise;
+    assert.equal(status, 200);
+    assert.match(promptMessage, /Host verification guidance: soft/);
+    assert.doesNotMatch(promptMessage, /Do not use explorer_list/);
+    assert.equal(chatStream.taskRequirements.contract, undefined);
+    const done = chatStream.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1])).find((event) => event.type === "done");
+    assert.equal(done.status, "done");
+    assert.equal(done.task.status, "completed");
+    assert.equal(done.task.metrics.toolCalls, 2);
+    assert.equal(done.task.metrics.blockedAttempts, 0);
+    assert.equal(done.task.metrics.evidenceSatisfied, false);
+    assert.deepEqual(done.task.metrics.tokenUsage, { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, reasoning: 3, total: 18 });
     await new Promise((resolve) => server.close(resolve));
   });
 
@@ -747,6 +856,7 @@ describe("A-17 execution contract cross-layer flow", () => {
     assert.match(first, /"contractRevision":1/);
     const second = await run("继续查 parse 的实现源码");
     assert.match(second, /"contractRevision":2/, second);
+    assert.match(second, /"userExpansion":true/, second);
     assert.match(second, /已展开到实现源码/);
     assert.equal(chatStream.taskRequirements.contract.kind, "diagnosis");
     assert.equal(prompts.length, 2);

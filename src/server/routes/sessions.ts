@@ -12,7 +12,8 @@ import { deriveReplySummary, parseSessionMessages } from "./session-message-pars
 import { isPathGuardError, writePathGuardError } from "./path-guard.js";
 import { authorizeRoutePath, isServerPermissionError, writeServerPermissionError } from "../permission-service.js";
 import { authorizeWorkspacePath, runWithWorkspaceOwnership } from "./workspace-authorization.js";
-import { agentProfileSelection, readAgentProfileSelection, resolveAgentProfile } from "../../agent/agent-profile.js";
+import { agentProfileRegistry, agentProfileSelection, readAgentProfileLifecycle, readAgentProfileSelection, resolveAgentProfile } from "../../agent/agent-profile.js";
+import { buildAllProfileCatalogs } from "../../agent/profile-catalog.js";
 
 // Re-export for backward compat (tests use mod.wsKey / mod.wsDir)
 export { wsKey, wsDir } from "./session-dir.js";
@@ -196,6 +197,10 @@ function readSessionProfile(lines: string[]): { id: string; revision: number } {
   const entries = lines.flatMap((line) => {
     try { return [JSON.parse(line)]; } catch { return []; }
   });
+  const lifecycle = readAgentProfileLifecycle(entries);
+  if (lifecycle?.status === "applied" && lifecycle.effective) {
+    return { id: lifecycle.effective.id, revision: lifecycle.effective.revision };
+  }
   return readAgentProfileSelection(entries) ?? agentProfileSelection(resolveAgentProfile("standard"));
 }
 
@@ -222,6 +227,26 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
   const { paths: p } = ctx.groups.storage;
   const engine = resolveEngine(ctx);
   const session = engine.session;
+
+  if (url === "/api/profiles" && method === "GET") {
+    const current = engine.session.profile;
+    res.writeHead(200, { "Content-Type": "application/json", ...cors });
+    res.end(JSON.stringify({
+      status: "ok",
+      current,
+      profiles: agentProfileRegistry.listSnapshots().map((snapshot) => ({
+        id: snapshot.id,
+        revision: snapshot.revision,
+        generation: snapshot.generation,
+        health: snapshot.health,
+        source: snapshot.source,
+        ...(snapshot.fingerprint ? { fingerprint: snapshot.fingerprint } : {}),
+        ...(snapshot.error ? { error: snapshot.error } : {}),
+      })),
+      catalogs: buildAllProfileCatalogs(),
+    }));
+    return true;
+  }
 
   // List sessions — filtered by workspace, with "other projects" section
   if ((url === "/api/sessions" || url?.startsWith("/api/sessions?")) && method === "GET") {
@@ -371,6 +396,25 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
     return true;
   }
 
+  // Switch the active profile only while the current session is empty.
+  if (url === "/api/sessions/profile" && method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const profileId = typeof body.profileId === "string" ? body.profileId.trim() : "";
+      if (!profileId) throw new Error("profileId is required");
+      const profile = await engine.switchProfile(profileId);
+      publishActiveSessionChanged(ctx);
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
+      res.end(JSON.stringify({ ok: true, profile }));
+    } catch (err: unknown) {
+      if (writeServerPermissionError(res, cors, err)) return true;
+      if (writePathGuardError(res, cors, err)) return true;
+      res.writeHead(400, { ...cors });
+      res.end(JSON.stringify({ error: (err as Error).message }));
+    }
+    return true;
+  }
+
   // Migrate session to workspace (move from _legacy to project dir)
   if (url === "/api/sessions/migrate" && method === "POST") {
     try {
@@ -485,7 +529,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
         () => runWithWorkspaceOwnership(
           ctx,
           targetWorkspace,
-          () => engine.openSession(targetFile, targetWorkspace),
+          () => engine.openSession(targetFile, targetWorkspace, "fork"),
         ),
       );
       publishActiveSessionChanged(ctx);
@@ -536,7 +580,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
         () => runWithWorkspaceOwnership(
           ctx,
           targetWorkspace,
-          () => engine.openSession(authorizedFile, targetWorkspace),
+          () => engine.openSession(authorizedFile, targetWorkspace, "resume"),
         ),
       );
       publishActiveSessionChanged(ctx);

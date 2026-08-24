@@ -8,7 +8,8 @@ import {
 
 import type { AgentRuntime } from "../agent/index.js"
 import { resolveSystemPrompt } from "../agent/prompts.js"
-import { agentToolToPiTool, toolRegistry } from "../agent/tools/index.js"
+import { toolRegistry } from "../agent/tools/index.js"
+import { presentNativeTool } from "../agent/tool-presentation.js"
 import {
   READ_ONLY_SUBAGENT_TOOLS,
   type SubagentModelRef,
@@ -105,8 +106,11 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
         if (!tool || !tool.isReadOnly) {
           throw new Error(`Read-only subagent tool is unavailable: ${name}`)
         }
-        return agentToolToPiTool(tool, input.workspace, undefined, {
-          desktopApiToken: runtime.config.desktopApiToken,
+        return presentNativeTool(tool, {
+          workspace: input.workspace,
+          extraCtx: {
+            desktopApiToken: runtime.config.desktopApiToken,
+          },
         })
       })
 

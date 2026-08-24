@@ -278,6 +278,13 @@ function assertPackagedReplayProviderResult(result) {
   assert.equal(replay.draftCleared, true);
   assert.equal(replay.sessionSwitchMatches, true);
   assert.equal(typeof replay.terminalAt, "number");
+
+  const profileCatalog = result.profileCatalog;
+  assert.ok(profileCatalog && typeof profileCatalog === "object", "packaged profile catalog result is missing");
+  assert.equal(profileCatalog.status, 200);
+  assert.ok(Array.isArray(profileCatalog.body?.catalogs));
+  assert.deepEqual(profileCatalog.body.catalogs.map((catalog) => catalog.id), ["fact-verification", "minimal", "standard"]);
+  assert.ok(profileCatalog.body.catalogs.every((catalog) => catalog.health === "ready" && typeof catalog.fingerprint === "string"));
 }
 
 function assertPackagedCancellationResult(result) {

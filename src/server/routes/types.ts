@@ -4,7 +4,7 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import type { ServerContextGroups } from "../server-context.js";
 import type { AgentEngine } from "../../agent-engine/index.js";
-import type { TaskLifecycleSnapshot, TaskRequirements } from "../task-lifecycle.js";
+import type { ExecutionPolicyMetrics, TaskLifecycleSnapshot, TaskRequirements } from "../task-lifecycle.js";
 import type { CorrelationLedger, CorrelationIds } from "../correlation.js";
 
 // ─── Trace Event 类型 ────────────────────────────────────
@@ -87,6 +87,8 @@ export interface ChatStreamState {
   taskLifecycle?: TaskLifecycleSnapshot;
   /** Per-turn contract attempts; strict verification must not re-run identical sources. */
   executionContractAttempts?: Set<string>;
+  /** Host-side counters for attempts rejected before tool execution. */
+  executionPolicyMetrics?: ExecutionPolicyMetrics;
 }
 
 export interface ServerContext {

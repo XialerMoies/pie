@@ -40,6 +40,8 @@ export const ROUTE_FILES = [
   "agent-fault-matrix.test.mjs",
   "execution-contract-flow.test.mjs",
   "agent-profile-flow.test.mjs",
+  "tool-presentation-flow.test.mjs",
+  "agent-profile-catalog-flow.test.mjs",
 ];
 
 export const SERIAL_ROUTE_FILES = ["multi-instance-e2e.mjs", "multi-instance-launch.test.mjs", "workspace-lock.test.mjs"];

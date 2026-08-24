@@ -4,13 +4,12 @@
  * PI 框架内置 7 个工具：read / bash / edit / write / grep / find / ls。
  * 这里注册的是本项目的自定义工具——PI 没有的、你后端独有的功能。
  *
- * 所有自定义 Tool 通过 ToolRegistry 统一管理，toPITools() 转换为
+ * 所有自定义 Tool 通过 ToolRegistry 统一管理，再由 ToolPresentation 转换为
  * PI SDK 需要的 ToolDefinition[] 格式，传给 createAgentSession()。
  */
 
 import {
   ToolRegistry,
-  agentToolToPIToolDefinition,
 } from "../tool-registry.js"
 import type { AgentTool, ToolExecutionExtraContext, ToolTraceEmitter } from "../types.js"
 import { canonicalToolName } from "../tool-identity.js"
@@ -30,6 +29,7 @@ import { fileWriteTool } from "./file-write.js"
 import { delegateTasksTool } from "./delegate-tasks.js"
 import { skillFactsTool } from "./skill-facts.js"
 import { resolveAgentProfile, type AgentProfile } from "../agent-profile.js"
+import { presentNativeTool, resolveToolPresentation } from "../tool-presentation.js"
 
 /** 全局 Tool 注册表 */
 export const toolRegistry = new ToolRegistry()
@@ -70,12 +70,16 @@ export function registerTool(
 
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */
 export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard")) {
-  return toolRegistry.toPITools(workspace, emitTrace, extraCtx, profile.toolNames)
+  return resolveToolPresentation(profile.presentation).present(toolRegistry.project(profile.toolNames), { workspace, emitTrace, extraCtx }) as any
+}
+
+function presentProfileTools(tools: readonly AgentTool[], workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard")) {
+  return resolveToolPresentation(profile.presentation).present(tools, { workspace, emitTrace, extraCtx }) as any
 }
 
 /**
  * 将单个 AgentTool 转换为 PI ToolDefinition 格式。
- * 与 toolRegistry.toPITools 内部逻辑一致，供 MCP 工具等非注册制工具使用。
+ * 兼容入口：非注册制工具也必须经过 native ToolPresentation。
  */
 export function agentToolToPiTool(
   tool: AgentTool,
@@ -85,7 +89,7 @@ export function agentToolToPiTool(
 ) {
   const canonical = canonicalToolName(tool.name)
   const normalized = canonical === tool.name ? tool : { ...tool, name: canonical }
-  return agentToolToPIToolDefinition(normalized, workspace, emitTrace, extraCtx)
+  return presentNativeTool(normalized, { workspace, emitTrace, extraCtx }) as any
 }
 
 // ─── MCP 原始工具缓存（后台连接，不阻塞工具注册）─────────────
@@ -237,7 +241,7 @@ export async function getCustomToolsAsync(
   // 2. MCP 工具：缓存命中或 workspace 未变直接使用
   const ws = workspace ?? ""
   if (_mcpCacheInitialized && _mcpWorkspace === ws) {
-    const mcpTools = _mcpCache.map((tool) => agentToolToPiTool(tool, workspace, emitTrace, extraCtx))
+    const mcpTools = presentProfileTools(_mcpCache, workspace, emitTrace, extraCtx, profile)
     return [...builtin, ...mcpTools]
   }
 
@@ -248,7 +252,7 @@ export async function getCustomToolsAsync(
   }
 
   // incomplete cache 中的健康 raw tools 仍按当前 session 上下文重新包装并提供。
-  const cachedMcpTools = _mcpCache.map((tool) => agentToolToPiTool(tool, workspace, emitTrace, extraCtx))
+  const cachedMcpTools = presentProfileTools(_mcpCache, workspace, emitTrace, extraCtx, profile)
   const available = [...builtin, ...cachedMcpTools]
 
   const current = _mcpInFlight

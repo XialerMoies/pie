@@ -8,10 +8,44 @@ export type TaskPhase = "discovering" | "verifying" | "answering";
 export type TaskStatus = "running" | "completed" | "failed" | "blocked" | "cancelled";
 export type TaskKind = "general" | "verification";
 
+export interface VerificationPolicy {
+  mode: "soft" | "hard";
+  confidence: "low" | "high";
+  reason: "fact_profile" | "checkpoint_request" | "evidence_only_request" | "fact_like_request";
+  preferredTools: string[];
+  preferredSources: string[];
+  stopWhenEvidenceSatisfied: boolean;
+}
+
+export interface TaskTokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  total: number;
+}
+
+export interface ExecutionPolicyMetrics {
+  unrelatedAttempts: number;
+  blockedAttempts: number;
+}
+
+export interface TaskExecutionMetrics extends ExecutionPolicyMetrics {
+  toolCalls: number;
+  evidenceSatisfied: boolean;
+  finalStatus: TaskStatus;
+  userExpansion: boolean;
+  durationMs: number;
+  tokenUsage?: TaskTokenUsage;
+}
+
 export interface TaskRequirements {
   kind: TaskKind;
   requiresEvidence: boolean;
   minSuccessfulEvidence: number;
+  verificationPolicy?: VerificationPolicy;
+  userExpansion?: boolean;
   contract?: ExecutionContract;
 }
 
@@ -31,6 +65,7 @@ export interface TaskLifecycleSnapshot {
   satisfiedEvidence?: string[];
   missingEvidence?: string[];
   reason?: string;
+  metrics: TaskExecutionMetrics;
   phaseHistory: Array<{ phase: TaskPhase; at: string; cause: string }>;
 }
 
@@ -39,9 +74,10 @@ export interface TaskLifecycleOptions {
   requirements?: TaskRequirements;
 }
 
-const VERIFICATION_REQUEST = /(?:验证|核验|检查|读取|查看|状态|证据|事实|inspect|verify|check|read|status|evidence|fact)/i;
-const FACT_CONTRACT_REQUEST = /(?:验证|核验|检查|状态|证据|事实|inspect|verify|check|status|evidence|fact)/i;
-const OPEN_WORK_REQUEST = /(?:修复|修改|实现|重构|排查|调试|构建|测试|fix|implement|refactor|debug|diagnose|build|test)/i;
+const FACT_LIKE_REQUEST = /(?:验证|核验|检查|读取|查看|状态|证据|事实|inspect|verify|check|read|status|evidence|fact)/i;
+const CHECKPOINT_REQUEST = /(?:按|按照|依据|遵循|using|follow)[^\n\r]{0,80}checkpoint-a-verification|checkpoint-a-verification[^\n\r]{0,80}(?:检查|核验|verify|check)/i;
+const EVIDENCE_ONLY_REQUEST = /(?:(?:只|仅)(?:报告|输出|说明)?[^\n\r]{0,40}(?:实际|真实)?(?:读取到|观察到|返回的|可检查的)?[^\n\r]{0,30}(?:事实|证据)|only\s+(?:report|use)[^\n\r]{0,60}(?:facts?|evidence))/i;
+const OPEN_WORK_REQUEST = /(?:修复|修改|实现|重构|排查|调试|构建|测试|分析|审查|评估|解释|总结|建议|规划|设计|为什么|原因|fix|implement|refactor|debug|diagnose|build|test|analy[sz]e|review|evaluate|explain|summarize|recommend|plan|design|why)/i;
 
 function sourceMatches(target: string, source: string): boolean {
   const normalizedTarget = target.replace(/\\/g, "/");
@@ -53,8 +89,9 @@ function sourceMatches(target: string, source: string): boolean {
 }
 
 export function inferTaskRequirements(message: string, profileId?: string): TaskRequirements {
-  const requiresEvidence = VERIFICATION_REQUEST.test(message || "");
-  const targetMatch = message.match(/(?:`|\b)((?:agent|src|data|docs|test)[/\\][^`\s\r\n]+)(?:`|\b)/i);
+  const text = message || "";
+  const targetMatches = [...text.matchAll(/(?:`|\b)((?:agent|src|data|docs|test)[/\\][^`\s\r\n]+)(?:`|\b)/gi)];
+  const targetMatch = targetMatches.at(-1);
   const target = targetMatch?.[1]?.replace(/\\/g, "/");
   const memoryScope = /(?:用户级|用户|user)[^\n\r]*(?:记忆|memory)/i.test(message || "")
     ? "user"
@@ -63,10 +100,39 @@ export function inferTaskRequirements(message: string, profileId?: string): Task
       : undefined;
   const skillTarget = Boolean(target && /(?:^|\/)skills\/[^/]+\/SKILL\.md$/i.test(target));
   const factProfile = profileId === "fact-verification";
-  const factIntent = (FACT_CONTRACT_REQUEST.test(message || "") && !OPEN_WORK_REQUEST.test(message || "")) || factProfile;
-  const supportedFactRequest = Boolean(target || memoryScope) && !OPEN_WORK_REQUEST.test(message || "");
-  const contract: ExecutionContract | undefined = factIntent
-    ? (factProfile && !supportedFactRequest
+  const openWork = OPEN_WORK_REQUEST.test(text);
+  const checkpointRequest = CHECKPOINT_REQUEST.test(text);
+  const evidenceOnlyRequest = EVIDENCE_ONLY_REQUEST.test(text);
+  const factLikeRequest = FACT_LIKE_REQUEST.test(text) && !openWork;
+  const highConfidence = factProfile || (!openWork && (checkpointRequest || (evidenceOnlyRequest && Boolean(target || memoryScope))));
+  const supportedFactRequest = Boolean(target || memoryScope) && !openWork;
+  const policyReason: VerificationPolicy["reason"] = factProfile
+    ? "fact_profile"
+    : checkpointRequest
+      ? "checkpoint_request"
+      : evidenceOnlyRequest
+        ? "evidence_only_request"
+        : "fact_like_request";
+  const preferredTools = memoryScope
+    ? ["list_memory", "read_memory"]
+    : skillTarget
+      ? ["file_read", "skill_facts"]
+      : target
+        ? ["file_read"]
+        : [];
+  const preferredSources = memoryScope ? [`memory:${memoryScope}`] : target ? [target] : [];
+  const verificationPolicy: VerificationPolicy | undefined = highConfidence || factLikeRequest
+    ? {
+        mode: highConfidence ? "hard" : "soft",
+        confidence: highConfidence ? "high" : "low",
+        reason: policyReason,
+        preferredTools,
+        preferredSources,
+        stopWhenEvidenceSatisfied: true,
+      }
+    : undefined;
+  const contract: ExecutionContract | undefined = highConfidence
+    ? (!supportedFactRequest
       ? {
           kind: "fact_verification",
           targets: ["profile:fact-verification"],
@@ -108,9 +174,10 @@ export function inferTaskRequirements(message: string, profileId?: string): Task
         : undefined)
     : undefined;
   return {
-    kind: requiresEvidence || factProfile ? "verification" : "general",
-    requiresEvidence: requiresEvidence || factProfile,
-    minSuccessfulEvidence: requiresEvidence || factProfile ? 1 : 0,
+    kind: verificationPolicy ? "verification" : "general",
+    requiresEvidence: verificationPolicy?.mode === "hard",
+    minSuccessfulEvidence: verificationPolicy?.mode === "hard" ? 1 : 0,
+    ...(verificationPolicy ? { verificationPolicy } : {}),
     ...(contract ? { contract } : {}),
   };
 }
@@ -121,8 +188,18 @@ export function inferTaskRequirements(message: string, profileId?: string): Task
  * or exposing internal server state in the user-facing response.
  */
 export function formatExecutionContractGuidance(requirements: TaskRequirements | undefined): string {
+  const policy = requirements?.verificationPolicy;
   const contract = requirements?.contract
-  if (!contract || contract.kind !== "fact_verification") return ""
+  if (!contract || contract.kind !== "fact_verification") {
+    if (policy?.mode !== "soft") return "";
+    const preferredTools = policy.preferredTools.length > 0 ? policy.preferredTools.join(", ") : "the most direct read-only tool";
+    const preferredSources = policy.preferredSources.length > 0 ? ` Start with: ${policy.preferredSources.join(", ")}.` : "";
+    return [
+      "[Host verification guidance: soft]",
+      `Prefer ${preferredTools} for the first direct check.${preferredSources}`,
+      "Stop once the requested facts are supported. You may inspect other relevant sources when the task genuinely requires it.",
+    ].join("\n");
+  }
   const target = contract.targets?.[0] || "the requested source"
   const instruction = contract.instructionSources?.[0]
   const memoryMatch = /^memory:(user|workspace)$/i.exec(target)
@@ -141,15 +218,16 @@ export function formatExecutionContractGuidance(requirements: TaskRequirements |
   ].join("\n")
 }
 
-const CONTRACT_EXPANSION_REQUEST = /(?:继续|展开|深入|查.*(?:实现|源码|parse)|查看.*(?:实现|源码)|investigate|implementation|source)/i;
+const CONTRACT_EXPANSION_REQUEST = /(?:(?:扩大|扩展|放宽)(?:调查|检查|核验|搜索|来源|工具|范围)?|(?:继续|展开|深入)[^\n\r]{0,50}(?:实现|源码|目录|其他来源|更多|parse)|(?:expand|broaden)[^\n\r]{0,50}(?:scope|source|search)|(?:continue|investigate)[^\n\r]{0,50}(?:implementation|source|more))/i;
 
 /** Explicit user expansion creates a new open-work contract revision. */
 export function expandTaskRequirements(previous: TaskRequirements | undefined, message: string, profileId?: string): TaskRequirements | undefined {
-  if (profileId === "fact-verification" || !previous?.contract || !CONTRACT_EXPANSION_REQUEST.test(message || "")) return undefined;
+  if (!previous?.contract || !CONTRACT_EXPANSION_REQUEST.test(message || "")) return undefined;
   return {
     kind: "general",
     requiresEvidence: false,
     minSuccessfulEvidence: 0,
+    userExpansion: true,
     contract: {
       kind: "diagnosis",
       completionCondition: "user_stop",
@@ -165,21 +243,36 @@ export function authorizeExecutionContractAttempt(
   attempts: Set<string>,
   toolName: string,
   scope: ToolEvidenceScope,
+  metrics?: ExecutionPolicyMetrics,
 ): ExecutionContractDecision {
   if (!contract || contract.kind !== "fact_verification") return { allowed: true };
   const target = scope.target || "";
   const sourceAllowed = !contract.allowedSources?.length
     || contract.allowedSources.some((source) => sourceMatches(target, source))
     || contract.instructionSources?.some((source) => sourceMatches(target, source));
-  if (!sourceAllowed) return { allowed: false, code: "execution_contract_violation", reason: "source_not_allowed", retryable: false };
+  if (!sourceAllowed) {
+    if (metrics) {
+      metrics.unrelatedAttempts += 1;
+      metrics.blockedAttempts += 1;
+    }
+    return { allowed: false, code: "execution_contract_violation", reason: "source_not_allowed", retryable: false };
+  }
   if (contract.allowedTools?.length && !contract.allowedTools.includes(toolName)) {
+    if (metrics) {
+      metrics.unrelatedAttempts += 1;
+      metrics.blockedAttempts += 1;
+    }
     return { allowed: false, code: "execution_contract_violation", reason: "tool_not_allowed", retryable: false };
   }
   if (contract.requiredEvidence?.length && lifecycle?.missingEvidence?.length === 0) {
+    if (metrics) metrics.blockedAttempts += 1;
     return { allowed: false, code: "execution_contract_complete", reason: "evidence_satisfied", retryable: false };
   }
   const key = `${contract.revision}:${toolName}:${scope.argsFingerprint || ""}:${scope.target || ""}`;
-  if (attempts.has(key)) return { allowed: false, code: "duplicate_attempt", reason: "duplicate_attempt", retryable: false };
+  if (attempts.has(key)) {
+    if (metrics) metrics.blockedAttempts += 1;
+    return { allowed: false, code: "duplicate_attempt", reason: "duplicate_attempt", retryable: false };
+  }
   attempts.add(key);
   return { allowed: true };
 }
@@ -204,12 +297,22 @@ export class TaskLifecycle {
     successfulEvidence: 0,
     retryableFailures: 0,
     retryDecisions: [],
+    metrics: {
+      toolCalls: 0,
+      unrelatedAttempts: 0,
+      blockedAttempts: 0,
+      evidenceSatisfied: false,
+      finalStatus: "running",
+      userExpansion: false,
+      durationMs: 0,
+    },
     phaseHistory: [],
   };
   #startedTools = new Map<string, { name: string; inputFingerprint: string }>();
   #completedTools = new Set<string>();
   #retryPolicy = new RetryPolicy();
   #evidenceFields = new Set<string>();
+  #startedAt = 0;
 
   constructor(options: TaskLifecycleOptions = {}) {
     this.#clock = options.clock ?? Date.now;
@@ -222,6 +325,7 @@ export class TaskLifecycle {
     this.#completedTools.clear();
     this.#retryPolicy = new RetryPolicy();
     this.#evidenceFields.clear();
+    this.#startedAt = this.#clock();
     this.#snapshot = {
       turnId,
       ...(correlation?.traceId ? { traceId: correlation.traceId } : {}),
@@ -233,6 +337,15 @@ export class TaskLifecycle {
       successfulEvidence: 0,
       retryableFailures: 0,
       retryDecisions: [],
+      metrics: {
+        toolCalls: 0,
+        unrelatedAttempts: 0,
+        blockedAttempts: 0,
+        evidenceSatisfied: false,
+        finalStatus: "running",
+        userExpansion: requirements.userExpansion === true,
+        durationMs: 0,
+      },
       ...(requirements.contract ? {
         contractRevision: requirements.contract.revision,
         requiredEvidence: [...(requirements.contract.requiredEvidence || [])],
@@ -246,6 +359,7 @@ export class TaskLifecycle {
 
   toolStarted(toolCallId: string, name: string, input: unknown): void {
     if (this.#snapshot.status !== "running") return;
+    if (!this.#startedTools.has(toolCallId) && !this.#completedTools.has(toolCallId)) this.#snapshot.metrics.toolCalls += 1;
     this.#startedTools.set(toolCallId, { name, inputFingerprint: fingerprint(input) });
     this.#transition("discovering", "tool.started");
   }
@@ -269,7 +383,24 @@ export class TaskLifecycle {
       const satisfied = required.filter((field) => this.#evidenceFields.has(field));
       this.#snapshot.satisfiedEvidence = satisfied;
       this.#snapshot.missingEvidence = required.filter((field) => !this.#evidenceFields.has(field));
+      this.#snapshot.metrics.evidenceSatisfied = this.#snapshot.missingEvidence.length === 0;
     }
+  }
+
+  recordPolicyMetrics(metrics: ExecutionPolicyMetrics | undefined): void {
+    if (!metrics) return;
+    this.#snapshot.metrics.unrelatedAttempts = Math.max(0, metrics.unrelatedAttempts);
+    this.#snapshot.metrics.blockedAttempts = Math.max(0, metrics.blockedAttempts);
+  }
+
+  recordUsage(usage: { input: number; output: number; cacheRead: number; cacheWrite: number; reasoning: number } | undefined): void {
+    if (!usage) return;
+    const input = Math.max(0, Number(usage.input) || 0);
+    const output = Math.max(0, Number(usage.output) || 0);
+    const cacheRead = Math.max(0, Number(usage.cacheRead) || 0);
+    const cacheWrite = Math.max(0, Number(usage.cacheWrite) || 0);
+    const reasoning = Math.max(0, Number(usage.reasoning) || 0);
+    this.#snapshot.metrics.tokenUsage = { input, output, cacheRead, cacheWrite, reasoning, total: input + output + cacheRead + cacheWrite };
   }
 
   toolFailed(toolCallId: string, name: string, error: EngineErrorInfo): void {
@@ -310,6 +441,7 @@ export class TaskLifecycle {
       } else if (this.#requirements.requiresEvidence && this.#snapshot.successfulEvidence < this.#requirements.minSuccessfulEvidence) {
         this.#block("evidence_insufficient");
       } else {
+        this.#snapshot.metrics.evidenceSatisfied = true;
         this.#snapshot.status = "completed";
         this.#transition("answering", "turn.completed");
       }
@@ -319,6 +451,7 @@ export class TaskLifecycle {
       this.#snapshot.status = "completed";
       this.#transition("answering", "turn.completed");
     }
+    this.#finalizeMetrics();
     return this.snapshot();
   }
 
@@ -326,6 +459,7 @@ export class TaskLifecycle {
     if (this.#snapshot.status === "completed" || this.#snapshot.status === "cancelled" || this.#snapshot.status === "blocked") return;
     this.#snapshot.status = "failed";
     this.#snapshot.reason = reason;
+    this.#finalizeMetrics();
   }
 
   cancel(reason = "cancelled"): void {
@@ -335,12 +469,17 @@ export class TaskLifecycle {
     if (this.#snapshot.status === "completed" || this.#snapshot.status === "blocked") return;
     this.#snapshot.status = "cancelled";
     this.#snapshot.reason = reason;
+    this.#finalizeMetrics();
   }
 
   snapshot(): TaskLifecycleSnapshot {
     return {
       ...this.#snapshot,
       retryDecisions: this.#snapshot.retryDecisions.map((decision) => ({ ...decision })),
+      metrics: {
+        ...this.#snapshot.metrics,
+        ...(this.#snapshot.metrics.tokenUsage ? { tokenUsage: { ...this.#snapshot.metrics.tokenUsage } } : {}),
+      },
       phaseHistory: this.#snapshot.phaseHistory.map((item) => ({ ...item })),
     };
   }
@@ -348,6 +487,12 @@ export class TaskLifecycle {
   #block(reason: string): void {
     this.#snapshot.status = "blocked";
     this.#snapshot.reason = reason;
+    this.#finalizeMetrics();
+  }
+
+  #finalizeMetrics(): void {
+    this.#snapshot.metrics.finalStatus = this.#snapshot.status;
+    this.#snapshot.metrics.durationMs = this.#startedAt > 0 ? Math.max(0, this.#clock() - this.#startedAt) : 0;
   }
 
   #transition(phase: TaskPhase, cause: string): void {

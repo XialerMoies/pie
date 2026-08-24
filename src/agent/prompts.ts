@@ -31,6 +31,22 @@ export interface PromptSection {
 const sectionCache = new Map<string, PromptSection>();
 
 /**
+ * Return a defensive snapshot of the registered prompt sections.
+ * Catalogs and diagnostics may inspect keys without receiving mutable
+ * factories or the live section objects used by the runtime.
+ */
+export function listPromptSections(): readonly PromptSection[] {
+  return [...sectionCache.values()].map((section) => Object.freeze({
+    key: section.key,
+    ...(section.content !== undefined ? { content: section.content } : {}),
+    ...(section.factory ? { factory: section.factory } : {}),
+    volatile: section.volatile === true,
+    enabled: section.enabled !== false,
+    ...(section.permanent !== undefined ? { permanent: section.permanent } : {}),
+  }));
+}
+
+/**
  * 注册一个 system prompt section。
  * 相同 key 的 section 会被缓存，直到调用 invalidateSection(key)。
  *
