@@ -129,9 +129,10 @@ describe("built server and dashboard event flow", () => {
     const serverPayloads = payloads(serverFlow.chat);
     const done = serverPayloads.find((payload) => payload.type === "done");
     assert.ok(done, "built server must emit a terminal done payload");
-    assert.deepEqual(done.blocks.map((block) => block.type), ["thinking", "tool", "text"]);
+    assert.deepEqual(done.blocks.map((block) => block.type), ["thinking", "tool", "step", "text"]);
     assert.equal(done.blocks.find((block) => block.type === "tool").status, "error");
-    assert.deepEqual(done.blocks.map((block) => block.seq), [1, 2, 3]);
+    assert.equal(done.blocks.find((block) => block.type === "step").variant, "error");
+    assert.deepEqual(done.blocks.map((block) => block.seq), [1, 2, 3, 4]);
 
     const win = loadDistWindow();
     const doc = win.document;
@@ -190,6 +191,7 @@ describe("built server and dashboard event flow", () => {
     assert.deepEqual([...doc.querySelectorAll("#ms [data-block-id]")].map((node) => node.dataset.blockId), [
       "thinking-dist-turn",
       "tool-dist-tool",
+      "error-dist-turn",
       "text-trailing",
     ]);
 

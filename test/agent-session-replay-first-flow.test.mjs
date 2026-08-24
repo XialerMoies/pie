@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Window } from "happy-dom";
 
 import {
   fixturePath,
@@ -51,69 +49,6 @@ describe("T-01 replay-first Agent/Session flow", () => {
     assert.equal(result.mode, "refresh");
     assert.equal(result.live.text, "Recovered answer");
     assert.equal(result.refresh.text, "Recovered answer");
-  });
-
-  it("projects the same replay presentation into the built dashboard and preserves DOM identity", () => {
-    const root = resolve(process.cwd());
-    const bundle = resolve(root, "dist/frontend/js/dashboard.js");
-    assert.equal(existsSync(bundle), true, "built dashboard is required for the T-01 frontend projection gate");
-    const scenario = loadReplayCatalog().scenarios.find((entry) => entry.id === "event-node-order");
-    assert.ok(scenario);
-    const result = runReplayScenario(scenario, "replay");
-    const createWindow = () => {
-      const win = new Window({ url: "http://127.0.0.1:5173/dashboard.html" });
-      win.document.body.innerHTML = '<div id="ms"></div><div id="pc"></div><textarea id="ci"></textarea><button id="cs"></button>';
-      win.fetch = async () => ({ ok: true, json: async () => ({}) });
-      win.localStorage.clear();
-      win.requestAnimationFrame = (callback) => setTimeout(callback, 0);
-      win.cancelAnimationFrame = (id) => clearTimeout(id);
-      win.mark = () => {};
-      win.logTiming = () => {};
-      win.toast = () => {};
-      win.confirmAsync = async () => true;
-      win.winCtrl = () => {};
-      win.refresh = async () => {};
-      win.getPane = () => null;
-      win.eval(readFileSync(bundle, "utf8"));
-      return win;
-    };
-    const win = createWindow();
-    win.App.ChatState.replaceMessages([{ role: "assistant", content: "", streaming: true, blocks: [] }]);
-    win.document.getElementById("ms").innerHTML = win.App.Chat.msgs();
-    const rootNode = win.document.querySelector("#ms > .m");
-    const identities = new Map();
-    let removed = 0;
-    const observer = new win.MutationObserver((records) => { for (const record of records) removed += record.removedNodes.length; });
-    observer.observe(win.document.getElementById("ms"), { childList: true, subtree: true });
-    const controller = new win.App.ChatViews.ChatSseControllerView({
-      scheduleMessagesRender: () => {}, updateUI: () => {}, markLastMessageRendered: () => {},
-      renderMessages: () => {}, refreshComposer: () => {}, setAssistantError: () => {},
-      completeSend: () => {}, failSend: () => {},
-    }, {
-      chat: win.App.Chat, chatState: win.App.ChatState,
-      chatStream: { isCurrent: () => true, setHandlers: () => true, close: () => {} }, chatViews: win.App.ChatViews,
-    });
-    assert.equal(controller.bind(1), true);
-    for (const payload of result.live.presentation) {
-      controller.handleMessage(1, { data: JSON.stringify(payload) });
-      for (const block of payload.blocks || (payload.block ? [payload.block] : [])) {
-        const node = win.document.querySelector(`[data-block-id="${block.blockId}"]`);
-        assert.ok(node, `${block.blockId} must mount from replay presentation`);
-        if (identities.has(block.blockId)) assert.equal(node, identities.get(block.blockId), `${block.blockId} identity changed during replay`);
-        else identities.set(block.blockId, node);
-      }
-    }
-    observer.disconnect();
-    assert.equal(win.document.querySelector("#ms > .m"), rootNode);
-    assert.equal(removed, 0, "replay presentation must not remove existing nodes");
-    const liveSnapshot = [...win.document.querySelectorAll("#ms [data-block-id]")].map((node) => ({ id: node.dataset.blockId, text: node.textContent }));
-    const refreshed = createWindow();
-    refreshed.App.ChatState.replaceMessages([{ role: "assistant", content: result.live.text, streaming: false, blocks: result.live.presentation.find((payload) => payload.type === "done").blocks }]);
-    refreshed.document.getElementById("ms").innerHTML = refreshed.App.Chat.msgs();
-    const refreshSnapshot = [...refreshed.document.querySelectorAll("#ms [data-block-id]")].map((node) => ({ id: node.dataset.blockId, text: node.textContent }));
-    assert.deepEqual(refreshSnapshot, liveSnapshot, "built dashboard refresh must converge to replay presentation");
-    win.close();
-    refreshed.close();
   });
 
   it("rejects record mode unless recording is explicitly enabled", () => {

@@ -15,8 +15,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -36,17 +36,17 @@ jobs:
       - run: npm run compile:frontend-ts
       - name: Run npm test (capture output)
         shell: bash
-        run: npm test 2>&1 | tee .test-output.txt
+        run: npm test 2>&1 | tee "$GITHUB_WORKSPACE/.test-output.txt"
       - name: Show failing test blocks
         if: failure()
         shell: bash
-        run: grep -A 18 '^not ok' .test-output.txt | head -400
+        run: grep -A 18 '^not ok' "$GITHUB_WORKSPACE/.test-output.txt" | head -400
       - name: Upload test output
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: npm-test-output
-          path: .test-output.txt
+          path: ${{ github.workspace }}/.test-output.txt
       - run: npm run test:build
 
   packaged-electron:
@@ -54,8 +54,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -70,7 +70,7 @@ jobs:
           CI: "true"
       - name: Upload packaged E2E diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: packaged-electron-e2e-diagnostics
           path: .tmp-packaged-e2e-*/**
