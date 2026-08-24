@@ -18,6 +18,7 @@ import {
   targetMatches,
   type ToolOutcome,
 } from "./tool-outcomes.js"
+import { planStateAllowsMutation } from "./plan-state.js"
 
 export async function authorizeToolExecution(tool: AgentTool, args: Record<string, unknown>, ctx: ToolContext): Promise<ToolExecutionDecision> {
   const request: ToolAuthorizationRequest = {
@@ -34,6 +35,14 @@ export async function authorizeToolExecution(tool: AgentTool, args: Record<strin
   const decisionRequest = { ...request } as ToolExecutionDecision["request"]
   delete (decisionRequest as any).args
   const permissionRequired = tool.needsPermission === true
+  const planState = ctx.getPlanState?.()
+  const planReadOnly = tool.isReadOnly || tool.isPlanReadOnly?.(args) === true
+  if (!planStateAllowsMutation(planState) && !planReadOnly) {
+    const error = new Error(`Planning state blocks mutating tool execution: ${tool.name}`) as Error & { code?: string; metadata?: Record<string, unknown> }
+    error.code = "plan_state_mutation_blocked"
+    error.metadata = { planState, tool: tool.name }
+    throw error
+  }
   if (ctx.getPermissionMode?.() === "yes" || ctx.permissionMode === "yes") {
     return { status: "allow", source: "mode", request: decisionRequest, reason: "Allowed by Yes permission mode", pathDecisions: [] }
   }

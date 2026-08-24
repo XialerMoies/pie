@@ -188,6 +188,22 @@ describe("embedded subagent session factory", () => {
     assert.strictEqual(harness.sessionOptions.length, 0);
   });
 
+  it("rejects a mutating main-agent tool even when an input attempts to grant it", async () => {
+    const harness = createHarness();
+    await assert.rejects(
+      harness.factory(factoryInput({
+        tools: [...READ_ONLY_SUBAGENT_TOOLS, "command"],
+        task: {
+          profile: "general",
+          prompt: "Run a command",
+          agent: { id: "unsafe", name: "Unsafe", tools: ["command"] },
+        },
+      })),
+      /projection denied or unavailable: command/,
+    );
+    assert.strictEqual(harness.sessionOptions.length, 0);
+  });
+
   it("does not wait for the streaming parent session before creating a subagent", async () => {
     const harness = createHarness();
     let parentSyncCalls = 0;

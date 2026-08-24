@@ -8,6 +8,10 @@ export const AGENT_PROFILE_LIFECYCLE_CUSTOM_TYPE = "my-code-agent.profile.lifecy
 export type AgentProfileId = "standard" | "minimal" | "fact-verification" | (string & {})
 export type AgentProfileHealth = "ready" | "broken" | "unavailable"
 export type AgentProfileSource = "builtin" | "workspace" | "user"
+export type AgentFeatureId = "web" | "memory" | "delegation" | "skills" | "planning" | "mcp"
+
+export const AGENT_FEATURE_IDS = ["web", "memory", "delegation", "skills", "planning", "mcp"] as const satisfies readonly AgentFeatureId[]
+const AGENT_FEATURE_SET = new Set<string>(AGENT_FEATURE_IDS)
 
 export interface AgentProfile {
   id: AgentProfileId
@@ -16,6 +20,7 @@ export interface AgentProfile {
   toolNames: "*" | readonly string[]
   presentation: ToolPresentationMode
   promptSections: "*" | readonly string[]
+  featureGates: "*" | readonly AgentFeatureId[]
   allowMcp: boolean
   includeSkills: boolean
 }
@@ -65,10 +70,23 @@ type ProfileSessionManager = {
 }
 
 function freezeProfile(profile: AgentProfile): AgentProfile {
+  if (profile.featureGates !== "*") {
+    if (!Array.isArray(profile.featureGates)) throw new Error(`Agent profile ${profile.id} must declare featureGates`)
+    const invalid = profile.featureGates.filter((feature) => !AGENT_FEATURE_SET.has(feature))
+    if (invalid.length > 0) throw new Error(`Agent profile ${profile.id} references unknown feature gate(s): ${invalid.join(", ")}`)
+    if (new Set(profile.featureGates).size !== profile.featureGates.length) {
+      throw new Error(`Agent profile ${profile.id} contains duplicate feature gates`)
+    }
+  }
+  const mcpEnabled = profile.featureGates === "*" || profile.featureGates.includes("mcp")
+  if (profile.allowMcp !== mcpEnabled) {
+    throw new Error(`Agent profile ${profile.id} has inconsistent allowMcp and mcp feature gate`)
+  }
   return Object.freeze({
     ...profile,
     toolNames: profile.toolNames === "*" ? "*" : Object.freeze([...profile.toolNames]),
     promptSections: profile.promptSections === "*" ? "*" : Object.freeze([...profile.promptSections]),
+    featureGates: profile.featureGates === "*" ? "*" : Object.freeze([...profile.featureGates]),
   })
 }
 
@@ -182,6 +200,7 @@ agentProfileRegistry.register({
   toolNames: "*",
   presentation: "native",
   promptSections: "*",
+  featureGates: "*",
   allowMcp: true,
   includeSkills: true,
 })
@@ -190,7 +209,7 @@ agentProfileRegistry.register({
   id: "minimal",
   revision: 1,
   description: "Small deterministic coding surface with one shell and one editor.",
-  toolNames: ["command", "str_replace_editor"],
+  toolNames: ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode"],
   presentation: "native",
   promptSections: [
     "identity",
@@ -201,6 +220,7 @@ agentProfileRegistry.register({
     "language_preference",
     "env_info",
   ],
+  featureGates: ["planning"],
   allowMcp: false,
   includeSkills: false,
 })
@@ -220,6 +240,7 @@ agentProfileRegistry.register({
     "token_budget",
     "env_info",
   ],
+  featureGates: ["memory", "skills"],
   allowMcp: false,
   includeSkills: false,
 })
@@ -236,6 +257,7 @@ export function profileFingerprint(profile: AgentProfile): string {
     toolNames: profile.toolNames,
     presentation: profile.presentation,
     promptSections: profile.promptSections,
+    featureGates: profile.featureGates,
     allowMcp: profile.allowMcp,
     includeSkills: profile.includeSkills,
   })).digest("hex")

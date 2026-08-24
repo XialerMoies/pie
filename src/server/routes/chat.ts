@@ -13,6 +13,7 @@ import { runPackagedReplayTurn } from "../packaged-replay-provider.js";
 import { serverConfirmationRegistry } from "../confirmation-registry.js";
 import { expandTaskRequirements, formatExecutionContractGuidance, inferTaskRequirements } from "../task-lifecycle.js";
 import { randomUUID } from "node:crypto";
+import { formatPlanStateGuidance } from "../../agent/plan-state.js";
 
 const COMMAND_CONFIRM_TIMEOUT_MS = 120_000;
 const MODEL_PROVIDER_SYNC_ERROR = "模型提供商同步失败，请重试。";
@@ -101,6 +102,21 @@ export function resolveCommandConfirmation(id: string, decision: CommandConfirma
 
 export function cancelCommandConfirmationsForResponse(response: import("http").ServerResponse): void {
   serverConfirmationRegistry.removeResponse(response, "command");
+  serverConfirmationRegistry.removeResponse(response, "plan");
+}
+
+export function createPlanExitConfirmCallback(chatStream: ChatStreamState) {
+  return async (request: { requestId: string; summary: string }): Promise<boolean> => {
+    const response = chatStream.response;
+    if (!response) return false;
+    const pending = serverConfirmationRegistry.begin("plan", [response], COMMAND_CONFIRM_TIMEOUT_MS);
+    writeChatEvent(chatStream, { type: "plan_confirm", id: pending.id, requestId: request.requestId, summary: request.summary });
+    return (await pending.result).allow === true;
+  };
+}
+
+export function resolvePlanConfirmation(id: string, allow: boolean): boolean {
+  return serverConfirmationRegistry.resolve(id, "plan", { allow });
 }
 
 export const handleChat: RouteHandler = (req, res, ctx) => {
@@ -137,6 +153,49 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
       }
     });
     return true;
+  }
+
+  if (url === "/api/chat/plan-confirm" && method === "POST") {
+    let body = "";
+    req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+    req.on("end", () => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const id = typeof parsed.id === "string" ? parsed.id : "";
+        if (!id) throw new Error("Missing confirmation id");
+        const settled = resolvePlanConfirmation(id, parsed.allow === true);
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: settled }));
+      } catch (err: unknown) {
+        res.writeHead(400, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+      }
+    });
+    return true;
+  }
+
+  if (url === "/api/plan-state" && method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json", ...cors });
+    res.end(JSON.stringify({ ok: true, state: engine.session.planState }));
+    return true;
+  }
+
+  if (url === "/api/plan-state" && method === "POST") {
+    let body = "";
+    req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+    return new Promise<boolean>((done) => req.on("end", async () => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const target = parsed.target;
+        if (target !== "active" && target !== "committed" && target !== "cancelled") throw new Error("Invalid plan state target");
+        const state = await engine.requestPlanState(target);
+        res.writeHead(200, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: true, state }));
+      } catch (err: unknown) {
+        res.writeHead(400, { "Content-Type": "application/json", ...cors });
+        res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+      } finally { done(true); }
+    }));
   }
 
   // Queue a user note into the currently running SDK session without starting a second prompt.
@@ -285,6 +344,8 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         }
         const contractGuidance = formatExecutionContractGuidance(chatStream.taskRequirements);
         if (contractGuidance) finalMessage = `${finalMessage}\n\n${contractGuidance}`;
+        const planGuidance = formatPlanStateGuidance(engine.session.planState);
+        if (planGuidance) finalMessage = `${finalMessage}\n\n${planGuidance}`;
         try {
           await engine.syncModelProviders();
         } catch {

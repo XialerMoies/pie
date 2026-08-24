@@ -26,6 +26,7 @@ import type {
   ToolOutcomeObserver,
   AgentToolExecutionResult,
 } from "./tool-outcomes.js"
+import type { PlanStateSnapshot } from "./plan-state.js"
 export * from "./tool-outcomes.js"
 
 function targetMatches(target: string, source: string): boolean {
@@ -324,6 +325,10 @@ export interface ToolContext {
   permissionMode?: PermissionMode
   /** Read the current host-controlled mode at command execution time. */
   getPermissionMode?: () => PermissionMode
+  /** Session-scoped planning lifecycle; independent from PermissionMode. */
+  getPlanState?: () => PlanStateSnapshot
+  enterPlanMode?: (reason?: string) => Promise<PlanStateSnapshot> | PlanStateSnapshot
+  requestPlanExit?: (summary: string) => Promise<{ approved: boolean; state: PlanStateSnapshot }>
   /** 实际 shell 方言：由宿主/UI 设置，模型不可控 */
   shellDialect?: ShellDialect
   /** 用户确认回调：返回 true/allow=允许，false/undefined=拒绝。无此回调时默认拒绝（fail-closed） */
@@ -419,6 +424,8 @@ export interface AgentTool {
   isReadOnly: boolean
   /** 危险操作标记（删除/覆盖/推送等），触发二次确认 */
   isDestructive?: boolean
+  /** Runtime argument-aware read-only classification used by independent plan state. */
+  isPlanReadOnly?: (args: Record<string, unknown>) => boolean
   /** 能否并行执行（FileWrite 设为 false，避免同时写同一个文件） */
   isConcurrencySafe?: boolean
   /** 条件启用：某些 tool 只在特定环境可用 */

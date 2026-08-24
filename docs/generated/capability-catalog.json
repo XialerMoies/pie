@@ -195,6 +195,51 @@
       "source": "src/agent/tools/memory.ts"
     },
     {
+      "name": "enter_plan_mode",
+      "description": "进入独立规划状态。规划状态不改变执行权限；进入后只允许只读探索，写操作继续由宿主阻止。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "进入规划状态的简短原因。"
+          }
+        }
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": false
+      },
+      "source": "src/agent/tools/plan-mode.ts"
+    },
+    {
+      "name": "exit_plan_mode",
+      "description": "提交当前方案并请求用户批准退出规划状态。只有用户明确批准后，状态才会变为 committed。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "供用户评审的方案摘要。"
+          }
+        },
+        "required": [
+          "summary"
+        ]
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": false
+      },
+      "source": "src/agent/tools/plan-mode.ts"
+    },
+    {
       "name": "explorer_list",
       "description": "列出目录内容，返回结构化的文件和文件夹列表。比 bash ls 更好用：自动过滤 node_modules/.git、目录排前面、显示完整相对路径。配合 file_read / search 使用：用这个看目录结构，用 search 找代码，用 file_read 读内容。",
       "parameters": {
@@ -1028,6 +1073,7 @@
       "content.delta",
       "diagnostic",
       "engine.ready",
+      "plan.changed",
       "queue.updated",
       "session.changed",
       "thinking.delta",
@@ -1102,6 +1148,13 @@
     {
       "method": "POST",
       "path": "/api/chat/note",
+      "handler": "handleChat",
+      "source": "src/server/routes/chat.ts",
+      "category": "chat"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chat/plan-confirm",
       "handler": "handleChat",
       "source": "src/server/routes/chat.ts",
       "category": "chat"
@@ -1427,6 +1480,20 @@
       "handler": "handlePermissions",
       "source": "src/server/routes/permissions.ts",
       "category": "permissions"
+    },
+    {
+      "method": "GET",
+      "path": "/api/plan-state",
+      "handler": "handleChat",
+      "source": "src/server/routes/chat.ts",
+      "category": "plan-state"
+    },
+    {
+      "method": "POST",
+      "path": "/api/plan-state",
+      "handler": "handleChat",
+      "source": "src/server/routes/chat.ts",
+      "category": "plan-state"
     },
     {
       "method": "GET",

@@ -34,6 +34,16 @@ import {
   type AgentProfileRef,
   type AgentProfileSelection,
 } from "./agent-profile.js"
+import {
+  defaultPlanState,
+  persistPlanState,
+  readPlanState,
+  recoverPlanState,
+  replacePlanState,
+  type PlanStateSnapshot,
+  type PlanStateSource,
+  type PlanStateTarget,
+} from "./plan-state.js"
 
 import { setCurrentRuntime as _setGlobalRuntime, getCurrentRuntime as _getGlobalRuntime } from "./globals.js";
 // 重导出供 tools 使用，实际实现在 globals.ts（零依赖，防循环）
@@ -54,6 +64,7 @@ export { buildToolContextExtra } from "./runtime-config.js"
 
 export type SessionEventCallback = (event: any, sourceSession?: AgentSession) => void
 export type WorkspaceChangeCallback = (workspace: string) => void
+export type PlanStateChangeCallback = (state: PlanStateSnapshot) => void
 
 interface SessionEventSubscription {
   cb: SessionEventCallback
@@ -112,6 +123,8 @@ export class AgentRuntime {
   private _activeProfile: AgentProfile = resolveAgentProfile("standard")
   private _activeProfileRef: AgentProfileRef = agentProfileRef(this._activeProfile)
   private _activeProfileLifecycle?: AgentProfileLifecycleFact
+  private _planState: PlanStateSnapshot = defaultPlanState()
+  private _planStateSubscriptions = new Set<PlanStateChangeCallback>()
 
   private constructor() {}
 
@@ -208,6 +221,70 @@ export class AgentRuntime {
   /** 仅在会话完整初始化后更新对外可见对象。 */
   set session(session: AgentSession) {
     this._session = session
+  }
+
+  /** Current session-scoped planning lifecycle, independent from PermissionMode. */
+  get planState(): PlanStateSnapshot {
+    return structuredClone(this._planState)
+  }
+
+  onPlanStateChange(callback: PlanStateChangeCallback): () => void {
+    this._planStateSubscriptions.add(callback)
+    return () => this._planStateSubscriptions.delete(callback)
+  }
+
+  private _publishPlanState(state: PlanStateSnapshot): PlanStateSnapshot {
+    this._planState = state
+    if (this.sessionManager) persistPlanState(this.sessionManager, state)
+    for (const callback of [...this._planStateSubscriptions]) {
+      try { callback(structuredClone(state)) } catch {}
+    }
+    return this.planState
+  }
+
+  /** User/UI transition. Streaming turns queue the replacement until agent_end. */
+  requestPlanState(target: PlanStateTarget, source: PlanStateSource = "user", reason?: string): PlanStateSnapshot {
+    if (target === this._planState.status || (this._planState.status === "pending" && target === this._planState.pendingTarget)) return this.planState
+    if (this._session?.isStreaming) {
+      return this._publishPlanState(replacePlanState(this._planState, "pending", source, {
+        pendingTarget: target,
+        reason: reason || "queued_until_turn_boundary",
+      }))
+    }
+    return this._publishPlanState(replacePlanState(this._planState, target, source, { reason }))
+  }
+
+  enterPlanMode(reason = "agent_requested_plan"): PlanStateSnapshot {
+    if (this._planState.status === "active") return this.planState
+    return this._publishPlanState(replacePlanState(this._planState, "active", "agent", { reason }))
+  }
+
+  async requestPlanExit(
+    summary: string,
+    confirm: (request: { requestId: string; summary: string; state: PlanStateSnapshot }) => Promise<boolean>,
+  ): Promise<{ approved: boolean; state: PlanStateSnapshot }> {
+    if (this._planState.status !== "active") return { approved: false, state: this.planState }
+    const pending = this._publishPlanState(replacePlanState(this._planState, "pending", "agent", {
+      pendingTarget: "committed",
+      summary,
+      reason: "awaiting_user_approval",
+    }))
+    const approved = await confirm({ requestId: pending.requestId!, summary, state: pending })
+    const current: PlanStateSnapshot = this.planState
+    if (current.requestId !== pending.requestId || current.status !== "pending") {
+      return { approved: false, state: this.planState }
+    }
+    const state = this._publishPlanState(replacePlanState(this._planState, approved ? "committed" : "active", "user", {
+      summary,
+      reason: approved ? "user_approved_plan" : "user_rejected_plan",
+    }))
+    return { approved, state }
+  }
+
+  commitPendingPlanState(reason = "safe_boundary"): PlanStateSnapshot {
+    if (this._planState.status !== "pending" || !this._planState.pendingTarget) return this.planState
+    if (this._planState.reason === "awaiting_user_approval") return this.planState
+    return this._publishPlanState(replacePlanState(this._planState, this._planState.pendingTarget, this._planState.source, { reason }))
   }
 
   private resetSessionPermissions(): void {
@@ -474,6 +551,7 @@ export class AgentRuntime {
     }
     this._eventSubscriptions = []
     this._workspaceChangeSubscriptions?.clear()
+    this._planStateSubscriptions.clear()
     const session = this._session
     this._session = undefined
     try { session?.dispose() } catch {}
@@ -631,6 +709,7 @@ export class AgentRuntime {
     try { currentUnsub?.() } catch {}
     if (!subscription.active) return
     const nextUnsub = sourceSession.subscribe((event) => {
+      if (event?.type === "agent_end") this.commitPendingPlanState("turn_boundary")
       if (subscription.active) subscription.cb(event, sourceSession)
     })
     if (!subscription.active) {
@@ -680,6 +759,7 @@ export class AgentRuntime {
     }
 
     const entries = this.sessionManager.getEntries()
+    this._planState = recoverPlanState(readPlanState(entries))
     const persistedSelection = readAgentProfileSelection(entries)
     const persistedLifecycle = readAgentProfileLifecycle(entries)
     const profile = profileOverride
@@ -744,6 +824,7 @@ export class AgentRuntime {
     // A failed switch must not leave an applied lifecycle fact on disk.
     if (created) persistAgentProfileSelection(this.sessionManager, profile)
     persistAgentProfileLifecycle(this.sessionManager, lifecycle)
+    if ((created && this._planState.revision === 0) || this._planState.source === "restore") persistPlanState(this.sessionManager, this._planState)
     this._activeProfileLifecycle = lifecycle
   }
 }

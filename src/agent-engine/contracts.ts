@@ -1,4 +1,5 @@
 import type { ToolFailureKind } from "../agent/types.js";
+import type { PlanStateSnapshot, PlanStateTarget } from "../agent/plan-state.js";
 
 export const ENGINE_EVENT_VERSION = 1 as const;
 
@@ -88,6 +89,7 @@ export interface EngineSessionSnapshot {
   messagesCount?: number;
   tools?: string[];
   profile?: { id: string; revision: number };
+  planState?: PlanStateSnapshot;
   profileLifecycle?: {
     requested: { id: string; revision: number; generation: number };
     effective?: { id: string; revision: number; generation: number };
@@ -115,6 +117,7 @@ export interface EngineEventBase {
 export type EngineEvent =
   | (EngineEventBase & { type: "engine.ready"; turnId: "" })
   | (EngineEventBase & { type: "session.changed"; turnId: ""; session: EngineSessionSnapshot })
+  | (EngineEventBase & { type: "plan.changed"; turnId: ""; state: PlanStateSnapshot })
   | (EngineEventBase & { type: "turn.started" })
   | (EngineEventBase & { type: "content.delta"; text: string; contentIndex?: number; phase?: EngineContentPhase })
   | (EngineEventBase & { type: "thinking.delta"; text: string; contentIndex?: number; phase?: EngineContentPhase })
@@ -150,6 +153,7 @@ export interface AgentEngine {
   openSession(sessionFile: string, workspace: string, lifecycleAction?: "resume" | "fork"): Promise<void>;
   createNewSession(profileId?: string): Promise<string>;
   switchProfile(profileId: string): Promise<{ id: string; revision: number }>;
+  requestPlanState(target: PlanStateTarget): Promise<PlanStateSnapshot>;
   setModel(provider: string, modelId: string): Promise<void>;
   setThinkingLevel(level: string): Promise<void>;
   syncModelProviders(): Promise<number>;
@@ -163,6 +167,7 @@ export interface AgentEngine {
 export const ENGINE_EVENT_TYPES = [
   "engine.ready",
   "session.changed",
+  "plan.changed",
   "turn.started",
   "content.delta",
   "thinking.delta",
@@ -185,6 +190,7 @@ const EVENT_TYPES = new Set<EngineEvent["type"]>(ENGINE_EVENT_TYPES);
 
 export function defaultEngineEventVisibility(type: EngineEvent["type"]): EngineEventVisibility {
   if (type === "diagnostic") return "debug";
+  if (type === "plan.changed") return "user";
   if (type === "content.delta" || type === "thinking.delta"
     || type === "tool.started" || type === "tool.updated"
     || type === "tool.completed" || type === "tool.failed"

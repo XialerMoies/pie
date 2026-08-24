@@ -1,6 +1,6 @@
 import type { CommandConfirmationResult } from "../agent/types.js";
 
-export type ConfirmationKind = "command" | "permission";
+export type ConfirmationKind = "command" | "permission" | "plan";
 
 type PendingConfirmation = {
   kind: ConfirmationKind;
@@ -74,7 +74,7 @@ export class ConfirmationRegistry {
   }
 
   private createId(kind: ConfirmationKind): string {
-    const prefix = kind === "command" ? "cmd" : "perm";
+    const prefix = kind === "command" ? "cmd" : kind === "plan" ? "plan" : "perm";
     let id: string;
     do {
       id = prefix + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);

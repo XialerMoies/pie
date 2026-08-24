@@ -5,6 +5,9 @@ interface ChatSseEvent {
   command?: string;
   reason?: string;
   permissionSuggestions?: any[];
+  id?: string;
+  summary?: string;
+  state?: unknown;
   text?: string;
   turnId?: string;
   sessionId?: string;
@@ -86,6 +89,14 @@ class ChatSseControllerView {
         if (confirmation?.handle) void confirmation.handle(data);
         return;
       }
+      if (data.type === 'plan_confirm') {
+        void this.handlePlanConfirmation(data);
+        return;
+      }
+      if (data.type === 'plan_state') {
+        this.dependencies.chat.applyPlanState?.(data.state);
+        return;
+      }
       if (data.type === 'queue_update') {
         const steering = Array.isArray(data.steering) ? data.steering.length : 0;
         const followUp = Array.isArray(data.followUp) ? data.followUp.length : 0;
@@ -113,6 +124,20 @@ class ChatSseControllerView {
     } catch {
       // Ignore malformed payloads and keep the active stream alive.
     }
+  }
+
+  private async handlePlanConfirmation(data: ChatSseEvent): Promise<void> {
+    if (!data.id) return;
+    const approved = await confirmAsync(`
+      <div style="font-weight:700;margin-bottom:8px">批准执行方案</div>
+      <div style="font-size:.76rem;color:var(--ts);margin-bottom:10px">Agent 已完成规划。批准后才会进入执行状态。</div>
+      <pre style="margin:0;max-width:560px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.18);border:1px solid var(--bd);border-radius:7px;padding:10px;font-family:var(--fm);font-size:.74rem;color:var(--tx)">${E(data.summary || '')}</pre>
+    `);
+    await fetch('/api/chat/plan-confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: data.id, allow: approved }),
+    }).catch(() => undefined);
   }
 
   handleError(generation: number, _event: Event): void {

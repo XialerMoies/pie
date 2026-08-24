@@ -10,8 +10,8 @@ import type { AgentRuntime } from "../agent/index.js"
 import { resolveSystemPrompt } from "../agent/prompts.js"
 import { toolRegistry } from "../agent/tools/index.js"
 import { presentNativeTool } from "../agent/tool-presentation.js"
+import { ToolPool } from "../agent/tool-pool.js"
 import {
-  READ_ONLY_SUBAGENT_TOOLS,
   type SubagentModelRef,
   type SubagentProfile,
 } from "./subagent-supervisor.js"
@@ -59,8 +59,6 @@ export interface EmbeddedSubagentFactoryDependencies {
   createSession?: typeof createAgentSession
 }
 
-const READ_ONLY_TOOL_SET = new Set<string>(READ_ONLY_SUBAGENT_TOOLS)
-
 const READ_ONLY_CONSTRAINTS = `You are a read-only subagent. Do not modify files, execute shell commands, write memory, or delegate more agents.
 Use only the tools exposed by the host. Treat focus paths as guidance, not as permission to leave the workspace.
 Your final response must be a JSON object with exactly these top-level fields: summary (string), findings (array), evidence (array).`
@@ -99,13 +97,16 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
 
     const configuredTools = input.task.agent?.tools ?? input.tools
     const inputToolSet = new Set(input.tools)
-    const tools = configuredTools.filter((name) => READ_ONLY_TOOL_SET.has(name) && inputToolSet.has(name))
-    const customTools = tools
-      .map((name) => {
-        const tool = toolRegistry.get(name)
-        if (!tool || !tool.isReadOnly) {
-          throw new Error(`Read-only subagent tool is unavailable: ${name}`)
-        }
+    const requestedTools = configuredTools.filter((name) => inputToolSet.has(name))
+    const selectedTools = new ToolPool().addNative(toolRegistry.getAll()).project({
+      audience: "subagent",
+      names: requestedTools,
+      featureGates: "*",
+    })
+    const tools = selectedTools.map((tool) => tool.name)
+    const customTools = selectedTools
+      .map((tool) => {
+        if (!tool.isReadOnly) throw new Error(`Read-only subagent tool is unavailable: ${tool.name}`)
         return presentNativeTool(tool, {
           workspace: input.workspace,
           extraCtx: {

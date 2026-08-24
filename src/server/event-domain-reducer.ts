@@ -19,6 +19,7 @@ export type DomainEventKind =
   | "tool_failed"
   | "terminal"
   | "queue"
+  | "plan"
   | "usage"
   | "compaction"
   | "internal"
@@ -52,6 +53,7 @@ export function reduceEngineEvent(event: EngineEvent): ReducedEngineEvent {
     case "turn.failed":
     case "turn.cancelled": kind = "terminal"; break;
     case "queue.updated": kind = "queue"; break;
+    case "plan.changed": kind = "plan"; break;
     case "usage.updated": kind = "usage"; break;
     case "compaction.started":
     case "compaction.completed":
@@ -68,4 +70,3 @@ export function reduceEngineEvent(event: EngineEvent): ReducedEngineEvent {
     presentationEligible: visibility === "user" && kind !== "debug" && kind !== "internal",
   };
 }
-

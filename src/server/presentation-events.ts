@@ -3,6 +3,7 @@ import { writeChatEvent } from "./chat-stream.js";
 import type { EvidenceLedgerEntry } from "./evidence-ledger.js";
 import type { TaskLifecycleSnapshot } from "./task-lifecycle.js";
 import type { CorrelationIds } from "./correlation.js";
+import type { PlanStateSnapshot } from "../agent/plan-state.js";
 
 /**
  * User-visible events emitted by the canonical engine bridge.
@@ -25,7 +26,8 @@ export type PresentationEvent =
       correlation?: CorrelationIds;
     }
   | { type: "cancelled"; turnId: string; sessionId: string; reason?: string; correlation?: CorrelationIds }
-  | { type: "queue_update"; steering: unknown[]; followUp: unknown[]; correlation?: CorrelationIds };
+  | { type: "queue_update"; steering: unknown[]; followUp: unknown[]; correlation?: CorrelationIds }
+  | { type: "plan_state"; state: PlanStateSnapshot; correlation?: CorrelationIds };
 
 function sanitizePresentationEvent(event: PresentationEvent): PresentationEvent {
   if (event.type !== "done") return event;

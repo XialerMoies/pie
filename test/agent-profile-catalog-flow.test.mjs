@@ -18,6 +18,8 @@ describe("AP-08 profile-generated tool and prompt catalog flow", () => {
       assert.deepStrictEqual(catalog.tools.map((tool) => tool.name), host.map((tool) => tool.name));
       assert.deepStrictEqual(presented.map((tool) => tool.name), catalog.tools.map((tool) => tool.name));
       assert.ok(catalog.tools.every((tool) => tool.executable && tool.enabled));
+      assert.deepStrictEqual(catalog.featureGates, profile.featureGates);
+      assert.ok(catalog.tools.every((tool) => tool.source === "native" && tool.audiences.includes("main")));
       assert.equal(catalog.presentation, profile.presentation);
       assert.deepStrictEqual(catalog.dependencies, { mcp: profile.allowMcp, skills: profile.includeSkills });
       const expectedPromptKeys = profile.promptSections === "*"
@@ -31,29 +33,35 @@ describe("AP-08 profile-generated tool and prompt catalog flow", () => {
   it("keeps minimal and fact-verification capability surfaces bounded", () => {
     const minimal = buildProfileCatalog(resolveAgentProfile("minimal"));
     const fact = buildProfileCatalog(resolveAgentProfile("fact-verification"));
-    assert.deepStrictEqual(minimal.tools.map((tool) => tool.name), ["command", "str_replace_editor"]);
+    assert.deepStrictEqual(minimal.tools.map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode"]);
     assert.deepStrictEqual(fact.tools.map((tool) => tool.name), ["file_read", "explorer_list", "read_memory", "list_memory", "skill_facts"]);
+    assert.deepStrictEqual(minimal.featureGates, ["planning"]);
+    assert.deepStrictEqual(fact.featureGates, ["memory", "skills"]);
+    assert.equal(fact.tools.find((tool) => tool.name === "skill_facts").feature, "skills");
+    assert.equal(fact.tools.find((tool) => tool.name === "read_memory").feature, "memory");
     assert.deepStrictEqual(minimal.dynamicSources, []);
     assert.deepStrictEqual(fact.dynamicSources, []);
   });
 
-  it("fails closed when a model-visible tool is not executable or an extra tool is not declared", () => {
+  it("fails closed when a model-visible tool is not executable and keeps undeclared tools disabled", () => {
     const declared = toolRegistry.get("file_read");
     assert.ok(declared);
     const brokenRegistry = {
       resolveName: (name) => ["file_read", "explorer_list", "skill_facts", "list_memory", "read_memory"].includes(name) ? name : undefined,
-      project: () => toolRegistry.project(resolveAgentProfile("fact-verification").toolNames).map((tool) => tool.name === "file_read" ? { ...tool, execute: undefined } : tool),
-      getAll: () => toolRegistry.getAll(),
+      project: () => { throw new Error("catalog must not bypass ToolPool"); },
+      getAll: () => toolRegistry.project(resolveAgentProfile("fact-verification").toolNames).map((tool) => tool.name === "file_read" ? { ...tool, execute: undefined } : tool),
     };
     assert.throws(() => buildProfileCatalog(resolveAgentProfile("fact-verification"), { registry: brokenRegistry }), /not executable/u);
 
     const extra = { ...declared, name: "undeclared_extra" };
     const extraRegistry = {
       resolveName: (name) => ["file_read", "explorer_list", "skill_facts", "list_memory", "read_memory"].includes(name) ? name : name === "undeclared_extra" ? "undeclared_extra" : undefined,
-      project: () => [declared, extra],
-      getAll: () => [declared, extra],
+      project: () => { throw new Error("catalog must not bypass ToolPool"); },
+      getAll: () => [...toolRegistry.project(resolveAgentProfile("fact-verification").toolNames), extra],
     };
-    assert.throws(() => buildProfileCatalog(resolveAgentProfile("fact-verification"), { registry: extraRegistry }), /projection mismatch/u);
+    const catalog = buildProfileCatalog(resolveAgentProfile("fact-verification"), { registry: extraRegistry });
+    assert.ok(!catalog.tools.some((tool) => tool.name === "undeclared_extra"));
+    assert.ok(catalog.disabledTools.includes("undeclared_extra"));
   });
 
   it("represents broken and unavailable profiles without standard fallback", () => {

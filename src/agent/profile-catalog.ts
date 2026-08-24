@@ -2,11 +2,13 @@ import { createHash } from "node:crypto"
 import {
   agentProfileRegistry,
   type AgentProfile,
+  type AgentFeatureId,
   type AgentProfileHealth,
   type AgentProfileSnapshot,
 } from "./agent-profile.js"
 import { listPromptSections, type PromptSection } from "./prompts.js"
 import { resolveToolPresentation, type ToolPresentationMode } from "./tool-presentation.js"
+import { profileAllowsFeature, ToolPool, type AgentToolAudience, type ToolPoolEntry, type ToolPoolSource } from "./tool-pool.js"
 import { toolRegistry } from "./tools/index.js"
 import type { AgentTool, ToolOperation } from "./types.js"
 
@@ -21,7 +23,9 @@ export interface ProfileToolCatalogEntry {
   riskLevel: string
   operations: ToolOperation[]
   workspaceBounded: boolean
-  source: "builtin" | "mcp"
+  source: ToolPoolSource
+  feature?: AgentFeatureId
+  audiences: AgentToolAudience[]
   schemaFingerprint: string
 }
 
@@ -39,6 +43,7 @@ export interface ProfileCatalog {
   generation: number
   health: AgentProfileHealth
   presentation: ToolPresentationMode
+  featureGates: "*" | readonly AgentFeatureId[]
   tools: ProfileToolCatalogEntry[]
   promptSections: ProfilePromptCatalogEntry[]
   dependencies: { mcp: boolean; skills: boolean }
@@ -98,7 +103,7 @@ function selectedPromptSections(profile: AgentProfile, sections: readonly Prompt
   return sections.filter((section) => requested.has(section.key))
 }
 
-function toolCatalogEntry(tool: AgentTool, presentation: ToolPresentationMode): ProfileToolCatalogEntry {
+function toolCatalogEntry(tool: AgentTool, entry: ToolPoolEntry, presentation: ToolPresentationMode): ProfileToolCatalogEntry {
   const enabled = !tool.isEnabled || tool.isEnabled()
   return {
     name: tool.name,
@@ -111,7 +116,9 @@ function toolCatalogEntry(tool: AgentTool, presentation: ToolPresentationMode): 
     riskLevel: tool.riskLevel || "medium",
     operations: [...(tool.operations || [])],
     workspaceBounded: tool.workspaceBounded !== false,
-    source: tool.mcpCapabilities ? "mcp" : "builtin",
+    source: entry.source,
+    ...(entry.feature ? { feature: entry.feature } : {}),
+    audiences: [...entry.audiences],
     schemaFingerprint: fingerprint({ name: tool.name, description: tool.description, parameters: tool.parameters }),
   }
 }
@@ -132,6 +139,7 @@ export function buildProfileCatalog(
     generation: snapshot.generation,
     health: snapshot.health,
     presentation: snapshot.profile?.presentation || "native" as const,
+    featureGates: snapshot.profile?.featureGates || [] as readonly AgentFeatureId[],
     tools: [] as ProfileToolCatalogEntry[],
     promptSections: [] as ProfilePromptCatalogEntry[],
     dependencies: { mcp: false, skills: false },
@@ -147,7 +155,11 @@ export function buildProfileCatalog(
   const profile = snapshot.profile
   const registry = options.registry || toolRegistry
   const sections = options.promptSections || listPromptSections()
-  const hostTools = registry.project(profile.toolNames)
+  const pool = new ToolPool().addNative(registry.getAll())
+  const requestedNames = profile.toolNames === "*"
+    ? "*"
+    : profile.toolNames.map((name) => registry.resolveName(name) || name)
+  const hostTools = pool.project({ audience: "main", names: requestedNames, featureGates: profile.featureGates })
   if (profile.toolNames !== "*") {
     const declaredNames = profile.toolNames.map((name) => registry.resolveName(name))
     if (declaredNames.some((name): name is undefined => !name)) {
@@ -175,16 +187,18 @@ export function buildProfileCatalog(
   }
 
   const selectedSections = selectedPromptSections(profile, sections)
-  const tools = hostTools.map((tool) => toolCatalogEntry(tool, profile.presentation))
-  const disabledTools = registry.getAll().filter((tool) => !hostTools.includes(tool)).map((tool) => tool.name)
+  const entriesByName = new Map(pool.entries().map((entry) => [entry.tool.name, entry]))
+  const tools = hostTools.map((tool) => toolCatalogEntry(tool, entriesByName.get(tool.name)!, profile.presentation))
+  const hostNamesSet = new Set(hostTools.map((tool) => tool.name))
+  const disabledTools = pool.entries().filter((entry) => !hostNamesSet.has(entry.tool.name)).map((entry) => entry.tool.name)
   const promptCatalog = selectedSections.map((section) => ({
     key: section.key,
     enabled: section.enabled !== false,
     volatile: section.volatile === true,
     contentFingerprint: promptFingerprint(section),
   }))
-  const dependencies = { mcp: profile.allowMcp, skills: profile.includeSkills }
-  const dynamicSources = profile.allowMcp ? ["mcp"] : []
+  const dependencies = { mcp: profile.allowMcp && profileAllowsFeature(profile, "mcp"), skills: profile.includeSkills }
+  const dynamicSources = dependencies.mcp ? ["mcp"] : []
   const completed = { ...base, tools, promptSections: promptCatalog, dependencies, dynamicSources, disabledTools }
   if (errors.length > 0) throw new Error(`Invalid profile catalog for ${profile.id}: ${errors.join("; ")}`)
   return { ...completed, fingerprint: catalogFingerprint(completed) }

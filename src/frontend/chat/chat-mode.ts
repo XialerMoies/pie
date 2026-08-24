@@ -37,13 +37,13 @@ function handleSlash(ci: HTMLTextAreaElement): void {
 
 const MODE_LABELS: Record<string, string> = { auto: '自动', explain: '解释', plan: '计划' };
 const PERMISSION_MODE_ORDER = ['plan', 'standard', 'dontAsk', 'yes'] as const;
-const PERMISSION_MODE_LABELS: Record<string, string> = { plan: '计划', standard: '标准', dontAsk: '不询问', yes: 'Yes' };
+const PERMISSION_MODE_LABELS: Record<string, string> = { plan: '逐次确认', standard: '标准', dontAsk: '不询问', yes: 'Yes' };
 const EFFORT_LABELS: Record<string, string> = { off: '关闭', minimal: '极少', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
 
 const MODE_INSTRUCTIONS: Record<string, string> = {
   auto: '',
   explain: '仅解释，不要修改任何文件或执行命令。',
-  plan: '不要执行任何操作。输出结构化方案：目标 → 步骤 → 涉及文件 → 风险。',
+  plan: '',
 };
 
 const EFFORT_INSTRUCTIONS: Record<string, string> = {
@@ -58,6 +58,31 @@ let _currentMode = 'auto';
 let _currentEffort = 'medium';
 let _availableLevels: string[] = Object.keys(EFFORT_LABELS);
 let _supportsThinking = false;
+let _planState: { status: 'active' | 'pending' | 'committed' | 'cancelled'; pendingTarget?: string } = { status: 'committed' };
+
+function applyPlanState(data: unknown): void {
+  const candidate = data && typeof data === 'object' && 'state' in data
+    ? (data as { state?: unknown }).state
+    : data;
+  if (!candidate || typeof candidate !== 'object') return;
+  const state = candidate as { status?: unknown; pendingTarget?: unknown };
+  if (!['active', 'pending', 'committed', 'cancelled'].includes(String(state.status))) return;
+  _planState = {
+    status: state.status as typeof _planState.status,
+    ...(typeof state.pendingTarget === 'string' ? { pendingTarget: state.pendingTarget } : {}),
+  };
+  if (_planState.status === 'active' || _planState.status === 'pending') _currentMode = 'plan';
+  else if (_currentMode === 'plan') _currentMode = 'auto';
+  preferences.set('chat-mode', _currentMode);
+  updateModeButton();
+}
+
+async function syncPlanState(): Promise<void> {
+  try {
+    const response = await fetch('/api/plan-state');
+    if (response.ok) applyPlanState(await response.json());
+  } catch {}
+}
 
 function applyThinkingState(data: unknown): void {
   const state = data && typeof data === 'object' ? data as Record<string, unknown> : {};
@@ -96,14 +121,32 @@ function loadModeState(): void {
   updateModeButton();
   // 启动时从服务端获取真实思考档位；不支持时保留本地 fallback 选择
   void syncThinkingLevel();
+  void syncPlanState();
   // 启动时同步一次权限模式，避免按钮显示模块默认值直到首次打开弹窗
   syncPermissionMode();
 }
 
-function setMode(mode: string): void {
+async function setMode(mode: string): Promise<void> {
+  const previous = _currentMode;
   _currentMode = mode;
   preferences.set('chat-mode', mode);
   updateModeButton();
+  const target = mode === 'plan' ? 'active' : previous === 'plan' ? 'committed' : undefined;
+  if (!target) return;
+  try {
+    const response = await fetch('/api/plan-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target }),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body?.error || 'plan state update failed');
+    applyPlanState(body);
+  } catch {
+    _currentMode = previous;
+    preferences.set('chat-mode', previous);
+    updateModeButton();
+  }
 }
 
 /** 调用服务端 setThinkingLevel，替代 localStorage + 提示词前缀 */
@@ -194,8 +237,9 @@ function updateModeButton(): void {
   const el = $('fi-mode-name');
   if (!el) return;
   const conversationLabel = MODE_LABELS[_currentMode] || '自动';
+  const planLabel = _planState.status === 'pending' ? '计划待处理' : conversationLabel;
   const permissionMode = permissions?.getMode?.() || 'standard';
-  el.textContent = `${conversationLabel} · ${PERMISSION_MODE_LABELS[permissionMode] || '标准'}`;
+  el.textContent = `${planLabel} · ${PERMISSION_MODE_LABELS[permissionMode] || '标准'}`;
 }
 
 let permissionModeSynced = false;
@@ -244,7 +288,7 @@ function showModePopup(btn: HTMLElement): void {
   popup.querySelectorAll('.mode-option[data-mode]').forEach(el => {
     el.addEventListener('click', () => {
       const mode = (el as HTMLElement).dataset.mode || 'auto';
-      setMode(mode);
+      void setMode(mode);
       popup.querySelectorAll('.mode-option').forEach(b => {
         b.classList.toggle('active', (b as HTMLElement).dataset.mode === mode);
       });
@@ -307,6 +351,8 @@ function stripInstruction(text: string): string {
   AppChat.setEffort = setEffort;
   AppChat.mountThinkingControl = mountThinkingControl;
   AppChat.syncThinkingLevel = syncThinkingLevel;
+  AppChat.syncPlanState = syncPlanState;
+  AppChat.applyPlanState = applyPlanState;
   AppChat.getMode = () => _currentMode;
   AppChat.getEffort = () => _currentEffort;
   AppChat.refreshModeButton = updateModeButton;

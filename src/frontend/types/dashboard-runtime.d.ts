@@ -15,6 +15,8 @@ interface AppChat {
   showModelPicker(e: MouseEvent): void;
   mountThinkingControl(root: HTMLElement): void;
   syncThinkingLevel(): Promise<void>;
+  syncPlanState(): Promise<void>;
+  applyPlanState(state: unknown): void;
   refreshModeButton(): void;
   addAttachment(att: Omit<ChatAttachment, 'id'>): void;
   removeAttachment(id: string): void;

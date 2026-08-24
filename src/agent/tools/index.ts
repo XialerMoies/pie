@@ -28,8 +28,10 @@ import { strReplaceEditorTool } from "./str-replace-editor.js"
 import { fileWriteTool } from "./file-write.js"
 import { delegateTasksTool } from "./delegate-tasks.js"
 import { skillFactsTool } from "./skill-facts.js"
+import { enterPlanModeTool, exitPlanModeTool } from "./plan-mode.js"
 import { resolveAgentProfile, type AgentProfile } from "../agent-profile.js"
 import { presentNativeTool, resolveToolPresentation } from "../tool-presentation.js"
+import { buildProfileToolPool, profileAllowsFeature, ToolPool } from "../tool-pool.js"
 
 /** 全局 Tool 注册表 */
 export const toolRegistry = new ToolRegistry()
@@ -61,6 +63,8 @@ toolRegistry.register(strReplaceEditorTool)
 toolRegistry.register(fileWriteTool)
 toolRegistry.register(delegateTasksTool)
 toolRegistry.register(skillFactsTool)
+toolRegistry.register(enterPlanModeTool)
+toolRegistry.register(exitPlanModeTool)
 
 export function registerTool(
   tool: Parameters<typeof toolRegistry.register>[0],
@@ -70,11 +74,23 @@ export function registerTool(
 
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */
 export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard")) {
-  return resolveToolPresentation(profile.presentation).present(toolRegistry.project(profile.toolNames), { workspace, emitTrace, extraCtx }) as any
+  const pool = new ToolPool().addNative(toolRegistry.getAll())
+  const tools = pool.project({ audience: "main", names: profile.toolNames, featureGates: profile.featureGates })
+  return resolveToolPresentation(profile.presentation).present(tools, { workspace, emitTrace, extraCtx }) as any
 }
 
 function presentProfileTools(tools: readonly AgentTool[], workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard")) {
   return resolveToolPresentation(profile.presentation).present(tools, { workspace, emitTrace, extraCtx }) as any
+}
+
+function assembleProfileTools(profile: AgentProfile, mcpTools: readonly AgentTool[] = []): AgentTool[] {
+  const pool = buildProfileToolPool(profile, toolRegistry.getAll(), mcpTools)
+  const nativeNames = profile.toolNames === "*" ? "*" : profile.toolNames
+  const native = pool.project({ audience: "main", names: nativeNames, featureGates: profile.featureGates })
+  const nativeSet = new Set(native.map((tool) => tool.name))
+  const dynamic = pool.project({ audience: "main", featureGates: profile.featureGates, requireAllRequested: false })
+    .filter((tool) => !nativeSet.has(tool.name))
+  return [...native, ...dynamic]
 }
 
 /**
@@ -236,13 +252,12 @@ export async function getCustomToolsAsync(
 
   // Profile capability projection is independent from PermissionMode. A
   // profile that does not expose MCP must not trigger discovery either.
-  if (!profile.allowMcp) return builtin
+  if (!profile.allowMcp || !profileAllowsFeature(profile, "mcp")) return builtin
 
   // 2. MCP 工具：缓存命中或 workspace 未变直接使用
   const ws = workspace ?? ""
   if (_mcpCacheInitialized && _mcpWorkspace === ws) {
-    const mcpTools = presentProfileTools(_mcpCache, workspace, emitTrace, extraCtx, profile)
-    return [...builtin, ...mcpTools]
+    return presentProfileTools(assembleProfileTools(profile, _mcpCache), workspace, emitTrace, extraCtx, profile)
   }
 
   if (_mcpWorkspace !== ws) {
@@ -252,8 +267,7 @@ export async function getCustomToolsAsync(
   }
 
   // incomplete cache 中的健康 raw tools 仍按当前 session 上下文重新包装并提供。
-  const cachedMcpTools = presentProfileTools(_mcpCache, workspace, emitTrace, extraCtx, profile)
-  const available = [...builtin, ...cachedMcpTools]
+  const available = presentProfileTools(assembleProfileTools(profile, _mcpCache), workspace, emitTrace, extraCtx, profile)
 
   const current = _mcpInFlight
   if (current && current.workspace === ws && current.epoch === _mcpRequestEpoch) return available

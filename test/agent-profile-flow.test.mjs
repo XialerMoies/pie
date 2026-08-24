@@ -17,6 +17,7 @@ import {
 import { resolveSystemPrompt } from "../src/agent/prompts.ts";
 import { getCustomTools, getCustomToolsAsync, toolRegistry } from "../src/agent/tools/index.ts";
 import { currentGeneration } from "../src/agent/mcp/MCPClientService.ts";
+import { defaultPlanState, persistPlanState, readPlanState, replacePlanState } from "../src/agent/plan-state.ts";
 import { handleSessions } from "../src/server/routes/sessions.ts";
 import { wsDir } from "../src/server/routes/session-dir.ts";
 
@@ -55,6 +56,7 @@ function createFlowContext(root, workspace) {
       workspace,
       isStreaming: false,
       profile: { id: "standard", revision: 1 },
+      planState: defaultPlanState(),
     },
     async switchWorkspace(next) { this.session.workspace = next; },
     async createNewSession(profileId) {
@@ -63,6 +65,8 @@ function createFlowContext(root, workspace) {
       mkdirSync(dir, { recursive: true });
       manager = SessionManager.create(this.session.workspace, dir);
       persistAgentProfileSelection(manager, profile);
+      const planState = defaultPlanState();
+      persistPlanState(manager, planState);
       // PI intentionally delays JSONL creation until the first assistant result.
       // Drive that real persistence boundary so the route flow can refresh/replay it.
       manager.appendMessage({ role: "assistant", content: [], timestamp: Date.now() });
@@ -71,6 +75,7 @@ function createFlowContext(root, workspace) {
         id: manager.getSessionId(),
         sessionFile: manager.getSessionFile(),
         profile: agentProfileSelection(profile),
+        planState,
       };
       return this.session.id;
     },
@@ -78,12 +83,14 @@ function createFlowContext(root, workspace) {
       const selection = readAgentProfileSelectionFile(file) ?? { id: "standard", revision: 1 };
       const profile = resolveAgentProfileSelection(selection);
       manager = SessionManager.open(file, undefined, nextWorkspace);
+      const planState = readPlanState(manager.getEntries());
       this.session = {
         ...this.session,
         id: manager.getSessionId(),
         workspace: nextWorkspace,
         sessionFile: file,
         profile: agentProfileSelection(profile),
+        planState,
       };
     },
   };
@@ -119,6 +126,7 @@ describe("AP-01 profile registry and projection", () => {
       toolNames: [],
       presentation: "native",
       promptSections: [],
+      featureGates: [],
       allowMcp: false,
       includeSkills: false,
     };
@@ -138,13 +146,13 @@ describe("AP-01 profile registry and projection", () => {
     const minimal = resolveAgentProfile("minimal");
     const allNames = toolRegistry.getAll().map((tool) => tool.name);
     assert.deepStrictEqual(getCustomTools(undefined, undefined, undefined, standard).map((tool) => tool.name), allNames);
-    assert.deepStrictEqual(getCustomTools(undefined, undefined, undefined, minimal).map((tool) => tool.name), ["command", "str_replace_editor"]);
+    assert.deepStrictEqual(getCustomTools(undefined, undefined, undefined, minimal).map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode"]);
 
     const fullBefore = resolveSystemPrompt();
     const minimalPrompt = resolveSystemPrompt(minimal.promptSections);
     const generationBefore = currentGeneration();
     const asyncMinimal = await getCustomToolsAsync(resolve(tmpdir(), "profile-no-mcp"), undefined, undefined, minimal);
-    assert.deepStrictEqual(asyncMinimal.map((tool) => tool.name), ["command", "str_replace_editor"]);
+    assert.deepStrictEqual(asyncMinimal.map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode"]);
     assert.strictEqual(currentGeneration(), generationBefore, "minimal must not start or invalidate MCP discovery");
     assert.strictEqual(resolveSystemPrompt(), fullBefore, "profile projection must not mutate the global prompt registry");
     assert.ok(minimalPrompt.length > 0);
@@ -211,9 +219,14 @@ describe("AP-01 sessions route cross-layer flow", () => {
       assert.strictEqual(listed.status, 200);
       assert.deepStrictEqual(listed.body.sessions.find((session) => session.id === minimalId).profile, { id: "minimal", revision: 1 });
 
+      const activePlan = replacePlanState(flow.engine.session.planState, "active", "user", { reason: "branch_plan" });
+      persistPlanState(flow.manager, activePlan);
+      flow.engine.session.planState = activePlan;
+
       const branched = await callSessions(flow.ctx, "POST", "/api/sessions/branch", { id: minimalId, workspace });
       assert.strictEqual(branched.status, 200);
       assert.deepStrictEqual(branched.body.profile, { id: "minimal", revision: 1 });
+      assert.deepStrictEqual(branched.body.planState, activePlan);
       assert.deepStrictEqual(readAgentProfileSelectionFile(flow.engine.session.sessionFile), { id: "minimal", revision: 1 });
 
       const createdStandard = await callSessions(flow.ctx, "POST", "/api/sessions/new", { workspace, profileId: "standard" });
@@ -223,6 +236,7 @@ describe("AP-01 sessions route cross-layer flow", () => {
       const activated = await callSessions(flow.ctx, "POST", "/api/sessions/activate", { id: minimalId, workspace });
       assert.strictEqual(activated.status, 200);
       assert.deepStrictEqual(activated.body.profile, { id: "minimal", revision: 1 });
+      assert.deepStrictEqual(activated.body.planState, activePlan);
       assert.strictEqual(flow.engine.session.sessionFile, minimalFile);
       assert.ok(flow.published.length >= 4);
     } finally {

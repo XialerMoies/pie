@@ -19,6 +19,7 @@ describe("capability catalog source facts", () => {
     assert.deepStrictEqual([...ENGINE_EVENT_TYPES], [
       "engine.ready",
       "session.changed",
+      "plan.changed",
       "turn.started",
       "content.delta",
       "thinking.delta",

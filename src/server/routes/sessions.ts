@@ -14,6 +14,7 @@ import { authorizeRoutePath, isServerPermissionError, writeServerPermissionError
 import { authorizeWorkspacePath, runWithWorkspaceOwnership } from "./workspace-authorization.js";
 import { agentProfileRegistry, agentProfileSelection, readAgentProfileLifecycle, readAgentProfileSelection, resolveAgentProfile } from "../../agent/agent-profile.js";
 import { buildAllProfileCatalogs } from "../../agent/profile-catalog.js";
+import { readPlanState } from "../../agent/plan-state.js";
 
 // Re-export for backward compat (tests use mod.wsKey / mod.wsDir)
 export { wsKey, wsDir } from "./session-dir.js";
@@ -204,6 +205,13 @@ function readSessionProfile(lines: string[]): { id: string; revision: number } {
   return readAgentProfileSelection(entries) ?? agentProfileSelection(resolveAgentProfile("standard"));
 }
 
+function readSessionPlanState(lines: string[]) {
+  const entries = lines.flatMap((line) => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+  return readPlanState(entries);
+}
+
 function appendSessionInfo(sessionFile: string, info: Record<string, unknown>): void {
   const content = readFileSync(sessionFile, "utf-8");
   const lines = content.trim().split("\n").filter(Boolean);
@@ -311,6 +319,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
             const id = header.id || basename(fullPath, ".jsonl");
             const meta = readSessionMeta(lines);
             const profile = readSessionProfile(lines);
+            const planState = readSessionPlanState(lines);
             const replySummary = meta.name ? "" : deriveReplySummary(lines);
             const hasError = lines.some((line: string) => line.includes('"isError":true') || line.includes('"status":"error"') || line.includes('"error"'));
             record = {
@@ -321,7 +330,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
               file: basename(fullPath), workspace: header.workspace || "",
               pinned: meta.pinned, titleSource: meta.titleSource,
               archived: Boolean(meta.archived), hasError, branchFrom: meta.branchFrom,
-              profile,
+              profile, planState,
             };
             cached.set(fullPath, { size: stat.size, mtimeMs: stat.mtimeMs, record });
           }
@@ -386,7 +395,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       const id = await engine.createNewSession(profileId);
       publishActiveSessionChanged(ctx);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
-      res.end(JSON.stringify({ ok: true, id, profile: engine.session.profile }));
+      res.end(JSON.stringify({ ok: true, id, profile: engine.session.profile, planState: engine.session.planState }));
     } catch (err: unknown) {
       if (writeServerPermissionError(res, cors, err)) return true;
       if (writePathGuardError(res, cors, err)) return true;
@@ -405,7 +414,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       const profile = await engine.switchProfile(profileId);
       publishActiveSessionChanged(ctx);
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
-      res.end(JSON.stringify({ ok: true, profile }));
+      res.end(JSON.stringify({ ok: true, profile, planState: engine.session.planState }));
     } catch (err: unknown) {
       if (writeServerPermissionError(res, cors, err)) return true;
       if (writePathGuardError(res, cors, err)) return true;
@@ -537,7 +546,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       const messages = parseSessionMessages(readFileSync(readableTarget, "utf-8"));
       const activeSessionId = engine.session.id || newId;
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
-      res.end(JSON.stringify({ ok: true, id: newId, activeSessionId, messages, profile: engine.session.profile }));
+      res.end(JSON.stringify({ ok: true, id: newId, activeSessionId, messages, profile: engine.session.profile, planState: engine.session.planState }));
     } catch (err: unknown) {
       if (writeServerPermissionError(res, cors, err)) return true;
       if (writePathGuardError(res, cors, err)) return true;
@@ -558,7 +567,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
         const activeSession = engine.session;
         if (activeSession?.id === id) {
           res.writeHead(200, { "Content-Type": "application/json", ...cors });
-          res.end(JSON.stringify({ ok: true, activeSessionId: id, messages: [], profile: activeSession.profile }));
+          res.end(JSON.stringify({ ok: true, activeSessionId: id, messages: [], profile: activeSession.profile, planState: activeSession.planState }));
           return true;
         }
         res.writeHead(404, { ...cors });
@@ -588,7 +597,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
       const messages = parseSessionMessages(content);
       const activeSessionId = engine.session.id || "";
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
-      res.end(JSON.stringify({ ok: true, activeSessionId, messages, profile: engine.session.profile }));
+      res.end(JSON.stringify({ ok: true, activeSessionId, messages, profile: engine.session.profile, planState: engine.session.planState }));
     } catch (err: unknown) {
       if (writeServerPermissionError(res, cors, err)) return true;
       if (writePathGuardError(res, cors, err)) return true;

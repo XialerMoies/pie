@@ -92,6 +92,8 @@ describe("builtin tool governance metadata", () => {
     ["file_write", { operations: ["create", "read", "write"], riskLevel: "high", needsPermission: false, workspaceBounded: true }],
     ["delegate_tasks", { operations: ["execute"], riskLevel: "high", needsPermission: false, workspaceBounded: true, authorizationMode: "specialized" }],
     ["skill_facts", { operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: true }],
+    ["enter_plan_mode", { operations: ["write"], riskLevel: "low", needsPermission: false, workspaceBounded: false }],
+    ["exit_plan_mode", { operations: ["write"], riskLevel: "low", needsPermission: false, workspaceBounded: false }],
   ]);
 
   it("every registered builtin tool declares the permission contract fields", () => {

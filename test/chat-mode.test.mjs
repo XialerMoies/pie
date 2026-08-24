@@ -3,6 +3,47 @@ import assert from "node:assert/strict";
 import { Window } from "happy-dom";
 
 describe("chat mode server-state boundary", () => {
+  it("uses the host plan-state API instead of permissionMode or a prompt-only flag", async () => {
+    const win = new Window();
+    global.window = win;
+    global.document = win.document;
+    global.self = win;
+    global.$ = (id) => win.document.getElementById(id);
+    win.document.body.innerHTML = '<span id="fi-mode-name"></span>';
+    const requests = [];
+    global.App = win.App = {
+      Chat: {},
+      Permissions: { getMode: () => "standard", refreshMode: async () => "standard", setMode() {} },
+      Preferences: { get: (_key, fallback = "") => fallback, set() {} },
+    };
+    let state = { status: "committed", revision: 0 };
+    global.fetch = async (url, options = {}) => {
+      requests.push({ url, options });
+      if (url === "/api/plan-state" && options.method === "POST") {
+        state = { status: JSON.parse(options.body).target, revision: state.revision + 1 };
+        return { ok: true, json: async () => ({ ok: true, state }) };
+      }
+      if (url === "/api/plan-state") return { ok: true, json: async () => ({ ok: true, state }) };
+      return { ok: true, json: async () => ({ supportsThinking: false }) };
+    };
+
+    await import(`../src/frontend/chat/chat-mode.ts?plan-${Date.now()}-${Math.random()}`);
+    win.App.Chat.loadModeState();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const button = win.document.createElement("button");
+    win.document.body.appendChild(button);
+    win.App.Chat.showModePopup(button);
+    win.document.querySelector('[data-mode="plan"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const mutation = requests.find((request) => request.url === "/api/plan-state" && request.options.method === "POST");
+    assert.equal(JSON.parse(mutation.options.body).target, "active");
+    assert.equal(win.document.getElementById("fi-mode-name").textContent, "计划 · 标准");
+    assert.equal(win.App.Chat.buildInstruction("检查代码"), "检查代码");
+    win.App.Chat.applyPlanState({ status: "committed", revision: 2 });
+    assert.equal(win.document.getElementById("fi-mode-name").textContent, "自动 · 标准");
+  });
+
   it("keeps unknown thinking levels out of the strategy popup DOM", async () => {
     const win = new Window();
     global.window = win;

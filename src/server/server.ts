@@ -12,7 +12,7 @@ import type { AgentEngine } from "../agent-engine/index.js";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { writeFileSync, existsSync, mkdirSync } from "fs";
-import { cancelCommandConfirmationsForResponse, createCommandConfirmCallback } from "./routes/chat.js";
+import { cancelCommandConfirmationsForResponse, createCommandConfirmCallback, createPlanExitConfirmCallback } from "./routes/chat.js";
 import type { ChatStreamState } from "./routes/types.js";
 import { TsserverManager } from "./ts-server.js";
 import { mark, logTiming } from "./timing.js";
@@ -220,6 +220,7 @@ async function main() {
   const permissionMode = createPermissionModeController("standard", (mode) => {
     permissionService.recordPermissionModeChange(mode, "permissions.mode");
   });
+  const planExitConfirm = createPlanExitConfirmCallback(chatStream);
 
   const customProviderStore = new CustomProviderStore({
     configFile: STARTUP.layout.customProvidersFile,
@@ -271,6 +272,9 @@ async function main() {
     modelsFile: STARTUP.layout.modelsFile,
     syncModelProviders: modelRuntime => customProviderService.syncRuntime(modelRuntime),
     getPermissionMode: () => permissionMode.get(),
+    getPlanState: () => runtime?.planState,
+    enterPlanMode: (reason) => runtime.enterPlanMode(reason),
+    requestPlanExit: (summary) => runtime.requestPlanExit(summary, ({ requestId, summary: planSummary }) => planExitConfirm({ requestId, summary: planSummary })),
     shellDialect: preferredShellDialect(),
     confirmCommand: createCommandConfirmCallback(chatStream),
     desktopApiToken: security.token,

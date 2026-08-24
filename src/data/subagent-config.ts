@@ -1,15 +1,9 @@
 import { readFileSync } from "node:fs";
 
 import { updateLockedJson } from "./locked-json-store.js";
+import { READ_ONLY_SUBAGENT_TOOL_NAMES } from "../agent/tool-pool.js";
 
-export const READ_ONLY_SUBAGENT_TOOL_NAMES = [
-  "git-status",
-  "search",
-  "file_read",
-  "explorer_list",
-  "git_log",
-  "file_outline",
-] as const;
+export { READ_ONLY_SUBAGENT_TOOL_NAMES } from "../agent/tool-pool.js";
 
 const READ_ONLY_TOOL_SET = new Set<string>(READ_ONLY_SUBAGENT_TOOL_NAMES);
 const MAX_AGENTS = 50;

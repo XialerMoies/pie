@@ -140,7 +140,7 @@ function activateById(id: string, options: SessionActivationOptions = {}): Promi
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data?.error || ('HTTP ' + response.status));
     return data;
-  }).then((data: { ok: boolean; activeSessionId?: string; messages?: any[]; error?: string }) => {
+  }).then((data: { ok: boolean; activeSessionId?: string; messages?: any[]; planState?: unknown; error?: string }) => {
     if (seq !== sessionActivationSeq) return;
     if (!data.ok || data.error) {
       if (!options.silent) toast('加载失败: ' + (data.error || ''));
@@ -148,6 +148,7 @@ function activateById(id: string, options: SessionActivationOptions = {}): Promi
     }
     disposeActiveStream();
     applySessionMessages(data, id, options);
+    if (data.planState) sessionActivationApp.Chat?.applyPlanState?.(data.planState);
     if (!options.silent) {
       toast('已切换到会话 (' + sessionActivationApp.ChatState.getMessages().length + ' 条消息');
     }

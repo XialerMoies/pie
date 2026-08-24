@@ -9,7 +9,7 @@ interface PermissionPanelViewState {
 
 function permissionModeOptions(mode: PermissionMode): string {
   return ([
-    ["plan", "计划模式"],
+    ["plan", "逐次确认模式"],
     ["standard", "标准模式"],
     ["dontAsk", "不询问模式"],
     ["yes", "Yes 模式"],

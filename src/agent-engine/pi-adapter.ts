@@ -16,6 +16,7 @@ import {
 } from "./contracts.js";
 import { AgentEngineError, normalizeEngineError } from "./errors.js";
 import { mapPiEvent, usageFromContext } from "./event-normalizer.js";
+import type { PlanStateSnapshot, PlanStateTarget } from "../agent/plan-state.js";
 
 export interface PiAgentEngineAdapterOptions {
   id?: string;
@@ -37,6 +38,9 @@ type RuntimeLike = Pick<
   | "switchProfile"
   | "activeProfile"
   | "activeProfileLifecycle"
+  | "planState"
+  | "onPlanStateChange"
+  | "requestPlanState"
   | "syncModelProviders"
   | "dispose"
 >;
@@ -56,6 +60,7 @@ export class PiAgentEngineAdapter implements AgentEngine {
   readonly #turnIdFactory: () => string;
   readonly #listeners = new Set<(event: EngineEvent) => void>();
   readonly #unsubscribeRuntime: () => void;
+  readonly #unsubscribePlanState: () => void;
   #seq = 0;
   #activeTurnId = "";
   #pendingTurnId = "";
@@ -75,6 +80,11 @@ export class PiAgentEngineAdapter implements AgentEngine {
       ? runtime.onEvent((event, sourceSession) => {
           if (!this.#isCurrentSession(sourceSession)) return;
           this.#onPiEvent(event);
+        })
+      : () => {};
+    this.#unsubscribePlanState = typeof runtime.onPlanStateChange === "function"
+      ? runtime.onPlanStateChange((state) => {
+          this.#emit({ ...this.#base(), type: "plan.changed", turnId: "", state });
         })
       : () => {};
   }
@@ -106,6 +116,7 @@ export class PiAgentEngineAdapter implements AgentEngine {
         .map((tool) => typeof tool.name === "string" ? tool.name : "")
         .filter(Boolean),
       profile: { ...profile },
+      planState: this.#runtime.planState,
       ...(this.#runtime.activeProfileLifecycle ? { profileLifecycle: this.#runtime.activeProfileLifecycle } : {}),
     };
   }
@@ -199,6 +210,10 @@ export class PiAgentEngineAdapter implements AgentEngine {
     return profile;
   }
 
+  async requestPlanState(target: PlanStateTarget): Promise<PlanStateSnapshot> {
+    return this.#runtime.requestPlanState(target);
+  }
+
   async setModel(provider: string, modelId: string): Promise<void> {
     const model = this.#runtime.modelRegistry.find(provider, modelId);
     if (!model) throw new AgentEngineError({ code: "model_not_found", category: "validation", retryable: false, message: "未找到指定模型" });
@@ -282,6 +297,7 @@ export class PiAgentEngineAdapter implements AgentEngine {
     if (this.#disposed) return;
     this.#disposed = true;
     this.#unsubscribeRuntime();
+    this.#unsubscribePlanState();
     this.#listeners.clear();
     this.#runtime.dispose();
   }

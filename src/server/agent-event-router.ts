@@ -462,7 +462,7 @@ export function attachEngineEvents(
     : undefined;
   const presentationKinds = new Set([
     "content", "thinking", "tool_started", "tool_updated", "tool_completed",
-    "tool_failed", "terminal", "queue",
+    "tool_failed", "terminal", "queue", "plan",
   ]);
   const taskLifecycle = new TaskLifecycle();
   const abortRequestedTurns = new Set<string>();
@@ -680,6 +680,11 @@ export function attachEngineEvents(
     if (turnId) recordCorrelation("runtime.event", event.type);
     if (event.type === "queue.updated") {
       writePresentationEvent(chatStream, { type: "queue_update", steering: event.steering, followUp: event.followUp });
+      return;
+    }
+    if (event.type === "plan.changed") {
+      writePresentationEvent(chatStream, { type: "plan_state", state: event.state });
+      try { ctx?.groups?.core.appEvents.publish("dashboard.changed"); } catch {}
       return;
     }
     if (event.type === "usage.updated") {

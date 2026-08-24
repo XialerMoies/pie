@@ -495,6 +495,7 @@ export const commandTool: AgentTool = defineAgentTool({
     required: ["command"],
   },
   isReadOnly: false,
+  isPlanReadOnly: (args) => isReadOnlyCommand(String(args.command || "")),
   isDestructive: true,
   isConcurrencySafe: false,
   operations: ["execute"],

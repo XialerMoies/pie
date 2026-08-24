@@ -46,7 +46,7 @@ describe("AP-06 profile lifecycle catalog and generation", () => {
     const registry = new AgentProfileRegistry();
     registry.register({
       id: "ready-profile", revision: 1, description: "ready", toolNames: [], presentation: "native",
-      promptSections: [], allowMcp: false, includeSkills: false,
+      promptSections: [], featureGates: [], allowMcp: false, includeSkills: false,
     });
     const broken = registry.registerBroken("broken-profile", 2, "workspace", "bad yaml");
     const unavailable = registry.markUnavailable("missing-profile", 1, "user");
@@ -59,7 +59,7 @@ describe("AP-06 profile lifecycle catalog and generation", () => {
 
   it("keeps old generation resolvable while new sessions see the replacement", () => {
     const registry = new AgentProfileRegistry();
-    const first = { id: "versioned", revision: 1, description: "one", toolNames: [], presentation: "native", promptSections: [], allowMcp: false, includeSkills: false };
+    const first = { id: "versioned", revision: 1, description: "one", toolNames: [], presentation: "native", promptSections: [], featureGates: [], allowMcp: false, includeSkills: false };
     registry.register(first);
     const firstSnapshot = registry.getSnapshot("versioned");
     const secondSnapshot = registry.replace({ ...first, description: "two", revision: 2 });
