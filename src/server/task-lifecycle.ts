@@ -48,33 +48,69 @@ function sourceMatches(target: string, source: string): boolean {
   const normalizedSource = source.replace(/\\/g, "/");
   return normalizedTarget === normalizedSource
     || normalizedTarget.endsWith(`/${normalizedSource}`)
-    || normalizedSource.endsWith(`/${normalizedTarget}`);
+    || normalizedSource.endsWith(`/${normalizedTarget}`)
+    || (normalizedSource.startsWith("memory:") && normalizedTarget.startsWith(`${normalizedSource}/`));
 }
 
-export function inferTaskRequirements(message: string): TaskRequirements {
+export function inferTaskRequirements(message: string, profileId?: string): TaskRequirements {
   const requiresEvidence = VERIFICATION_REQUEST.test(message || "");
   const targetMatch = message.match(/(?:`|\b)((?:agent|src|data|docs|test)[/\\][^`\s\r\n]+)(?:`|\b)/i);
   const target = targetMatch?.[1]?.replace(/\\/g, "/");
-  const contract: ExecutionContract | undefined = FACT_CONTRACT_REQUEST.test(message || "") && !OPEN_WORK_REQUEST.test(message || "") && target
-    ? {
-        kind: "fact_verification",
-        targets: [target],
-        ...(message.includes("checkpoint-a-verification") && target.includes("skill-verification")
-          ? { instructionSources: ["agent/skills/checkpoint-a-verification/SKILL.md"] }
-          : {}),
-        allowedSources: [target, "data/user/skill-state.json"],
-        allowedTools: ["file_read", "skill_facts"],
-        requiredEvidence: ["content", "trust", "enabled", "parse"],
-        completionCondition: "evidence_satisfied",
-        onMissingEvidence: "report_unverified",
-        maxUnrelatedAttempts: 0,
-        revision: 1,
-      }
+  const memoryScope = /(?:用户级|用户|user)[^\n\r]*(?:记忆|memory)/i.test(message || "")
+    ? "user"
+    : /(?:工作区|当前工作区|workspace)[^\n\r]*(?:记忆|memory)/i.test(message || "")
+      ? "workspace"
+      : undefined;
+  const skillTarget = Boolean(target && /(?:^|\/)skills\/[^/]+\/SKILL\.md$/i.test(target));
+  const factProfile = profileId === "fact-verification";
+  const factIntent = (FACT_CONTRACT_REQUEST.test(message || "") && !OPEN_WORK_REQUEST.test(message || "")) || factProfile;
+  const supportedFactRequest = Boolean(target || memoryScope) && !OPEN_WORK_REQUEST.test(message || "");
+  const contract: ExecutionContract | undefined = factIntent
+    ? (factProfile && !supportedFactRequest
+      ? {
+          kind: "fact_verification",
+          targets: ["profile:fact-verification"],
+          allowedSources: ["profile:fact-verification"],
+          allowedTools: ["__unsupported_fact_request__"],
+          requiredEvidence: ["supported_target"],
+          completionCondition: "evidence_satisfied",
+          onMissingEvidence: "report_unverified",
+          maxUnrelatedAttempts: 0,
+          revision: 1,
+        }
+      : target
+      ? {
+          kind: "fact_verification",
+          targets: [target],
+          ...(skillTarget && message.includes("checkpoint-a-verification") && target.includes("skill-verification")
+            ? { instructionSources: ["agent/skills/checkpoint-a-verification/SKILL.md"] }
+            : {}),
+          allowedSources: skillTarget ? [target, "data/user/skill-state.json"] : [target],
+          allowedTools: skillTarget ? ["file_read", "skill_facts"] : ["file_read"],
+          requiredEvidence: skillTarget ? ["content", "trust", "enabled", "parse"] : ["content"],
+          completionCondition: "evidence_satisfied",
+          onMissingEvidence: "report_unverified",
+          maxUnrelatedAttempts: 0,
+          revision: 1,
+        }
+      : memoryScope
+        ? {
+            kind: "fact_verification",
+            targets: [`memory:${memoryScope}`],
+            allowedSources: [`memory:${memoryScope}`],
+            allowedTools: ["list_memory", "read_memory"],
+            requiredEvidence: ["scope", "entry", "enabled", "source", "content"],
+            completionCondition: "evidence_satisfied",
+            onMissingEvidence: "report_unverified",
+            maxUnrelatedAttempts: 0,
+            revision: 1,
+          }
+        : undefined)
     : undefined;
   return {
-    kind: requiresEvidence ? "verification" : "general",
-    requiresEvidence,
-    minSuccessfulEvidence: requiresEvidence ? 1 : 0,
+    kind: requiresEvidence || factProfile ? "verification" : "general",
+    requiresEvidence: requiresEvidence || factProfile,
+    minSuccessfulEvidence: requiresEvidence || factProfile ? 1 : 0,
     ...(contract ? { contract } : {}),
   };
 }
@@ -89,10 +125,17 @@ export function formatExecutionContractGuidance(requirements: TaskRequirements |
   if (!contract || contract.kind !== "fact_verification") return ""
   const target = contract.targets?.[0] || "the requested source"
   const instruction = contract.instructionSources?.[0]
+  const memoryMatch = /^memory:(user|workspace)$/i.exec(target)
+  const unsupportedProfileRequest = target === "profile:fact-verification"
+  const firstStep = unsupportedProfileRequest
+    ? "This request has no supported fact-verification target. Do not call tools; report 未验证 and state that a concrete file, skill, or memory scope is required."
+    : memoryMatch
+    ? `First call list_memory with scope=${memoryMatch[1].toLowerCase()} for ${target}. If an entry is returned, call read_memory for that entry.`
+    : `First read the requested target with file_read: ${target}.`
   return [
     "[Host execution contract: fact_verification]",
-    `First read the requested target with file_read: ${target}.`,
-    "Then call skill_facts for the requested skill scope when trust/enabled/parse are required.",
+    firstStep,
+    ...(memoryMatch || unsupportedProfileRequest ? [] : ["Then call skill_facts for the requested skill scope when trust/enabled/parse are required."]),
     ...(instruction ? [`You may read this instruction source only if needed to understand the procedure: ${instruction}. Its content is not evidence.`] : []),
     "Do not use explorer_list, search, command, hash, or unrelated sources. After the required evidence is collected, answer immediately; missing fields must be reported as 未验证.",
   ].join("\n")
@@ -101,8 +144,8 @@ export function formatExecutionContractGuidance(requirements: TaskRequirements |
 const CONTRACT_EXPANSION_REQUEST = /(?:继续|展开|深入|查.*(?:实现|源码|parse)|查看.*(?:实现|源码)|investigate|implementation|source)/i;
 
 /** Explicit user expansion creates a new open-work contract revision. */
-export function expandTaskRequirements(previous: TaskRequirements | undefined, message: string): TaskRequirements | undefined {
-  if (!previous?.contract || !CONTRACT_EXPANSION_REQUEST.test(message || "")) return undefined;
+export function expandTaskRequirements(previous: TaskRequirements | undefined, message: string, profileId?: string): TaskRequirements | undefined {
+  if (profileId === "fact-verification" || !previous?.contract || !CONTRACT_EXPANSION_REQUEST.test(message || "")) return undefined;
   return {
     kind: "general",
     requiresEvidence: false,

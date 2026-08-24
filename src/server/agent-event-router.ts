@@ -576,9 +576,18 @@ export function attachEngineEvents(
     const task = taskLifecycle.snapshot();
     const strictVerification = chatStream.taskRequirements?.contract?.kind === "fact_verification"
       || chatStream.taskRequirements?.requiresEvidence === true;
+    const factVerification = chatStream.taskRequirements?.contract?.kind === "fact_verification";
     const finalText = strictVerification && task.status !== "completed"
       ? `未验证：${task.missingEvidence?.length ? `缺少证据字段：${task.missingEvidence.join("、")}` : task.reason || "没有获得足够的成功证据。"}`
       : fullText || chatStream.textBuffer;
+    // A fact check that lacks an object or required fields is a valid
+    // unverified report, not a failed chat turn. Keep genuine provider,
+    // permission, and transport failures on the error path.
+    const unverifiedReport = factVerification && task.status !== "completed" && (
+      task.reason === "evidence_unverified"
+      || task.reason === "evidence_insufficient"
+      || task.reason === "target_not_found_is_not_retryable_without_a_new_target"
+    );
     // A cancellation requested by the runtime after a hard tool failure is
     // presented as a failed/blocked turn, not as a successful user cancel.
     if (event.type === "turn.cancelled" && task.status !== "blocked") {
@@ -589,9 +598,9 @@ export function attachEngineEvents(
         text: finalText,
         turnId,
         sessionId,
-        status: event.type === "turn.completed" && task.status === "completed" ? "done" : "error",
+        status: (event.type === "turn.completed" && task.status === "completed") || unverifiedReport ? "done" : "error",
         ...(event.type === "turn.completed" && event.usage ? { usage: event.usage } : {}),
-        ...(task.status !== "completed"
+        ...(task.status !== "completed" && !unverifiedReport
           ? { error: task.reason || (event.type === "turn.failed" ? event.error.message : event.type === "turn.cancelled" ? event.reason : undefined) || "Agent turn failed" }
           : {}),
         blocks: chatStream.blocks,

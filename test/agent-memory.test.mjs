@@ -340,6 +340,9 @@ describe("scoped memory management", () => {
       await writeMemoryTool.execute({ name: "managed", content: "# Managed" }, ctx);
       const listed = await listMemoryTool.execute({}, ctx);
       assert.ok(listed.text.includes("managed"));
+      assert.deepEqual(listed.metadata?.evidenceFields, ["scope", "entry", "enabled", "source"]);
+      assert.equal(listed.data?.entries?.[0]?.enabled, true);
+      assert.equal(listed.data?.entries?.[0]?.source, "user");
       await setMemoryEnabledTool.execute({ name: "managed", enabled: false }, ctx);
       assert.ok(!readFileSync(resolve(root, "MEMORY.md"), "utf8").includes("managed"));
       await deleteMemoryTool.execute({ name: "managed" }, ctx);
@@ -594,6 +597,18 @@ describe("runtime session transition serialization", () => {
     assert.strictEqual(runtime.currentWorkspace, "/next");
     assert.strictEqual(runtime.session.id, "created");
     assert.strictEqual(createdId, "created");
+  });
+
+  it("rejects an unknown profile before disposing or replacing the active session", async () => {
+    const runtime = await makeRuntime("/workspace", "old");
+    const oldSession = runtime.session;
+    let initCalls = 0;
+    runtime._initSession = async () => { initCalls += 1; };
+
+    await assert.rejects(runtime.createNewSession("unknown-profile"), /Unknown agent profile/);
+
+    assert.strictEqual(runtime.session, oldSession);
+    assert.strictEqual(initCalls, 0);
   });
 
   it("does not deduplicate the same open key across runtime instances", async () => {

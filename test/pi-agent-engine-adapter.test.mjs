@@ -31,6 +31,7 @@ function createRuntime() {
   };
   const runtime = {
     currentWorkspace: "E:\\workspace",
+    activeProfile: { id: "minimal", revision: 1 },
     session,
     modelRegistry: { find: () => session.model },
     onEvent(callback) { listener = callback; return () => { listener = undefined; }; },
@@ -40,7 +41,7 @@ function createRuntime() {
     async runWithStableSession(operation) { return operation(); },
     async switchWorkspace(workspace) { this.currentWorkspace = workspace; },
     async openSession(_file, workspace) { this.currentWorkspace = workspace; },
-    async createNewSession() { return "session-2"; },
+    async createNewSession(profileId) { this.createdProfileId = profileId; return "session-2"; },
     async syncModelProviders() { return 3; },
     dispose() {},
     get aborts() { return aborts; },
@@ -62,6 +63,14 @@ describe("PiAgentEngineAdapter", () => {
   it("exposes an AgentEngine initializer from the agent boundary", async () => {
     const agent = await import("../src/agent/index.ts");
     assert.equal(typeof agent.initEngine, "function");
+  });
+
+  it("projects the active profile through the engine snapshot and create call", async () => {
+    const runtime = createRuntime();
+    const engine = adapter(runtime);
+    assert.deepStrictEqual(engine.session.profile, { id: "minimal", revision: 1 });
+    assert.strictEqual(await engine.createNewSession("standard"), "session-2");
+    assert.strictEqual(runtime.createdProfileId, "standard");
   });
 
   it("maps PI lifecycle, content, tool, usage, and completion events", () => {

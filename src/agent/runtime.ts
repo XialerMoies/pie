@@ -16,6 +16,16 @@ import { wsDir } from "../server/routes/session-dir.js"
 import { calculateContextUsageSnapshot, type ContextUsageSnapshot } from "./context-usage.js"
 import type { SkillFactSnapshot } from "./skills/skill-service.js"
 import { formatSkillPrompt } from "./skills/skill-prompt.js"
+import {
+  agentProfileSelection,
+  persistAgentProfileSelection,
+  readAgentProfileSelection,
+  resolveAgentProfile,
+  resolveAgentProfileSelection,
+  type AgentProfile,
+  type AgentProfileId,
+  type AgentProfileSelection,
+} from "./agent-profile.js"
 
 import { setCurrentRuntime as _setGlobalRuntime, getCurrentRuntime as _getGlobalRuntime } from "./globals.js";
 // 重导出供 tools 使用，实际实现在 globals.ts（零依赖，防循环）
@@ -51,6 +61,7 @@ interface SessionToolTraceEmitter {
 interface SessionRecoveryPoint {
   workspace: string
   sessionFile?: string
+  profileId?: AgentProfileId
 }
 
 function sameRuntimePath(left: string | undefined, right: string): boolean {
@@ -89,6 +100,7 @@ export class AgentRuntime {
   private _modelProviderSyncIdleWait?: boolean
   private _skillPromptStatus?: SkillPromptStatus
   private _skillPromptRefreshTail: Promise<void> = Promise.resolve()
+  private _activeProfile: AgentProfile = resolveAgentProfile("standard")
 
   private constructor() {}
 
@@ -260,9 +272,10 @@ export class AgentRuntime {
    * 强制创建新 session（不续写旧文件）。
    * 返回新 session ID。
    */
-  async createNewSession(): Promise<string> {
+  async createNewSession(profileId?: string): Promise<string> {
+    const profile = resolveAgentProfile(profileId || this.config.profileId)
     return this._enqueueSessionTransition(async () => {
-      console.log(`[runtime] Creating new session`)
+      console.log(`[runtime] Creating new session profile=${profile.id}@${profile.revision}`)
       this.resetSessionPermissions()
 
       await this._replaceSessionWithRollback(
@@ -270,6 +283,7 @@ export class AgentRuntime {
         true,
         undefined,
         true /* forceNew */,
+        profile.id,
       )
       const id = this.session.sessionManager?.getSessionId?.() || ""
       console.log(`[runtime] ✅ New session created: ${id}`)
@@ -282,6 +296,11 @@ export class AgentRuntime {
     return this._skillPromptStatus ? { ...this._skillPromptStatus } : undefined
   }
 
+  /** Immutable profile snapshot for the active session. */
+  get activeProfile(): AgentProfileSelection {
+    return agentProfileSelection(this._activeProfile ?? resolveAgentProfile("standard"))
+  }
+
   /** 强制刷新 system prompt（串行化，失败显式返回而不是伪装成功） */
   async refreshSystemPrompt(): Promise<SystemPromptRefreshResult> {
     const operation = async (): Promise<SystemPromptRefreshResult> => {
@@ -289,7 +308,7 @@ export class AgentRuntime {
       const previousRevision = this._skillPromptStatus?.status === "ready" ? this._skillPromptStatus.revision : undefined
       let newPrompt: string
       try {
-        newPrompt = await this._buildSystemPrompt(this.currentWorkspace)
+        newPrompt = await this._buildSystemPrompt(this.currentWorkspace, this._activeProfile ?? resolveAgentProfile("standard"))
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         const failure: SystemPromptRefreshResult = { ok: false, code: "skill_prompt_unavailable", message, attemptedAt, ...(previousRevision ? { previousRevision } : {}) }
@@ -324,8 +343,13 @@ export class AgentRuntime {
     return pending
   }
 
-  private async _buildSystemPrompt(cwd: string): Promise<string> {
-    const base = resolveSystemPrompt()
+  private async _buildSystemPrompt(cwd: string, profile?: AgentProfile): Promise<string> {
+    const effectiveProfile = profile ?? this._activeProfile ?? resolveAgentProfile("standard")
+    const base = resolveSystemPrompt(effectiveProfile.promptSections)
+    if (!effectiveProfile.includeSkills) {
+      this._skillPromptStatus = undefined
+      return base
+    }
     const service = this.config.skillService
     if (!service) {
       this._skillPromptStatus = undefined
@@ -470,6 +494,7 @@ export class AgentRuntime {
     const recoveryPoint: SessionRecoveryPoint = {
       workspace: this.currentWorkspace,
       sessionFile: previousSession?.sessionFile,
+      profileId: this._activeProfile?.id,
     }
     this._session = undefined
     try { previousSession?.abort() } catch {}
@@ -495,13 +520,14 @@ export class AgentRuntime {
     keepMcp: boolean,
     sessionFile?: string,
     forceNew?: boolean,
+    profileId?: string,
   ): Promise<void> {
     this._sessionSwitching = true
     try {
       const recoveryPoint = await this._saveAndDispose(keepMcp)
       this.currentWorkspace = workspace
       try {
-        await this._initSession(workspace, sessionFile, forceNew)
+        await this._initSession(workspace, sessionFile, forceNew, profileId)
       } catch (error) {
         await this._restoreSession(recoveryPoint)
         throw error
@@ -540,7 +566,7 @@ export class AgentRuntime {
     this._session = undefined
 
     try {
-      await this._initSession(recoveryPoint.workspace, recoveryPoint.sessionFile)
+      await this._initSession(recoveryPoint.workspace, recoveryPoint.sessionFile, undefined, recoveryPoint.profileId)
       this._rebindEvents()
     } catch (rollbackError) {
       this._session = undefined
@@ -564,26 +590,20 @@ export class AgentRuntime {
     subscription.currentUnsub = nextUnsub
   }
 
-  private async _initSession(cwd: string, existingSessionFile?: string, forceNew?: boolean): Promise<void> {
+  private async _initSession(cwd: string, existingSessionFile?: string, forceNew?: boolean, requestedProfileId?: string): Promise<void> {
     const { agentDir, sessionsDir, authFile, modelsFile } = this.config
 
     this.modelRuntime = await ModelRuntime.create({ authPath: authFile, modelsPath: modelsFile })
     await this.config.syncModelProviders?.(this.modelRuntime)
     this.modelRegistry = new ModelRegistry(this.modelRuntime)
 
-    const systemPrompt = await this._buildSystemPrompt(cwd)
-    const loader = new DefaultResourceLoader({
-      cwd,
-      agentDir,
-      appendSystemPrompt: systemPrompt ? [systemPrompt] : undefined,
-    })
-    await loader.reload()
-
     // 优先续写指定文件，否则查找 workspace 现有 session，否则创建新会话
+    let created = false
     if (forceNew) {
       // 强制新 session：由 SessionManager.create 创建文件
       const wsSessionsDir = this.wsSessionDir(cwd)
       this.sessionManager = SessionManager.create(cwd, wsSessionsDir)
+      created = true
     } else if (existingSessionFile) {
       // SessionManager.open(文件路径, sessionDir, cwd覆盖)
       // sessionDir 传 undefined 让 SessionManager 从文件路径推导，避免混到根目录
@@ -598,16 +618,35 @@ export class AgentRuntime {
         // 新 session 直接创建在 workspace 目录下
         const wsSessionsDir = this.wsSessionDir(cwd)
         this.sessionManager = SessionManager.create(cwd, wsSessionsDir)
+        created = true
       }
     }
+
+    const persistedSelection = readAgentProfileSelection(this.sessionManager.getEntries())
+    const profile = persistedSelection
+      ? resolveAgentProfileSelection(persistedSelection)
+      : created
+        ? resolveAgentProfile(requestedProfileId || this.config.profileId)
+        : resolveAgentProfile("standard")
+    this._activeProfile = profile
+    if (created) persistAgentProfileSelection(this.sessionManager, profile)
+
+    const systemPrompt = await this._buildSystemPrompt(cwd, profile)
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      appendSystemPrompt: systemPrompt ? [systemPrompt] : undefined,
+    })
+    await loader.reload()
     const toolTrace = this._createToolTraceEmitter()
     const customTools = await getCustomToolsAsync(
       cwd,
       toolTrace.emit,
       buildToolContextExtra(this.config),
+      profile,
     )
 
-    console.log(`[runtime] 自定义 Tool: ${customTools.map((t: { name: string }) => t.name).join(", ") || "（无）"}`)
+    console.log(`[runtime] Profile: ${profile.id}@${profile.revision}; 自定义 Tool: ${customTools.map((t: { name: string }) => t.name).join(", ") || "（无）"}`)
 
     const { session } = await createAgentSession({
       agentDir,

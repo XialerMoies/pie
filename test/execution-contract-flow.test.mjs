@@ -11,6 +11,8 @@ import {
 import { authorizeExecutionContractAttempt, expandTaskRequirements, inferTaskRequirements } from "../src/server/task-lifecycle.ts";
 import { formatExecutionContractGuidance } from "../src/server/task-lifecycle.ts";
 import { skillFactsTool } from "../src/agent/tools/skill-facts.ts";
+import { fileReadTool } from "../src/agent/tools/file-read.ts";
+import { readMemoryTool, writeMemoryTool } from "../src/agent/tools/memory.ts";
 import { attachEngineEvents } from "../src/server/agent-event-router.ts";
 import { dispatchRoute } from "../src/server/routes/index.ts";
 import { handleSkillSettings } from "../src/server/routes/settings/skills.ts";
@@ -52,6 +54,28 @@ describe("A-17 execution contract cross-layer flow", () => {
     assert.equal(requirements.contract?.onMissingEvidence, "report_unverified");
   });
 
+  it("requires only complete content for an ordinary file fact check", () => {
+    const requirements = inferTaskRequirements("请检查 docs/任务清单.md 的内容，只报告实际读取到的事实");
+    assert.deepStrictEqual(requirements.contract?.allowedTools, ["file_read"]);
+    assert.deepStrictEqual(requirements.contract?.allowedSources, ["docs/任务清单.md"]);
+    assert.deepStrictEqual(requirements.contract?.requiredEvidence, ["content"]);
+  });
+
+  it("binds every fact-verification profile turn to a contract and keeps long-context targets bounded", () => {
+    const unsupported = inferTaskRequirements("帮我做点事情", "fact-verification");
+    assert.equal(unsupported.contract?.kind, "fact_verification");
+    assert.deepStrictEqual(unsupported.contract?.targets, ["profile:fact-verification"]);
+    assert.deepStrictEqual(unsupported.contract?.requiredEvidence, ["supported_target"]);
+    assert.match(formatExecutionContractGuidance(unsupported), /Do not call tools/);
+
+    const longContext = `${"历史上下文。".repeat(4000)}\n请核验 \`docs/任务清单.md\`，只报告实际读取到的事实。`;
+    const bounded = inferTaskRequirements(longContext, "fact-verification");
+    assert.deepStrictEqual(bounded.contract?.targets, ["docs/任务清单.md"]);
+    assert.deepStrictEqual(bounded.contract?.allowedTools, ["file_read"]);
+    assert.deepStrictEqual(bounded.contract?.requiredEvidence, ["content"]);
+    assert.equal(expandTaskRequirements(bounded, "继续查实现源码", "fact-verification"), undefined);
+  });
+
   it("provides a bounded first-step control frame without widening evidence scope", () => {
     const requirements = inferTaskRequirements("请按 checkpoint-a-verification 检查 agent/skills/skill-verification/SKILL.md 的状态和内容");
     const guidance = formatExecutionContractGuidance(requirements);
@@ -59,6 +83,15 @@ describe("A-17 execution contract cross-layer flow", () => {
     assert.match(guidance, /Then call skill_facts/);
     assert.match(guidance, /Do not use explorer_list/);
     assert.match(guidance, /instruction source only if needed/);
+  });
+
+  it("guides scoped-memory verification to the memory tools instead of file search", () => {
+    const requirements = inferTaskRequirements("请按 checkpoint-a-verification 检查用户级记忆中的一个条目，说明作用域、启用状态和证据来源");
+    const guidance = formatExecutionContractGuidance(requirements);
+    assert.match(guidance, /list_memory with scope=user/);
+    assert.match(guidance, /read_memory/);
+    assert.doesNotMatch(guidance, /file_read/);
+    assert.match(guidance, /Do not use explorer_list/);
   });
 
   it("does not impose a fact contract on implementation or diagnosis requests", () => {
@@ -223,6 +256,118 @@ describe("A-17 execution contract cross-layer flow", () => {
     assert.equal(second.details.retryable, false);
   });
 
+  it("never satisfies a fresh verification turn from the cross-turn evidence cache", async () => {
+    let executions = 0;
+    let cacheLookups = 0;
+    const contract = inferTaskRequirements("请检查 docs/任务清单.md 的内容，只报告实际读取到的事实").contract;
+    const tool = defineAgentTool({
+      name: "file_read",
+      description: "read current source",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      isReadOnly: true,
+      resultFormat: "structured",
+      execute: async () => { executions += 1; return structuredToolResult("fresh", { content: "fresh" }, [], { evidenceFields: ["content"] }); },
+    });
+    const definition = agentToolToPIToolDefinition(tool, process.cwd(), undefined, {
+      getExecutionContract: () => contract,
+      authorizeExecutionContract: () => ({ allowed: true }),
+      evidenceLookup: () => { cacheLookups += 1; return { evidenceId: "old", summary: "stale", payloadHash: "old" }; },
+    });
+    const result = await definition.execute("fresh-read", { path: "docs/任务清单.md" });
+    assert.strictEqual(executions, 1);
+    assert.strictEqual(cacheLookups, 0);
+    assert.equal(result.content[0].text, "fresh");
+  });
+
+  it("drives the real HTTP file tool through success, permission, not-found, transport, cancellation, and truncation", async () => {
+    const longContent = Array.from({ length: 5000 }, (_, index) => `line-${index + 1}`).join("\n");
+    const server = createServer((req, res) => {
+      const path = new URL(req.url, "http://127.0.0.1").searchParams.get("path");
+      if (path === "transport.txt") { req.socket.destroy(); return; }
+      if (path === "cancel.txt") { setTimeout(() => { if (!res.destroyed) { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ content: "late", encoding: "text", size: 4 })); } }, 250); return; }
+      if (path === "denied.txt") { res.writeHead(403, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "Access denied" })); return; }
+      if (path === "missing.txt") { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "File not found" })); return; }
+      const content = path === "long.txt" ? longContent : "current-content";
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ content, encoding: "text", size: Buffer.byteLength(content), mtime: "2026-08-24T00:00:00.000Z" }));
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const previousPort = process.env.SERVER_PORT;
+    process.env.SERVER_PORT = String(server.address().port);
+    const run = async (path, options = {}) => {
+      const outcomes = [];
+      const contract = {
+        kind: "fact_verification", targets: [path], allowedSources: [path], allowedTools: ["file_read"], requiredEvidence: ["content"],
+        completionCondition: "evidence_satisfied", onMissingEvidence: "report_unverified", maxUnrelatedAttempts: 0, revision: 1,
+      };
+      const definition = agentToolToPIToolDefinition(fileReadTool, process.cwd(), undefined, {
+        getExecutionContract: () => contract,
+        authorizeExecutionContract: () => ({ allowed: true }),
+        toolOutcomeSource: "test",
+        toolOutcomeObserver: (observation) => outcomes.push(observation),
+      });
+      try {
+        const result = await definition.execute(`call-${path}`, { path, ...(options.maxLines ? { maxLines: options.maxLines } : {}) }, options.signal);
+        return { result, outcomes };
+      } catch (error) { return { error, outcomes }; }
+    };
+    try {
+      const success = await run("ok.txt");
+      assert.deepStrictEqual(success.result.details.evidenceFields, ["content"]);
+      assert.equal(success.outcomes.at(-1).outcome, "success");
+
+      const denied = await run("denied.txt");
+      assert.equal(denied.result.details.outcome.failure.kind, "permission_denied");
+      assert.equal(denied.outcomes.at(-1).status, undefined);
+      assert.equal(denied.outcomes.at(-1).outcome, "failed");
+
+      const missing = await run("missing.txt");
+      assert.equal(missing.result.details.outcome.failure.kind, "not_found");
+      assert.equal(missing.outcomes.at(-1).failureKind, "not_found");
+
+      const transport = await run("transport.txt");
+      assert.ok(transport.error);
+      assert.equal(transport.outcomes.at(-1).failureKind, "transport_error");
+
+      const controller = new AbortController();
+      const cancelledPromise = run("cancel.txt", { signal: controller.signal });
+      controller.abort(new Error("cancelled by test"));
+      const cancelled = await cancelledPromise;
+      assert.ok(cancelled.error);
+      assert.equal(cancelled.outcomes.at(-1).failureKind, "cancelled");
+
+      const truncated = await run("long.txt", { maxLines: 10 });
+      assert.equal(truncated.result.details.data.truncated, true);
+      assert.deepStrictEqual(truncated.result.details.evidenceFields, []);
+      assert.deepStrictEqual(truncated.outcomes.at(-1).evidenceFields, []);
+    } finally {
+      if (previousPort === undefined) delete process.env.SERVER_PORT; else process.env.SERVER_PORT = previousPort;
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("requires list_memory metadata followed by the real entry body before memory evidence is complete", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const root = mkdtempSync(resolve(tmpdir(), "fact-memory-flow-"));
+    const ctx = { cwd: process.cwd(), workspace: process.cwd(), userMemoryRoot: root };
+    try {
+      await writeMemoryTool.execute({ name: "preference", content: "Use focused evidence.", scope: "user" }, ctx);
+      const requirements = inferTaskRequirements("请按 checkpoint-a-verification 检查用户级记忆中的一个条目，说明作用域、启用状态和证据来源");
+      assert.deepStrictEqual(requirements.contract?.requiredEvidence, ["scope", "entry", "enabled", "source", "content"]);
+      const result = await readMemoryTool.execute({ name: "preference", scope: "user" }, ctx);
+      assert.equal(result.outcome.status, "success");
+      assert.deepStrictEqual(result.metadata.evidenceFields, ["scope", "entry", "enabled", "source", "content"]);
+      const decision = authorizeExecutionContractAttempt(requirements.contract, undefined, new Set(), "read_memory", {
+        target: "memory:user/preference", argsFingerprint: "preference",
+      });
+      assert.equal(decision.allowed, true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("stops a strict contract before a tool call once all evidence fields are complete", () => {
     const contract = inferTaskRequirements("请检查 agent/skills/skill-verification/SKILL.md 的状态和内容").contract;
     const attempts = new Set();
@@ -345,7 +490,7 @@ describe("A-17 execution contract cross-layer flow", () => {
     const events = chatStream.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1]));
     const done = events.find((event) => event.type === "done");
     assert.ok(done);
-    assert.equal(done.status, "error");
+    assert.equal(done.status, "done");
     assert.equal(done.task.reason, "evidence_unverified");
     assert.deepEqual(done.task.missingEvidence, ["content", "parse"]);
     assert.match(done.text, /^未验证：/);
@@ -369,6 +514,112 @@ describe("A-17 execution contract cross-layer flow", () => {
     });
     assert.match(replayBody, /"type":"done"/);
     assert.match(replayBody, /"reason":"evidence_unverified"/);
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  it("drives an unsupported fact-profile request through real HTTP/SSE to a normal unverified terminal", async () => {
+    const listeners = new Set();
+    let promptMessage = "";
+    const engine = {
+      session: { id: "fact-profile-http", workspace: process.cwd(), isStreaming: false, isCompacting: false, profile: { id: "fact-verification", revision: 1 } },
+      subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+      syncModelProviders: async () => 0,
+      prompt: async ({ message }) => {
+        promptMessage = message;
+        const base = { version: 1, sessionId: "fact-profile-http", turnId: "fact-profile-turn", timestamp: Date.now() };
+        const emit = (event, seq) => { for (const listener of listeners) listener({ ...base, seq, ...event }); };
+        emit({ type: "turn.started" }, 1);
+        emit({ type: "content.delta", text: "我猜应该可以。" }, 2);
+        emit({ type: "turn.completed" }, 3);
+      },
+    };
+    const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: process.cwd(), traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0, eventSeq: 0, eventHistory: [] };
+    const runtime = { session: engine.session, currentWorkspace: process.cwd(), switchWorkspace: async () => {}, onEvent: () => () => {} };
+    const ctx = withServerGroups({ engine, runtime, chatStream, sseClients: [], observability: { evidenceLedger: new EvidenceLedger() },
+      paths: { APP_ROOT: process.cwd(), DATA_DIR: process.cwd(), PI_CONFIG_DIR: process.cwd(), SESSIONS_DIR: process.cwd(), FRONTEND_DIR: process.cwd(), FRONTEND_SRC_DIR: process.cwd(), HAS_BUILT_FRONTEND: false } });
+    attachEngineEvents(engine, runtime, chatStream, ctx);
+    const server = createServer((req, res) => { void dispatchRoute(req, res, ctx); });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+    const ssePromise = new Promise((resolve, reject) => {
+      const request = http.get({ hostname: "127.0.0.1", port, path: "/api/chat/stream" });
+      let body = "";
+      request.on("response", (response) => { response.setEncoding("utf8"); response.on("data", (chunk) => { body += chunk; }); response.on("end", () => resolve(body)); });
+      request.on("error", reject);
+    });
+    const post = await new Promise((resolve, reject) => {
+      const request = http.request({ hostname: "127.0.0.1", port, path: "/api/chat", method: "POST", headers: { "content-type": "application/json" } }, (response) => { response.resume(); response.on("end", () => resolve(response.statusCode)); });
+      request.on("error", reject); request.end(JSON.stringify({ message: "帮我做点事情" }));
+    });
+    await ssePromise;
+    assert.equal(post, 200);
+    assert.match(promptMessage, /no supported fact-verification target/);
+    const done = chatStream.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1])).find((event) => event.type === "done");
+    assert.equal(done.status, "done");
+    assert.equal(done.task.reason, "evidence_unverified");
+    assert.deepStrictEqual(done.task.missingEvidence, ["supported_target"]);
+    assert.match(done.text, /^未验证：/);
+    assert.doesNotMatch(done.text, /我猜应该可以/);
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  it("keeps an empty user-memory verification terminal out of the generic reply-failed UI", async () => {
+    const ledger = new EvidenceLedger();
+    const listeners = new Set();
+    const engine = {
+      session: { id: "memory-empty-session", workspace: process.cwd(), isStreaming: false, isCompacting: false },
+      subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+      syncModelProviders: async () => 0,
+      prompt: async () => {
+        const base = { version: 1, sessionId: "memory-empty-session", turnId: "memory-empty-turn", timestamp: Date.now() };
+        const emit = (event, seq) => { for (const listener of listeners) listener({ ...base, seq, ...event }); };
+        emit({ type: "turn.started" }, 1);
+        ledger.observe({ source: "live", toolName: "list_memory", toolCallId: "memory-list-1", outcome: "success",
+          requestScope: { target: "memory:user" }, payloadSummary: "暂无记忆。", complete: true, evidenceFields: ["scope"] });
+        emit({ type: "tool.started", toolCallId: "memory-list-1", name: "list_memory", input: { scope: "user" } }, 2);
+        emit({ type: "tool.completed", toolCallId: "memory-list-1", name: "list_memory", output: "暂无记忆。", metadata: { evidenceFields: ["scope"] } }, 3);
+        // This reproduces the old runaway fallback: a missing target after an
+        // empty scope must become an honest unverified report, not a generic
+        // "回复失败" terminal.
+        emit({ type: "tool.started", toolCallId: "explorer-fallback", name: "explorer_list", input: { path: ".pi" } }, 4);
+        emit({ type: "tool.failed", toolCallId: "explorer-fallback", name: "explorer_list",
+          error: { category: "provider", kind: "not_found", code: "target_not_found", message: "目录不存在", retryable: false } }, 5);
+        emit({ type: "content.delta", text: "没有可供核验的用户级记忆条目。" }, 6);
+        emit({ type: "turn.failed", error: { category: "provider", kind: "not_found", code: "target_not_found", message: "目录不存在", retryable: false } }, 7);
+      },
+    };
+    const chatStream = { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: process.cwd(), traceSeq: 0, emittedTraces: new Set(), blocks: [], blockSeq: 0, eventSeq: 0, eventHistory: [],
+      taskRequirements: inferTaskRequirements("请按 checkpoint-a-verification 检查用户级记忆中的一个条目，说明作用域、启用状态和证据来源") };
+    const runtime = { session: engine.session, currentWorkspace: process.cwd(), switchWorkspace: async () => {}, onEvent: () => () => {} };
+    const ctx = withServerGroups({ engine, runtime, chatStream, sseClients: [], observability: { evidenceLedger: ledger },
+      paths: { APP_ROOT: process.cwd(), DATA_DIR: process.cwd(), PI_CONFIG_DIR: process.cwd(), SESSIONS_DIR: process.cwd(), FRONTEND_DIR: process.cwd(), FRONTEND_SRC_DIR: process.cwd(), HAS_BUILT_FRONTEND: false } });
+    attachEngineEvents(engine, runtime, chatStream, ctx);
+    const server = createServer((req, res) => { void dispatchRoute(req, res, ctx); });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+    const ssePromise = new Promise((resolve, reject) => {
+      const request = http.get({ hostname: "127.0.0.1", port, path: "/api/chat/stream" });
+      let body = "";
+      request.on("response", (response) => { response.setEncoding("utf8"); response.on("data", (chunk) => { body += chunk; }); response.on("end", () => resolve(body)); });
+      request.on("error", reject);
+    });
+    const post = await new Promise((resolve, reject) => {
+      const request = http.request({ hostname: "127.0.0.1", port, path: "/api/chat", method: "POST", headers: { "content-type": "application/json" } }, (response) => {
+        let body = ""; response.setEncoding("utf8"); response.on("data", (chunk) => { body += chunk; }); response.on("end", () => resolve({ status: response.statusCode, body }));
+      });
+      request.on("error", reject);
+      request.end(JSON.stringify({ message: "请按 checkpoint-a-verification 检查用户级记忆中的一个条目，说明作用域、启用状态和证据来源" }));
+    });
+    await ssePromise;
+    assert.equal(post.status, 200);
+    const events = chatStream.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1]));
+    const done = events.find((event) => event.type === "done");
+    assert.ok(done);
+    assert.equal(done.status, "done");
+    assert.equal(done.task.status, "blocked");
+    assert.equal(done.task.reason, "target_not_found_is_not_retryable_without_a_new_target");
+    assert.match(done.text, /^未验证：/);
+    assert.equal("error" in done, false);
     await new Promise((resolve) => server.close(resolve));
   });
 
@@ -437,7 +688,7 @@ describe("A-17 execution contract cross-layer flow", () => {
     const first = { ...firstPost, body: await readStream(), done: undefined };
     first.done = first.body.match(/data: (\{[^\n]*"type":"done"[^\n]*\})/)?.[1] ? JSON.parse(first.body.match(/data: (\{[^\n]*"type":"done"[^\n]*\})/)?.[1]) : undefined;
     assert.equal(first.post.status, 200);
-    assert.equal(first.done?.status, "error");
+    assert.equal(first.done?.status, "done");
     assert.equal(first.done?.task.reason, "evidence_unverified");
 
     // A reconnect can replay the failed terminal event, but it must not turn it into success.

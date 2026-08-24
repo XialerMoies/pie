@@ -321,6 +321,26 @@ describe("typescript routes", () => {
     assert.ok(Array.isArray(diagnostics.diagnostics));
   });
 
+  it("skips non-TypeScript files without starting or querying tsserver", async () => {
+    const markdown = resolve(TEST_WORKSPACE, "README.md");
+    writeFileSync(markdown, "# notes\n", "utf-8");
+    const before = isRunningCalls;
+    const result = await callHandler(
+      handleTypeScript,
+      "GET",
+      `/api/ts/diagnostics?file=${encodeURIComponent(markdown)}`,
+      null,
+      ctx,
+    );
+    const body = parseJSON(result.body);
+    assert.equal(result.status, 200);
+    assert.equal(body.status, "skipped");
+    assert.equal(body.code, "unsupported_file");
+    assert.deepEqual(body.diagnostics, []);
+    assert.equal(isRunningCalls, before);
+    assert.equal(lastTsRequest, null);
+  });
+
   it("applies code actions only after all target files pass authorization", async () => {
     const before = readFileSync(TEST_FILE, "utf-8");
     const result = await callHandler(handleTypeScript, "POST", "/api/ts/apply-code-action", {

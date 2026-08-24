@@ -57,11 +57,25 @@ export async function tsCloseFile(filePath: string): Promise<void> {
   } catch {}
 }
 
-/** 获取诊断（原始数据） */
+export type TsDiagnosticsStatus = "ok" | "pending" | "timeout" | "failed" | "skipped" | "stale";
+export interface TsDiagnosticsResult {
+  status: TsDiagnosticsStatus;
+  diagnostics: unknown[];
+  code?: string;
+  error?: string;
+}
+
+/** Diagnostics are meaningful only for files handled by tsserver. */
+export function isTypeScriptFile(filePath: string): boolean {
+  return /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/i.test(filePath.split(/[?#]/, 1)[0]);
+}
+
+/** 获取诊断（保留 pending/timeout/failed，不伪装成空诊断） */
 const diagnosticsRequests = new Map<string, { controller: AbortController; generation: number }>();
 
 /** Per-file latest-wins diagnostics. A stale request is actively cancelled. */
-export async function tsDiagnostics(filePath: string): Promise<unknown[]> {
+export async function tsDiagnostics(filePath: string): Promise<TsDiagnosticsResult> {
+  if (!isTypeScriptFile(filePath)) return { status: "skipped", code: "unsupported_file", diagnostics: [] };
   const absoluteFile = tsserverAbsPath(filePath);
   const previous = diagnosticsRequests.get(absoluteFile);
   previous?.controller.abort();
@@ -75,11 +89,18 @@ export async function tsDiagnostics(filePath: string): Promise<unknown[]> {
     const r = await fetch(`/api/ts/diagnostics?${params.toString()}`, { signal: controller.signal });
     const data = await r.json().catch(() => null);
     const current = diagnosticsRequests.get(absoluteFile);
-    if (!current || current.generation !== generation || controller.signal.aborted) return [];
-    if (data?.status !== "ok" || !Array.isArray(data.diagnostics)) return [];
-    return data.diagnostics;
+    if (!current || current.generation !== generation || controller.signal.aborted) {
+      return { status: "stale", diagnostics: [] };
+    }
+    if (data?.status === "ok" && Array.isArray(data.diagnostics)) {
+      return { status: "ok", diagnostics: data.diagnostics };
+    }
+    const status = data?.status === "pending" || data?.status === "timeout" || data?.status === "failed"
+      ? data.status : "failed";
+    return { status, code: data?.code, error: data?.error, diagnostics: [] };
   } catch {
-    return [];
+    if (controller.signal.aborted) return { status: "stale", diagnostics: [] };
+    return { status: "failed", code: "diagnostics_transport_error", diagnostics: [] };
   } finally {
     if (diagnosticsRequests.get(absoluteFile)?.generation === generation) diagnosticsRequests.delete(absoluteFile);
   }

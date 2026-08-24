@@ -108,6 +108,7 @@ function mockRuntime(overrides) {
   const session = mockSession();
   return {
     session,
+    activeProfile: { id: "standard", revision: 1 },
     modelRegistry: { getModels: () => [] },
     currentWorkspace: ROOT,
     syncModelProviders: async () => 0,
@@ -2496,7 +2497,7 @@ describe("sessions routes", () => {
     const { status, body } = await callHandler(handleSessions, "POST", "/api/sessions/new", { workspace: ROOT }, ctx);
     assert.strictEqual(status, 200);
     const data = parseJSON(body);
-    assert.deepStrictEqual(data, { ok: true, id: "sess-created" });
+    assert.deepStrictEqual(data, { ok: true, id: "sess-created", profile: { id: "standard", revision: 1 } });
     assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["dashboard.changed", "usage.changed"]);
   });
 
@@ -2507,7 +2508,7 @@ describe("sessions routes", () => {
     });
     const { status, body } = await callHandler(handleSessions, "POST", "/api/sessions/new", { workspace: ROOT }, ctx);
     assert.strictEqual(status, 200);
-    assert.deepStrictEqual(parseJSON(body), { ok: true, id: "sess-created" });
+    assert.deepStrictEqual(parseJSON(body), { ok: true, id: "sess-created", profile: { id: "standard", revision: 1 } });
   });
 
   it("does not publish when session creation fails", async () => {
@@ -2547,7 +2548,7 @@ describe("sessions routes", () => {
     try {
       const { status, body } = await callHandler(handleSessions, "POST", "/api/sessions/activate", { id: "activate-me", workspace }, ctx);
       assert.strictEqual(status, 200);
-      assert.deepStrictEqual(parseJSON(body), { ok: true, activeSessionId: "activate-me", messages: [] });
+      assert.deepStrictEqual(parseJSON(body), { ok: true, activeSessionId: "activate-me", messages: [], profile: { id: "standard", revision: 1 } });
       assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["dashboard.changed", "usage.changed"]);
     } finally {
       rmSync(root, { recursive: true, force: true });

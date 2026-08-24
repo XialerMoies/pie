@@ -87,6 +87,7 @@ export interface EngineSessionSnapshot {
   supportsThinking?: boolean;
   messagesCount?: number;
   tools?: string[];
+  profile?: { id: string; revision: number };
 }
 
 export interface EngineEventBase {
@@ -138,7 +139,7 @@ export interface AgentEngine {
   compact(focus?: string): Promise<void>;
   switchWorkspace(workspace: string): Promise<void>;
   openSession(sessionFile: string, workspace: string): Promise<void>;
-  createNewSession(): Promise<string>;
+  createNewSession(profileId?: string): Promise<string>;
   setModel(provider: string, modelId: string): Promise<void>;
   setThinkingLevel(level: string): Promise<void>;
   syncModelProviders(): Promise<number>;

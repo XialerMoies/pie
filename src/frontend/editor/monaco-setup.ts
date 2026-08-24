@@ -16,7 +16,7 @@
  */
 import "monaco-editor/esm/nls.messages.zh-cn.js";
 import * as monaco from "monaco-editor";
-import { tsFetch, tsOpenFile, tsChangeFile, tsCloseFile, tsDiagnostics, tsserverAbsPath, tsserverRoot } from "./monaco-tsserver";
+import { tsFetch, tsOpenFile, tsChangeFile, tsCloseFile, tsDiagnostics, isTypeScriptFile, tsserverAbsPath, tsserverRoot } from "./monaco-tsserver";
 import { mapCompletionKind, langFromPath, defineThemes } from "./monaco-theme";
 import { ObserverOwner } from "./observer-owner";
 
@@ -26,7 +26,13 @@ import { ObserverOwner } from "./observer-owner";
 // Worker graphs are built in separate Vite processes. Keeping only stable
 // URLs in this entry prevents Rollup from retaining all language workers in
 // one native-memory peak.
-const isDevSource = import.meta.url.includes("/src/frontend/");
+// The dev server serves generated modules from /gen/editor/, so checking only
+// for /src/frontend/ incorrectly selects production asset URLs and causes 404
+// worker loads. Production entries live under /frontend/js or dist/frontend.
+// The dashboard dynamically imports this module as `/editor/monaco-setup.ts`
+// in Vite dev, while the standalone compiler emits `/gen/editor/...`. Both
+// are development graphs; packaged bundles are emitted below `/assets/`.
+const isDevSource = /\/(?:editor|gen\/editor|src\/frontend\/editor)\//.test(new URL(import.meta.url).pathname);
 const devWorkerBase = import.meta.url.includes("/gen/editor/") ? "../../editor/workers/" : "./workers/";
 const workerBase = isDevSource ? devWorkerBase : "../assets/";
 const workerExtension = isDevSource ? ".ts" : ".js";
@@ -41,7 +47,19 @@ const workerUrls = {
 };
 
 function createMonacoWorker(url: string, label: string): Worker {
-  return new Worker(url, { type: "module", name: label });
+  const worker = new Worker(url, { type: "module", name: label });
+  // Chromium only exposes a generic Event for module-worker bootstrap failures;
+  // capture the useful fields before Monaco's global error handler consumes it.
+  worker.addEventListener("error", (event) => {
+    const detail = event instanceof ErrorEvent
+      ? `${event.message || "unknown error"} (${event.filename || "unknown source"}:${event.lineno || 0}:${event.colno || 0})`
+      : "worker bootstrap failed";
+    console.error(`[monaco-worker] ${label} failed url=${url} ${detail}`);
+  });
+  worker.addEventListener("messageerror", () => {
+    console.error(`[monaco-worker] ${label} messageerror url=${url}`);
+  });
+  return worker;
 }
 
 self.MonacoEnvironment = {
@@ -67,6 +85,8 @@ const translationObserver = new ObserverOwner();
 
 let _diagFile = "";
 let _diagInFlight = false;
+let _diagFailureCount = 0;
+let _diagNextAttemptAt = 0;
 
 /** 将 tsserver 诊断转换为 Monaco markers + ProblemItem 列表 */
 function _diagnosticsToState(filePath: string, diags: any[]): { markers: monaco.editor.IMarkerData[]; problems: ProblemItem[] } {
@@ -118,6 +138,8 @@ function _diagnosticsToState(filePath: string, diags: any[]): { markers: monaco.
 
 async function pollDiagnostics(): Promise<void> {
   if (!_diagFile || !editor) return;
+  if (!isTypeScriptFile(_diagFile)) return;
+  if (Date.now() < _diagNextAttemptAt) return;
   if (_diagInFlight) return;
   const model = editor.getModel();
   if (!model) return;
@@ -125,12 +147,21 @@ async function pollDiagnostics(): Promise<void> {
   _diagInFlight = true;
 
   try {
-    const diags = await tsDiagnostics(filePath);
+    const result = await tsDiagnostics(filePath);
     // The active editor can change while tsserver is responding. Do not let a
     // stale response overwrite the newly selected file's markers/problems.
     if (filePath !== _diagFile || editor?.getModel() !== model) return;
-    if (diags && diags.length > 0) console.log(`[tsserver] ${diags.length} diagnostics for ${filePath}`);
-    const { markers, problems } = _diagnosticsToState(filePath, diags as any[]);
+    if (result.status !== "ok") {
+      if (result.status === "stale") return;
+      _diagFailureCount = Math.min(_diagFailureCount + 1, 5);
+      _diagNextAttemptAt = Date.now() + Math.min(60_000, 3_000 * (2 ** (_diagFailureCount - 1)));
+      console.warn(`[tsserver] diagnostics ${result.status} for ${filePath}: ${result.code || "unknown"}`);
+      return;
+    }
+    _diagFailureCount = 0;
+    _diagNextAttemptAt = 0;
+    if (result.diagnostics.length > 0) console.log(`[tsserver] ${result.diagnostics.length} diagnostics for ${filePath}`);
+    const { markers, problems } = _diagnosticsToState(filePath, result.diagnostics as any[]);
     monaco.editor.setModelMarkers(model, "typescript", markers);
 
     // 同步写入 ProblemsStore
@@ -619,13 +650,22 @@ export function monacoSetLanguage(id: string): void {
   if (!model) return;
 
   _currentFilePath = id;
-  _diagFile = id;
   monaco.editor.setModelLanguage(model, lang);
 
   // 通知 tsserver 打开文件（仅 TS/JS 文件）
   if (lang === "typescript" || lang === "javascript") {
+    _diagFile = id;
+    _diagFailureCount = 0;
+    _diagNextAttemptAt = 0;
     const content = model.getValue();
     tsOpenFile(id, content);
+  } else {
+    _diagFile = "";
+    _diagFailureCount = 0;
+    _diagNextAttemptAt = 0;
+    monaco.editor.setModelMarkers(model, "typescript", []);
+    const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
+    store?.clearFile(id);
   }
 }
 
@@ -649,8 +689,10 @@ export function monacoBlur(): void {
 
 /** 为指定文件刷新诊断并更新 ProblemsStore */
 async function _refreshDiagnosticsForFile(filePath: string, model?: monaco.editor.ITextModel | null): Promise<void> {
-  const diags = await tsDiagnostics(filePath);
-  const { markers, problems } = _diagnosticsToState(filePath, diags as any[]);
+  if (!isTypeScriptFile(filePath)) return;
+  const result = await tsDiagnostics(filePath);
+  if (result.status !== "ok") return;
+  const { markers, problems } = _diagnosticsToState(filePath, result.diagnostics as any[]);
   if (model) monaco.editor.setModelMarkers(model, "typescript", markers);
   const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
   if (store) store.setProblems(filePath, problems);

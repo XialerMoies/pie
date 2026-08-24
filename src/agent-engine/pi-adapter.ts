@@ -34,6 +34,7 @@ type RuntimeLike = Pick<
   | "switchWorkspace"
   | "openSession"
   | "createNewSession"
+  | "activeProfile"
   | "syncModelProviders"
   | "dispose"
 >;
@@ -79,6 +80,7 @@ export class PiAgentEngineAdapter implements AgentEngine {
   get session(): EngineSessionSnapshot {
     const session = this.#runtime.session;
     const model = session.model;
+    const profile = this.#runtime.activeProfile ?? { id: "standard", revision: 1 };
     if (model) this.#knownModels.set(`${model.provider}/${model.id}`, model);
     return {
       id: sessionId(this.#runtime),
@@ -101,6 +103,7 @@ export class PiAgentEngineAdapter implements AgentEngine {
       tools: ((session.agent?.state?.tools as Array<{ name?: unknown }> | undefined) ?? [])
         .map((tool) => typeof tool.name === "string" ? tool.name : "")
         .filter(Boolean),
+      profile: { ...profile },
     };
   }
 
@@ -179,8 +182,8 @@ export class PiAgentEngineAdapter implements AgentEngine {
     this.#emitSessionChanged();
   }
 
-  async createNewSession(): Promise<string> {
-    const id = await this.#runtime.createNewSession();
+  async createNewSession(profileId?: string): Promise<string> {
+    const id = await this.#runtime.createNewSession(profileId);
     this.#resetTurn();
     this.#emitSessionChanged();
     return id;

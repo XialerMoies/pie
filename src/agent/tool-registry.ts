@@ -15,6 +15,7 @@ import type {
 import {
   assertStructuredToolResult,
   classifyThrownToolFailure,
+  targetMatches,
   type ToolOutcome,
 } from "./tool-outcomes.js"
 
@@ -109,7 +110,11 @@ export function agentToolToPIToolDefinition(tool: AgentTool, workspace?: string,
         ...(workspace ? { workspace } : {}),
         ...((typeof args.target === "string" || typeof args.path === "string" || typeof args.file === "string")
           ? { target: String(args.target || args.path || args.file).slice(0, 512) }
-          : (authorizedTool.name === "skill_facts" && typeof args.id === "string" ? { target: `${args.source === "user" ? "user/skills" : "agent/skills"}/${args.id}/SKILL.md`.slice(0, 512) } : {})),
+          : (authorizedTool.name === "skill_facts" && typeof args.id === "string"
+            ? { target: `${args.source === "user" ? "user/skills" : "agent/skills"}/${args.id}/SKILL.md`.slice(0, 512) }
+            : (authorizedTool.name === "list_memory" || authorizedTool.name === "read_memory"
+              ? { target: `memory:${args.scope === "workspace" ? "workspace" : "user"}${authorizedTool.name === "read_memory" && typeof args.name === "string" ? `/${args.name}` : ""}` }
+              : {}))),
         ...((typeof args.operation === "string" || typeof args.action === "string") ? { operation: String(args.operation || args.action).slice(0, 128) } : {}),
         argsFingerprint: createHash("sha256").update(JSON.stringify(args)).digest("hex"),
       }
@@ -117,8 +122,7 @@ export function agentToolToPIToolDefinition(tool: AgentTool, workspace?: string,
       let executionContractDecision: ExecutionContractDecision | undefined
       const sourceMatches = (sources: readonly string[] | undefined): boolean => Boolean(sources?.some((source) => {
         const target = (requestScope.target || "").replace(/\\/g, "/")
-        const normalized = source.replace(/\\/g, "/")
-        return target === normalized || target.endsWith(`/${normalized}`) || normalized.endsWith(`/${target}`)
+        return targetMatches(target, source)
       }))
       if (contract?.kind === "fact_verification" && contract.targets?.length) {
         const target = requestScope.target || ""
@@ -139,7 +143,12 @@ export function agentToolToPIToolDefinition(tool: AgentTool, workspace?: string,
       }
       emitTrace?.({ type: "tool_execution_start", toolCallId: _toolCallId, toolName: authorizedTool.name, args })
       try {
-        const cached = extraCtx?.evidenceLookup?.(authorizedTool.name, requestScope)
+        // A fresh fact-verification turn must inspect the current source. The
+        // general evidence cache has no source revision/mtime proof and cannot
+        // safely satisfy a later verification request.
+        const cached = contract?.kind === "fact_verification"
+          ? undefined
+          : extraCtx?.evidenceLookup?.(authorizedTool.name, requestScope)
         if (cached) {
           const text = cached.summary || "已使用此前验证的结果。"
           emitTrace?.({ type: "tool_execution_end", toolCallId: _toolCallId, toolName: authorizedTool.name, result: text, outcome: { status: "success" }, metadata: { evidenceId: cached.evidenceId, deduplicated: true } })
@@ -195,5 +204,15 @@ export class ToolRegistry {
   getCanonicalName(name: string): string | undefined { return this.resolveName(name) }
   getAliases(): ReadonlyMap<string, string> { return new Map(this.aliases) }
   getAll(): AgentTool[] { return [...this.tools.values()] }
-  toPITools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext) { return this.getAll().map((tool) => agentToolToPIToolDefinition(tool, workspace, emitTrace, extraCtx)) as any }
+  project(names: "*" | readonly string[] = "*"): AgentTool[] {
+    if (names === "*") return this.getAll()
+    const requested = new Set<string>()
+    for (const name of names) {
+      const canonical = this.resolveName(name)
+      if (!canonical) throw new Error(`Agent profile references unknown tool: ${name}`)
+      requested.add(canonical)
+    }
+    return this.getAll().filter((tool) => requested.has(tool.name))
+  }
+  toPITools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, names: "*" | readonly string[] = "*") { return this.project(names).map((tool) => agentToolToPIToolDefinition(tool, workspace, emitTrace, extraCtx)) as any }
 }

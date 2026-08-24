@@ -29,6 +29,7 @@ import { strReplaceEditorTool } from "./str-replace-editor.js"
 import { fileWriteTool } from "./file-write.js"
 import { delegateTasksTool } from "./delegate-tasks.js"
 import { skillFactsTool } from "./skill-facts.js"
+import { resolveAgentProfile, type AgentProfile } from "../agent-profile.js"
 
 /** 全局 Tool 注册表 */
 export const toolRegistry = new ToolRegistry()
@@ -68,8 +69,8 @@ export function registerTool(
 }
 
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */
-export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext) {
-  return toolRegistry.toPITools(workspace, emitTrace, extraCtx)
+export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard")) {
+  return toolRegistry.toPITools(workspace, emitTrace, extraCtx, profile.toolNames)
 }
 
 /**
@@ -224,9 +225,14 @@ export async function getCustomToolsAsync(
   workspace?: string,
   emitTrace?: ToolTraceEmitter,
   extraCtx?: ToolExecutionExtraContext,
+  profile: AgentProfile = resolveAgentProfile("standard"),
 ): Promise<ReturnType<typeof toolRegistry.toPITools>> {
   // 1. 内置自定义工具
-  const builtin = getCustomTools(workspace, emitTrace, extraCtx)
+  const builtin = getCustomTools(workspace, emitTrace, extraCtx, profile)
+
+  // Profile capability projection is independent from PermissionMode. A
+  // profile that does not expose MCP must not trigger discovery either.
+  if (!profile.allowMcp) return builtin
 
   // 2. MCP 工具：缓存命中或 workspace 未变直接使用
   const ws = workspace ?? ""

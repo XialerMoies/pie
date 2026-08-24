@@ -98,6 +98,30 @@ describe("A-04 task lifecycle cross-layer flow", () => {
     assert.deepEqual(done.task.missingEvidence, []);
   });
 
+  it("creates a scoped memory contract and reports an empty scope as unverified", () => {
+    const requirements = inferTaskRequirements("请按 checkpoint-a-verification 检查用户级记忆中的一个条目，说明作用域、启用状态和证据来源");
+    assert.equal(requirements.contract?.kind, "fact_verification");
+    assert.deepEqual(requirements.contract?.targets, ["memory:user"]);
+    assert.deepEqual(requirements.contract?.allowedTools, ["list_memory", "read_memory"]);
+
+    const ledger = new EvidenceLedger();
+    const flow = wire(requirements, ledger);
+    ledger.observe({ source: "live", toolName: "list_memory", toolCallId: "memory-list-1", outcome: "success",
+      requestScope: { target: "memory:user" }, payloadSummary: "暂无记忆。", complete: true, evidenceFields: ["scope"] });
+    flow.engine.emit("event", base("turn.started", 1));
+    flow.engine.emit("event", base("tool.started", 2, { toolCallId: "memory-list-1", name: "list_memory", input: { scope: "user" } }));
+    flow.engine.emit("event", base("tool.completed", 3, { toolCallId: "memory-list-1", name: "list_memory", output: "暂无记忆。", metadata: { evidenceFields: ["scope"] } }));
+    flow.engine.emit("event", base("content.delta", 4, { text: "当前没有用户级记忆条目，无法核验具体条目。" }));
+    flow.engine.emit("event", base("turn.completed", 5));
+
+    const done = flow.stream.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1])).find((payload) => payload.type === "done");
+    assert.equal(done.status, "done");
+    assert.equal(done.task.status, "blocked");
+    assert.equal(done.task.reason, "evidence_unverified");
+    assert.match(done.text, /^未验证：缺少证据字段：/);
+    assert.equal("error" in done, false);
+  });
+
   it("persists the terminal task contract for refresh/replay inspection", async () => {
     const root = await mkdtemp(join(tmpdir(), "mca-a04-task-"));
     const sessionFile = join(root, "session.jsonl");

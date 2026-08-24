@@ -26,6 +26,10 @@ const cors = { "Access-Control-Allow-Origin": "*" };
 // queueing duplicate semantic and syntactic requests in the child process.
 const diagnosticsInFlight = new WeakMap<object, Map<string, Promise<unknown[]>>>();
 
+function isTypeScriptFile(file: string): boolean {
+  return /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/i.test(file.split(/[?#]/, 1)[0]);
+}
+
 function diagnosticsFailure(err: unknown): { status: "pending" | "timeout" | "failed"; code: string; error: string } {
   const message = err instanceof Error ? err.message : String(err || "diagnostics failed");
   if (/queue is full|pending|project loading|not ready/i.test(message)) {
@@ -82,6 +86,11 @@ export const handleTypeScript: RouteHandler = async (req, res, ctx) => {
       const u = new URL(url, `http://${req.headers.host || "localhost"}`);
       const file = u.searchParams.get("file") || "";
       const authorized = await authorizeTsFile(ctx, file, "read", "ts.diagnostics", u.searchParams.get("projectRoot"));
+      if (!isTypeScriptFile(authorized.path)) {
+        res.writeHead(200, { "Content-Type": "application/json", ...cors, "X-Request-State": "skipped" });
+        res.end(JSON.stringify({ status: "skipped", code: "unsupported_file", diagnostics: [] }));
+        return true;
+      }
       const ts = await getTsServer(ctx);
 
       let byFile = diagnosticsInFlight.get(ts as object);

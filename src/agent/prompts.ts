@@ -96,9 +96,11 @@ export function invalidateAllSections(): void {
  * - volatile 或 factory 的 section 每次重新求值
  * - 静态 section 直接使用缓存内容
  */
-export function resolveSystemPrompt(): string {
+export function resolveSystemPrompt(keys: "*" | readonly string[] = "*"): string {
   const parts: string[] = [];
-  for (const [, section] of sectionCache) {
+  const included = keys === "*" ? undefined : new Set(keys);
+  for (const [key, section] of sectionCache) {
+    if (included && !included.has(key)) continue;
     if (section.enabled === false) continue;
     if (section.factory) {
       parts.push(section.factory());
@@ -113,6 +115,11 @@ export function resolveSystemPrompt(): string {
 
 defineSection("identity", `你是 My Code Agent，一个基于 PI 框架的智能编程助手。
 你通过工具与用户交互：读文件、写代码、执行命令、搜索内容。
+`, { permanent: true });
+
+defineSection("fact_verification_identity", `你是 My Code Agent 的事实核验 Profile。
+你只收集当前请求明确指定的可检查证据并报告实际结果，不修改文件、不运行命令、不扩展为实现调查。
+宿主执行契约决定本轮允许的目标和来源；缺少对象、字段或完整载荷时，“未验证”是合法且完整的终态。
 `, { permanent: true });
 
 defineSection("tools_guidance", `## 工具使用指南

@@ -93,7 +93,13 @@ export const readMemoryTool: AgentTool = defineAgentTool({
       if (!existsSync(filePath)) return structuredToolError(`未找到记忆"${n}"。用 write_memory 创建一条新的。`, "memory_not_found")
       const authorizedFile = await authorizeMemoryPath(ctx, root, filePath, "read", "agent.memory.read")
       const content = readFileSync(authorizedFile, "utf8")
-      return structuredToolResult(content, { name: n, scope: selectedScope, path: authorizedFile, content, operation: "read" })
+      const entry = loadIndex(root, selectedScope).entries.find((item) => item.name === n)
+      return structuredToolResult(
+        content,
+        { name: n, scope: selectedScope, path: authorizedFile, content, operation: "read", ...(entry ? { enabled: entry.enabled, source: entry.source } : {}) },
+        [],
+        entry ? { evidenceFields: ["scope", "entry", "enabled", "source", "content"] } : { evidenceFields: ["scope", "entry", "content"] },
+      )
     } catch (error) { return structuredToolError(error instanceof Error ? error.message : String(error), "memory_read_failed") }
   },
 })
@@ -125,7 +131,17 @@ export const listMemoryTool: AgentTool = defineAgentTool({
   parameters: { type: "object", properties: { scope: scopeSchema } },
   isReadOnly: true, isConcurrencySafe: true, operations: ["read"], riskLevel: "low", needsPermission: false, workspaceBounded: false, resultFormat: "structured",
   execute: async ({ scope }, ctx) => {
-    try { const selectedScope = scopeOf(scope); const root = rootFor(ctx, selectedScope); maybeMigrate(selectedScope, root); const index = loadIndex(root, selectedScope); const entries = index.entries.filter((entry) => entry.enabled); return structuredToolResult(entries.map((entry) => `${entry.name}: ${entry.summary || "无摘要"}`).join("\n") || "暂无记忆。", { scope: selectedScope, entries }) }
+    try {
+      const selectedScope = scopeOf(scope); const root = rootFor(ctx, selectedScope); maybeMigrate(selectedScope, root)
+      const index = loadIndex(root, selectedScope); const entries = index.entries
+      const evidenceFields = entries.length > 0 ? ["scope", "entry", "enabled", "source"] : ["scope"]
+      return structuredToolResult(
+        entries.map((entry) => `${entry.name} [${entry.enabled ? "enabled" : "disabled"}]: ${entry.summary || "无摘要"}`).join("\n") || "暂无记忆。",
+        { scope: selectedScope, entries },
+        [],
+        { evidenceFields },
+      )
+    }
     catch (error) { return structuredToolError(error instanceof Error ? error.message : String(error), "memory_list_failed") }
   },
 })

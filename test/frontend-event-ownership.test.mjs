@@ -156,6 +156,13 @@ describe("application event stream ownership", () => {
     assert.match(buildRunner, /peak RSS=/);
     assert.match(distRunner, /peak RSS=/);
   });
+
+  it("selects generated worker URLs in Vite development modules", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/frontend/editor/monaco-setup.ts"), "utf8");
+    assert.ok(source.includes("const isDevSource = /\\/(?:editor|gen\\/editor|src\\/frontend\\/editor)\\//.test"));
+    assert.ok(source.includes('const devWorkerBase = import.meta.url.includes("/gen/editor/")'));
+    assert.ok(source.includes('new Worker(url, { type: "module", name: label })'));
+  });
 });
 
 describe("dashboard DOM event ownership", () => {

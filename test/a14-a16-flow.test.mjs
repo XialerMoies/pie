@@ -116,6 +116,6 @@ test("A-14 frontend diagnostics cancels stale same-file request", async (t) => {
   assert.equal(requests.length, 2);
   assert.equal(requests[0].init.signal.aborted, true);
   requests[1].resolveFetch({ ok: true, json: async () => ({ status: "ok", diagnostics: [{ code: 1 }] }) });
-  assert.deepEqual(await first, []);
-  assert.deepEqual(await second, [{ code: 1 }]);
+  assert.equal((await first).status, "stale");
+  assert.deepEqual(await second, { status: "ok", diagnostics: [{ code: 1 }] });
 });

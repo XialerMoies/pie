@@ -36,6 +36,7 @@ export function targetMatches(target: string, source: string): boolean {
   return normalizedTarget === normalizedSource
     || normalizedTarget.endsWith(`/${normalizedSource}`)
     || normalizedSource.endsWith(`/${normalizedTarget}`)
+    || (normalizedSource.startsWith("memory:") && normalizedTarget.startsWith(`${normalizedSource}/`))
 }
 
 export type ToolOutcomeSource = "live" | "replay" | "test"
