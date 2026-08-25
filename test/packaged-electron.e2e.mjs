@@ -7,11 +7,18 @@ import { fileURLToPath } from "node:url";
 import { firstTimingAtOrAfter } from "./helpers/electron-e2e-result.mjs";
 import { inspectPackagedE2EPoll } from "./helpers/packaged-electron-poll.mjs";
 import { validateFailureArtifact, writeFailureArtifact } from "./helpers/failure-artifact.mjs";
+import {
+  hasChildExited,
+  requestWindowsProcessTreeStop,
+  resolveWorkbenchBudget,
+  terminateWindowsProcessTree,
+} from "./helpers/packaged-electron-process.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const executable = resolve(ROOT, "release", "win-unpacked", "MyCodeAgent.exe");
 const timeoutArg = process.argv.find((arg) => arg.startsWith("--timeout="));
 const timeoutMs = timeoutArg ? Number(timeoutArg.slice("--timeout=".length)) : 120_000;
+const workbenchBudgetMs = resolveWorkbenchBudget();
 
 assert.ok(process.platform === "win32", "packaged Electron E2E currently targets Windows");
 assert.ok(existsSync(executable), `packaged executable is missing: ${executable}`);
@@ -59,17 +66,12 @@ function startMemoryMonitor() {
 }
 
 function hasExited(child) {
-  return child.exitCode !== null || child.signalCode !== null;
+  return hasChildExited(child);
 }
 
 function stopProcessTree(child) {
   if (!child?.pid || hasExited(child)) return;
-  const result = spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-    stdio: "ignore",
-    timeout: 10_000,
-    windowsHide: true,
-  });
-  if (result.error) throw result.error;
+  requestWindowsProcessTreeStop(child);
 }
 
 function waitForExit(child, waitMs = 15_000) {
@@ -88,8 +90,7 @@ function waitForExit(child, waitMs = 15_000) {
 }
 
 async function terminateChild(child) {
-  stopProcessTree(child);
-  await waitForExit(child, 10_000);
+  await terminateWindowsProcessTree(child, { waitMs: 15_000 });
   children.delete(child);
   child.stdout?.destroy();
   child.stderr?.destroy();
@@ -439,7 +440,10 @@ function assertSingleProcessMultiWindowResult(result) {
   assert.equal(result.acceptance.timing.shellVisibleMs, shellVisible.at - shellCreated.at);
   assert.equal(result.acceptance.timing.workbenchLoadedMs, workbenchLoaded.at - result.acceptance.timing.workspaceSelectedAt);
   assert.ok(result.acceptance.timing.shellVisibleMs < 300, `empty shell took ${result.acceptance.timing.shellVisibleMs}ms`);
-  assert.ok(result.acceptance.timing.workbenchLoadedMs < 3_000, `project workbench took ${result.acceptance.timing.workbenchLoadedMs}ms`);
+  assert.ok(
+    result.acceptance.timing.workbenchLoadedMs < workbenchBudgetMs,
+    `project workbench took ${result.acceptance.timing.workbenchLoadedMs}ms (budget ${workbenchBudgetMs}ms)`,
+  );
 
   return {
     shellVisibleMs: result.acceptance.timing.shellVisibleMs,
@@ -517,12 +521,9 @@ try {
   }
 } finally {
   const cleanupErrors = [];
-  for (const runningChild of [...children]) {
-    try {
-      await terminateChild(runningChild);
-    } catch (error) {
-      cleanupErrors.push(error);
-    }
+  const cleanupResults = await Promise.allSettled([...children].map((runningChild) => terminateChild(runningChild)));
+  for (const result of cleanupResults) {
+    if (result.status === "rejected") cleanupErrors.push(result.reason);
   }
   if (cleanupErrors.length > 0) {
     passed = false;
