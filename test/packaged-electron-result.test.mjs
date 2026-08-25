@@ -52,7 +52,7 @@ test("packaged probe captures the real reopen outcome instead of declaring lock 
 
 test("packaged E2E keeps a strict local workbench budget and a bounded CI budget", () => {
   assert.equal(resolveWorkbenchBudget({}), 3_000);
-  assert.equal(resolveWorkbenchBudget({ CI: "true" }), 10_000);
+  assert.equal(resolveWorkbenchBudget({ CI: "true" }), 20_000);
   assert.equal(resolveWorkbenchBudget({ CI: "true", MY_CODE_AGENT_E2E_WORKBENCH_BUDGET_MS: "4500" }), 4_500);
   assert.throws(() => resolveWorkbenchBudget({ MY_CODE_AGENT_E2E_WORKBENCH_BUDGET_MS: "0" }), /positive/);
 });

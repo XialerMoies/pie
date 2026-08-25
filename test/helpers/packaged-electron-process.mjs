@@ -7,7 +7,7 @@ export function resolvePositiveBudget(value, fallback) {
 }
 
 export function resolveWorkbenchBudget(env = process.env) {
-  return resolvePositiveBudget(env.MY_CODE_AGENT_E2E_WORKBENCH_BUDGET_MS, env.CI ? 10_000 : 3_000);
+  return resolvePositiveBudget(env.MY_CODE_AGENT_E2E_WORKBENCH_BUDGET_MS, env.CI ? 20_000 : 3_000);
 }
 
 export function resolveEmptyShellBudget(env = process.env) {

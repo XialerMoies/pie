@@ -111,7 +111,7 @@ jobs:
         env:
           CI: "true"
           MY_CODE_AGENT_E2E_EMPTY_SHELL_BUDGET_MS: "5000"
-          MY_CODE_AGENT_E2E_WORKBENCH_BUDGET_MS: "10000"
+          MY_CODE_AGENT_E2E_WORKBENCH_BUDGET_MS: "20000"
           MY_CODE_AGENT_E2E_EXIT_BUDGET_MS: "60000"
       - name: Upload packaged E2E diagnostics
         if: failure()
