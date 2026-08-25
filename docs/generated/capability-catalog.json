@@ -897,28 +897,28 @@
     },
     {
       "file": "scripts/test-build.mjs",
-      "line": 19,
+      "line": 21,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-build.mjs",
-      "line": 26,
+      "line": 28,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-build.mjs",
-      "line": 36,
+      "line": 38,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-build.mjs",
-      "line": 47,
+      "line": 49,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"

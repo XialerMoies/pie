@@ -7,6 +7,8 @@ const BUILD_LIMIT_MB = Number(process.env.MY_CODE_AGENT_BUILD_MEMORY_MB || 3584)
 
 const testManifest = buildTestManifest();
 const steps = [
+  ["build server", "node_modules/typescript/bin/tsc", ["-p", "tsconfig.json"]],
+  ["build electron", "node_modules/typescript/bin/tsc", ["-p", "tsconfig.electron.json"]],
   ["build frontend", "scripts/build-frontend.mjs", []],
   ["smoke", "test/smoke.mjs", []],
   ["dist flow", "scripts/tsx-test.mjs", ["--test", "--test-concurrency=1", ...testManifest.suites.build]],
@@ -78,5 +80,12 @@ async function runStep(label, script, args, limitMb) {
 console.log(`[test-build] build memory limit ${BUILD_LIMIT_MB}MB; test memory limit ${TEST_LIMIT_MB}MB`);
 for (const [label, script, args] of steps) {
   console.log(`[test-build] ${label}`);
-  await runStep(label, script, args, label === "build frontend" ? BUILD_LIMIT_MB : TEST_LIMIT_MB);
+  await runStep(
+    label,
+    script,
+    args,
+    label === "build frontend" || label === "build server" || label === "build electron"
+      ? BUILD_LIMIT_MB
+      : TEST_LIMIT_MB,
+  );
 }

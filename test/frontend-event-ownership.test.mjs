@@ -150,7 +150,9 @@ describe("application event stream ownership", () => {
     assert.match(viteConfig, /reportCompressedSize: false/);
     assert.match(buildRunner, /MY_CODE_AGENT_BUILD_MEMORY_MB \|\| 3584/);
     assert.match(buildRunner, /MY_CODE_AGENT_TEST_MEMORY_MB \|\| 2048/);
-    assert.match(buildRunner, /label === "build frontend" \? BUILD_LIMIT_MB : TEST_LIMIT_MB/);
+    assert.match(buildRunner, /\["build server", "node_modules\/typescript\/bin\/tsc", \["-p", "tsconfig\.json"\]\]/);
+    assert.match(buildRunner, /\["build electron", "node_modules\/typescript\/bin\/tsc", \["-p", "tsconfig\.electron\.json"\]\]/);
+    assert.match(buildRunner, /label === "build frontend" \|\| label === "build server" \|\| label === "build electron"/);
     assert.match(distRunner, /MY_CODE_AGENT_BUILD_MEMORY_MB \|\| 3584/);
     assert.match(distRunner, /electron-builder.*TEST_LIMIT_MB/);
     assert.match(buildRunner, /peak RSS=/);
