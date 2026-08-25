@@ -960,21 +960,14 @@
     },
     {
       "file": "scripts/test-routes.mjs",
-      "line": 14,
+      "line": 25,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-routes.mjs",
-      "line": 23,
-      "api": "spawn",
-      "category": "build-or-test",
-      "owner": "tooling"
-    },
-    {
-      "file": "scripts/test-routes.mjs",
-      "line": 33,
+      "line": 34,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
@@ -982,6 +975,13 @@
     {
       "file": "scripts/test-routes.mjs",
       "line": 44,
+      "api": "spawn",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/test-routes.mjs",
+      "line": 55,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
