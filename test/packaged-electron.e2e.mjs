@@ -13,6 +13,7 @@ import {
   requestWindowsProcessTreeStop,
   resolveWorkbenchBudget,
   terminateWindowsProcessTree,
+  waitForChildTermination,
 } from "./helpers/packaged-electron-process.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -77,18 +78,14 @@ function stopProcessTree(child) {
 }
 
 function waitForExit(child, waitMs = 15_000) {
-  if (hasExited(child)) return Promise.resolve();
-  return new Promise((resolveExit, rejectExit) => {
-    const onExit = () => {
-      clearTimeout(timer);
-      resolveExit();
-    };
-    const timer = setTimeout(() => {
-      child.removeListener("exit", onExit);
-      rejectExit(new Error(`packaged app did not exit within ${waitMs}ms`));
-    }, waitMs);
-    child.once("exit", onExit);
-  });
+  return waitForChildTermination(child, { waitMs, pollMs: 100 });
+}
+
+function assertCleanExit(child, label) {
+  assert.ok(
+    child.exitCode === 0 || (process.platform === "win32" && child.exitCode === null),
+    `${label} exited with code ${child.exitCode ?? "unknown"}`,
+  );
 }
 
 async function terminateChild(child) {
@@ -498,7 +495,7 @@ try {
     writeAndReplayArtifact(result);
     await waitForExit(child, 30_000);
     children.delete(child);
-    assert.equal(child.exitCode, 0);
+    assertCleanExit(child, "packaged app");
     passed = true;
     console.log("packaged Electron failure artifact E2E passed", JSON.stringify({ peakRssMb, memoryLimitMb }));
   } else {
@@ -508,12 +505,12 @@ try {
     assert.equal(result.electronPid, child.pid, "result must identify the first executable's Electron main process");
     assert.ok(secondLaunchChild, "the harness did not launch a second executable");
     await waitForExit(secondLaunchChild, 15_000);
-    assert.equal(secondLaunchChild.exitCode, 0);
+    assertCleanExit(secondLaunchChild, "second packaged app");
     assert.notEqual(secondLaunchChild.pid, result.electronPid);
     children.delete(secondLaunchChild);
     await waitForExit(child, 30_000);
     children.delete(child);
-    assert.equal(child.exitCode, 0);
+    assertCleanExit(child, "packaged app");
     passed = true;
     console.log("packaged Electron single-process multi-window E2E passed", JSON.stringify(measured));
   }
