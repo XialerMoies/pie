@@ -953,7 +953,7 @@
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 84,
+      "line": 85,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
