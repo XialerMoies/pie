@@ -35,15 +35,28 @@ jobs:
       # 需先 compile 生成 gen/，否则 npm test 阶段 ENOENT。
       - run: npm run compile:frontend-ts
       - name: Run npm test (capture output)
-        shell: bash
-        run: npm test 2>&1 | tee "$GITHUB_WORKSPACE/.test-output.txt"
+        shell: pwsh
+        run: |
+          $logPath = Join-Path $env:GITHUB_WORKSPACE ".test-output.txt"
+          & npm test *> $logPath
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            Write-Host "npm test failed with exit code $exitCode"
+            Get-Content -LiteralPath $logPath -Tail 240
+            exit $exitCode
+          }
       - name: Show failing test blocks
         if: failure()
-        shell: bash
-        run: grep -A 18 '^not ok' "$GITHUB_WORKSPACE/.test-output.txt" | head -400
+        shell: pwsh
+        run: |
+          $logPath = Join-Path $env:GITHUB_WORKSPACE ".test-output.txt"
+          if (-not (Test-Path -LiteralPath $logPath)) {
+            Write-Error "Test output was not captured at $logPath"
+          }
+          Select-String -LiteralPath $logPath -Pattern '^not ok' -Context 0,18 | Select-Object -First 400
       - name: Upload test output
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: npm-test-output
           path: ${{ github.workspace }}/.test-output.txt
@@ -70,7 +83,7 @@ jobs:
           CI: "true"
       - name: Upload packaged E2E diagnostics
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: packaged-electron-e2e-diagnostics
           path: .tmp-packaged-e2e-*/**
