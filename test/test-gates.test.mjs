@@ -9,6 +9,8 @@ describe("T-05 test gate governance", () => {
     assert.deepEqual(validateGateDag(GATES), []);
     assert.ok(GATES.some((gate) => gate.name === "build" && gate.deps.includes("typecheck") && gate.deps.includes("unit")));
     assert.ok(GATES.some((gate) => gate.name === "build" && gate.deps.includes("replay") && gate.deps.includes("coverage")));
+    assert.ok(GATES.some((gate) => gate.name === "profile-catalog" && gate.args.includes("profiles:generate")));
+    assert.ok(GATES.some((gate) => gate.name === "report" && gate.deps.includes("profile-catalog")));
     assert.equal(GATES.find((gate) => gate.name === "coverage")?.optional, undefined);
     assert.ok(GATES.every((gate) => typeof gate.profile === "string" && Array.isArray(gate.deps)));
   });
