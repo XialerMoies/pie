@@ -668,7 +668,9 @@ describe("server bindings", () => {
       },
       startupTimeoutMs: 5_000,
       stopTimeoutMs: 1_000,
-      forceKillGraceTimeoutMs: 1_000,
+      // Windows hosted runners can take several seconds to reap a real child
+      // after taskkill; keep the test bounded without changing production policy.
+      forceKillGraceTimeoutMs: 5_000,
       writeStdout: () => {},
       writeStderr: () => {},
     });
@@ -714,7 +716,8 @@ describe("server bindings", () => {
       executable: electronPath,
       startupTimeoutMs: 5_000,
       stopTimeoutMs: 1_000,
-      forceKillGraceTimeoutMs: 1_000,
+      // Windows hosted runners can take several seconds to reap Electron.
+      forceKillGraceTimeoutMs: 5_000,
       writeStdout: () => {},
       writeStderr: () => {},
     });
