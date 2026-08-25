@@ -82,6 +82,10 @@ jobs:
           if-no-files-found: ignore
 
   routes:
+    strategy:
+      fail-fast: false
+      matrix:
+        route-shard: [0, 1]
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -102,6 +106,8 @@ jobs:
           MY_CODE_AGENT_GATE_BUDGET_MB: "2048"
           MY_CODE_AGENT_COVERAGE_ENABLED: "1"
           NODE_V8_COVERAGE: ${{ github.workspace }}/.coverage/raw
+          MY_CODE_AGENT_ROUTE_SHARD_COUNT: "2"
+          MY_CODE_AGENT_ROUTE_SHARD_INDEX: ${{ matrix.route-shard }}
         run: |
           New-Item -ItemType Directory -Path (Join-Path $env:GITHUB_WORKSPACE ".coverage/raw") -Force | Out-Null
           $logPath = Join-Path $env:GITHUB_WORKSPACE ".routes-output.txt"
@@ -117,14 +123,14 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v6
         with:
-          name: coverage-routes
+          name: coverage-routes-${{ matrix.route-shard }}
           path: ${{ github.workspace }}/.coverage/raw
           if-no-files-found: error
       - name: Upload routes diagnostics
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: routes-test-output
+          name: routes-test-output-${{ matrix.route-shard }}
           path: ${{ github.workspace }}/.routes-output.txt
           if-no-files-found: ignore
 

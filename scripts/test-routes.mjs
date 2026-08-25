@@ -5,8 +5,19 @@ import { buildTestManifest } from "./test-manifest.mjs";
 const HARD_LIMIT_MB = Number(process.env.MY_CODE_AGENT_TEST_MEMORY_MB || 2048);
 const WARN_LIMIT_MB = Math.floor(HARD_LIMIT_MB * 0.8);
 const testManifest = buildTestManifest();
-const TEST_FILES = testManifest.suites.routes;
-const SERIAL_FILES = testManifest.suites.routesSerial;
+const routeShardCount = Number(process.env.MY_CODE_AGENT_ROUTE_SHARD_COUNT || 1);
+const routeShardIndex = Number(process.env.MY_CODE_AGENT_ROUTE_SHARD_INDEX || 0);
+
+if (!Number.isInteger(routeShardCount) || routeShardCount < 1) {
+  throw new Error(`MY_CODE_AGENT_ROUTE_SHARD_COUNT must be a positive integer (received ${routeShardCount})`);
+}
+if (!Number.isInteger(routeShardIndex) || routeShardIndex < 0 || routeShardIndex >= routeShardCount) {
+  throw new Error(`MY_CODE_AGENT_ROUTE_SHARD_INDEX must be between 0 and ${routeShardCount - 1} (received ${routeShardIndex})`);
+}
+
+const TEST_FILES = testManifest.suites.routes.filter((_, index) => index % routeShardCount === routeShardIndex);
+// Cross-process lock tests must remain serial and run once in the first shard.
+const SERIAL_FILES = routeShardIndex === 0 ? testManifest.suites.routesSerial : [];
 
 function processTreeRssMb(pid) {
   if (process.platform !== "win32") {
@@ -78,7 +89,7 @@ async function runFile(file, concurrency) {
   if (code !== 0) throw new Error(`${file} failed with exit code ${code ?? "null"}${signal ? ` (${signal})` : ""}`);
 }
 
-console.log(`[test-routes] isolated file mode; memory limit ${HARD_LIMIT_MB}MB (warning ${WARN_LIMIT_MB}MB)`);
+console.log(`[test-routes] isolated file mode; memory limit ${HARD_LIMIT_MB}MB (warning ${WARN_LIMIT_MB}MB); shard ${routeShardIndex + 1}/${routeShardCount}`);
 for (const file of TEST_FILES) await runFile(file, 4);
 for (const file of SERIAL_FILES) await runFile(file, 1);
 console.log(`[test-routes] all ${TEST_FILES.length + SERIAL_FILES.length} files passed`);

@@ -127,11 +127,18 @@ describe("application event stream ownership", () => {
     const pkg = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf8"));
     assert.strictEqual(pkg.scripts["test:routes"], "node scripts/test-routes.mjs");
     const runner = readFileSync(resolve(process.cwd(), "scripts/test-routes.mjs"), "utf8");
+    const workflow = readFileSync(resolve(process.cwd(), ".github/workflows/windows-governance.yml"), "utf8");
     const manifest = buildTestManifest();
     assert.match(runner, /runFile\(file, 4\)/);
     assert.match(runner, /runFile\(file, 1\)/);
     assert.match(runner, /processTreeRssMb/);
     assert.match(runner, /MY_CODE_AGENT_TEST_MEMORY_MB \|\| 2048/);
+    assert.match(runner, /MY_CODE_AGENT_ROUTE_SHARD_COUNT/);
+    assert.match(runner, /index % routeShardCount === routeShardIndex/);
+    assert.match(runner, /SERIAL_FILES = routeShardIndex === 0/);
+    assert.match(workflow, /route-shard: \[0, 1\]/);
+    assert.match(workflow, /MY_CODE_AGENT_ROUTE_SHARD_COUNT: "2"/);
+    assert.match(workflow, /name: coverage-routes-\$\{\{ matrix\.route-shard \}\}/);
     assert.deepEqual(manifest.suites.routesSerial, ["test/multi-instance-e2e.mjs", "test/multi-instance-launch.test.mjs", "test/workspace-lock.test.mjs"]);
   });
 
