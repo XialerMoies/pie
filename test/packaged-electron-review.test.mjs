@@ -97,7 +97,8 @@ test("packaged harness observes focus and validates process exit instead of trus
   assert.match(source, /getFocusedWindow\(\)|\.isFocused\(\)/);
   assert.match(source, /\.on\("focus"/);
   assert.match(source, /focusedWindow\s*=\s*options\.getFocusedWindow\(\)/);
-  assert.match(harness, /assert\.equal\(child\.exitCode, 0\)/);
+  assert.match(harness, /assertCleanExit\(child, "packaged app"\)/);
+  assert.match(harness, /child\.exitCode === null/);
 });
 
 test("packaged E2E has no unvalidated phase protocol", () => {

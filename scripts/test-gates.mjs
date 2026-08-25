@@ -14,6 +14,7 @@ const coverageRawDirectory = resolve(process.cwd(), ".coverage", "raw");
 const profiles = {
   light: { memoryMb: 2048 },
   test: { memoryMb: Number(process.env.MY_CODE_AGENT_TEST_MEMORY_MB || 2048) },
+  unit: { memoryMb: Number(process.env.MY_CODE_AGENT_UNIT_MEMORY_MB || process.env.MY_CODE_AGENT_TEST_MEMORY_MB || 2048) },
   build: { memoryMb: Number(process.env.MY_CODE_AGENT_BUILD_MEMORY_MB || 3584) },
   electron: { memoryMb: Number(process.env.MY_CODE_AGENT_TEST_MEMORY_MB || 2048) },
   live: { memoryMb: Number(process.env.MY_CODE_AGENT_LIVE_MEMORY_MB || 2048) },
@@ -25,7 +26,7 @@ export const GATES = [
   { name: "profile-catalog", deps: ["manifest"], profile: "light", command: npmCommand, args: ["run", "profiles:generate"] },
   { name: "report", deps: ["manifest", "profile-catalog"], profile: "light", command: process.execPath, args: ["scripts/test-report.mjs", "--check"] },
   { name: "typecheck", deps: ["manifest"], profile: "build", command: npmCommand, args: ["run", "typecheck"] },
-  { name: "unit", deps: ["report"], profile: "test", coverageProducer: true, command: npmCommand, args: ["run", "test:unit"] },
+  { name: "unit", deps: ["report"], profile: "unit", coverageProducer: true, command: npmCommand, args: ["run", "test:unit"] },
   { name: "routes", deps: ["report"], profile: "test", coverageProducer: true, command: npmCommand, args: ["run", "test:routes"] },
   { name: "frontend", deps: ["report"], profile: "test", coverageProducer: true, command: npmCommand, args: ["run", "test:frontend"] },
   { name: "css-vars", deps: ["frontend"], profile: "light", command: process.execPath, args: ["test/css-vars.mjs"] },
