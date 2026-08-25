@@ -160,7 +160,9 @@ export async function runGates({ gates = GATES, selected = null, concurrency = d
   const coverageEnabled = active.some((gate) => gate.name === "coverage")
     || process.env.MY_CODE_AGENT_COVERAGE_ENABLED === "1";
   if (coverageEnabled) {
-    rmSync(resolve(process.cwd(), ".coverage"), { recursive: true, force: true });
+    // A workflow-level NODE_V8_COVERAGE collector owns the directory lifecycle.
+    // Do not delete its directory after Node has already initialized coverage.
+    if (!process.env.NODE_V8_COVERAGE) rmSync(resolve(process.cwd(), ".coverage"), { recursive: true, force: true });
     mkdirSync(coverageRawDirectory, { recursive: true });
   }
   const results = new Map();

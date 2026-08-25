@@ -54,7 +54,9 @@ jobs:
           MY_CODE_AGENT_UNIT_MEMORY_MB: "4096"
           MY_CODE_AGENT_GATE_BUDGET_MB: "4096"
           MY_CODE_AGENT_COVERAGE_ENABLED: "1"
+          NODE_V8_COVERAGE: ${{ github.workspace }}/.coverage/raw
         run: |
+          New-Item -ItemType Directory -Path (Join-Path $env:GITHUB_WORKSPACE ".coverage/raw") -Force | Out-Null
           $logPath = Join-Path $env:GITHUB_WORKSPACE ".unit-output.txt"
           New-Item -ItemType File -Path $logPath -Force | Out-Null
           & npm run test:gates -- report unit 2>&1 | Tee-Object -FilePath $logPath
@@ -99,7 +101,9 @@ jobs:
         env:
           MY_CODE_AGENT_GATE_BUDGET_MB: "2048"
           MY_CODE_AGENT_COVERAGE_ENABLED: "1"
+          NODE_V8_COVERAGE: ${{ github.workspace }}/.coverage/raw
         run: |
+          New-Item -ItemType Directory -Path (Join-Path $env:GITHUB_WORKSPACE ".coverage/raw") -Force | Out-Null
           $logPath = Join-Path $env:GITHUB_WORKSPACE ".routes-output.txt"
           New-Item -ItemType File -Path $logPath -Force | Out-Null
           & npm run test:gates -- report routes 2>&1 | Tee-Object -FilePath $logPath
@@ -145,7 +149,9 @@ jobs:
         env:
           MY_CODE_AGENT_GATE_BUDGET_MB: "2048"
           MY_CODE_AGENT_COVERAGE_ENABLED: "1"
+          NODE_V8_COVERAGE: ${{ github.workspace }}/.coverage/raw
         run: |
+          New-Item -ItemType Directory -Path (Join-Path $env:GITHUB_WORKSPACE ".coverage/raw") -Force | Out-Null
           $logPath = Join-Path $env:GITHUB_WORKSPACE ".frontend-output.txt"
           New-Item -ItemType File -Path $logPath -Force | Out-Null
           & npm run test:gates -- report frontend 2>&1 | Tee-Object -FilePath $logPath
