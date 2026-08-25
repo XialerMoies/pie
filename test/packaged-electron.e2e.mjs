@@ -10,6 +10,7 @@ import { validateFailureArtifact, writeFailureArtifact } from "./helpers/failure
 import {
   hasChildExited,
   resolveEmptyShellBudget,
+  resolveExitBudget,
   requestWindowsProcessTreeStop,
   resolveWorkbenchBudget,
   terminateWindowsProcessTree,
@@ -22,6 +23,7 @@ const timeoutArg = process.argv.find((arg) => arg.startsWith("--timeout="));
 const timeoutMs = timeoutArg ? Number(timeoutArg.slice("--timeout=".length)) : 120_000;
 const workbenchBudgetMs = resolveWorkbenchBudget();
 const emptyShellBudgetMs = resolveEmptyShellBudget();
+const exitBudgetMs = resolveExitBudget();
 
 assert.ok(process.platform === "win32", "packaged Electron E2E currently targets Windows");
 assert.ok(existsSync(executable), `packaged executable is missing: ${executable}`);
@@ -493,7 +495,7 @@ try {
     assert.equal(result.ok, false, "fault injection must enter the packaged Electron failure path");
     assert.equal(result.error?.code, "e2e_artifact_probe");
     writeAndReplayArtifact(result);
-    await waitForExit(child, 30_000);
+    await waitForExit(child, exitBudgetMs);
     children.delete(child);
     assertCleanExit(child, "packaged app");
     passed = true;
@@ -508,7 +510,7 @@ try {
     assertCleanExit(secondLaunchChild, "second packaged app");
     assert.notEqual(secondLaunchChild.pid, result.electronPid);
     children.delete(secondLaunchChild);
-    await waitForExit(child, 30_000);
+    await waitForExit(child, exitBudgetMs);
     children.delete(child);
     assertCleanExit(child, "packaged app");
     passed = true;

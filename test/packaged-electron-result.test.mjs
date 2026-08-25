@@ -7,6 +7,7 @@ import { firstTimingAtOrAfter } from "./helpers/electron-e2e-result.mjs";
 import {
   isWindowsPidRunning,
   resolveEmptyShellBudget,
+  resolveExitBudget,
   resolveWorkbenchBudget,
   terminateWindowsProcessTree,
   waitForChildTermination,
@@ -61,6 +62,13 @@ test("packaged E2E uses a strict local shell budget and a bounded CI cold-start 
   assert.equal(resolveEmptyShellBudget({ CI: "true" }), 5_000);
   assert.equal(resolveEmptyShellBudget({ CI: "true", MY_CODE_AGENT_E2E_EMPTY_SHELL_BUDGET_MS: "3500" }), 3_500);
   assert.throws(() => resolveEmptyShellBudget({ MY_CODE_AGENT_E2E_EMPTY_SHELL_BUDGET_MS: "0" }), /positive/);
+});
+
+test("packaged E2E allows slower CI process shutdown without changing local timing", () => {
+  assert.equal(resolveExitBudget({}), 30_000);
+  assert.equal(resolveExitBudget({ CI: "true" }), 60_000);
+  assert.equal(resolveExitBudget({ CI: "true", MY_CODE_AGENT_E2E_EXIT_BUDGET_MS: "45000" }), 45_000);
+  assert.throws(() => resolveExitBudget({ MY_CODE_AGENT_E2E_EXIT_BUDGET_MS: "0" }), /positive/);
 });
 
 test("packaged cleanup accepts OS termination when Node misses the exit event", async () => {
