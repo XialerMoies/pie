@@ -157,7 +157,8 @@ export async function runGates({ gates = GATES, selected = null, concurrency = d
     if (requested) return wanted.has(gate.name) && (!gate.optional || requested.has(gate.name) || process.env.PROVIDER_MATRIX_FILE?.trim());
     return !gate.optional || process.env.PROVIDER_MATRIX_FILE?.trim();
   });
-  const coverageEnabled = active.some((gate) => gate.name === "coverage");
+  const coverageEnabled = active.some((gate) => gate.name === "coverage")
+    || process.env.MY_CODE_AGENT_COVERAGE_ENABLED === "1";
   if (coverageEnabled) {
     rmSync(resolve(process.cwd(), ".coverage"), { recursive: true, force: true });
     mkdirSync(coverageRawDirectory, { recursive: true });

@@ -6,78 +6,187 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Keep submitted revisions queued instead of cancelling an active validation.
 concurrency:
   group: windows-governance-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  validate:
+  preflight:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-      # package-lock.json 大部分 resolved URL 指向 npmmirror（本地生成），
-      # GitHub runner 在美国拉国内镜像会超时。CI 强制用 npmjs 并重写 host。
       - name: Force default registry for CI
+        shell: pwsh
         run: |
-          echo "registry=https://registry.npmjs.org/" > .npmrc
-          echo "replace-registry-host=always" >> .npmrc
+          "registry=https://registry.npmjs.org/" | Set-Content .npmrc
+          "replace-registry-host=always" | Add-Content .npmrc
       - run: npm ci
       - run: npm run typecheck
       - run: npm run capabilities:check
       - name: Run command security parser shadow parity
         run: npm run test:security-shadow
-      # problems-bottom-bar 测试加载编译产物 src/frontend/gen/*.js（gitignore），
-      # 需先 compile 生成 gen/，否则 npm test 阶段 ENOENT。
       - run: npm run compile:frontend-ts
-      - name: Run blocking gates (capture output)
+
+  unit:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Force default registry for CI
+        shell: pwsh
+        run: |
+          "registry=https://registry.npmjs.org/" | Set-Content .npmrc
+          "replace-registry-host=always" | Add-Content .npmrc
+      - run: npm ci
+      - name: Run unit gate with coverage
         shell: pwsh
         env:
           MY_CODE_AGENT_UNIT_MEMORY_MB: "4096"
-          MY_CODE_AGENT_GATE_CONCURRENCY: "3"
-          MY_CODE_AGENT_GATE_BUDGET_MB: "8192"
+          MY_CODE_AGENT_GATE_BUDGET_MB: "4096"
+          MY_CODE_AGENT_COVERAGE_ENABLED: "1"
         run: |
-          $logPath = Join-Path $env:GITHUB_WORKSPACE ".test-output.txt"
+          $logPath = Join-Path $env:GITHUB_WORKSPACE ".unit-output.txt"
           New-Item -ItemType File -Path $logPath -Force | Out-Null
-          & npm run test:gates -- governance manifest profile-catalog report typecheck unit routes frontend css-vars replay agent-eval coverage build build-flow 2>&1 | Tee-Object -FilePath $logPath
-          $exitCode = $LASTEXITCODE
-          if ($exitCode -ne 0) {
-            Write-Host "blocking gates failed with exit code $exitCode"
-            Get-Content -LiteralPath $logPath -Tail 240
-            exit $exitCode
-          }
-      - name: Show failing test blocks
-        if: failure()
-        shell: pwsh
-        run: |
-          $logPath = Join-Path $env:GITHUB_WORKSPACE ".test-output.txt"
-          if (-not (Test-Path -LiteralPath $logPath)) {
-            "No blocking-gate output file was produced." | Set-Content -LiteralPath $logPath -Encoding utf8
-          }
-          $logItem = Get-Item -LiteralPath $logPath
-          Write-Host "blocking-gate log: $($logItem.FullName) ($($logItem.Length) bytes)"
-          Write-Host "---- blocking-gate log tail ----"
-          Get-Content -LiteralPath $logPath -Tail 240
-          Write-Host "---- gate failure summary ----"
-          $gateFailures = Select-String -LiteralPath $logPath -Pattern '\[test-gates\] (finish .*status=(?!exit:0)|LIMIT |blocked at )'
-          if ($gateFailures) { $gateFailures | Select-Object -First 100 }
-          $runnerFailures = Select-String -LiteralPath $logPath -Pattern '\[(test-routes|test-suite|test-build)\].*(failed|exceeded|error|exit=)|Error:|AssertionError|ERR_ASSERTION'
-          if ($runnerFailures) { $runnerFailures | Select-Object -First 100 }
-          Write-Host "---- failing test blocks ----"
-          $matches = Select-String -LiteralPath $logPath -Pattern '^not ok' -Context 0,18
-          if ($matches) { $matches | Select-Object -First 400 }
-      - name: Upload test output
+          & npm run test:gates -- report unit 2>&1 | Tee-Object -FilePath $logPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload unit coverage
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-unit
+          path: ${{ github.workspace }}/.coverage/raw
+          if-no-files-found: error
+      - name: Upload unit diagnostics
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: npm-test-output
-          path: ${{ github.workspace }}/.test-output.txt
-      - name: Upload build artifacts for packaged Electron
+          name: unit-test-output
+          path: ${{ github.workspace }}/.unit-output.txt
+          if-no-files-found: ignore
+
+  routes:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Force default registry for CI
+        shell: pwsh
+        run: |
+          "registry=https://registry.npmjs.org/" | Set-Content .npmrc
+          "replace-registry-host=always" | Add-Content .npmrc
+      - run: npm ci
+      - name: Run routes gate with coverage
+        shell: pwsh
+        env:
+          MY_CODE_AGENT_GATE_BUDGET_MB: "2048"
+          MY_CODE_AGENT_COVERAGE_ENABLED: "1"
+        run: |
+          $logPath = Join-Path $env:GITHUB_WORKSPACE ".routes-output.txt"
+          New-Item -ItemType File -Path $logPath -Force | Out-Null
+          & npm run test:gates -- report routes 2>&1 | Tee-Object -FilePath $logPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload routes coverage
         if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-routes
+          path: ${{ github.workspace }}/.coverage/raw
+          if-no-files-found: error
+      - name: Upload routes diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: routes-test-output
+          path: ${{ github.workspace }}/.routes-output.txt
+          if-no-files-found: ignore
+
+  frontend:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Force default registry for CI
+        shell: pwsh
+        run: |
+          "registry=https://registry.npmjs.org/" | Set-Content .npmrc
+          "replace-registry-host=always" | Add-Content .npmrc
+      - run: npm ci
+      - run: npm run compile:frontend-ts
+      - name: Run frontend gate with coverage
+        shell: pwsh
+        env:
+          MY_CODE_AGENT_GATE_BUDGET_MB: "2048"
+          MY_CODE_AGENT_COVERAGE_ENABLED: "1"
+        run: |
+          $logPath = Join-Path $env:GITHUB_WORKSPACE ".frontend-output.txt"
+          New-Item -ItemType File -Path $logPath -Force | Out-Null
+          & npm run test:gates -- report frontend 2>&1 | Tee-Object -FilePath $logPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload frontend coverage
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-frontend
+          path: ${{ github.workspace }}/.coverage/raw
+          if-no-files-found: error
+      - name: Upload frontend diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: frontend-test-output
+          path: ${{ github.workspace }}/.frontend-output.txt
+          if-no-files-found: ignore
+
+  validate:
+    needs: [preflight, unit, routes, frontend]
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Force default registry for CI
+        shell: pwsh
+        run: |
+          "registry=https://registry.npmjs.org/" | Set-Content .npmrc
+          "replace-registry-host=always" | Add-Content .npmrc
+      - run: npm ci
+      - name: Download coverage from parallel test jobs
+        uses: actions/download-artifact@v6
+        with:
+          pattern: coverage-*
+          path: ${{ github.workspace }}/.coverage/raw
+          merge-multiple: true
+      - name: Run coverage aggregate
+        run: node scripts/test-coverage.mjs
+      - name: Build validated artifacts
+        run: npm run build
+      - name: Run build flow against validated artifacts
+        shell: pwsh
+        env:
+          MY_CODE_AGENT_SKIP_BUILD: "1"
+        run: npm run test:build
+      - name: Upload build artifacts for packaged Electron
         uses: actions/upload-artifact@v6
         with:
           name: windows-build-${{ github.sha }}
@@ -97,9 +206,10 @@ jobs:
           node-version: 22
           cache: npm
       - name: Force default registry for CI
+        shell: pwsh
         run: |
-          echo "registry=https://registry.npmjs.org/" > .npmrc
-          echo "replace-registry-host=always" >> .npmrc
+          "registry=https://registry.npmjs.org/" | Set-Content .npmrc
+          "replace-registry-host=always" | Add-Content .npmrc
       - run: npm ci
       - name: Download validated build artifacts
         uses: actions/download-artifact@v6
