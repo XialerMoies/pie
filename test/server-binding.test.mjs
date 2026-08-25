@@ -13,6 +13,8 @@ import {
   createExternalServerBinding,
   createNoneServerBinding,
   createOwnedServerBinding,
+  forceKillChildProcess,
+  isProcessAlive,
 } from "../src/electron/server-binding.ts";
 
 const temporaryRoots = [];
@@ -134,6 +136,29 @@ function makeHarness(options = {}) {
 }
 
 describe("server bindings", () => {
+  it("treats a Windows taskkill not-found race as an already-terminated process", () => {
+    const child = new FakeChildProcess(4322);
+    assert.doesNotThrow(() => forceKillChildProcess(child, {
+      platform: "win32",
+      taskkill: () => { throw Object.assign(new Error("taskkill target not found"), { status: 128 }); },
+      probe: () => { throw Object.assign(new Error("process not found"), { code: "ESRCH" }); },
+    }));
+  });
+
+  it("keeps a Windows taskkill failure terminal when the target PID is alive", () => {
+    const child = new FakeChildProcess(4323);
+    assert.throws(() => forceKillChildProcess(child, {
+      platform: "win32",
+      taskkill: () => { throw Object.assign(new Error("taskkill access denied"), { status: 5 }); },
+      probe: () => true,
+    }), /taskkill access denied/);
+  });
+
+  it("treats only ESRCH as a missing process", () => {
+    assert.equal(isProcessAlive(4324, () => { throw Object.assign(new Error("missing"), { code: "ESRCH" }); }), false);
+    assert.equal(isProcessAlive(4324, () => { throw Object.assign(new Error("denied"), { code: "EPERM" }); }), true);
+  });
+
   it("creates a none binding whose stop is a no-op and cannot start", async () => {
     const binding = createNoneServerBinding();
 

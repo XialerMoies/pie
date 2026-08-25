@@ -120,6 +120,42 @@ export interface OwnedServerBinding {
 
 export type ServerBinding = NoneServerBinding | ExternalServerBinding | OwnedServerBinding;
 
+export function isProcessAlive(
+  pid: number,
+  probe: (pid: number, signal: 0) => boolean = process.kill,
+): boolean {
+  try {
+    probe(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException)?.code !== "ESRCH";
+  }
+}
+
+export function forceKillChildProcess(
+  child: ChildProcess,
+  options: {
+    platform?: NodeJS.Platform;
+    taskkill?: typeof execFileSync;
+    probe?: (pid: number, signal: 0) => boolean;
+  } = {},
+): void {
+  const platform = options.platform || process.platform;
+  if (platform === "win32" && child.pid) {
+    try {
+      const args = ["/F", "/T", "/PID", String(child.pid)];
+      if (options.taskkill) options.taskkill("taskkill", args, { stdio: "ignore" });
+      else execFileSync("taskkill", args, { stdio: "ignore" });
+    } catch (error: unknown) {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      if (!isProcessAlive(child.pid, options.probe)) return;
+      throw error;
+    }
+    return;
+  }
+  if (!child.kill("SIGKILL")) throw new Error("Pi server force kill failed");
+}
+
 export function createNoneServerBinding(): NoneServerBinding {
   const binding: NoneServerBinding = {
     kind: "none",
@@ -169,11 +205,7 @@ export function createExternalServerBinding(options: {
 }
 
 function defaultForceKill(child: ChildProcess): void {
-  if (process.platform === "win32" && child.pid) {
-    execFileSync("taskkill", ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore" });
-    return;
-  }
-  if (!child.kill("SIGKILL")) throw new Error("Pi server force kill failed");
+  forceKillChildProcess(child);
 }
 
 function prepareLayout(spec: OwnedServerSpec): void {

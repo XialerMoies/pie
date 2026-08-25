@@ -1024,14 +1024,14 @@
     },
     {
       "file": "src/electron/server-binding.ts",
-      "line": 173,
+      "line": 148,
       "api": "execFileSync",
       "category": "internal-server",
       "owner": "electron"
     },
     {
       "file": "src/electron/server-binding.ts",
-      "line": 202,
+      "line": 234,
       "api": "spawn",
       "category": "internal-server",
       "owner": "electron"
