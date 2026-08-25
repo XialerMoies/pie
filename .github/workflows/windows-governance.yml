@@ -38,7 +38,8 @@ jobs:
         shell: pwsh
         env:
           MY_CODE_AGENT_UNIT_MEMORY_MB: "4096"
-          MY_CODE_AGENT_GATE_BUDGET_MB: "4096"
+          MY_CODE_AGENT_GATE_CONCURRENCY: "3"
+          MY_CODE_AGENT_GATE_BUDGET_MB: "8192"
         run: |
           $logPath = Join-Path $env:GITHUB_WORKSPACE ".test-output.txt"
           New-Item -ItemType File -Path $logPath -Force | Out-Null
