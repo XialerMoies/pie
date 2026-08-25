@@ -192,6 +192,8 @@ jobs:
           "registry=https://registry.npmjs.org/" | Set-Content .npmrc
           "replace-registry-host=always" | Add-Content .npmrc
       - run: npm ci
+      - name: Generate build-time profile catalog
+        run: npm run profiles:generate
       - name: Download coverage from parallel test jobs
         uses: actions/download-artifact@v6
         with:
