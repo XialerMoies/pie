@@ -162,6 +162,8 @@ describe("application event stream ownership", () => {
     assert.match(buildRunner, /label === "build frontend" \|\| label === "build server" \|\| label === "build electron"/);
     assert.match(distRunner, /MY_CODE_AGENT_BUILD_MEMORY_MB \|\| 3584/);
     assert.match(distRunner, /electron-builder.*TEST_LIMIT_MB/);
+    assert.match(distRunner, /MY_CODE_AGENT_SKIP_NATIVE_REBUILD/);
+    assert.match(distRunner, /config\.npmRebuild=false/);
     assert.match(buildRunner, /peak RSS=/);
     assert.match(distRunner, /peak RSS=/);
   });

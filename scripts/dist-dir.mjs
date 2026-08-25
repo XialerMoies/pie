@@ -79,4 +79,8 @@ if (skipBuild) {
 const electronBuilder = process.platform === "win32"
   ? resolve("node_modules", ".bin", "electron-builder.cmd")
   : resolve("node_modules", ".bin", "electron-builder");
-await run("electron-builder", electronBuilder, ["--win", "dir"], TEST_LIMIT_MB);
+const electronBuilderArgs = ["--win", "dir"];
+if (process.env.MY_CODE_AGENT_SKIP_NATIVE_REBUILD === "1") {
+  electronBuilderArgs.push("--config.npmRebuild=false");
+}
+await run("electron-builder", electronBuilder, electronBuilderArgs, TEST_LIMIT_MB);

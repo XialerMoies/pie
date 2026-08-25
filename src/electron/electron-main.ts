@@ -154,6 +154,10 @@ function hardenWindow(win: BrowserWindow): void {
 let initialContext: WindowContext | null = null;
 let initialServerBinding: ServerBinding = createNoneServerBinding();
 let allowAppQuit = false;
+let e2eQuitFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+const e2eQuitFallbackMs = E2E_MODE
+  ? Number(process.env.MY_CODE_AGENT_E2E_QUIT_FALLBACK_MS || 10_000)
+  : 0;
 const e2eRuntime = createElectronE2ERuntime({
   enabled: E2E_MODE,
   electronPid: process.pid,
@@ -554,9 +558,20 @@ app.on("before-quit", (event) => {
   if (!ownsSingleInstanceLock) return;
   if (allowAppQuit) return;
   event.preventDefault();
+  if (E2E_MODE && e2eQuitFallbackTimer === null && Number.isFinite(e2eQuitFallbackMs) && e2eQuitFallbackMs > 0) {
+    e2eQuitFallbackTimer = setTimeout(() => {
+      e2eQuitFallbackTimer = null;
+      console.error(`[electron] E2E shutdown exceeded ${e2eQuitFallbackMs}ms; forcing app exit`);
+      app.exit(0);
+    }, e2eQuitFallbackMs);
+  }
   void resumeQuitAfterDisposal({
     dispose: stopPiServer,
     resumeQuit: () => {
+      if (e2eQuitFallbackTimer !== null) {
+        clearTimeout(e2eQuitFallbackTimer);
+        e2eQuitFallbackTimer = null;
+      }
       allowAppQuit = true;
       app.quit();
     },

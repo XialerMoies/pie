@@ -262,6 +262,14 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
     assert.match(electronMain, /void stopPiServer\(\)\.catch\(/, "window-all-closed must consume shutdown failures");
   });
 
+  it("bounds packaged E2E shutdown without changing normal Electron quit ownership", () => {
+    const electronMain = readFileSync(new URL("../src/electron/electron-main.ts", import.meta.url), "utf8");
+    assert.match(electronMain, /MY_CODE_AGENT_E2E_QUIT_FALLBACK_MS/);
+    assert.match(electronMain, /E2E shutdown exceeded/);
+    assert.match(electronMain, /app\.exit\(0\)/);
+    assert.match(electronMain, /clearTimeout\(e2eQuitFallbackTimer\)/);
+  });
+
   it("resumes Electron quit only after successful disposal", async () => {
     const events = [];
     let allowAppQuit = false;
