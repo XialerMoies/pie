@@ -9,7 +9,7 @@
  * 原则：只封装，不 fork。PI 的 agent-loop 不改。
  */
 import { AgentRuntime, type RuntimeConfig } from "./runtime.js"
-import { PiAgentEngineAdapter, type AgentEngine } from "../agent-engine/index.js"
+import { PiAgentEngine, type AgentEngine } from "../agent-engine/index.js"
 
 export type { AgentRuntime, RuntimeConfig, AgentEngine }
 
@@ -21,7 +21,7 @@ export interface AgentHost {
 /** Single construction path for every PI-backed host boundary. */
 async function createAgentHost(config: RuntimeConfig): Promise<AgentHost> {
   const runtime = await AgentRuntime.create(config)
-  return { engine: new PiAgentEngineAdapter(runtime), runtime }
+  return { engine: new PiAgentEngine(runtime), runtime }
 }
 
 /** Initialize the stable host-facing engine while PI remains behind the adapter. */

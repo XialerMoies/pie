@@ -1,4 +1,4 @@
-import type { ModelRuntime } from "@xiamol/pi-coding-agent";
+import type { ProviderRuntime } from "./runtime-types.js";
 
 import {
   PROVIDER_PROTOCOLS,
@@ -116,7 +116,7 @@ export class CustomProviderService {
   readonly #referenceLock: ProviderReferenceMutationLock;
   readonly #networkClient: NonNullable<CustomProviderServiceOptions["networkClient"]>;
   readonly #knownCustomIds = new Set<string>();
-  readonly #officialIds = new WeakMap<ModelRuntime, Set<string>>();
+  readonly #officialIds = new WeakMap<ProviderRuntime, Set<string>>();
 
   constructor(options: CustomProviderServiceOptions) {
     this.#store = options.store;
@@ -137,7 +137,7 @@ export class CustomProviderService {
     };
   }
 
-  #officialIdsFor(runtime: ModelRuntime, customIds: ReadonlySet<string>): Set<string> {
+  #officialIdsFor(runtime: ProviderRuntime, customIds: ReadonlySet<string>): Set<string> {
     for (const id of customIds) this.#knownCustomIds.add(id);
     let officialIds = this.#officialIds.get(runtime);
     if (officialIds === undefined) {
@@ -151,7 +151,7 @@ export class CustomProviderService {
     return officialIds;
   }
 
-  async list(runtime: ModelRuntime): Promise<CustomProviderListResponse> {
+  async list(runtime: ProviderRuntime): Promise<CustomProviderListResponse> {
     const snapshot = await this.#store.readRedacted();
     const customIds = new Set(snapshot.providers.map((provider) => provider.id));
     const officialIds = this.#officialIdsFor(runtime, customIds);
@@ -160,12 +160,12 @@ export class CustomProviderService {
       .map((provider) => ({
         id: provider.id,
         name: provider.name,
-        configured: runtime.getProviderAuthStatus(provider.id).configured,
+        configured: Boolean(runtime.getProviderAuthStatus(provider.id)?.configured),
       }));
     return { revision: snapshot.revision, official, custom: snapshot.providers };
   }
 
-  async create(input: CustomProviderMutationInput, runtime: ModelRuntime): Promise<RedactedCustomProviderSnapshot> {
+  async create(input: CustomProviderMutationInput, runtime: ProviderRuntime): Promise<RedactedCustomProviderSnapshot> {
     const provider = validateCustomProviderDraft(input.provider);
     const current = await this.#store.readSnapshot();
     assertRevision(input.expectedRevision, current.revision);
@@ -189,7 +189,7 @@ export class CustomProviderService {
   async update(
     providerId: string,
     input: CustomProviderMutationInput,
-    runtime: ModelRuntime,
+    runtime: ProviderRuntime,
   ): Promise<RedactedCustomProviderSnapshot> {
     const provider = validateCustomProviderDraft(input.provider);
     return this.#referenceLock.runExclusive(async () => {
@@ -219,7 +219,7 @@ export class CustomProviderService {
   async delete(
     providerId: string,
     input: CustomProviderDeleteInput,
-    runtime: ModelRuntime,
+    runtime: ProviderRuntime,
   ): Promise<RedactedCustomProviderSnapshot> {
     return this.#referenceLock.runExclusive(async () => {
       const current = await this.#store.readSnapshot();
@@ -319,7 +319,7 @@ export class CustomProviderService {
     );
   }
 
-  async syncRuntime(runtime: ModelRuntime): Promise<number> {
+  async syncRuntime(runtime: ProviderRuntime): Promise<number> {
     const snapshot = await this.#store.readSnapshot();
     this.#officialIdsFor(runtime, new Set(snapshot.providers.map((provider) => provider.id)));
     return this.#coordinator.sync(runtime);

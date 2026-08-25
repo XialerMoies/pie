@@ -1,5 +1,5 @@
-import type { ModelRuntime } from "@xiamol/pi-coding-agent"
 import type { SessionPermissionState, ToolExecutionExtraContext, ToolHostContext } from "./types.js"
+import type { ProviderRuntime } from "../model-provider/runtime-types.js"
 import { applySessionPermissionSuggestions } from "./permissions.js"
 import type { SkillService } from "./skills/skill-service.js"
 import type { AgentProfileId } from "./agent-profile.js"
@@ -15,7 +15,7 @@ export interface RuntimeConfig extends ToolHostContext {
   userMemoryRoot?: string
   workspaceMemoryRoot?: string
   sessionPermissionState?: SessionPermissionState
-  syncModelProviders?: (runtime: ModelRuntime) => Promise<number>
+  syncModelProviders?: (runtime: ProviderRuntime) => Promise<number>
   skillService?: SkillService
   /** Default for newly-created sessions. Existing sessions restore their persisted profile. */
   profileId?: AgentProfileId

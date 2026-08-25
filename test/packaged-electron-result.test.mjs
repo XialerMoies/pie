@@ -6,6 +6,7 @@ import test from "node:test";
 import { firstTimingAtOrAfter } from "./helpers/electron-e2e-result.mjs";
 import {
   isWindowsPidRunning,
+  resolveEmptyShellBudget,
   resolveWorkbenchBudget,
   terminateWindowsProcessTree,
   waitForChildTermination,
@@ -53,6 +54,13 @@ test("packaged E2E keeps a strict local workbench budget and a bounded CI budget
   assert.equal(resolveWorkbenchBudget({ CI: "true" }), 10_000);
   assert.equal(resolveWorkbenchBudget({ CI: "true", MY_CODE_AGENT_E2E_WORKBENCH_BUDGET_MS: "4500" }), 4_500);
   assert.throws(() => resolveWorkbenchBudget({ MY_CODE_AGENT_E2E_WORKBENCH_BUDGET_MS: "0" }), /positive/);
+});
+
+test("packaged E2E uses a strict local shell budget and a bounded CI cold-start budget", () => {
+  assert.equal(resolveEmptyShellBudget({}), 300);
+  assert.equal(resolveEmptyShellBudget({ CI: "true" }), 5_000);
+  assert.equal(resolveEmptyShellBudget({ CI: "true", MY_CODE_AGENT_E2E_EMPTY_SHELL_BUDGET_MS: "3500" }), 3_500);
+  assert.throws(() => resolveEmptyShellBudget({ MY_CODE_AGENT_E2E_EMPTY_SHELL_BUDGET_MS: "0" }), /positive/);
 });
 
 test("packaged cleanup accepts OS termination when Node misses the exit event", async () => {

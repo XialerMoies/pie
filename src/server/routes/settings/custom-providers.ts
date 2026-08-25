@@ -259,7 +259,7 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
       return true;
     }
     if (route.kind === "list" && req.method === "GET") {
-      writeJson(res, 200, await service.list(ctx.groups.providers.model.modelRuntime));
+      writeJson(res, 200, await service.list(ctx.groups.providers.model.providerRuntime ?? ctx.groups.providers.model.modelRuntime!));
       return true;
     }
     if (route.kind === "reveal") {
@@ -295,7 +295,7 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
     if (route.kind === "list" && req.method === "POST") {
       const input = mutationInput(await parseBody(req));
       await authorizeMutationFiles(ctx);
-      const snapshot = await service.create(input, ctx.groups.providers.model.modelRuntime);
+      const snapshot = await service.create(input, ctx.groups.providers.model.providerRuntime ?? ctx.groups.providers.model.modelRuntime!);
       const payload = JSON.stringify(snapshot);
       scheduleRuntimeSync(ctx);
       res.writeHead(201, JSON_HEADERS);
@@ -316,8 +316,8 @@ export const handleCustomProviderSettings: RouteHandler = async (req, res, ctx) 
       : deleteInput(await parseBody(req));
     await authorizeMutationFiles(ctx);
     const snapshot = req.method === "PUT"
-      ? await service.update(providerId, input as CustomProviderMutationInput, ctx.groups.providers.model.modelRuntime)
-      : await service.delete(providerId, input as CustomProviderDeleteInput, ctx.groups.providers.model.modelRuntime);
+      ? await service.update(providerId, input as CustomProviderMutationInput, ctx.groups.providers.model.providerRuntime ?? ctx.groups.providers.model.modelRuntime!)
+      : await service.delete(providerId, input as CustomProviderDeleteInput, ctx.groups.providers.model.providerRuntime ?? ctx.groups.providers.model.modelRuntime!);
     const payload = JSON.stringify(snapshot);
     scheduleRuntimeSync(ctx);
     res.writeHead(200, JSON_HEADERS);

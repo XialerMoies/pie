@@ -12,7 +12,7 @@ import type { ProviderReferenceMutationLock } from "../model-provider/provider-r
 import type { TsserverManager } from "./ts-server.js";
 import type { ServerObservability } from "./observability.js";
 import type { StartupPathsSnapshot } from "./startup-paths.js";
-import type { ModelRegistry, ModelRuntime } from "@xiamol/pi-coding-agent";
+import type { ProviderModelRegistry, ProviderRuntime } from "../model-provider/runtime-types.js";
 import type { SkillService } from "../agent/skills/skill-service.js";
 
 export interface ServerCoreContext {
@@ -56,8 +56,14 @@ export interface ServerProviderContext {
 }
 
 export interface ModelProviderContext {
-  readonly modelRuntime: ModelRuntime;
-  readonly modelRegistry: ModelRegistry;
+  readonly providerRuntime: ProviderRuntime;
+  /** @deprecated test/third-party compatibility; production routes use providerRuntime. */
+  readonly modelRuntime?: ProviderRuntime;
+  readonly modelRegistry: ProviderModelRegistry;
+  listModels(): readonly import("../model-provider/runtime-types.js").ProviderModel[];
+  findModel(provider: string, id: string): import("../model-provider/runtime-types.js").ProviderModel | undefined;
+  providerAuthStatus(provider: string): { configured?: boolean; source?: string } | undefined;
+  refreshProviders(providers: readonly string[]): Promise<void>;
   syncModelProviders(options?: { waitForIdle?: boolean }): Promise<number>;
   runWithStableSession<T>(operation: () => Promise<T>): Promise<T>;
 }

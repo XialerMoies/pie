@@ -6,8 +6,8 @@
  */
 import { readdirSync, existsSync } from "fs"
 import { resolve } from "path"
-import type { AgentSession } from "@xiamol/pi-coding-agent"
-import { createAgentSession, ModelRuntime, ModelRegistry, SessionManager, DefaultResourceLoader } from "@xiamol/pi-coding-agent"
+import type { AgentSession } from "../agent-engine/pi-runtime.js"
+import { createAgentSession, ModelRuntime, ModelRegistry, SessionManager, DefaultResourceLoader } from "../agent-engine/pi-runtime.js"
 import { resolveSystemPrompt } from "./prompts.js"
 import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools/index.js"
 import { normalizePermissionPath, resetSessionPermissionState } from "./permissions.js"

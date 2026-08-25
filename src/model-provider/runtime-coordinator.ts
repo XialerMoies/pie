@@ -1,4 +1,4 @@
-import type { ModelRuntime } from "@xiamol/pi-coding-agent";
+import type { ProviderRuntime } from "./runtime-types.js";
 
 import type { CustomProviderStore } from "./custom-provider-store.js";
 import { IncompleteCustomProviderRollbackError } from "./pi-custom-provider-adapter.js";
@@ -18,18 +18,18 @@ export interface CustomProviderRuntimeCoordinatorOptions {
 export class CustomProviderRuntimeCoordinator {
   readonly #store: CustomProviderRuntimeCoordinatorOptions["store"];
   readonly #adapter: CustomProviderRuntimeCoordinatorOptions["adapter"];
-  readonly #states = new WeakMap<ModelRuntime, RuntimeSyncState>();
+  readonly #states = new WeakMap<ProviderRuntime, RuntimeSyncState>();
 
   constructor(options: CustomProviderRuntimeCoordinatorOptions) {
     this.#store = options.store;
     this.#adapter = options.adapter;
   }
 
-  loadedRevision(runtime: ModelRuntime): number {
+  loadedRevision(runtime: ProviderRuntime): number {
     return this.#stateFor(runtime).loadedRevision;
   }
 
-  sync(runtime: ModelRuntime): Promise<number> {
+  sync(runtime: ProviderRuntime): Promise<number> {
     const state = this.#stateFor(runtime);
     state.requestedGeneration += 1;
     if (state.inFlight) return state.inFlight;
@@ -39,7 +39,7 @@ export class CustomProviderRuntimeCoordinator {
     return pending;
   }
 
-  #stateFor(runtime: ModelRuntime): RuntimeSyncState {
+  #stateFor(runtime: ProviderRuntime): RuntimeSyncState {
     let state = this.#states.get(runtime);
     if (state === undefined) {
       state = { loadedRevision: -1, requestedGeneration: 0 };
@@ -48,7 +48,7 @@ export class CustomProviderRuntimeCoordinator {
     return state;
   }
 
-  async #drain(runtime: ModelRuntime, state: RuntimeSyncState): Promise<number> {
+  async #drain(runtime: ProviderRuntime, state: RuntimeSyncState): Promise<number> {
     try {
       while (true) {
         const generation = state.requestedGeneration;
@@ -65,7 +65,7 @@ export class CustomProviderRuntimeCoordinator {
   }
 
   async #loadAndApply(
-    runtime: ModelRuntime,
+    runtime: ProviderRuntime,
     state: RuntimeSyncState,
     generation: number,
   ): Promise<number> {

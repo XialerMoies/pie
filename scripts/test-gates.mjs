@@ -33,7 +33,7 @@ export const GATES = [
   { name: "agent-eval", deps: ["report"], profile: "test", command: process.execPath, args: ["scripts/tsx-test.mjs", "--test", "--test-concurrency=1", "test/agent-behavior-baseline-flow.test.mjs"] },
   { name: "coverage", deps: ["unit", "routes", "frontend"], profile: "test", command: process.execPath, args: ["scripts/test-coverage.mjs"] },
   { name: "build", deps: ["typecheck", "unit", "routes", "frontend", "css-vars", "replay", "coverage"], profile: "build", command: npmCommand, args: ["run", "build"] },
-  { name: "build-flow", deps: ["build"], profile: "test", command: npmCommand, args: ["run", "test:build"] },
+  { name: "build-flow", deps: ["build"], profile: "test", env: { MY_CODE_AGENT_SKIP_BUILD: "1" }, command: npmCommand, args: ["run", "test:build"] },
   { name: "electron", deps: ["build-flow"], profile: "electron", command: npmCommand, args: ["run", "test:electron:e2e"] },
   { name: "live", deps: ["report"], profile: "live", optional: true, retry: "observe", command: npmCommand, args: ["run", "test:provider:live"] },
 ];
@@ -79,6 +79,7 @@ function runGate(gate, coverageEnabled = false) {
     ...process.env,
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --max-old-space-size=${profile.memoryMb}`.trim(),
     ...(coverageEnabled && gate.coverageProducer ? { NODE_V8_COVERAGE: coverageRawDirectory } : {}),
+    ...(gate.env || {}),
   };
   console.log(`[test-gates] start ${gate.name} deps=[${gate.deps.join(",") || "-"}] profile=${gate.profile} limit=${profile.memoryMb}MB`);
   const child = spawn(gate.command, gate.args, { cwd: process.cwd(), env, stdio: "inherit", shell: gate.command.endsWith(".cmd"), windowsHide: true });

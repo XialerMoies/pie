@@ -1,4 +1,4 @@
-import { calculateContextTokens, estimateTokens } from "@xiamol/pi-coding-agent"
+import { calculateContextTokens, estimateTokens } from "../agent-engine/pi-runtime.js"
 
 export type ContextUsageSource = "exact" | "mixed" | "estimated"
 

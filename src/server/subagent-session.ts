@@ -1,12 +1,11 @@
-import type { AgentSession, ModelRegistry } from "@xiamol/pi-coding-agent"
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  SessionManager,
-  SettingsManager,
-} from "@xiamol/pi-coding-agent"
-
 import type { AgentRuntime } from "../agent/index.js"
+import type { ProviderModel, ProviderModelRegistry } from "../model-provider/runtime-types.js"
+import {
+  createPiSubagentResourceLoader,
+  createPiSubagentSession,
+  createPiSubagentSessionManager,
+  createPiSubagentSettingsManager,
+} from "../agent-engine/pi-subagent.js"
 import { resolveSystemPrompt } from "../agent/prompts.js"
 import { toolRegistry } from "../agent/tools/index.js"
 import { presentNativeTool } from "../agent/tool-presentation.js"
@@ -50,13 +49,50 @@ type RuntimeForSubagents = Pick<
   AgentRuntime,
   "modelRuntime" | "modelRegistry" | "config" | "session" | "syncModelProvidersForSubagent"
 >
-type ResourceLoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0]
+export interface EmbeddedSubagentSession {
+  messages?: unknown[]
+  subscribe(listener: (event: { type?: string; message?: unknown }) => void): () => void
+  prompt(prompt: string): Promise<unknown>
+  abort(): Promise<unknown> | unknown
+  dispose(): Promise<unknown> | unknown
+}
+
+export interface EmbeddedSubagentResourceLoaderOptions {
+  cwd: string
+  agentDir: string
+  settingsManager?: unknown
+  systemPrompt?: string
+  noExtensions?: boolean
+  noSkills?: boolean
+  noPromptTemplates?: boolean
+  noThemes?: boolean
+  noContextFiles?: boolean
+}
+
+export interface EmbeddedSubagentResourceLoader {
+  reload(): Promise<void>
+}
+
+export interface EmbeddedSubagentSessionCreateOptions {
+  cwd: string
+  agentDir: string
+  modelRuntime?: unknown
+  model?: unknown
+  thinkingLevel?: string
+  tools: readonly string[]
+  customTools: readonly unknown[]
+  resourceLoader: EmbeddedSubagentResourceLoader
+  settingsManager?: unknown
+  sessionManager?: unknown
+}
 
 export interface EmbeddedSubagentFactoryDependencies {
   runtime: RuntimeForSubagents
   resolvePrompt?: () => string
-  createResourceLoader?: (options: ResourceLoaderOptions) => InstanceType<typeof DefaultResourceLoader>
-  createSession?: typeof createAgentSession
+  createResourceLoader?: (options: EmbeddedSubagentResourceLoaderOptions) => EmbeddedSubagentResourceLoader
+  createSession?: (options: EmbeddedSubagentSessionCreateOptions) => Promise<EmbeddedSubagentSession>
+  createSessionManager?: (workspace: string) => unknown
+  createSettingsManager?: () => unknown
 }
 
 const READ_ONLY_CONSTRAINTS = `You are a read-only subagent. Do not modify files, execute shell commands, write memory, or delegate more agents.
@@ -67,12 +103,14 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
   const {
     runtime,
     resolvePrompt = resolveSystemPrompt,
-    createResourceLoader = (options) => new DefaultResourceLoader(options),
-    createSession = createAgentSession,
+    createResourceLoader = createPiSubagentResourceLoader,
+    createSession = createPiSubagentSession,
+    createSessionManager = createPiSubagentSessionManager,
+    createSettingsManager = createPiSubagentSettingsManager,
   } = dependencies
   const parentSystemPrompt = resolvePrompt()
 
-  return async (input: EmbeddedSubagentSessionInput): Promise<AgentSession> => {
+  return async (input: EmbeddedSubagentSessionInput): Promise<EmbeddedSubagentSession> => {
     const profile = normalizeProfile(input.task.profile)
     const systemPrompt = [
       parentSystemPrompt,
@@ -81,7 +119,7 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
       input.task.agent?.prompt,
     ].filter(Boolean).join("\n\n")
 
-    const settingsManager = SettingsManager.inMemory()
+    const settingsManager = createSettingsManager()
     const resourceLoader = createResourceLoader({
       cwd: input.workspace,
       agentDir: runtime.config.agentDir,
@@ -117,7 +155,7 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
 
     await runtime.syncModelProvidersForSubagent()
     const model = resolveModel(runtime.modelRegistry, runtime.session.model, input.model)
-    const { session } = await createSession({
+    const created = await createSession({
       cwd: input.workspace,
       agentDir: runtime.config.agentDir,
       modelRuntime: runtime.modelRuntime,
@@ -127,9 +165,11 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
       customTools,
       resourceLoader,
       settingsManager,
-      sessionManager: SessionManager.inMemory(input.workspace),
+      sessionManager: createSessionManager(input.workspace),
     })
-    return session
+    return (created && typeof created === "object" && "session" in created
+      ? (created as { session: EmbeddedSubagentSession }).session
+      : created)
   }
 }
 
@@ -140,10 +180,10 @@ function normalizeProfile(profile?: string): SubagentProfile {
 }
 
 function resolveModel(
-  registry: ModelRegistry,
-  inheritedModel: AgentSession["model"],
+  registry: ProviderModelRegistry,
+  inheritedModel: ProviderModel | undefined,
   override?: SubagentModelRef,
-): NonNullable<AgentSession["model"]> {
+): ProviderModel {
   if (override) {
     const model = registry.find(override.provider, override.id)
     if (!model) throw new Error(`Unknown subagent model: ${override.provider}/${override.id}`)

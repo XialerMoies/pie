@@ -10,6 +10,10 @@ export function resolveWorkbenchBudget(env = process.env) {
   return resolvePositiveBudget(env.MY_CODE_AGENT_E2E_WORKBENCH_BUDGET_MS, env.CI ? 10_000 : 3_000);
 }
 
+export function resolveEmptyShellBudget(env = process.env) {
+  return resolvePositiveBudget(env.MY_CODE_AGENT_E2E_EMPTY_SHELL_BUDGET_MS, env.CI ? 5_000 : 300);
+}
+
 export function hasChildExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
 }

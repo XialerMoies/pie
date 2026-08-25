@@ -19,8 +19,9 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
       // 只读模型列表：不等待 streaming turn 结束，避免长 tool 执行期间设置页/
       // 模型选择器一直卡在加载中。provider 注册本身不依赖 session idle。
       await model.syncModelProviders({ waitForIdle: false });
-      const modelRegistry = model.modelRegistry;
-      const all = modelRegistry.getAvailable();
+      const all = typeof model.listModels === "function"
+        ? model.listModels()
+        : model.modelRegistry.getAvailable();
       let authData: Record<string, unknown> = {};
       try {
         if (existsSync(p.PI_CONFIG_DIR)) {
@@ -35,11 +36,11 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
         if (writePathGuardError(res, cors, err)) return true;
         authData = {};
       }
-      const providers = [...new Set(all.map((m: { provider: string }) => m.provider))];
+      const providers = [...new Set(all.map((m) => m.provider))];
       const configuredProviders = providers.filter((provider) => hasProviderAuth(model, provider, authData[provider]));
       const filtered = configuredProviders.length === 0
-        ? all.map((m: { provider: string; id: string }) => ({ provider: (m as { provider: string; id: string }).provider, id: (m as { provider: string; id: string }).id }))
-        : all.filter((m: { provider: string }) => configuredProviders.includes((m as { provider: string }).provider)).map((m: { provider: string; id: string }) => ({ provider: m.provider, id: m.id }));
+        ? all.map((m) => ({ provider: m.provider, id: m.id }))
+        : all.filter((m) => configuredProviders.includes(m.provider)).map((m) => ({ provider: m.provider, id: m.id }));
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(JSON.stringify({ models: filtered }));
     } catch (err: unknown) {
@@ -62,8 +63,12 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
       const settingsFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "settings.json", "write", "settings.save")).path;
       const save = async () => {
         await model.syncModelProviders();
-        const findModel = model.modelRegistry?.find;
-        if (typeof findModel === "function" && !findModel.call(model.modelRegistry, defaultProvider, defaultModel)) {
+        const found = typeof model.findModel === "function"
+          ? model.findModel(defaultProvider, defaultModel)
+          : typeof model.modelRegistry?.find === "function"
+            ? model.modelRegistry.find(defaultProvider, defaultModel)
+            : true;
+        if (!found) {
           throw new Error("Default model is not available");
         }
         await updateLockedJson<Record<string, unknown>>(settingsFile, () => ({}), (settings) => {
@@ -92,7 +97,11 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
       let found = false;
       const switchModel = () => model.runWithStableSession(async () => {
         await model.syncModelProviders();
-        const targetModel = model.modelRegistry.find(provider, modelId);
+        const targetModel = typeof model.findModel === "function"
+          ? model.findModel(provider, modelId)
+          : typeof model.modelRegistry?.find === "function"
+            ? model.modelRegistry.find(provider, modelId)
+            : undefined;
         if (!targetModel) return;
         found = true;
         const priorModel = engine.session.model;

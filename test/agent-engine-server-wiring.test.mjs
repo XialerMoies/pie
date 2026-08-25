@@ -41,7 +41,7 @@ describe("AgentEngine server and CLI wiring", () => {
     const agent = source("src/agent/index.ts");
     assert.match(agent, /async function createAgentHost\(config: RuntimeConfig\)/);
     assert.equal((agent.match(/AgentRuntime\.create\(config\)/g) || []).length, 1);
-    assert.equal((agent.match(/new PiAgentEngineAdapter\(runtime\)/g) || []).length, 1);
+    assert.equal((agent.match(/new PiAgentEngine(?:Adapter)?\(runtime\)/g) || []).length, 1);
     assert.doesNotMatch(agent, /export async function initAgent\(/);
     assert.match(agent, /return \(await createAgentHost\(config\)\)\.engine/);
     assert.match(agent, /return createAgentHost\(config\)/);
@@ -52,5 +52,23 @@ describe("AgentEngine server and CLI wiring", () => {
     assert.match(runtime, /noTools:\s*["']builtin["']/);
     assert.match(runtime, /customTools,/);
     assert.match(runtime, /excludeTools:\s*\[\s*["']read["']\s*,\s*["']bash["']\s*,\s*["']edit["']\s*,\s*["']write["']\s*,\s*["']grep["']\s*,\s*["']find["']\s*,\s*["']ls["']/);
+  });
+
+  it("keeps E0-b provider, subagent, settings, and SSE boundaries PI-free", () => {
+    for (const file of [
+      "src/server/subagent-session.ts",
+      "src/server/routes/settings/auth.ts",
+      "src/server/routes/settings/models.ts",
+      "src/server/routes/settings/subagents.ts",
+      "src/server/routes/settings/custom-providers.ts",
+      "src/server/agent-event-router.ts",
+      "src/server/server-context.ts",
+      "src/model-provider/custom-provider-service.ts",
+      "src/model-provider/runtime-coordinator.ts",
+    ]) {
+      assert.doesNotMatch(source(file), /@xiamol\/pi-coding-agent/, file);
+    }
+    assert.match(source("src/agent-engine/pi-subagent.ts"), /createAgentSession/);
+    assert.match(source("src/server/server-bootstrap.ts"), /listModels|refreshProviders/);
   });
 });

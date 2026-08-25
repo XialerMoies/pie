@@ -16,9 +16,11 @@ export function storedApiKey(value: unknown): string {
 }
 
 function authStatus(model: ModelProviderContext, provider: string): { configured?: boolean; source?: string } | undefined {
-  const modelRuntime = model.modelRuntime;
-  if (typeof modelRuntime?.getProviderAuthStatus !== "function") return undefined;
-  try { return modelRuntime.getProviderAuthStatus(provider); } catch { return undefined; }
+  try {
+    return typeof model.providerAuthStatus === "function"
+      ? model.providerAuthStatus(provider)
+      : model.providerRuntime?.getProviderAuthStatus?.(provider) ?? model.modelRuntime?.getProviderAuthStatus?.(provider);
+  } catch { return undefined; }
 }
 
 export function hasProviderAuth(model: ModelProviderContext, provider: string, stored: unknown): boolean {
@@ -30,15 +32,14 @@ export const handleAuthSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
   const { paths: p } = ctx.groups.storage;
   const model = ctx.groups.providers.model;
-  const modelRegistry = model.modelRegistry;
 
   if (url === "/api/auth" && method === "GET") {
     try {
       const authFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "auth.json", "read", "settings.auth.read")).path;
       const authData = existsSync(authFile) ? JSON.parse(readFileSync(authFile, "utf-8")) : {};
-      const availableProviders = typeof modelRegistry?.getAvailable === "function"
-        ? modelRegistry.getAvailable().map((model: { provider: string }) => model.provider)
-        : [];
+      const availableProviders = (typeof model.listModels === "function"
+        ? model.listModels()
+        : model.modelRegistry?.getAvailable?.() ?? []).map((entry) => entry.provider);
       const providers = [...new Set([...Object.keys(authData), ...availableProviders])];
       const providerKeys = providers.map((provider) => {
         const apiKey = storedApiKey(authData[provider]);
@@ -101,7 +102,11 @@ export const handleAuthSettings: RouteHandler = async (req, res, ctx) => {
         authData[provider] = { type: "api_key", key: apiKey };
         return authData;
       }, { trailingNewline: false });
-      await model.modelRuntime.refresh({ providers: [provider], allowNetwork: false });
+      if (typeof model.refreshProviders === "function") await model.refreshProviders([provider]);
+      else {
+        const result = await (model.providerRuntime ?? model.modelRuntime).refresh({ providers: [provider], allowNetwork: false });
+        if (result.aborted) throw new Error("Provider refresh was aborted");
+      }
       res.writeHead(200, { ...cors });
       res.end(JSON.stringify({ ok: true }));
     } catch (err: unknown) {

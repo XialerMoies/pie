@@ -10,7 +10,7 @@ import { cors, publishDashboardChanged } from "./common.js";
 
 export const handleSubagentSettings: RouteHandler = async (req, res, ctx) => {
   const { url, method } = req;
-  const { runtime } = ctx.groups.core;
+  const model = ctx.groups.providers.model;
   const { paths: p } = ctx.groups.storage;
   if (url === "/api/subagents" && method === "GET") {
     const file = p.SUBAGENTS_FILE || resolve(p.PI_CONFIG_DIR, "subagents.json");
@@ -27,9 +27,14 @@ export const handleSubagentSettings: RouteHandler = async (req, res, ctx) => {
       const file = p.SUBAGENTS_FILE || resolve(p.PI_CONFIG_DIR, "subagents.json");
       let saved = agents;
       const replace = async () => {
-        await runtime.syncModelProviders();
+        await model.syncModelProviders();
         for (const agent of agents) {
-          if (agent.model && !runtime.modelRegistry.find(agent.model.provider, agent.model.id)) {
+          const found = agent.model && (typeof model.findModel === "function"
+            ? model.findModel(agent.model.provider, agent.model.id)
+            : typeof model.modelRegistry?.find === "function"
+              ? model.modelRegistry.find(agent.model.provider, agent.model.id)
+              : true);
+          if (agent.model && !found) {
             throw new Error(`Subagent model is not available: ${agent.model.provider}/${agent.model.id}`);
           }
         }

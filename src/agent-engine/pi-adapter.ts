@@ -391,3 +391,7 @@ export class PiAgentEngineAdapter implements AgentEngine {
     return ["off", ...values.filter((level) => level !== "off")];
   }
 }
+
+/** Named host implementation used by production wiring. The adapter alias is
+ * retained for callers and fixtures that still use the migration name. */
+export class PiAgentEngine extends PiAgentEngineAdapter {}

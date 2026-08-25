@@ -34,14 +34,14 @@ jobs:
       # problems-bottom-bar 测试加载编译产物 src/frontend/gen/*.js（gitignore），
       # 需先 compile 生成 gen/，否则 npm test 阶段 ENOENT。
       - run: npm run compile:frontend-ts
-      - name: Run npm test (capture output)
+      - name: Run blocking gates (capture output)
         shell: pwsh
         run: |
           $logPath = Join-Path $env:GITHUB_WORKSPACE ".test-output.txt"
-          & npm test *> $logPath
+          & npm run test:gates -- governance manifest profile-catalog report typecheck unit routes frontend css-vars replay agent-eval coverage build build-flow *> $logPath
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) {
-            Write-Host "npm test failed with exit code $exitCode"
+            Write-Host "blocking gates failed with exit code $exitCode"
             Get-Content -LiteralPath $logPath -Tail 240
             exit $exitCode
           }
@@ -60,7 +60,15 @@ jobs:
         with:
           name: npm-test-output
           path: ${{ github.workspace }}/.test-output.txt
-      - run: npm run test:build
+      - name: Upload build artifacts for packaged Electron
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-build-${{ github.sha }}
+          path: |
+            dist
+            dist-electron
+          if-no-files-found: error
 
   packaged-electron:
     needs: validate
@@ -77,10 +85,16 @@ jobs:
           echo "registry=https://registry.npmjs.org/" > .npmrc
           echo "replace-registry-host=always" >> .npmrc
       - run: npm ci
-      - run: npm run dist:dir
+      - name: Download validated build artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: windows-build-${{ github.sha }}
+          path: .
+      - run: node scripts/dist-dir.mjs --skip-build
       - run: npm run test:electron:e2e:run
         env:
           CI: "true"
+          MY_CODE_AGENT_E2E_EMPTY_SHELL_BUDGET_MS: "5000"
           MY_CODE_AGENT_E2E_WORKBENCH_BUDGET_MS: "10000"
       - name: Upload packaged E2E diagnostics
         if: failure()

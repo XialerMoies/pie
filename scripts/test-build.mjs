@@ -4,6 +4,7 @@ import { buildTestManifest } from "./test-manifest.mjs";
 
 const TEST_LIMIT_MB = Number(process.env.MY_CODE_AGENT_TEST_MEMORY_MB || 2048);
 const BUILD_LIMIT_MB = Number(process.env.MY_CODE_AGENT_BUILD_MEMORY_MB || 3584);
+const skipBuild = process.argv.includes("--skip-build") || process.env.MY_CODE_AGENT_SKIP_BUILD === "1";
 
 const testManifest = buildTestManifest();
 const steps = [
@@ -79,6 +80,7 @@ async function runStep(label, script, args, limitMb) {
 
 console.log(`[test-build] build memory limit ${BUILD_LIMIT_MB}MB; test memory limit ${TEST_LIMIT_MB}MB`);
 for (const [label, script, args] of steps) {
+  if (skipBuild && label.startsWith("build ")) continue;
   console.log(`[test-build] ${label}`);
   await runStep(
     label,

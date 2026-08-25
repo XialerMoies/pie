@@ -16,7 +16,7 @@ import { mistralConversationsApi } from "@earendil-works/pi-ai/api/mistral-conve
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { piMessagesApi } from "@earendil-works/pi-ai/api/pi-messages.lazy";
-import type { ModelRuntime } from "@xiamol/pi-coding-agent";
+import type { ProviderRuntime } from "./runtime-types.js";
 
 import {
   validateCustomProviderDefinition,
@@ -43,7 +43,7 @@ export class IncompleteCustomProviderRollbackError extends AggregateError {
   }
 }
 
-async function refreshRuntimeProviders(runtime: ModelRuntime, providerIds: readonly string[]): Promise<void> {
+async function refreshRuntimeProviders(runtime: ProviderRuntime, providerIds: readonly string[]): Promise<void> {
   const providers = [...new Set(providerIds)];
   if (providers.length === 0) return;
   const result = await runtime.refresh({ providers, allowNetwork: false });
@@ -232,7 +232,7 @@ function mapModels(definition: CustomProviderDefinition): readonly Model<Provide
 export class PiCustomProviderAdapter {
   readonly #registrations = new WeakMap<PreparedCustomProvider, PreparedRegistration>();
   readonly #ownedByRuntime = new WeakMap<
-    ModelRuntime,
+    ProviderRuntime,
     ReadonlyMap<string, Provider<ProviderProtocol>>
   >();
 
@@ -286,7 +286,7 @@ export class PiCustomProviderAdapter {
   }
 
   async replaceRuntimeProviders(
-    runtime: ModelRuntime,
+    runtime: ProviderRuntime,
     prepared: readonly PreparedCustomProvider[],
   ): Promise<void> {
     const next = new Map<string, PreparedCustomProvider>();

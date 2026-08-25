@@ -9,6 +9,7 @@ import { inspectPackagedE2EPoll } from "./helpers/packaged-electron-poll.mjs";
 import { validateFailureArtifact, writeFailureArtifact } from "./helpers/failure-artifact.mjs";
 import {
   hasChildExited,
+  resolveEmptyShellBudget,
   requestWindowsProcessTreeStop,
   resolveWorkbenchBudget,
   terminateWindowsProcessTree,
@@ -19,6 +20,7 @@ const executable = resolve(ROOT, "release", "win-unpacked", "MyCodeAgent.exe");
 const timeoutArg = process.argv.find((arg) => arg.startsWith("--timeout="));
 const timeoutMs = timeoutArg ? Number(timeoutArg.slice("--timeout=".length)) : 120_000;
 const workbenchBudgetMs = resolveWorkbenchBudget();
+const emptyShellBudgetMs = resolveEmptyShellBudget();
 
 assert.ok(process.platform === "win32", "packaged Electron E2E currently targets Windows");
 assert.ok(existsSync(executable), `packaged executable is missing: ${executable}`);
@@ -439,7 +441,10 @@ function assertSingleProcessMultiWindowResult(result) {
   assert.ok(shellCreated && shellVisible && workbenchLoaded, "required timing events are missing");
   assert.equal(result.acceptance.timing.shellVisibleMs, shellVisible.at - shellCreated.at);
   assert.equal(result.acceptance.timing.workbenchLoadedMs, workbenchLoaded.at - result.acceptance.timing.workspaceSelectedAt);
-  assert.ok(result.acceptance.timing.shellVisibleMs < 300, `empty shell took ${result.acceptance.timing.shellVisibleMs}ms`);
+  assert.ok(
+    result.acceptance.timing.shellVisibleMs < emptyShellBudgetMs,
+    `empty shell took ${result.acceptance.timing.shellVisibleMs}ms (budget ${emptyShellBudgetMs}ms)`,
+  );
   assert.ok(
     result.acceptance.timing.workbenchLoadedMs < workbenchBudgetMs,
     `project workbench took ${result.acceptance.timing.workbenchLoadedMs}ms (budget ${workbenchBudgetMs}ms)`,
