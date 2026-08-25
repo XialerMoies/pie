@@ -54,6 +54,11 @@ jobs:
           if (-not (Test-Path -LiteralPath $logPath)) {
             "No blocking-gate output file was produced." | Set-Content -LiteralPath $logPath -Encoding utf8
           }
+          $logItem = Get-Item -LiteralPath $logPath
+          Write-Host "blocking-gate log: $($logItem.FullName) ($($logItem.Length) bytes)"
+          Write-Host "---- blocking-gate log tail ----"
+          Get-Content -LiteralPath $logPath -Tail 240
+          Write-Host "---- failing test blocks ----"
           $matches = Select-String -LiteralPath $logPath -Pattern '^not ok' -Context 0,18
           if ($matches) { $matches | Select-Object -First 400 }
       - name: Upload test output
