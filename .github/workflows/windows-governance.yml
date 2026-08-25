@@ -59,6 +59,11 @@ jobs:
           New-Item -ItemType File -Path $logPath -Force | Out-Null
           & npm run test:gates -- report unit 2>&1 | Tee-Object -FilePath $logPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Namespace unit coverage files
+        shell: pwsh
+        run: |
+          Get-ChildItem -LiteralPath .coverage/raw -Filter "*.json" |
+            Rename-Item -NewName { "unit-$($_.Name)" }
       - name: Upload unit coverage
         if: success()
         uses: actions/upload-artifact@v6
@@ -99,6 +104,11 @@ jobs:
           New-Item -ItemType File -Path $logPath -Force | Out-Null
           & npm run test:gates -- report routes 2>&1 | Tee-Object -FilePath $logPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Namespace routes coverage files
+        shell: pwsh
+        run: |
+          Get-ChildItem -LiteralPath .coverage/raw -Filter "*.json" |
+            Rename-Item -NewName { "routes-$($_.Name)" }
       - name: Upload routes coverage
         if: success()
         uses: actions/upload-artifact@v6
@@ -140,6 +150,11 @@ jobs:
           New-Item -ItemType File -Path $logPath -Force | Out-Null
           & npm run test:gates -- report frontend 2>&1 | Tee-Object -FilePath $logPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Namespace frontend coverage files
+        shell: pwsh
+        run: |
+          Get-ChildItem -LiteralPath .coverage/raw -Filter "*.json" |
+            Rename-Item -NewName { "frontend-$($_.Name)" }
       - name: Upload frontend coverage
         if: success()
         uses: actions/upload-artifact@v6
