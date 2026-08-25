@@ -58,6 +58,11 @@ jobs:
           Write-Host "blocking-gate log: $($logItem.FullName) ($($logItem.Length) bytes)"
           Write-Host "---- blocking-gate log tail ----"
           Get-Content -LiteralPath $logPath -Tail 240
+          Write-Host "---- gate failure summary ----"
+          $gateFailures = Select-String -LiteralPath $logPath -Pattern '\[test-gates\] (finish .*status=(?!exit:0)|LIMIT |blocked at )'
+          if ($gateFailures) { $gateFailures | Select-Object -First 100 }
+          $runnerFailures = Select-String -LiteralPath $logPath -Pattern '\[(test-routes|test-suite|test-build)\].*(failed|exceeded|error|exit=)|Error:|AssertionError|ERR_ASSERTION'
+          if ($runnerFailures) { $runnerFailures | Select-Object -First 100 }
           Write-Host "---- failing test blocks ----"
           $matches = Select-String -LiteralPath $logPath -Pattern '^not ok' -Context 0,18
           if ($matches) { $matches | Select-Object -First 400 }
