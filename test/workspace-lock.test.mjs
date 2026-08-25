@@ -27,7 +27,7 @@ function fixture(name) {
   return { root, dataRoot, workspace };
 }
 
-function waitForExit(child, timeoutMs = 10_000) {
+function waitForExit(child, timeoutMs = process.platform === "win32" ? 30_000 : 10_000) {
   return new Promise((resolveExit, rejectExit) => {
     const timer = setTimeout(() => {
       child.kill();
@@ -105,7 +105,7 @@ function runServerToExit(workspace, dataRoot, instanceId) {
   let stderr = "";
   child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
   child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-  return waitForExit(child, 10_000).then((result) => ({ ...result, stdout, stderr }));
+  return waitForExit(child).then((result) => ({ ...result, stdout, stderr }));
 }
 
 async function waitFor(predicate, message, timeoutMs = 5_000) {
