@@ -144,6 +144,17 @@ async function setProfile(profileId: string, popup?: HTMLElement): Promise<void>
     : undefined;
   if (option) option.setAttribute('aria-busy', 'true');
   try {
+    const hasMessages = Boolean(chatModeApp.ChatState?.getMessages?.()?.length);
+    if (hasMessages) {
+      const created = await (chatModeApp.Chat as { createSessionWithProfile?: (id: string) => Promise<{ profile?: unknown } | null> })
+        .createSessionWithProfile?.(profileId);
+      if (!created) throw new Error('当前会话已锁定，请新建会话后切换能力');
+      applyProfileState({ profile: created.profile });
+      updateProfilePopupSelection(popup);
+      popup?.remove();
+      toast(`已新建${profileLabel(_profileId)}能力会话`, 'info');
+      return;
+    }
     // A draft tab has no server-side session yet. Materialize it with the
     // requested profile before falling back to the profile-switch route;
     // otherwise the route would target whatever older runtime session happens
@@ -411,6 +422,7 @@ function showModePopup(btn: HTMLElement): void {
   popup.style.left = rect.left + 'px';
 
   const permissionMode = permissions?.getMode?.() || 'standard';
+  const profileLocked = Boolean(chatModeApp.ChatState?.getMessages?.()?.length);
   if (!_profileCatalogLoaded) void syncProfiles();
   let html = '';
 
@@ -435,9 +447,19 @@ function showModePopup(btn: HTMLElement): void {
     html += '<span class="profile-empty">能力目录加载中…</span>';
   } else {
     for (const profile of profiles) {
-      const disabled = profile.health !== 'ready';
-      html += `<button class="mode-option profile-option${profile.id === _profileId ? ' active' : ''}" type="button" role="option" aria-selected="${profile.id === _profileId}"${disabled ? ' disabled' : ''} data-profile="${E(profile.id)}" title="${E(profileStatusLabel(profile))}">${E(profileLabel(profile.id))}</button>`;
+      const unavailable = profile.health !== 'ready';
+      const disabled = unavailable || profileLocked;
+      const title = profileLocked ? '本会话已有消息，能力已锁定' : profileStatusLabel(profile);
+      html += `<button class="mode-option profile-option${profile.id === _profileId ? ' active' : ''}" type="button" role="option" aria-selected="${profile.id === _profileId}"${disabled ? ' disabled' : ''} data-profile="${E(profile.id)}" title="${E(title)}">${E(profileLabel(profile.id))}</button>`;
     }
+  }
+  if (profileLocked && profiles.some((profile) => profile.id !== _profileId && profile.health === 'ready')) {
+    html += '<div class="profile-lock-note">当前会话已有消息，能力模式已锁定</div><div class="mode-segment profile-new-segment">';
+    for (const profile of profiles) {
+      if (profile.id === _profileId || profile.health !== 'ready') continue;
+      html += `<button class="mode-option profile-new-option" type="button" data-profile-new="${E(profile.id)}">以${E(profileLabel(profile.id))}新建</button>`;
+    }
+    html += '</div>';
   }
   html += '</div>';
 
@@ -469,6 +491,12 @@ function showModePopup(btn: HTMLElement): void {
   popup.querySelectorAll<HTMLElement>('[data-profile]').forEach((option) => {
     option.addEventListener('click', () => {
       const profileId = option.dataset.profile || '';
+      void setProfile(profileId, popup);
+    });
+  });
+  popup.querySelectorAll<HTMLElement>('[data-profile-new]').forEach((option) => {
+    option.addEventListener('click', () => {
+      const profileId = option.dataset.profileNew || '';
       void setProfile(profileId, popup);
     });
   });

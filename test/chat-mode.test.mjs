@@ -189,6 +189,41 @@ describe("chat mode server-state boundary", () => {
     assert.equal(popup.querySelector('[data-profile="minimal"]').classList.contains("active"), true);
   });
 
+  it("locks an existing conversation profile and offers a new session action", async () => {
+    const win = new Window();
+    global.window = win;
+    global.document = win.document;
+    global.self = win;
+    global.$ = (id) => win.document.getElementById(id);
+    global.E = (value) => String(value);
+    global.toast = () => {};
+    win.document.body.innerHTML = '<span id="fi-mode-name"></span>';
+    const created = [];
+    global.App = win.App = {
+      Chat: {
+        createSessionWithProfile: async (id) => { created.push(id); return { profile: { id, revision: 1 } }; },
+      },
+      ChatState: { getMessages: () => [{ role: "user", content: "已有消息" }] },
+      Permissions: { getMode: () => "standard", refreshMode: async () => "standard", setMode() {} },
+      Preferences: { get: (_key, fallback = "") => fallback, set() {} },
+    };
+    global.fetch = async (url) => ({ ok: true, json: async () => url === "/api/profiles"
+      ? { current: { id: "standard" }, catalogs: [{ id: "standard", health: "ready" }, { id: "minimal", health: "ready" }] }
+      : { supportsThinking: false } });
+    await import(`../src/frontend/chat/chat-mode.ts?locked-profile-${Date.now()}-${Math.random()}`);
+    win.App.Chat.loadModeState();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const button = win.document.createElement("button");
+    win.document.body.appendChild(button);
+    win.App.Chat.showModePopup(button);
+    const popup = win.document.getElementById("mode-popup");
+    assert.equal(popup.querySelector('[data-profile="minimal"]').disabled, true);
+    assert.match(popup.querySelector('.profile-lock-note').textContent, /锁定/);
+    popup.querySelector('[data-profile-new="minimal"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(created, ["minimal"]);
+  });
+
   it("uses the host plan-state API instead of permissionMode or a prompt-only flag", async () => {
     const win = new Window();
     global.window = win;

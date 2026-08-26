@@ -900,6 +900,11 @@ textarea.cpe-input{resize:vertical;line-height:1.45}
 .mode-option:hover{color:var(--tx);background:rgba(255,255,255,.04)}
 .mode-option.active{color:#0A0A0F;background:var(--am);font-weight:700;box-shadow:0 4px 12px rgba(245,158,11,.18)}
 .profile-empty{grid-column:1 / -1;padding:5px 2px;color:var(--tm);font-size:.62rem;text-align:center}
+.profile-option:disabled{cursor:not-allowed;opacity:.52}
+.profile-option:disabled.active{opacity:.72}
+.profile-lock-note{margin-top:7px;padding:6px 2px 5px;color:var(--tm);font-size:.61rem;line-height:1.4}
+.profile-new-segment{grid-template-columns:1fr;background:transparent;padding:0;border:0}
+.profile-new-option{border:1px solid var(--bd);background:var(--bc);color:var(--am)}
 .evidence-state{margin-top:8px;padding:7px 8px;border-top:1px solid var(--bd);font-size:.62rem;color:var(--tm)}
 .evidence-state[data-active="true"]{color:var(--am);font-weight:700}
 .fi-evidence-state{margin-left:4px;color:var(--am);font-size:.58rem;font-weight:700}
