@@ -180,10 +180,13 @@ describe("chat mode server-state boundary", () => {
     const button = win.document.createElement("button");
     win.document.body.appendChild(button);
     win.App.Chat.showModePopup(button);
+    const popup = win.document.getElementById("mode-popup");
     win.document.querySelector('[data-profile="minimal"]').click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(win.App.Chat.getProfile(), "minimal");
     assert.equal(requests.some(({ url }) => url === "/api/sessions/profile"), false);
+    assert.equal(win.document.getElementById("mode-popup"), popup);
+    assert.equal(popup.querySelector('[data-profile="minimal"]').classList.contains("active"), true);
   });
 
   it("uses the host plan-state API instead of permissionMode or a prompt-only flag", async () => {

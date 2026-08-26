@@ -152,7 +152,7 @@ async function setProfile(profileId: string, popup?: HTMLElement): Promise<void>
       .ensureSessionForProfile?.(profileId);
     if (created) {
       applyProfileState({ profile: created.profile });
-      popup?.remove();
+      updateProfilePopupSelection(popup);
       toast(`已切换 Agent 能力：${profileLabel(_profileId)}`, 'info');
       return;
     }
@@ -164,7 +164,7 @@ async function setProfile(profileId: string, popup?: HTMLElement): Promise<void>
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(typeof body?.error === 'string' ? body.error : '能力切换失败');
     applyProfileState({ profile: body.profile });
-    popup?.remove();
+    updateProfilePopupSelection(popup);
     toast(`已切换 Agent 能力：${profileLabel(_profileId)}`, 'info');
   } catch (error) {
     if (option) option.removeAttribute('aria-busy');
@@ -172,6 +172,16 @@ async function setProfile(profileId: string, popup?: HTMLElement): Promise<void>
     _profileId = previous;
     updateModeButton();
   }
+}
+
+function updateProfilePopupSelection(popup?: HTMLElement): void {
+  popup?.querySelectorAll<HTMLElement>('[data-profile]').forEach((candidate) => {
+    const active = candidate.dataset.profile === _profileId;
+    candidate.classList.toggle('active', active);
+    candidate.setAttribute('aria-selected', String(active));
+    candidate.removeAttribute('aria-busy');
+  });
+  updateModeButton();
 }
 
 function applyPlanState(data: unknown): void {
