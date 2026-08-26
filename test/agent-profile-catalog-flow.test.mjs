@@ -10,7 +10,7 @@ import { checkProfileCatalog } from "../scripts/generate-profile-catalog.mjs";
 describe("AP-08 profile-generated tool and prompt catalog flow", () => {
   it("matches the real registry projection and native presentation for every ready profile", () => {
     const catalogs = buildAllProfileCatalogs();
-    assert.deepStrictEqual(catalogs.map((catalog) => catalog.id), ["fact-verification", "minimal", "standard"]);
+    assert.deepStrictEqual(catalogs.map((catalog) => catalog.id), ["minimal", "standard"]);
     for (const catalog of catalogs) {
       const profile = resolveAgentProfile(catalog.id);
       const host = toolRegistry.project(profile.toolNames);
@@ -30,36 +30,30 @@ describe("AP-08 profile-generated tool and prompt catalog flow", () => {
     }
   });
 
-  it("keeps minimal and fact-verification capability surfaces bounded", () => {
+  it("keeps the minimal capability surface bounded", () => {
     const minimal = buildProfileCatalog(resolveAgentProfile("minimal"));
-    const fact = buildProfileCatalog(resolveAgentProfile("fact-verification"));
     assert.deepStrictEqual(minimal.tools.map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode"]);
-    assert.deepStrictEqual(fact.tools.map((tool) => tool.name), ["file_read", "explorer_list", "read_memory", "list_memory", "skill_facts"]);
     assert.deepStrictEqual(minimal.featureGates, ["planning"]);
-    assert.deepStrictEqual(fact.featureGates, ["memory", "skills"]);
-    assert.equal(fact.tools.find((tool) => tool.name === "skill_facts").feature, "skills");
-    assert.equal(fact.tools.find((tool) => tool.name === "read_memory").feature, "memory");
     assert.deepStrictEqual(minimal.dynamicSources, []);
-    assert.deepStrictEqual(fact.dynamicSources, []);
   });
 
   it("fails closed when a model-visible tool is not executable and keeps undeclared tools disabled", () => {
     const declared = toolRegistry.get("file_read");
     assert.ok(declared);
     const brokenRegistry = {
-      resolveName: (name) => ["file_read", "explorer_list", "skill_facts", "list_memory", "read_memory"].includes(name) ? name : undefined,
+      resolveName: (name) => name === "file_read" ? name : undefined,
       project: () => { throw new Error("catalog must not bypass ToolPool"); },
-      getAll: () => toolRegistry.project(resolveAgentProfile("fact-verification").toolNames).map((tool) => tool.name === "file_read" ? { ...tool, execute: undefined } : tool),
+      getAll: () => toolRegistry.project(["file_read"]).map((tool) => tool.name === "file_read" ? { ...tool, execute: undefined } : tool),
     };
-    assert.throws(() => buildProfileCatalog(resolveAgentProfile("fact-verification"), { registry: brokenRegistry }), /not executable/u);
+    assert.throws(() => buildProfileCatalog({ ...resolveAgentProfile("minimal"), toolNames: ["file_read"] }, { registry: brokenRegistry }), /not executable/u);
 
     const extra = { ...declared, name: "undeclared_extra" };
     const extraRegistry = {
-      resolveName: (name) => ["file_read", "explorer_list", "skill_facts", "list_memory", "read_memory"].includes(name) ? name : name === "undeclared_extra" ? "undeclared_extra" : undefined,
+      resolveName: (name) => name === "file_read" || name === "undeclared_extra" ? name : undefined,
       project: () => { throw new Error("catalog must not bypass ToolPool"); },
-      getAll: () => [...toolRegistry.project(resolveAgentProfile("fact-verification").toolNames), extra],
+      getAll: () => [...toolRegistry.project(["file_read"]), extra],
     };
-    const catalog = buildProfileCatalog(resolveAgentProfile("fact-verification"), { registry: extraRegistry });
+    const catalog = buildProfileCatalog({ ...resolveAgentProfile("minimal"), toolNames: ["file_read"] }, { registry: extraRegistry });
     assert.ok(!catalog.tools.some((tool) => tool.name === "undeclared_extra"));
     assert.ok(catalog.disabledTools.includes("undeclared_extra"));
   });
@@ -80,10 +74,10 @@ describe("AP-08 profile-generated tool and prompt catalog flow", () => {
   it("keeps the generated artifact deterministic and exposes only selected prompt content", async () => {
     const result = await checkProfileCatalog();
     assert.equal(result.ok, true, result.reason);
-    const fact = buildProfileCatalog(resolveAgentProfile("fact-verification"));
-    const prompt = resolveSystemPrompt(resolveAgentProfile("fact-verification").promptSections);
-    assert.ok(prompt.includes("事实核验 Profile"));
-    assert.ok(!prompt.includes("你是 My Code Agent，一个基于 PI 框架"));
-    assert.ok(fact.promptSections.every((section) => section.contentFingerprint.length === 64));
+    const standard = buildProfileCatalog(resolveAgentProfile("standard"));
+    const prompt = resolveSystemPrompt(resolveAgentProfile("standard").promptSections);
+    assert.ok(prompt.includes("本轮事实核验约束"));
+    assert.ok(prompt.includes("不改变会话 Agent Profile"));
+    assert.ok(standard.promptSections.every((section) => section.contentFingerprint.length === 64));
   });
 });

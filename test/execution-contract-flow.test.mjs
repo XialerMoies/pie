@@ -90,19 +90,17 @@ describe("A-17/AP-12 execution contract cross-layer flow", () => {
     assert.deepStrictEqual(requirements.contract?.requiredEvidence, ["content"]);
   });
 
-  it("binds every fact-verification profile turn to a contract and keeps long-context targets bounded", () => {
-    const unsupported = inferTaskRequirements("帮我做点事情", "fact-verification");
-    assert.equal(unsupported.contract?.kind, "fact_verification");
-    assert.deepStrictEqual(unsupported.contract?.targets, ["profile:fact-verification"]);
-    assert.deepStrictEqual(unsupported.contract?.requiredEvidence, ["supported_target"]);
-    assert.match(formatExecutionContractGuidance(unsupported), /Do not call tools/);
-
+  it("keeps verification as a per-turn overlay independent of the active capability profile", () => {
+    const ordinaryStandard = inferTaskRequirements("帮我做点事情", "standard");
+    const ordinaryMinimal = inferTaskRequirements("帮我做点事情", "minimal");
+    assert.equal(ordinaryStandard.contract, undefined);
+    assert.equal(ordinaryMinimal.contract, undefined);
     const longContext = `${"历史上下文。".repeat(4000)}\n请核验 \`docs/任务清单.md\`，只报告实际读取到的事实。`;
-    const bounded = inferTaskRequirements(longContext, "fact-verification");
+    const bounded = inferTaskRequirements(longContext, "minimal");
     assert.deepStrictEqual(bounded.contract?.targets, ["docs/任务清单.md"]);
     assert.deepStrictEqual(bounded.contract?.allowedTools, ["file_read"]);
     assert.deepStrictEqual(bounded.contract?.requiredEvidence, ["content"]);
-    const expanded = expandTaskRequirements(bounded, "继续查实现源码", "fact-verification");
+    const expanded = expandTaskRequirements(bounded, "继续查实现源码", "minimal");
     assert.equal(expanded?.contract?.revision, 2);
     assert.equal(expanded?.userExpansion, true);
   });
@@ -724,16 +722,16 @@ describe("A-17/AP-12 execution contract cross-layer flow", () => {
     await new Promise((resolve) => server.close(resolve));
   });
 
-  it("drives an unsupported fact-profile request through real HTTP/SSE to a normal unverified terminal", async () => {
+  it("keeps an ordinary request open when no verification overlay is requested", async () => {
     const listeners = new Set();
     let promptMessage = "";
     const engine = {
-      session: { id: "fact-profile-http", workspace: process.cwd(), isStreaming: false, isCompacting: false, profile: { id: "fact-verification", revision: 1 } },
+      session: { id: "ordinary-profile-http", workspace: process.cwd(), isStreaming: false, isCompacting: false, profile: { id: "standard", revision: 1 } },
       subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
       syncModelProviders: async () => 0,
       prompt: async ({ message }) => {
         promptMessage = message;
-        const base = { version: 1, sessionId: "fact-profile-http", turnId: "fact-profile-turn", timestamp: Date.now() };
+        const base = { version: 1, sessionId: "ordinary-profile-http", turnId: "ordinary-profile-turn", timestamp: Date.now() };
         const emit = (event, seq) => { for (const listener of listeners) listener({ ...base, seq, ...event }); };
         emit({ type: "turn.started" }, 1);
         emit({ type: "content.delta", text: "我猜应该可以。" }, 2);
@@ -760,13 +758,11 @@ describe("A-17/AP-12 execution contract cross-layer flow", () => {
     });
     await ssePromise;
     assert.equal(post, 200);
-    assert.match(promptMessage, /no supported fact-verification target/);
+    assert.equal(promptMessage, "帮我做点事情");
     const done = chatStream.eventHistory.map((entry) => JSON.parse(entry.data.split("data: ")[1])).find((event) => event.type === "done");
     assert.equal(done.status, "done");
-    assert.equal(done.task.reason, "evidence_unverified");
-    assert.deepStrictEqual(done.task.missingEvidence, ["supported_target"]);
-    assert.match(done.text, /^未验证：/);
-    assert.doesNotMatch(done.text, /我猜应该可以/);
+    assert.equal(done.task.status, "completed");
+    assert.match(done.text, /我猜应该可以/);
     await new Promise((resolve) => server.close(resolve));
   });
 

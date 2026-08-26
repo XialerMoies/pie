@@ -174,12 +174,9 @@ describe("AP-10/AP-11 Profile, host, and ToolPool cross-layer flow", () => {
   it("keeps builtin profiles independent while standard retains the open host surface", () => {
     const standard = resolveAgentProfile("standard");
     const minimal = resolveAgentProfile("minimal");
-    const fact = resolveAgentProfile("fact-verification");
     assert.equal(standard.featureGates, "*");
     assert.deepStrictEqual(minimal.featureGates, ["planning"]);
-    assert.deepStrictEqual(fact.featureGates, ["memory", "skills"]);
     assert.equal(standard.allowMcp, true);
     assert.equal(minimal.allowMcp, false);
-    assert.equal(fact.allowMcp, false);
   });
 });

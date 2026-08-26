@@ -285,11 +285,10 @@ function assertPackagedReplayProviderResult(result) {
   assert.ok(profileCatalog && typeof profileCatalog === "object", "packaged profile catalog result is missing");
   assert.equal(profileCatalog.status, 200);
   assert.ok(Array.isArray(profileCatalog.body?.catalogs));
-  assert.deepEqual(profileCatalog.body.catalogs.map((catalog) => catalog.id), ["fact-verification", "minimal", "standard"]);
+  assert.deepEqual(profileCatalog.body.catalogs.map((catalog) => catalog.id), ["minimal", "standard"]);
   assert.ok(profileCatalog.body.catalogs.every((catalog) => catalog.health === "ready" && typeof catalog.fingerprint === "string"));
   assert.ok(profileCatalog.body.catalogs.every((catalog) => catalog.featureGates === "*" || Array.isArray(catalog.featureGates)));
   assert.ok(profileCatalog.body.catalogs.every((catalog) => catalog.tools.every((tool) => tool.source === "native" && tool.audiences.includes("main"))));
-  assert.deepEqual(profileCatalog.body.catalogs.find((catalog) => catalog.id === "fact-verification")?.featureGates, ["memory", "skills"]);
 }
 
 function assertPackagedCancellationResult(result) {

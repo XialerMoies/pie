@@ -3,6 +3,87 @@ import assert from "node:assert/strict";
 import { Window } from "happy-dom";
 
 describe("chat mode server-state boundary", () => {
+  it("renders the server profile catalog inside the strategy popup", async () => {
+    const win = new Window();
+    global.window = win;
+    global.document = win.document;
+    global.self = win;
+    global.$ = (id) => win.document.getElementById(id);
+    global.E = (value) => String(value).replace(/[&<>\"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+    global.toast = () => {};
+    win.document.body.innerHTML = '<span id="fi-mode-name"></span>';
+    global.App = win.App = {
+      Chat: {},
+      Permissions: { getMode: () => "standard", refreshMode: async () => "standard", setMode() {} },
+      Preferences: { get: (_key, fallback = "") => fallback, set() {} },
+    };
+    global.fetch = async (url) => ({
+      ok: true,
+      json: async () => url === "/api/profiles"
+        ? { current: { id: "minimal" }, catalogs: [
+          { id: "standard", health: "ready", featureGates: "*", tools: [{ enabled: true, executable: true }, { enabled: true, executable: true }] },
+          { id: "minimal", health: "ready", featureGates: ["planning"], tools: [{ enabled: true, executable: true }] },
+          { id: "broken-profile", health: "broken", featureGates: [], tools: [] },
+        ] }
+        : { supportsThinking: false },
+    });
+
+    await import(`../src/frontend/chat/chat-mode.ts?profiles-${Date.now()}-${Math.random()}`);
+    win.App.Chat.loadModeState();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const button = win.document.createElement("button");
+    win.document.body.appendChild(button);
+    win.App.Chat.showModePopup(button);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const popup = win.document.getElementById("mode-popup");
+    assert.ok(popup);
+    assert.equal(popup.querySelector('[data-profile="minimal"]')?.classList.contains("active"), true);
+    assert.equal(popup.querySelector('[data-profile="broken-profile"]'), null);
+    assert.deepEqual(
+      [...popup.querySelectorAll('[data-profile]')].map((option) => option.dataset.profile),
+      ["standard", "minimal"],
+    );
+    assert.equal(win.App.Chat.getProfile(), "minimal");
+  });
+
+  it("keeps the current profile when the host rejects switching a non-empty session", async () => {
+    const win = new Window();
+    global.window = win;
+    global.document = win.document;
+    global.self = win;
+    global.$ = (id) => win.document.getElementById(id);
+    global.E = (value) => String(value);
+    const notices = [];
+    global.toast = (message, type) => notices.push({ message, type });
+    win.document.body.innerHTML = '<span id="fi-mode-name"></span>';
+    global.App = win.App = {
+      Chat: {},
+      Permissions: { getMode: () => "standard", refreshMode: async () => "standard", setMode() {} },
+      Preferences: { get: (_key, fallback = "") => fallback, set() {} },
+    };
+    global.fetch = async (url, options = {}) => {
+      if (url === "/api/profiles") return { ok: true, json: async () => ({ current: { id: "standard" }, catalogs: [
+        { id: "standard", health: "ready", featureGates: "*", tools: [] },
+        { id: "minimal", health: "ready", featureGates: [], tools: [] },
+      ] }) };
+      if (url === "/api/sessions/profile" && options.method === "POST") return { ok: false, json: async () => ({ error: "非空会话不可切换能力" }) };
+      return { ok: true, json: async () => ({ supportsThinking: false }) };
+    };
+
+    await import(`../src/frontend/chat/chat-mode.ts?profile-reject-${Date.now()}-${Math.random()}`);
+    win.App.Chat.loadModeState();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const button = win.document.createElement("button");
+    win.document.body.appendChild(button);
+    win.App.Chat.showModePopup(button);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    win.document.querySelector('[data-profile="minimal"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(win.App.Chat.getProfile(), "standard");
+    assert.equal(notices.at(-1)?.type, "error");
+  });
+
   it("uses the host plan-state API instead of permissionMode or a prompt-only flag", async () => {
     const win = new Window();
     global.window = win;

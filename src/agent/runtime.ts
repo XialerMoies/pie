@@ -762,11 +762,13 @@ export class AgentRuntime {
     this._planState = recoverPlanState(readPlanState(entries))
     const persistedSelection = readAgentProfileSelection(entries)
     const persistedLifecycle = readAgentProfileLifecycle(entries)
+    const legacyFactProfile = persistedSelection?.id === "fact-verification"
+      || persistedLifecycle?.effective?.id === "fact-verification"
     const profile = profileOverride
       ?? (persistedLifecycle?.status === "applied" && persistedLifecycle.effective
-        ? resolveAgentProfileRef(persistedLifecycle.effective)
+        ? legacyFactProfile ? resolveAgentProfile("standard") : resolveAgentProfileRef(persistedLifecycle.effective)
         : persistedSelection
-          ? resolveAgentProfileSelection(persistedSelection)
+          ? legacyFactProfile ? resolveAgentProfile("standard") : resolveAgentProfileSelection(persistedSelection)
           : created
             ? resolveAgentProfile(requestedProfileId || this.config.profileId)
             : resolveAgentProfile("standard"))
@@ -774,7 +776,7 @@ export class AgentRuntime {
     this._activeProfileRef = profileOverride
       ? agentProfileRef(profileOverride)
       : persistedLifecycle?.status === "applied" && persistedLifecycle.effective
-        ? persistedLifecycle.effective
+        ? legacyFactProfile ? agentProfileRef(profile) : persistedLifecycle.effective
         : agentProfileRef(profile)
     const action = lifecycleAction ?? (created ? "create" : "resume")
     const profileSnapshot = agentProfileRegistry.resolveRef(this._activeProfileRef)

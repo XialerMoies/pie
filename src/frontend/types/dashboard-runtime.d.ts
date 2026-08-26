@@ -17,6 +17,9 @@ interface AppChat {
   syncThinkingLevel(): Promise<void>;
   syncPlanState(): Promise<void>;
   applyPlanState(state: unknown): void;
+  applyProfile?(state: unknown): void;
+  syncProfiles?(): Promise<void>;
+  getProfile?(): string;
   refreshModeButton(): void;
   addAttachment(att: Omit<ChatAttachment, 'id'>): void;
   removeAttachment(id: string): void;

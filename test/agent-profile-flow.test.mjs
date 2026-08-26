@@ -180,24 +180,12 @@ describe("AP-01 profile registry and projection", () => {
   });
 });
 
-describe("AP-02 fact-verification profile projection", () => {
-  it("exposes only bounded read tools, a focused prompt, and no MCP or skill injection", async () => {
-    const profile = resolveAgentProfile("fact-verification");
-    assert.deepStrictEqual(
-      getCustomTools(undefined, undefined, undefined, profile).map((tool) => tool.name),
-      ["file_read", "explorer_list", "read_memory", "list_memory", "skill_facts"],
-    );
-    const generationBefore = currentGeneration();
-    const asyncTools = await getCustomToolsAsync(resolve(tmpdir(), "fact-profile-no-mcp"), undefined, undefined, profile);
-    assert.deepStrictEqual(asyncTools.map((tool) => tool.name), ["file_read", "explorer_list", "read_memory", "list_memory", "skill_facts"]);
-    assert.strictEqual(currentGeneration(), generationBefore);
-    assert.strictEqual(profile.allowMcp, false);
-    assert.strictEqual(profile.includeSkills, false);
-    const prompt = resolveSystemPrompt(profile.promptSections);
-    assert.match(prompt, /事实核验 Profile/);
-    assert.match(prompt, /“未验证”是合法且完整的终态/);
-    assert.doesNotMatch(prompt, /Edit\/Write/);
-    assert.doesNotMatch(prompt, /主动更新记忆/);
+describe("AP-02 request-scoped evidence contract", () => {
+  it("keeps fact verification out of the persistent profile registry", () => {
+    assert.throws(() => resolveAgentProfile("fact-verification"), /Unknown agent profile/);
+    const prompt = resolveSystemPrompt();
+    assert.match(prompt, /本轮事实核验约束/);
+    assert.match(prompt, /不改变会话 Agent Profile/);
   });
 });
 
@@ -262,31 +250,4 @@ describe("AP-01 sessions route cross-layer flow", () => {
     }
   });
 
-  it("persists and restores fact-verification independently across concurrent session hosts", async () => {
-    const root = mkdtempSync(resolve(tmpdir(), "agent-fact-profile-concurrent-"));
-    const firstWorkspace = resolve(root, "first-workspace");
-    const secondWorkspace = resolve(root, "second-workspace");
-    mkdirSync(firstWorkspace, { recursive: true });
-    mkdirSync(secondWorkspace, { recursive: true });
-    const first = createFlowContext(resolve(root, "first-host"), firstWorkspace);
-    const second = createFlowContext(resolve(root, "second-host"), secondWorkspace);
-    try {
-      const [factCreated, standardCreated] = await Promise.all([
-        callSessions(first.ctx, "POST", "/api/sessions/new", { workspace: firstWorkspace, profileId: "fact-verification" }),
-        callSessions(second.ctx, "POST", "/api/sessions/new", { workspace: secondWorkspace, profileId: "standard" }),
-      ]);
-      assert.deepStrictEqual(factCreated.body.profile, { id: "fact-verification", revision: 1 });
-      assert.deepStrictEqual(standardCreated.body.profile, { id: "standard", revision: 1 });
-      const factFile = first.engine.session.sessionFile;
-      assert.deepStrictEqual(readAgentProfileSelectionFile(factFile), { id: "fact-verification", revision: 1 });
-
-      await callSessions(first.ctx, "POST", "/api/sessions/new", { workspace: firstWorkspace, profileId: "standard" });
-      const restored = await callSessions(first.ctx, "POST", "/api/sessions/activate", { id: factCreated.body.id, workspace: firstWorkspace });
-      assert.deepStrictEqual(restored.body.profile, { id: "fact-verification", revision: 1 });
-      assert.strictEqual(first.engine.session.sessionFile, factFile);
-      assert.deepStrictEqual(second.engine.session.profile, { id: "standard", revision: 1 });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 });

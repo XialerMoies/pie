@@ -84,7 +84,7 @@ function renderMessages(options: SessionActivationOptions): void {
 }
 
 function applySessionMessages(
-  data: { activeSessionId?: string; messages?: any[] },
+  data: { activeSessionId?: string; messages?: any[]; profile?: unknown },
   fallbackId: string,
   options: SessionActivationOptions = {},
 ): void {
@@ -92,6 +92,7 @@ function applySessionMessages(
   sessionActivationApp.ChatState.replaceMessages(mapMessages(data.messages || []));
   renderMessages(options);
   sessionActivationApp.ChatTimeline?.sync();
+  if (data.profile) sessionActivationApp.Chat?.applyProfile?.({ profile: data.profile });
 
   const activeId = data.activeSessionId || fallbackId;
   if (activeId && !options.skipTabState) {
@@ -140,7 +141,7 @@ function activateById(id: string, options: SessionActivationOptions = {}): Promi
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data?.error || ('HTTP ' + response.status));
     return data;
-  }).then((data: { ok: boolean; activeSessionId?: string; messages?: any[]; planState?: unknown; error?: string }) => {
+  }).then((data: { ok: boolean; activeSessionId?: string; messages?: any[]; planState?: unknown; profile?: unknown; error?: string }) => {
     if (seq !== sessionActivationSeq) return;
     if (!data.ok || data.error) {
       if (!options.silent) toast('加载失败: ' + (data.error || ''));

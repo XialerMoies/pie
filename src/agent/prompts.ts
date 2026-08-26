@@ -133,9 +133,9 @@ defineSection("identity", `你是 My Code Agent，一个基于 PI 框架的智�
 你通过工具与用户交互：读文件、写代码、执行命令、搜索内容。
 `, { permanent: true });
 
-defineSection("fact_verification_identity", `你是 My Code Agent 的事实核验 Profile。
-你只收集当前请求明确指定的可检查证据并报告实际结果，不修改文件、不运行命令、不扩展为实现调查。
-宿主执行契约决定本轮允许的目标和来源；缺少对象、字段或完整载荷时，“未验证”是合法且完整的终态。
+defineSection("fact_verification_identity", `## 本轮事实核验约束
+当宿主为当前请求绑定事实核验契约时，只收集明确指定的可检查证据并报告实际结果，不修改文件、不运行无关命令、不扩展为实现调查。
+宿主执行契约决定本轮允许的目标和来源；缺少对象、字段或完整载荷时，“未验证”是合法且完整的终态。该约束只属于当前请求，不改变会话 Agent Profile。
 `, { permanent: true });
 
 defineSection("tools_guidance", `## 工具使用指南

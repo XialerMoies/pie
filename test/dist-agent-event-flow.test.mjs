@@ -82,10 +82,9 @@ describe("built server and dashboard event flow", () => {
     const built = buildAllProfileCatalogs();
     const generated = JSON.parse(readFileSync(resolve(ROOT, "docs/generated/profile-catalog.json"), "utf8")).profiles;
     assert.deepEqual(built, generated);
-    assert.deepEqual(built.map((catalog) => catalog.id), ["fact-verification", "minimal", "standard"]);
+    assert.deepEqual(built.map((catalog) => catalog.id), ["minimal", "standard"]);
     assert.ok(built.every((catalog) => catalog.tools.every((tool) => tool.executable)));
     assert.ok(built.every((catalog) => catalog.tools.every((tool) => tool.source === "native" && tool.audiences.includes("main"))));
-    assert.deepEqual(built.find((catalog) => catalog.id === "fact-verification")?.featureGates, ["memory", "skills"]);
   });
 
   it("injects built server events into the built dashboard and preserves live/replay state", async () => {

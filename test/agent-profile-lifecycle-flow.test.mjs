@@ -121,7 +121,7 @@ describe("AP-06 route and runtime boundaries", () => {
     const catalog = await call(ctx, "GET", "/api/profiles");
     assert.equal(catalog.status, 200);
     assert.ok(catalog.body.profiles.some((profile) => profile.id === "standard" && profile.health === "ready"));
-    assert.deepStrictEqual(catalog.body.catalogs.map((profile) => profile.id), ["fact-verification", "minimal", "standard"]);
+    assert.deepStrictEqual(catalog.body.catalogs.map((profile) => profile.id), ["minimal", "standard"]);
     assert.ok(catalog.body.catalogs.every((profile) => profile.health === "ready" && profile.fingerprint.length === 64));
     const rejected = await call(ctx, "POST", "/api/sessions/profile", { profileId: "minimal" });
     assert.equal(rejected.status, 400);

@@ -172,7 +172,7 @@ export function agentToolToPIToolDefinition(tool: AgentTool, workspace?: string,
       }
       emitTrace?.({ type: "tool_execution_start", toolCallId: _toolCallId, toolName: authorizedTool.name, args })
       try {
-        // A fresh fact-verification turn must inspect the current source. The
+        // A fresh evidence-contract turn must inspect the current source. The
         // general evidence cache has no source revision/mtime proof and cannot
         // safely satisfy a later verification request.
         const cached = factVerificationContract

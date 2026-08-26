@@ -25,13 +25,7 @@ describe("AP-03 native ToolPresentation cross-layer boundary", () => {
     assert.throws(() => resolveToolPresentation("ptc"), /Unsupported tool presentation/);
 
     const standard = resolveAgentProfile("standard");
-    const fact = resolveAgentProfile("fact-verification");
     assert.equal(standard.presentation, "native");
-    assert.equal(fact.presentation, "native");
-    assert.deepStrictEqual(
-      getCustomTools("/workspace", undefined, undefined, fact).map((entry) => entry.name),
-      toolRegistry.project(fact.toolNames).map((entry) => entry.name),
-    );
   });
 
   it("presents a host tool as one native PI definition without changing execution semantics", async () => {

@@ -54,11 +54,91 @@ const EFFORT_INSTRUCTIONS: Record<string, string> = {
   max: '请穷尽所有可能性，进行彻底分析和验证。',
 };
 
+type ProfileCatalogEntry = {
+  id: string;
+  health?: string;
+  revision?: number;
+  generation?: number;
+  featureGates?: string[] | '*';
+  tools?: Array<{ enabled?: boolean; executable?: boolean }>;
+};
+
+const PROFILE_LABELS: Record<string, string> = {
+  standard: '标准',
+  minimal: '极简',
+};
+const USER_PROFILE_ORDER = ['standard', 'minimal'] as const;
+
+let _profileId = 'standard';
+let _profileCatalog: ProfileCatalogEntry[] = [];
+let _profileCatalogLoaded = false;
+
 let _currentMode = 'auto';
 let _currentEffort = 'medium';
 let _availableLevels: string[] = Object.keys(EFFORT_LABELS);
 let _supportsThinking = false;
 let _planState: { status: 'active' | 'pending' | 'committed' | 'cancelled'; pendingTarget?: string } = { status: 'committed' };
+
+function profileLabel(id: string): string {
+  return PROFILE_LABELS[id] || id;
+}
+
+function profileStatusLabel(profile: ProfileCatalogEntry): string {
+  if (profile.health === 'ready') return '可用';
+  if (profile.health === 'broken') return '损坏';
+  if (profile.health === 'unavailable') return '不可用';
+  return profile.health || '未知';
+}
+
+function applyProfileState(data: unknown): void {
+  if (!data || typeof data !== 'object') return;
+  const state = data as { current?: { id?: unknown }; profile?: { id?: unknown }; catalogs?: unknown };
+  const selected = state.current?.id ?? state.profile?.id;
+  if (typeof selected === 'string' && selected.trim()) _profileId = selected;
+  if (Array.isArray(state.catalogs)) {
+    _profileCatalog = state.catalogs.filter((entry): entry is ProfileCatalogEntry => {
+      if (!entry || typeof entry !== 'object') return false;
+      const id = (entry as { id?: unknown }).id;
+      return typeof id === 'string' && id.trim().length > 0;
+    });
+    _profileCatalogLoaded = true;
+  }
+  updateModeButton();
+}
+
+async function syncProfiles(): Promise<void> {
+  try {
+    const response = await fetch('/api/profiles');
+    if (!response.ok) return;
+    applyProfileState(await response.json());
+  } catch {}
+}
+
+async function setProfile(profileId: string, popup?: HTMLElement): Promise<void> {
+  const previous = _profileId;
+  if (!profileId || profileId === previous) return;
+  const option = popup
+    ? [...popup.querySelectorAll<HTMLElement>('[data-profile]')].find((candidate) => candidate.dataset.profile === profileId)
+    : undefined;
+  if (option) option.setAttribute('aria-busy', 'true');
+  try {
+    const response = await fetch('/api/sessions/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profileId }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(typeof body?.error === 'string' ? body.error : '能力切换失败');
+    applyProfileState({ profile: body.profile });
+    popup?.remove();
+    toast(`已切换 Agent 能力：${profileLabel(_profileId)}`, 'info');
+  } catch (error) {
+    if (option) option.removeAttribute('aria-busy');
+    toast(error instanceof Error && error.message ? error.message : '能力切换失败', 'error');
+    _profileId = previous;
+    updateModeButton();
+  }
+}
 
 function applyPlanState(data: unknown): void {
   const candidate = data && typeof data === 'object' && 'state' in data
@@ -124,6 +204,7 @@ function loadModeState(): void {
   void syncPlanState();
   // 启动时同步一次权限模式，避免按钮显示模块默认值直到首次打开弹窗
   syncPermissionMode();
+  void syncProfiles();
 }
 
 async function setMode(mode: string): Promise<void> {
@@ -240,6 +321,7 @@ function updateModeButton(): void {
   const planLabel = _planState.status === 'pending' ? '计划待处理' : conversationLabel;
   const permissionMode = permissions?.getMode?.() || 'standard';
   el.textContent = `${planLabel} · ${PERMISSION_MODE_LABELS[permissionMode] || '标准'}`;
+  el.title = `策略：${planLabel}；权限：${PERMISSION_MODE_LABELS[permissionMode] || '标准'}；能力：${profileLabel(_profileId)}`;
 }
 
 let permissionModeSynced = false;
@@ -267,6 +349,7 @@ function showModePopup(btn: HTMLElement): void {
   popup.style.left = rect.left + 'px';
 
   const permissionMode = permissions?.getMode?.() || 'standard';
+  if (!_profileCatalogLoaded) void syncProfiles();
   let html = '';
 
   html += '<div class="mode-popup-title">对话方式</div><div class="mode-segment">';
@@ -279,6 +362,20 @@ function showModePopup(btn: HTMLElement): void {
   html += '<div class="mode-popup-title permission-popup-title">执行权限</div><div class="mode-segment permission-segment">';
   for (const key of PERMISSION_MODE_ORDER) {
     html += `<button class="mode-option permission-option${key === permissionMode ? ' active' : ''}" type="button" data-permission-mode="${key}">${PERMISSION_MODE_LABELS[key]}</button>`;
+  }
+  html += '</div>';
+
+  html += '<div class="mode-popup-title profile-popup-title">能力模式</div><div class="mode-segment profile-segment" role="listbox" aria-label="能力模式">';
+  const profiles = USER_PROFILE_ORDER
+    .map((id) => _profileCatalog.find((profile) => profile.id === id))
+    .filter((profile): profile is ProfileCatalogEntry => Boolean(profile));
+  if (profiles.length === 0) {
+    html += '<span class="profile-empty">能力目录加载中…</span>';
+  } else {
+    for (const profile of profiles) {
+      const disabled = profile.health !== 'ready';
+      html += `<button class="mode-option profile-option${profile.id === _profileId ? ' active' : ''}" type="button" role="option" aria-selected="${profile.id === _profileId}"${disabled ? ' disabled' : ''} data-profile="${E(profile.id)}" title="${E(profileStatusLabel(profile))}">${E(profileLabel(profile.id))}</button>`;
+    }
   }
   html += '</div>';
 
@@ -300,6 +397,12 @@ function showModePopup(btn: HTMLElement): void {
       const mode = option.dataset.permissionMode as 'plan' | 'standard' | 'dontAsk' | 'yes';
       permissions?.setMode?.(mode);
       popup.remove();
+    });
+  });
+  popup.querySelectorAll<HTMLElement>('[data-profile]').forEach((option) => {
+    option.addEventListener('click', () => {
+      const profileId = option.dataset.profile || '';
+      void setProfile(profileId, popup);
     });
   });
   // 启动已同步过一次；弹窗仅在从未同步时再查一次服务器，其余情况用本地缓存
@@ -360,4 +463,7 @@ function stripInstruction(text: string): string {
   AppChat.handleSlash = handleSlash;
   AppChat.loadModeState = loadModeState;
   AppChat.showModePopup = showModePopup;
+  AppChat.applyProfile = applyProfileState;
+  AppChat.syncProfiles = syncProfiles;
+  AppChat.getProfile = () => _profileId;
 } }

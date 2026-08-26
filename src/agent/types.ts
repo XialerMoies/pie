@@ -408,6 +408,11 @@ export interface ExecutionContract {
   revision: number
 }
 
+/** Request-scoped evidence overlay; never persisted as an AgentProfile. */
+export type EvidenceContract = ExecutionContract & {
+  kind: "fact_verification" | "fact_verification_batch"
+}
+
 export interface ExecutionContractDecision {
   allowed: boolean
   code?: "execution_contract_violation" | "execution_contract_complete" | "duplicate_attempt"

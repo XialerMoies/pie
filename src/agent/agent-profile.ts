@@ -5,7 +5,7 @@ import type { ToolPresentationMode } from "./tool-presentation.js"
 export const AGENT_PROFILE_SESSION_CUSTOM_TYPE = "my-code-agent.profile"
 export const AGENT_PROFILE_LIFECYCLE_CUSTOM_TYPE = "my-code-agent.profile.lifecycle"
 
-export type AgentProfileId = "standard" | "minimal" | "fact-verification" | (string & {})
+export type AgentProfileId = "standard" | "minimal" | (string & {})
 export type AgentProfileHealth = "ready" | "broken" | "unavailable"
 export type AgentProfileSource = "builtin" | "workspace" | "user"
 export type AgentFeatureId = "web" | "memory" | "delegation" | "skills" | "planning" | "mcp"
@@ -221,26 +221,6 @@ agentProfileRegistry.register({
     "env_info",
   ],
   featureGates: ["planning"],
-  allowMcp: false,
-  includeSkills: false,
-})
-
-agentProfileRegistry.register({
-  id: "fact-verification",
-  revision: 1,
-  description: "Bounded read-only evidence collection for inspectable fact checks.",
-  toolNames: ["file_read", "explorer_list", "skill_facts", "list_memory", "read_memory"],
-  presentation: "native",
-  promptSections: [
-    "fact_verification_identity",
-    "evidence_contract",
-    "task_lifecycle",
-    "response_style",
-    "language_preference",
-    "token_budget",
-    "env_info",
-  ],
-  featureGates: ["memory", "skills"],
   allowMcp: false,
   includeSkills: false,
 })

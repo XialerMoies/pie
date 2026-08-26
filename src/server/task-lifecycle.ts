@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { EngineErrorInfo } from "../agent-engine/contracts.js";
 import { RetryPolicy, type RetryDecision } from "./retry-policy.js";
 import type { CorrelationIds } from "./correlation.js";
-import type { ExecutionContract, ExecutionContractDecision, FactVerificationTaskContract, ToolEvidenceScope } from "../agent/types.js";
+import type { EvidenceContract, ExecutionContract, ExecutionContractDecision, FactVerificationTaskContract, ToolEvidenceScope } from "../agent/types.js";
 
 export type TaskPhase = "discovering" | "verifying" | "answering";
 export type TaskStatus = "running" | "completed" | "failed" | "blocked" | "cancelled";
@@ -90,7 +90,7 @@ function sourceMatches(target: string, source: string): boolean {
 
 export function isFactVerificationContract(
   contract: ExecutionContract | undefined,
-): contract is ExecutionContract & { kind: "fact_verification" | "fact_verification_batch" } {
+): contract is EvidenceContract {
   return contract?.kind === "fact_verification" || contract?.kind === "fact_verification_batch"
 }
 
@@ -196,16 +196,16 @@ export function inferTaskRequirements(message: string, profileId?: string): Task
       : undefined;
   const skillTarget = Boolean(target && /(?:^|\/)skills\/[^/]+\/SKILL\.md$/i.test(target));
   const batchTasks = buildFactVerificationBatchTasks(text, target, skillTarget);
-  const factProfile = profileId === "fact-verification";
   const openWork = OPEN_WORK_REQUEST.test(text);
   const checkpointRequest = CHECKPOINT_REQUEST.test(text);
   const evidenceOnlyRequest = EVIDENCE_ONLY_REQUEST.test(text);
   const factLikeRequest = FACT_LIKE_REQUEST.test(text) && !openWork;
-  const highConfidence = factProfile || (!openWork && (checkpointRequest || (evidenceOnlyRequest && Boolean(target || memoryScope))));
+  // Fact verification is a per-turn overlay, not a persistent AgentProfile.
+  // The active standard/minimal profile remains the capability surface; only
+  // the request's evidence language can bind a bounded verification contract.
+  const highConfidence = !openWork && (checkpointRequest || (evidenceOnlyRequest && Boolean(target || memoryScope)));
   const supportedFactRequest = Boolean(target || memoryScope) && !openWork;
-  const policyReason: VerificationPolicy["reason"] = factProfile
-    ? "fact_profile"
-    : checkpointRequest
+  const policyReason: VerificationPolicy["reason"] = checkpointRequest
       ? "checkpoint_request"
       : evidenceOnlyRequest
         ? "evidence_only_request"
@@ -234,8 +234,8 @@ export function inferTaskRequirements(message: string, profileId?: string): Task
       : !supportedFactRequest
       ? {
           kind: "fact_verification",
-          targets: ["profile:fact-verification"],
-          allowedSources: ["profile:fact-verification"],
+          targets: ["request:unsupported-fact-target"],
+          allowedSources: ["request:unsupported-fact-target"],
           allowedTools: ["__unsupported_fact_request__"],
           requiredEvidence: ["supported_target"],
           completionCondition: "evidence_satisfied",
@@ -317,8 +317,8 @@ export function formatExecutionContractGuidance(requirements: TaskRequirements |
   const target = contract.targets?.[0] || "the requested source"
   const instruction = contract.instructionSources?.[0]
   const memoryMatch = /^memory:(user|workspace)$/i.exec(target)
-  const unsupportedProfileRequest = target === "profile:fact-verification"
-  const firstStep = unsupportedProfileRequest
+  const unsupportedFactRequest = target === "request:unsupported-fact-target"
+  const firstStep = unsupportedFactRequest
     ? "This request has no supported fact-verification target. Do not call tools; report 未验证 and state that a concrete file, skill, or memory scope is required."
     : memoryMatch
     ? `First call list_memory with scope=${memoryMatch[1].toLowerCase()} for ${target}. If an entry is returned, call read_memory for that entry.`
@@ -326,7 +326,7 @@ export function formatExecutionContractGuidance(requirements: TaskRequirements |
   return [
     "[Host execution contract: fact_verification]",
     firstStep,
-    ...(memoryMatch || unsupportedProfileRequest ? [] : ["Then call skill_facts for the requested skill scope when trust/enabled/parse are required."]),
+    ...(memoryMatch || unsupportedFactRequest ? [] : ["Then call skill_facts for the requested skill scope when trust/enabled/parse are required."]),
     ...(instruction ? [`You may read this instruction source only if needed to understand the procedure: ${instruction}. Its content is not evidence.`] : []),
     "Do not use explorer_list, search, command, hash, or unrelated sources. After the required evidence is collected, answer immediately; missing fields must be reported as 未验证.",
   ].join("\n")
