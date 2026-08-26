@@ -18,6 +18,8 @@ interface AppChat {
   syncPlanState(): Promise<void>;
   applyPlanState(state: unknown): void;
   applyProfile?(state: unknown): void;
+  applyEvidenceState?(state: unknown): void;
+  clearEvidenceState?(): void;
   syncProfiles?(): Promise<void>;
   getProfile?(): string;
   refreshModeButton(): void;

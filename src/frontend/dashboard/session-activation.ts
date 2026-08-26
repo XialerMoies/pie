@@ -90,6 +90,7 @@ function applySessionMessages(
 ): void {
   sessionActivationApp.Chat?.resetMsgKeys?.();
   sessionActivationApp.ChatState.replaceMessages(mapMessages(data.messages || []));
+  sessionActivationApp.Chat?.clearEvidenceState?.();
   renderMessages(options);
   sessionActivationApp.ChatTimeline?.sync();
   if (data.profile) sessionActivationApp.Chat?.applyProfile?.({ profile: data.profile });

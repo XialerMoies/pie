@@ -15,6 +15,7 @@ let finalized;
 let scheduledRenders;
 let markedRendered;
 let fullRenders;
+let evidenceStates;
 
 function reset() {
   messages.splice(0, messages.length, { role: "assistant", content: "", streaming: true, blocks: [] });
@@ -25,6 +26,7 @@ function reset() {
   scheduledRenders = 0;
   markedRendered = 0;
   fullRenders = 0;
+  evidenceStates = [];
 }
 
 global.mark = () => {};
@@ -42,6 +44,8 @@ global.window = {
         finalized = true;
         return true;
       },
+      applyEvidenceState(state) { evidenceStates.push(state); },
+      clearEvidenceState() { evidenceStates.push({ status: "cleared" }); },
     },
     ChatState: {
       getMessages: () => messages,
@@ -100,6 +104,24 @@ describe("chat SSE controller event flow", () => {
     assert.strictEqual(closed, true);
     assert.strictEqual(messages[0].streaming, false);
     assert.deepStrictEqual(messages[0].blocks.map((block) => block.blockId), ["thinking-flow-1", "tool-flow", "thinking-flow-2", "text-flow"]);
+  });
+
+  it("keeps request evidence active across baseline/reconnect and clears it at terminal", () => {
+    reset();
+    const controller = global.window.App.ChatViews.createSseController({
+      scheduleMessagesRender: () => {}, updateUI: () => {}, markLastMessageRendered: () => {},
+      renderMessages: () => {}, refreshComposer: () => {}, setAssistantError: () => {},
+      completeSend: () => {}, failSend: () => {},
+    });
+    controller.bind(70);
+    handlers.onMessage({ data: JSON.stringify({ type: "stream_ready", evidenceState: { status: "active", kind: "fact_verification", revision: 1 } }) });
+    handlers.onMessage({ data: JSON.stringify({ type: "evidence_state", state: { status: "active", kind: "fact_verification", revision: 1 } }) });
+    handlers.onMessage({ data: JSON.stringify({ type: "done", text: "verified", blocks: [] }) });
+    assert.deepStrictEqual(evidenceStates, [
+      { status: "active", kind: "fact_verification", revision: 1 },
+      { status: "active", kind: "fact_verification", revision: 1 },
+      { status: "cleared" },
+    ]);
   });
 
   it("ignores compatibility thinking frames once block streaming owns the assistant node", () => {

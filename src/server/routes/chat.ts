@@ -312,6 +312,10 @@ export const handleChat: RouteHandler = (req, res, ctx) => {
         const requestMessage = typeof message === "string" ? message : "";
         chatStream.taskRequirements = expandTaskRequirements(chatStream.taskRequirements, requestMessage, engine.session.profile?.id)
           || inferTaskRequirements(requestMessage, engine.session.profile?.id);
+        const requestContract = chatStream.taskRequirements?.contract;
+        chatStream.evidenceContractState = requestContract?.kind === "fact_verification" || requestContract?.kind === "fact_verification_batch"
+          ? { status: "active", kind: requestContract.kind, revision: requestContract.revision }
+          : { status: "cleared" };
         chatStream.taskLifecycle = undefined;
         if (workspace) chatStream.currentWorkspace = workspace;
         if (process.env.NODE_ENV === "test" && process.env.MY_CODE_AGENT_E2E_CONCURRENCY === "1" && (requestMessage === E2E_LONG_TOOL_MESSAGE || requestMessage === E2E_CANCEL_TOOL_MESSAGE)) {

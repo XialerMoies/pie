@@ -125,6 +125,40 @@ describe("chat mode server-state boundary", () => {
     assert.equal(win.document.getElementById("fi-mode-name").textContent, "自动 · 标准");
   });
 
+  it("shows request-scoped evidence without changing the selected profile", async () => {
+    const win = new Window();
+    global.window = win;
+    global.document = win.document;
+    global.self = win;
+    global.$ = (id) => win.document.getElementById(id);
+    global.E = (value) => String(value);
+    global.toast = () => {};
+    win.document.body.innerHTML = '<span id="fi-mode-name"></span><span id="fi-evidence-state"></span><button id="fi-mode-btn"></button>';
+    global.App = win.App = {
+      Chat: {},
+      Permissions: { getMode: () => "standard", refreshMode: async () => "standard", setMode() {} },
+      Preferences: { get: (_key, fallback = "") => fallback, set() {} },
+    };
+    global.fetch = async (url) => ({ ok: true, json: async () => url === "/api/profiles"
+      ? { current: { id: "minimal" }, catalogs: [
+        { id: "standard", health: "ready" }, { id: "minimal", health: "ready" },
+      ] }
+      : { supportsThinking: false } });
+
+    await import(`../src/frontend/chat/chat-mode.ts?evidence-${Date.now()}-${Math.random()}`);
+    win.App.Chat.loadModeState();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    win.App.Chat.applyEvidenceState({ status: "active", kind: "fact_verification", revision: 1 });
+    assert.equal(win.App.Chat.getProfile(), "minimal");
+    assert.equal(win.document.getElementById("fi-evidence-state").textContent, "核验中");
+    const button = win.document.getElementById("fi-mode-btn");
+    win.App.Chat.showModePopup(button);
+    assert.equal(win.document.querySelector("[data-evidence-state]").textContent, "本轮事实核验 · 进行中");
+    win.App.Chat.clearEvidenceState();
+    assert.equal(win.document.getElementById("fi-evidence-state").hidden, true);
+    assert.equal(win.App.Chat.getProfile(), "minimal");
+  });
+
   it("keeps unknown thinking levels out of the strategy popup DOM", async () => {
     const win = new Window();
     global.window = win;

@@ -618,6 +618,8 @@ export function attachEngineEvents(
       || task.reason === "execution_contract_source_not_allowed"
       || task.reason === "execution_contract_tool_not_allowed"
     );
+    chatStream.evidenceContractState = { status: "cleared" };
+    writePresentationEvent(chatStream, { type: "evidence_state", state: chatStream.evidenceContractState });
     // A cancellation requested by the runtime after a hard tool failure is
     // presented as a failed/blocked turn, not as a successful user cancel.
     if (event.type === "turn.cancelled" && task.status !== "blocked") {
@@ -697,6 +699,9 @@ export function attachEngineEvents(
       recordCorrelation("runtime.event", event.type);
       taskLifecycle.start(chatStream.turnId, chatStream.taskRequirements, { traceId: chatStream.traceId, sessionId: chatStream.sessionId });
       chatStream.taskLifecycle = taskLifecycle.snapshot();
+      if (chatStream.evidenceContractState?.status === "active") {
+        writePresentationEvent(chatStream, { type: "evidence_state", state: chatStream.evidenceContractState });
+      }
       recordCorrelation("task.transition", event.type, { phase: chatStream.taskLifecycle.phase });
       domainReducer.reset();
       chatStream.activeTextInput = undefined;

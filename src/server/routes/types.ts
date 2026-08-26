@@ -27,6 +27,13 @@ export interface ChatTextInputState {
   implicitStartAllowed?: boolean;
 }
 
+/** Ephemeral request overlay; never persisted as a session profile. */
+export interface EvidenceContractState {
+  status: "active" | "cleared";
+  kind?: "fact_verification" | "fact_verification_batch";
+  revision?: number;
+}
+
 // ─── Assistant Block 协议 ─────────────────────────────────
 
 /** 在 assistant 气泡内线性排列的内容块，按 seq 排序 */
@@ -91,6 +98,8 @@ export interface ChatStreamState {
   executionContractProgress?: Map<string, Set<string>>;
   /** Host-side counters for attempts rejected before tool execution. */
   executionPolicyMetrics?: ExecutionPolicyMetrics;
+  /** Current request-scoped evidence overlay for SSE baseline/reconnect. */
+  evidenceContractState?: EvidenceContractState;
 }
 
 export interface ServerContext {

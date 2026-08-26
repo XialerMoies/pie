@@ -1,4 +1,4 @@
-import type { AssistantBlock, ChatStreamState } from "./routes/types.js";
+import type { AssistantBlock, ChatStreamState, EvidenceContractState } from "./routes/types.js";
 import { writeChatEvent } from "./chat-stream.js";
 import type { EvidenceLedgerEntry } from "./evidence-ledger.js";
 import type { TaskLifecycleSnapshot } from "./task-lifecycle.js";
@@ -27,7 +27,8 @@ export type PresentationEvent =
     }
   | { type: "cancelled"; turnId: string; sessionId: string; reason?: string; correlation?: CorrelationIds }
   | { type: "queue_update"; steering: unknown[]; followUp: unknown[]; correlation?: CorrelationIds }
-  | { type: "plan_state"; state: PlanStateSnapshot; correlation?: CorrelationIds };
+  | { type: "plan_state"; state: PlanStateSnapshot; correlation?: CorrelationIds }
+  | { type: "evidence_state"; state: EvidenceContractState; correlation?: CorrelationIds };
 
 function sanitizePresentationEvent(event: PresentationEvent): PresentationEvent {
   if (event.type !== "done") return event;

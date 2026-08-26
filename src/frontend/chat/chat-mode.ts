@@ -78,6 +78,7 @@ let _currentEffort = 'medium';
 let _availableLevels: string[] = Object.keys(EFFORT_LABELS);
 let _supportsThinking = false;
 let _planState: { status: 'active' | 'pending' | 'committed' | 'cancelled'; pendingTarget?: string } = { status: 'committed' };
+let _evidenceState: { status: 'active' | 'cleared'; kind?: string; revision?: number } = { status: 'cleared' };
 
 function profileLabel(id: string): string {
   return PROFILE_LABELS[id] || id;
@@ -88,6 +89,27 @@ function profileStatusLabel(profile: ProfileCatalogEntry): string {
   if (profile.health === 'broken') return '损坏';
   if (profile.health === 'unavailable') return '不可用';
   return profile.health || '未知';
+}
+
+function applyEvidenceState(data: unknown): void {
+  const candidate = data && typeof data === 'object' && 'state' in data
+    ? (data as { state?: unknown }).state
+    : data;
+  if (!candidate || typeof candidate !== 'object') return;
+  const state = candidate as { status?: unknown; kind?: unknown; revision?: unknown };
+  if (state.status !== 'active' && state.status !== 'cleared') return;
+  _evidenceState = {
+    status: state.status,
+    ...(state.status === 'active' && typeof state.kind === 'string' ? { kind: state.kind } : {}),
+    ...(state.status === 'active' && Number.isSafeInteger(state.revision) ? { revision: state.revision as number } : {}),
+  };
+  updateModeButton();
+  const popup = document.getElementById('mode-popup');
+  const status = popup?.querySelector<HTMLElement>('[data-evidence-state]');
+  if (status) {
+    status.textContent = _evidenceState.status === 'active' ? '本轮事实核验 · 进行中' : '本轮事实核验 · 未绑定';
+    status.dataset.active = String(_evidenceState.status === 'active');
+  }
 }
 
 function applyProfileState(data: unknown): void {
@@ -321,7 +343,13 @@ function updateModeButton(): void {
   const planLabel = _planState.status === 'pending' ? '计划待处理' : conversationLabel;
   const permissionMode = permissions?.getMode?.() || 'standard';
   el.textContent = `${planLabel} · ${PERMISSION_MODE_LABELS[permissionMode] || '标准'}`;
-  el.title = `策略：${planLabel}；权限：${PERMISSION_MODE_LABELS[permissionMode] || '标准'}；能力：${profileLabel(_profileId)}`;
+  el.title = `策略：${planLabel}；权限：${PERMISSION_MODE_LABELS[permissionMode] || '标准'}；能力：${profileLabel(_profileId)}${_evidenceState.status === 'active' ? '；本轮事实核验进行中' : ''}`;
+  const badge = $('fi-evidence-state');
+  if (badge) {
+    badge.textContent = _evidenceState.status === 'active' ? '核验中' : '';
+    badge.hidden = _evidenceState.status !== 'active';
+    badge.setAttribute('aria-hidden', String(_evidenceState.status !== 'active'));
+  }
 }
 
 let permissionModeSynced = false;
@@ -378,6 +406,8 @@ function showModePopup(btn: HTMLElement): void {
     }
   }
   html += '</div>';
+
+  html += `<div class="evidence-state" data-evidence-state data-active="${_evidenceState.status === 'active'}">${_evidenceState.status === 'active' ? '本轮事实核验 · 进行中' : '本轮事实核验 · 未绑定'}</div>`;
 
   popup.innerHTML = html;
   document.body.appendChild(popup);
@@ -464,6 +494,8 @@ function stripInstruction(text: string): string {
   AppChat.loadModeState = loadModeState;
   AppChat.showModePopup = showModePopup;
   AppChat.applyProfile = applyProfileState;
+  AppChat.applyEvidenceState = applyEvidenceState;
+  AppChat.clearEvidenceState = () => applyEvidenceState({ status: 'cleared' });
   AppChat.syncProfiles = syncProfiles;
   AppChat.getProfile = () => _profileId;
 } }

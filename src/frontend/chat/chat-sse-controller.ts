@@ -21,6 +21,7 @@ interface ChatSseEvent {
   status?: 'done' | 'error';
   error?: string;
   task?: { status?: string; reason?: string; retryDecisions?: Array<{ category?: string }> };
+  evidenceState?: { status?: 'active' | 'cleared'; kind?: string; revision?: number };
 }
 
 interface ChatSseControllerDependencies {
@@ -92,6 +93,11 @@ class ChatSseControllerView {
       const messages = this.dependencies.chatState.getMessages();
       const last = messages[messages.length - 1];
 
+      if (data.type === 'stream_ready') {
+        if (data.evidenceState) this.dependencies.chat.applyEvidenceState?.(data.evidenceState);
+        return;
+      }
+
       if (data.type === 'subagent_event' && data.event) {
         const updated = this.dependencies.chat.updateSubagentEvent?.(data.event) || false;
         if (!updated) this.callbacks.scheduleMessagesRender();
@@ -112,6 +118,10 @@ class ChatSseControllerView {
       }
       if (data.type === 'plan_state') {
         this.dependencies.chat.applyPlanState?.(data.state);
+        return;
+      }
+      if (data.type === 'evidence_state') {
+        this.dependencies.chat.applyEvidenceState?.(data.state);
         return;
       }
       if (data.type === 'queue_update') {
@@ -216,6 +226,7 @@ class ChatSseControllerView {
     if (Array.isArray(data.blocks)) last.blocks = data.blocks;
     last._rv = (last._rv || 0) + 1;
     this.dependencies.chatState.setBusy(false);
+    this.dependencies.chat.clearEvidenceState?.();
     this.dependencies.chatStream.close();
     const finalized = this.dependencies.chat.finalizeLastMessage?.() || false;
     if (finalized) this.callbacks.markLastMessageRendered();
@@ -267,6 +278,7 @@ class ChatSseControllerView {
       last.streaming = false;
       last._rv = (last._rv || 0) + 1;
       this.dependencies.chatState.setBusy(false);
+      this.dependencies.chat.clearEvidenceState?.();
       this.dependencies.chatStream.close();
       this.callbacks.renderMessages();
       this.callbacks.refreshComposer();
@@ -285,6 +297,7 @@ class ChatSseControllerView {
       ['retry', 'copy'],
     );
     this.dependencies.chatState.setBusy(false);
+    this.dependencies.chat.clearEvidenceState?.();
     this.dependencies.chatStream.close();
     this.callbacks.refreshComposer();
     this.callbacks.failSend();
@@ -300,6 +313,7 @@ class ChatSseControllerView {
       last._rv = (last._rv || 0) + 1;
     }
     this.dependencies.chatState.setBusy(false);
+    this.dependencies.chat.clearEvidenceState?.();
     this.dependencies.chatStream.close();
     const finalized = last && (this.dependencies.chat.finalizeLastMessage?.() || false);
     if (finalized) this.callbacks.markLastMessageRendered();
@@ -320,6 +334,7 @@ class ChatSseControllerView {
       }
       this.callbacks.setAssistantError(failure.title, failure.message, failure.reason, failure.nextSteps, failure.raw, failure.actions);
       this.dependencies.chatState.setBusy(false);
+      this.dependencies.chat.clearEvidenceState?.();
       this.dependencies.chatStream.close();
       this.callbacks.renderMessages();
       this.callbacks.refreshComposer();
@@ -337,6 +352,7 @@ class ChatSseControllerView {
       reason,
     );
     this.dependencies.chatState.setBusy(false);
+    this.dependencies.chat.clearEvidenceState?.();
     this.dependencies.chatStream.close();
     this.callbacks.renderMessages();
     this.callbacks.refreshComposer();

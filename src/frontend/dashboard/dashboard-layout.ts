@@ -139,7 +139,7 @@ function buildMainArea(): string {
           <div class="fi-divider"></div>
           <div class="fi-actions-bar">
             <button class="fi-abtn fi-model" id="fi-model-btn" title="切换模型"><span id="fi-model-name">claude-sonnet</span> <span class="fi-arrow">▾</span></button>
-            <button class="fi-abtn fi-mode" id="fi-mode-btn" title="切换策略"><span id="fi-mode-name">自动</span> <span class="fi-arrow">▾</span></button>
+            <button class="fi-abtn fi-mode" id="fi-mode-btn" title="切换策略"><span id="fi-mode-name">自动</span><span id="fi-evidence-state" class="fi-evidence-state" hidden aria-hidden="true"></span> <span class="fi-arrow">▾</span></button>
             <button class="fi-abtn fi-file" id="fi-file-btn" title="添加本机文件">${window.S('iplus', 14)}</button>
             <span class="fi-spacer"></span>
             <button id="chat-note-mode" class="fi-abtn fi-note-mode" title="补充处理时机" style="${chatBusy ? '' : 'display:none'}">当前步骤后</button>

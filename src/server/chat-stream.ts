@@ -39,7 +39,10 @@ export function writeChatEvent(state: ChatStreamState, payload: unknown): number
 
 export function writeChatStreamBaseline(state: ChatStreamState, response: ServerResponse): number {
   normalizeState(state);
-  try { response.write(frame(state.eventSeq, { type: "stream_ready" })); } catch { /* Client disconnected during setup. */ }
+  const baseline = state.evidenceContractState?.status === "active"
+    ? { type: "stream_ready", evidenceState: state.evidenceContractState }
+    : { type: "stream_ready" };
+  try { response.write(frame(state.eventSeq, baseline)); } catch { /* Client disconnected during setup. */ }
   return state.eventSeq;
 }
 
