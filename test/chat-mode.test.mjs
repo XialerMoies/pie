@@ -189,7 +189,7 @@ describe("chat mode server-state boundary", () => {
     assert.equal(popup.querySelector('[data-profile="minimal"]').classList.contains("active"), true);
   });
 
-  it("locks an existing conversation profile and offers a new session action", async () => {
+  it("locks an existing conversation profile without adding extra actions", async () => {
     const win = new Window();
     global.window = win;
     global.document = win.document;
@@ -198,11 +198,8 @@ describe("chat mode server-state boundary", () => {
     global.E = (value) => String(value);
     global.toast = () => {};
     win.document.body.innerHTML = '<span id="fi-mode-name"></span>';
-    const created = [];
     global.App = win.App = {
-      Chat: {
-        createSessionWithProfile: async (id) => { created.push(id); return { profile: { id, revision: 1 } }; },
-      },
+      Chat: {},
       ChatState: { getMessages: () => [{ role: "user", content: "已有消息" }] },
       Permissions: { getMode: () => "standard", refreshMode: async () => "standard", setMode() {} },
       Preferences: { get: (_key, fallback = "") => fallback, set() {} },
@@ -218,10 +215,8 @@ describe("chat mode server-state boundary", () => {
     win.App.Chat.showModePopup(button);
     const popup = win.document.getElementById("mode-popup");
     assert.equal(popup.querySelector('[data-profile="minimal"]').disabled, true);
-    assert.match(popup.querySelector('.profile-lock-note').textContent, /锁定/);
-    popup.querySelector('[data-profile-new="minimal"]').click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.deepEqual(created, ["minimal"]);
+    assert.equal(popup.querySelector('.profile-lock-note'), null);
+    assert.equal(popup.querySelector('[data-profile-new="minimal"]'), null);
   });
 
   it("uses the host plan-state API instead of permissionMode or a prompt-only flag", async () => {
@@ -293,7 +288,7 @@ describe("chat mode server-state boundary", () => {
     assert.equal(win.document.getElementById("fi-evidence-state").textContent, "核验中");
     const button = win.document.getElementById("fi-mode-btn");
     win.App.Chat.showModePopup(button);
-    assert.equal(win.document.querySelector("[data-evidence-state]").textContent, "本轮事实核验 · 进行中");
+    assert.equal(win.document.querySelector("#mode-popup [data-evidence-state]"), null);
     win.App.Chat.clearEvidenceState();
     assert.equal(win.document.getElementById("fi-evidence-state").hidden, true);
     assert.equal(win.App.Chat.getProfile(), "minimal");

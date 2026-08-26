@@ -9,7 +9,6 @@ interface DashboardChatApi extends AppChat {
   showModePopup?: (button: HTMLElement) => void;
   permissionFailureToChatError?: (failure: PermissionFailurePayload) => ChatErrorState;
   ensureSessionForProfile?: (profileId: string) => Promise<{ profile?: unknown } | null>;
-  createSessionWithProfile?: (profileId: string) => Promise<{ profile?: unknown } | null>;
 }
 
 interface DashboardChatDependencies {
@@ -333,24 +332,6 @@ async function ensureSessionForProfile(profileId: string): Promise<{ profile?: u
     throw new Error(typeof data?.error === 'string' ? data.error : `创建会话失败 (HTTP ${response.status})`);
   }
   chatBindCreatedSession(data.id, activeTabId);
-  return { profile: data.profile };
-}
-
-async function createSessionWithProfile(profileId: string): Promise<{ profile?: unknown } | null> {
-  await dashboardChatDependencies.getSessionRestore().whenReady();
-  const response = await fetch('/api/sessions/new', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspace: dashboardChatState.getWorkspacePath(), profileId }),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || typeof data?.id !== 'string' || !data.id) {
-    throw new Error(typeof data?.error === 'string' ? data.error : `创建会话失败 (HTTP ${response.status})`);
-  }
-  chatBindCreatedSession(data.id);
-  dashboardChatRuntimeState.clearMessages();
-  dashboardChatChat.resetMsgKeys();
-  dashboardChatTimeline?.sync();
   return { profile: data.profile };
 }
 
@@ -705,7 +686,6 @@ window.showModelPicker = showModelPicker;
   dashboardChatPublicApi.copyLastError = copyLastError;
   dashboardChatPublicApi.reconnect = reconnectChatStream;
   dashboardChatPublicApi.ensureSessionForProfile = ensureSessionForProfile;
-  dashboardChatPublicApi.createSessionWithProfile = createSessionWithProfile;
   dashboardChatPublicApi.permissionFailureToChatError = dashboardChatViews.permissionFailureToChatError;
   dashboardChatPublicApi.refreshWorkspaceState = refreshWorkspaceState;
   dashboardChatPublicApi.resetMsgKeys = resetMsgKeys;

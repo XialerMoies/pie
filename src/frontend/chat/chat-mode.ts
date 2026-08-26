@@ -146,14 +146,7 @@ async function setProfile(profileId: string, popup?: HTMLElement): Promise<void>
   try {
     const hasMessages = Boolean(chatModeApp.ChatState?.getMessages?.()?.length);
     if (hasMessages) {
-      const created = await (chatModeApp.Chat as { createSessionWithProfile?: (id: string) => Promise<{ profile?: unknown } | null> })
-        .createSessionWithProfile?.(profileId);
-      if (!created) throw new Error('当前会话已锁定，请新建会话后切换能力');
-      applyProfileState({ profile: created.profile });
-      updateProfilePopupSelection(popup);
-      popup?.remove();
-      toast(`已新建${profileLabel(_profileId)}能力会话`, 'info');
-      return;
+      throw new Error('当前会话已锁定，无法切换能力');
     }
     // A draft tab has no server-side session yet. Materialize it with the
     // requested profile before falling back to the profile-switch route;
@@ -453,17 +446,7 @@ function showModePopup(btn: HTMLElement): void {
       html += `<button class="mode-option profile-option${profile.id === _profileId ? ' active' : ''}" type="button" role="option" aria-selected="${profile.id === _profileId}"${disabled ? ' disabled' : ''} data-profile="${E(profile.id)}" title="${E(title)}">${E(profileLabel(profile.id))}</button>`;
     }
   }
-  if (profileLocked && profiles.some((profile) => profile.id !== _profileId && profile.health === 'ready')) {
-    html += '<div class="profile-lock-note">当前会话已有消息，能力模式已锁定</div><div class="mode-segment profile-new-segment">';
-    for (const profile of profiles) {
-      if (profile.id === _profileId || profile.health !== 'ready') continue;
-      html += `<button class="mode-option profile-new-option" type="button" data-profile-new="${E(profile.id)}">以${E(profileLabel(profile.id))}新建</button>`;
-    }
-    html += '</div>';
-  }
   html += '</div>';
-
-  html += `<div class="evidence-state" data-evidence-state data-active="${_evidenceState.status === 'active'}">${_evidenceState.status === 'active' ? '本轮事实核验 · 进行中' : '本轮事实核验 · 未绑定'}</div>`;
 
   popup.innerHTML = html;
   document.body.appendChild(popup);
@@ -491,12 +474,6 @@ function showModePopup(btn: HTMLElement): void {
   popup.querySelectorAll<HTMLElement>('[data-profile]').forEach((option) => {
     option.addEventListener('click', () => {
       const profileId = option.dataset.profile || '';
-      void setProfile(profileId, popup);
-    });
-  });
-  popup.querySelectorAll<HTMLElement>('[data-profile-new]').forEach((option) => {
-    option.addEventListener('click', () => {
-      const profileId = option.dataset.profileNew || '';
       void setProfile(profileId, popup);
     });
   });
