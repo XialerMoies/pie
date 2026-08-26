@@ -133,19 +133,22 @@ describe("Problems Bottom Bar", () => {
       </section>
     `;
 
-    globalThis._initProblemsBar();
     const handle = doc.getElementById("pb-resize-handle");
     assert.ok(handle, "resize handle should exist");
     assert.strictEqual(handle.getAttribute("role"), "separator");
-    doc.getElementById("pb-status-trigger").click();
-    assert.ok(syncCount > 0, "opening the panel should resync token rail");
-
     const panel = doc.getElementById("pb-panel");
     const main = doc.createElement("div");
     main.className = "main";
     main.getBoundingClientRect = () => ({ height: 400 });
     doc.body.appendChild(main);
     panel.getBoundingClientRect = () => ({ height: 100 });
+
+    globalThis._initProblemsBar();
+    assert.strictEqual(handle.getAttribute("aria-valuemin"), "48");
+    assert.strictEqual(handle.getAttribute("aria-valuemax"), "320", "aria max should follow the main area height");
+    doc.getElementById("pb-status-trigger").click();
+    assert.ok(syncCount > 0, "opening the panel should resync token rail");
+
     handle.dispatchEvent(new win.MouseEvent("mousedown", { clientY: 100, bubbles: true }));
     doc.dispatchEvent(new win.MouseEvent("mousemove", { clientY: 40, bubbles: true }));
     assert.strictEqual(panel.style.height, "160px", "dragging upward should increase panel height");

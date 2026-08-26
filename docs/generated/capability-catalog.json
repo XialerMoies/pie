@@ -1188,6 +1188,13 @@
       "category": "compact"
     },
     {
+      "method": "GET",
+      "path": "/api/components",
+      "handler": "handleComponents",
+      "source": "src/server/routes/components.ts",
+      "category": "components"
+    },
+    {
       "method": "DELETE",
       "pathPattern": "/api/custom-providers/:providerId",
       "handler": "handleCustomProviderSettings",

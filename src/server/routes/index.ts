@@ -14,6 +14,7 @@ import { handleTypeScript } from "./typescript.js";
 import { handleUiState } from "./ui-state.js";
 import { handlePermissions } from "./permissions.js";
 import { handleDiagnostics } from "./diagnostics.js";
+import { handleComponents } from "./components.js";
 
 const handlers: RouteHandler[] = [
   handleChat,
@@ -27,6 +28,7 @@ const handlers: RouteHandler[] = [
   handleUiState,
   handlePermissions,
   handleDiagnostics,
+  handleComponents,
 ];
 
 /**

@@ -11,6 +11,26 @@
 import { AgentRuntime, type RuntimeConfig } from "./runtime.js"
 import { PiAgentEngine, type AgentEngine } from "../agent-engine/index.js"
 
+export {
+  CAPABILITY_COMPONENT_SCHEMA_VERSION,
+  CapabilityComponentError,
+  CapabilityComponentManager,
+  REQUIRED_COMPONENT_MANIFESTS,
+  capabilityComponentManager,
+  componentManifestFingerprint,
+} from "./capability-components.js"
+export type {
+  CapabilityComponentHealth,
+  CapabilityComponentKind,
+  CapabilityComponentLifecycleAction,
+  CapabilityComponentLifecycleEvent,
+  CapabilityComponentManifest,
+  CapabilityComponentSource,
+  CapabilityComponentState,
+  CapabilityComponentStatus,
+  RegisterComponentOptions,
+} from "./capability-components.js"
+
 export type { AgentRuntime, RuntimeConfig, AgentEngine }
 
 export interface AgentHost {

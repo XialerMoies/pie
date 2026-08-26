@@ -160,7 +160,7 @@ body{background:var(--bg);height:100vh}
 .s-search:focus{border-color:var(--am)}
 .s-search::placeholder{color:var(--tm)}
 .topbar{grid-area:top;background:var(--bs);border-bottom:0;display:flex;align-items:center;gap:0;padding:0 0 0 12px;-webkit-app-region:drag;user-select:none}
-.main{grid-area:main;display:flex;flex-direction:column;background:var(--bg);overflow:hidden;min-width:0;border:1px solid var(--bd);border-left:1px solid var(--bd);border-radius:4px 0 0 4px}
+.main{grid-area:main;display:flex;flex-direction:column;background:var(--bg);overflow:hidden;min-width:0;border:1px solid var(--bd);border-radius:4px 0 0 4px}
 
 /* ─── Session Tabs（在统一 tb-scroll 内）─────────────────── */
 .tb-scroll::-webkit-scrollbar{height:3px;background:transparent}

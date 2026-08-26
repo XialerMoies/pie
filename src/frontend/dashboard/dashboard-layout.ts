@@ -156,7 +156,7 @@ function buildMainArea(): string {
 
 function buildProblemsPanel(): string {
   return `<section class="pb-panel" id="pb-panel" aria-label="问题" style="display:none">
-    <div class="pb-resize-handle" id="pb-resize-handle" role="separator" aria-orientation="horizontal" aria-valuemin="48" aria-valuemax="600" aria-valuenow="0" tabindex="0" title="调整问题栏高度"></div>
+    <div class="pb-resize-handle" id="pb-resize-handle" role="separator" aria-orientation="horizontal" aria-valuemin="48" aria-valuemax="48" aria-valuenow="48" tabindex="0" title="调整问题栏高度"></div>
     <div class="pb-panel-head"><span>问题</span></div>
     <div class="pb-body" id="pb-body"></div>
   </section>`;
@@ -608,6 +608,16 @@ function _pbMaxHeight(): number {
   return Math.max(PB_MIN_HEIGHT, Math.floor(available * 0.8));
 }
 
+function _pbSyncResizeA11y(): void {
+  const panel = $('pb-panel');
+  const handle = $('pb-resize-handle');
+  if (!handle) return;
+  const current = panel?.getBoundingClientRect().height || PB_MIN_HEIGHT;
+  handle.setAttribute('aria-valuemin', String(PB_MIN_HEIGHT));
+  handle.setAttribute('aria-valuemax', String(_pbMaxHeight()));
+  handle.setAttribute('aria-valuenow', String(Math.round(current)));
+}
+
 function _pbSetHeight(height: number): void {
   const panel = $('pb-panel');
   const handle = $('pb-resize-handle');
@@ -615,6 +625,7 @@ function _pbSetHeight(height: number): void {
   const clamped = Math.max(PB_MIN_HEIGHT, Math.min(Math.round(height), _pbMaxHeight()));
   panel.style.height = `${clamped}px`;
   panel.style.maxHeight = 'none';
+  _pbSyncResizeA11y();
   handle?.setAttribute('aria-valuenow', String(clamped));
   (window as any).syncTokenRailPosition?.();
 }
@@ -624,6 +635,7 @@ function _pbInitResize(): void {
   const panel = $('pb-panel');
   if (!handle || !panel || handle.dataset.bound === '1') return;
   handle.dataset.bound = '1';
+  _pbSyncResizeA11y();
 
   handle.addEventListener('mousedown', (event: MouseEvent) => {
     event.preventDefault();

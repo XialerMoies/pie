@@ -230,7 +230,8 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     assert.match(css, /\.sbar\{[^}]*border-right:0/);
     assert.match(css, /\.status-problems\{[^}]*border-right:0/);
     assert.match(css, /\.tb-more\{[^}]*border-left:0/);
-    assert.match(css, /\.main\{[^}]*border-left:1px solid var\(--bd\)/);
+    assert.match(css, /\.main\{[^}]*border:1px solid var\(--bd\)/);
+    assert.doesNotMatch(css, /\.main\{[^}]*border-left:1px solid var\(--bd\)/);
     assert.match(css, /\.tb-item\{[^}]*border-right:1px solid var\(--bd\)/);
   });
 
@@ -244,7 +245,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
     assert.match(css, /\.topbar\{[^}]*border-bottom:0/);
     assert.match(css, /\.statusbar\{[^}]*border-top:0/);
-    assert.match(css, /\.main\{[^}]*border:1px solid var\(--bd\)[^}]*border-left:1px solid var\(--bd\)/);
+    assert.match(css, /\.main\{[^}]*border:1px solid var\(--bd\)/);
   });
 
   it("功能栏与主区相连的分隔线端点使用圆角", () => {
