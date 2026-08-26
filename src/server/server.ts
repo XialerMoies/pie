@@ -71,6 +71,7 @@ import { SkillService } from "../agent/skills/skill-service.js";
 import { toolRegistry } from "../agent/tools/index.js";
 import { assertProfileCatalogsReady } from "../agent/profile-catalog.js";
 import { setLocalApiToken } from "../agent/tools/local-api.js";
+import { capabilityComponentManager } from "../agent/capability-components.js";
 
 import { attachEngineEvents, recordUserNoteBlock } from "./agent-event-router.js";
 export { attachEngineEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTaskLifecycle, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
@@ -163,6 +164,7 @@ async function main() {
   ]) {
     mkdirSync(directory, { recursive: true });
   }
+  await capabilityComponentManager.restore(join(PI_CONFIG_DIR, "component-state.json"));
   try {
     writeFileSync(STARTUP.layout.authFile, JSON.stringify({}, null, 2), { encoding: "utf8", flag: "wx" });
   } catch (error: any) {

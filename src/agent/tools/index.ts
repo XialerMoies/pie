@@ -32,6 +32,7 @@ import { enterPlanModeTool, exitPlanModeTool } from "./plan-mode.js"
 import { resolveAgentProfile, type AgentProfile } from "../agent-profile.js"
 import { presentNativeTool, resolveToolPresentation } from "../tool-presentation.js"
 import { buildProfileToolPool, profileAllowsFeature, ToolPool } from "../tool-pool.js"
+import { capabilityComponentManager } from "../capability-components.js"
 
 /** 全局 Tool 注册表 */
 export const toolRegistry = new ToolRegistry()
@@ -75,7 +76,7 @@ export function registerTool(
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */
 export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard")) {
   const pool = new ToolPool().addNative(toolRegistry.getAll())
-  const tools = pool.project({ audience: "main", names: profile.toolNames, featureGates: profile.featureGates })
+  const tools = pool.project({ audience: "main", names: profile.toolNames, featureGates: profile.featureGates, componentManager: capabilityComponentManager })
   return resolveToolPresentation(profile.presentation).present(tools, { workspace, emitTrace, extraCtx }) as any
 }
 
@@ -86,9 +87,9 @@ function presentProfileTools(tools: readonly AgentTool[], workspace?: string, em
 function assembleProfileTools(profile: AgentProfile, mcpTools: readonly AgentTool[] = []): AgentTool[] {
   const pool = buildProfileToolPool(profile, toolRegistry.getAll(), mcpTools)
   const nativeNames = profile.toolNames === "*" ? "*" : profile.toolNames
-  const native = pool.project({ audience: "main", names: nativeNames, featureGates: profile.featureGates })
+  const native = pool.project({ audience: "main", names: nativeNames, featureGates: profile.featureGates, componentManager: capabilityComponentManager })
   const nativeSet = new Set(native.map((tool) => tool.name))
-  const dynamic = pool.project({ audience: "main", featureGates: profile.featureGates, requireAllRequested: false })
+  const dynamic = pool.project({ audience: "main", featureGates: profile.featureGates, requireAllRequested: false, componentManager: capabilityComponentManager })
     .filter((tool) => !nativeSet.has(tool.name))
   return [...native, ...dynamic]
 }

@@ -20,15 +20,18 @@ export {
   componentManifestFingerprint,
 } from "./capability-components.js"
 export type {
+  CapabilityComponentDependency,
   CapabilityComponentHealth,
   CapabilityComponentKind,
   CapabilityComponentLifecycleAction,
   CapabilityComponentLifecycleEvent,
+  CapabilityComponentLifecycleResult,
   CapabilityComponentManifest,
   CapabilityComponentSource,
   CapabilityComponentState,
   CapabilityComponentStatus,
   RegisterComponentOptions,
+  SyncComponentOptions,
 } from "./capability-components.js"
 
 export type { AgentRuntime, RuntimeConfig, AgentEngine }

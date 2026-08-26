@@ -1,6 +1,7 @@
 import { canonicalToolName } from "./tool-identity.js"
 import type { AgentFeatureId, AgentProfile } from "./agent-profile.js"
 import type { AgentTool } from "./types.js"
+import type { CapabilityComponentManager } from "./capability-components.js"
 
 export type AgentToolAudience = "main" | "coordinator" | "subagent"
 export type ToolPoolSource = "native" | "mcp"
@@ -41,6 +42,7 @@ export interface ToolPoolEntry {
   source: ToolPoolSource
   feature?: AgentFeatureId
   audiences: readonly AgentToolAudience[]
+  componentId?: string
 }
 
 export interface ToolPoolProjection {
@@ -48,6 +50,7 @@ export interface ToolPoolProjection {
   names?: "*" | readonly string[]
   featureGates?: "*" | readonly AgentFeatureId[]
   requireAllRequested?: boolean
+  componentManager?: CapabilityComponentManager
 }
 
 function nativeAudiences(name: string): AgentToolAudience[] {
@@ -75,11 +78,14 @@ export class ToolPool {
   }
 
   addMcp(tools: readonly AgentTool[]): this {
-    for (const tool of tools) this.#add(tool, "mcp", "mcp", ["main"])
+    for (const tool of tools) {
+      const match = /^mcp__(.+?)__.+$/u.exec(canonicalToolName(tool.name))
+      this.#add(tool, "mcp", "mcp", ["main"], match ? `mcp-server.${match[1]}` : undefined)
+    }
     return this
   }
 
-  #add(tool: AgentTool, source: ToolPoolSource, feature: AgentFeatureId | undefined, audiences: readonly AgentToolAudience[]): void {
+  #add(tool: AgentTool, source: ToolPoolSource, feature: AgentFeatureId | undefined, audiences: readonly AgentToolAudience[], componentId?: string): void {
     const name = canonicalToolName(tool.name)
     if (!name) throw new Error("Tool pool cannot add an unnamed tool")
     if (this.#entries.has(name)) throw new Error(`Tool pool duplicate identity: ${name}`)
@@ -88,6 +94,7 @@ export class ToolPool {
       source,
       ...(feature ? { feature } : {}),
       audiences: Object.freeze([...audiences]),
+      ...(componentId ? { componentId } : {}),
     })
   }
 
@@ -107,6 +114,10 @@ export class ToolPool {
       if (!entry.audiences.includes(request.audience)) return false
       if (entry.feature && enabled && !enabled.has(entry.feature)) return false
       if (entry.tool.isEnabled && !entry.tool.isEnabled()) return false
+      if (request.componentManager && entry.componentId) {
+        const component = request.componentManager.get(entry.componentId)
+        if (component && component.status !== "active") return false
+      }
       return true
     })
 
@@ -123,6 +134,7 @@ export function buildProfileToolPool(
   profile: AgentProfile,
   nativeTools: readonly AgentTool[],
   mcpTools: readonly AgentTool[] = [],
+  componentManager?: CapabilityComponentManager,
 ): ToolPool {
   const pool = new ToolPool().addNative(nativeTools)
   if (mcpTools.length > 0) {
@@ -133,4 +145,3 @@ export function buildProfileToolPool(
   }
   return pool
 }
-

@@ -11,6 +11,7 @@ import { resolveToolPresentation, type ToolPresentationMode } from "./tool-prese
 import { profileAllowsFeature, ToolPool, type AgentToolAudience, type ToolPoolEntry, type ToolPoolSource } from "./tool-pool.js"
 import { toolRegistry } from "./tools/index.js"
 import type { AgentTool, ToolOperation } from "./types.js"
+import type { CapabilityComponentManager } from "./capability-components.js"
 
 export interface ProfileToolCatalogEntry {
   name: string
@@ -56,6 +57,7 @@ export interface ProfileCatalog {
 export interface ProfileCatalogOptions {
   registry?: typeof toolRegistry
   promptSections?: readonly PromptSection[]
+  componentManager?: CapabilityComponentManager
 }
 
 function stableValue(value: unknown): unknown {
@@ -159,7 +161,7 @@ export function buildProfileCatalog(
   const requestedNames = profile.toolNames === "*"
     ? "*"
     : profile.toolNames.map((name) => registry.resolveName(name) || name)
-  const hostTools = pool.project({ audience: "main", names: requestedNames, featureGates: profile.featureGates })
+  const hostTools = pool.project({ audience: "main", names: requestedNames, featureGates: profile.featureGates, componentManager: options.componentManager })
   if (profile.toolNames !== "*") {
     const declaredNames = profile.toolNames.map((name) => registry.resolveName(name))
     if (declaredNames.some((name): name is undefined => !name)) {
