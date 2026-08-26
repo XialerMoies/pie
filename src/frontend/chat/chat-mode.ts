@@ -144,6 +144,18 @@ async function setProfile(profileId: string, popup?: HTMLElement): Promise<void>
     : undefined;
   if (option) option.setAttribute('aria-busy', 'true');
   try {
+    // A draft tab has no server-side session yet. Materialize it with the
+    // requested profile before falling back to the profile-switch route;
+    // otherwise the route would target whatever older runtime session happens
+    // to be active and reject the request as non-empty.
+    const created = await (chatModeApp.Chat as { ensureSessionForProfile?: (id: string) => Promise<{ profile?: unknown } | null> })
+      .ensureSessionForProfile?.(profileId);
+    if (created) {
+      applyProfileState({ profile: created.profile });
+      popup?.remove();
+      toast(`已切换 Agent 能力：${profileLabel(_profileId)}`, 'info');
+      return;
+    }
     const response = await fetch('/api/sessions/profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -352,6 +364,18 @@ function updateModeButton(): void {
   }
 }
 
+function handlePermissionModeChanged(): void {
+  updateModeButton();
+  const popup = document.getElementById('mode-popup');
+  const mode = permissions?.getMode?.();
+  if (!popup || !mode) return;
+  popup.querySelectorAll<HTMLElement>('[data-permission-mode]').forEach((option) => {
+    option.classList.toggle('active', option.dataset.permissionMode === mode);
+  });
+}
+
+window.addEventListener('permission-mode-changed', handlePermissionModeChanged);
+
 let permissionModeSynced = false;
 
 /** 从服务端同步权限模式一次；成功后刷新策略按钮，可选的弹窗在其中一并更新 active 状态 */
@@ -416,7 +440,7 @@ function showModePopup(btn: HTMLElement): void {
     el.addEventListener('click', () => {
       const mode = (el as HTMLElement).dataset.mode || 'auto';
       void setMode(mode);
-      popup.querySelectorAll('.mode-option').forEach(b => {
+      popup.querySelectorAll('.mode-option[data-mode]').forEach(b => {
         b.classList.toggle('active', (b as HTMLElement).dataset.mode === mode);
       });
     });
@@ -426,7 +450,10 @@ function showModePopup(btn: HTMLElement): void {
     option.addEventListener('click', () => {
       const mode = option.dataset.permissionMode as 'plan' | 'standard' | 'dontAsk' | 'yes';
       permissions?.setMode?.(mode);
-      popup.remove();
+      popup.querySelectorAll<HTMLElement>('[data-permission-mode]').forEach((candidate) => {
+        candidate.classList.toggle('active', candidate === option);
+      });
+      updateModeButton();
     });
   });
   popup.querySelectorAll<HTMLElement>('[data-profile]').forEach((option) => {

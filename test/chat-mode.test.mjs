@@ -84,6 +84,108 @@ describe("chat mode server-state boundary", () => {
     assert.equal(notices.at(-1)?.type, "error");
   });
 
+  it("keeps permission and profile highlights when changing conversation mode", async () => {
+    const win = new Window();
+    global.window = win;
+    global.document = win.document;
+    global.self = win;
+    global.$ = (id) => win.document.getElementById(id);
+    global.E = (value) => String(value);
+    global.toast = () => {};
+    win.document.body.innerHTML = '<span id="fi-mode-name"></span>';
+    global.App = win.App = {
+      Chat: {},
+      Permissions: { getMode: () => "dontAsk", refreshMode: async () => "dontAsk", setMode() {} },
+      Preferences: { get: (_key, fallback = "") => fallback, set() {} },
+    };
+    global.fetch = async (url) => ({
+      ok: true,
+      json: async () => url === "/api/profiles"
+        ? { current: { id: "minimal" }, catalogs: [
+          { id: "standard", health: "ready" }, { id: "minimal", health: "ready" },
+        ] }
+        : { supportsThinking: false },
+    });
+    await import(`../src/frontend/chat/chat-mode.ts?highlights-${Date.now()}-${Math.random()}`);
+    win.App.Chat.loadModeState();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const button = win.document.createElement("button");
+    win.document.body.appendChild(button);
+    win.App.Chat.showModePopup(button);
+    const popup = win.document.getElementById("mode-popup");
+    popup.querySelector('[data-mode="plan"]').click();
+    assert.equal(popup.querySelector('[data-permission-mode="dontAsk"]').classList.contains("active"), true);
+    assert.equal(popup.querySelector('[data-profile="minimal"]').classList.contains("active"), true);
+  });
+
+  it("keeps the strategy popup open and highlights the selected permission mode", async () => {
+    const win = new Window();
+    global.window = win;
+    global.document = win.document;
+    global.self = win;
+    global.$ = (id) => win.document.getElementById(id);
+    global.E = (value) => String(value);
+    global.toast = () => {};
+    win.document.body.innerHTML = '<span id="fi-mode-name"></span>';
+    let selectedPermissionMode = "standard";
+    global.App = win.App = {
+      Chat: {},
+      Permissions: {
+        getMode: () => selectedPermissionMode,
+        refreshMode: async () => selectedPermissionMode,
+        setMode: (mode) => { selectedPermissionMode = mode; },
+      },
+      Preferences: { get: (_key, fallback = "") => fallback, set() {} },
+    };
+    global.fetch = async () => ({ ok: true, json: async () => ({ supportsThinking: false, current: { id: "standard" }, catalogs: [
+      { id: "standard", health: "ready" }, { id: "minimal", health: "ready" },
+    ] }) });
+    await import(`../src/frontend/chat/chat-mode.ts?permission-popup-${Date.now()}-${Math.random()}`);
+    win.App.Chat.loadModeState();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const button = win.document.createElement("button");
+    win.document.body.appendChild(button);
+    win.App.Chat.showModePopup(button);
+    const popup = win.document.getElementById("mode-popup");
+    popup.querySelector('[data-permission-mode="dontAsk"]').click();
+    assert.equal(win.document.getElementById("mode-popup"), popup);
+    assert.equal(popup.querySelector('[data-permission-mode="dontAsk"]').classList.contains("active"), true);
+    assert.equal(popup.querySelector('[data-mode="auto"]').classList.contains("active"), true);
+  });
+
+  it("uses the draft-session materializer for capability switching", async () => {
+    const win = new Window();
+    global.window = win;
+    global.document = win.document;
+    global.self = win;
+    global.$ = (id) => win.document.getElementById(id);
+    global.E = (value) => String(value);
+    global.toast = () => {};
+    win.document.body.innerHTML = '<span id="fi-mode-name"></span>';
+    const requests = [];
+    global.App = win.App = {
+      Chat: { ensureSessionForProfile: async () => ({ profile: { id: "minimal", revision: 1 } }) },
+      Permissions: { getMode: () => "standard", refreshMode: async () => "standard", setMode() {} },
+      Preferences: { get: (_key, fallback = "") => fallback, set() {} },
+    };
+    global.fetch = async (url, options = {}) => {
+      requests.push({ url, options });
+      return { ok: true, json: async () => url === "/api/profiles"
+        ? { current: { id: "standard" }, catalogs: [{ id: "standard", health: "ready" }, { id: "minimal", health: "ready" }] }
+        : { supportsThinking: false } };
+    };
+    await import(`../src/frontend/chat/chat-mode.ts?draft-profile-${Date.now()}-${Math.random()}`);
+    win.App.Chat.loadModeState();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const button = win.document.createElement("button");
+    win.document.body.appendChild(button);
+    win.App.Chat.showModePopup(button);
+    win.document.querySelector('[data-profile="minimal"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(win.App.Chat.getProfile(), "minimal");
+    assert.equal(requests.some(({ url }) => url === "/api/sessions/profile"), false);
+  });
+
   it("uses the host plan-state API instead of permissionMode or a prompt-only flag", async () => {
     const win = new Window();
     global.window = win;

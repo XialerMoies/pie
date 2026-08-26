@@ -253,6 +253,7 @@ async function performPermissionMode(
     if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot, allowUnmounted)) return;
     resetPermissionModeControls();
     syncPermissionsPanel();
+    publishPermissionModeChanged();
     return;
   }
   if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot, allowUnmounted)) return;
@@ -268,13 +269,21 @@ async function performPermissionMode(
     _permissionMode = mode;
     updatePermissionModeBadge();
     syncPermissionsPanel();
+    publishPermissionModeChanged();
     toast(`已切换为${mode === "yes" ? " Yes" : ""}权限模式`, "success");
   } catch (error) {
     if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot, allowUnmounted)) return;
     resetPermissionModeControls();
     syncPermissionsPanel();
+    publishPermissionModeChanged();
     toast(`权限模式切换失败: ${(error as Error).message}`, "error");
   }
+}
+
+function publishPermissionModeChanged(): void {
+  try {
+    window.dispatchEvent(new CustomEvent("permission-mode-changed", { detail: { mode: _permissionMode } }));
+  } catch {}
 }
 
 function isCurrentMountedRoot(requestMountedGeneration: number, requestRoot: HTMLElement | null): boolean {

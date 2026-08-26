@@ -21,6 +21,7 @@ interface AppChat {
   applyEvidenceState?(state: unknown): void;
   clearEvidenceState?(): void;
   syncProfiles?(): Promise<void>;
+  ensureSessionForProfile?(profileId: string): Promise<{ profile?: unknown } | null>;
   getProfile?(): string;
   refreshModeButton(): void;
   addAttachment(att: Omit<ChatAttachment, 'id'>): void;
