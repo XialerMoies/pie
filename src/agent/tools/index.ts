@@ -30,12 +30,15 @@ import { delegateTasksTool } from "./delegate-tasks.js"
 import { skillFactsTool } from "./skill-facts.js"
 import { enterPlanModeTool, exitPlanModeTool } from "./plan-mode.js"
 import { resolveAgentProfile, type AgentProfile } from "../agent-profile.js"
-import { presentNativeTool, resolveToolPresentation } from "../tool-presentation.js"
+import { nativeToolPresentation, presentNativeTool, presentSessionTools } from "../tool-presentation.js"
 import { buildProfileToolPool, profileAllowsFeature, ToolPool } from "../tool-pool.js"
 import { capabilityComponentManager } from "../capability-components.js"
+import type { RequiredComponentLease } from "../capability-component-replacement.js"
 
 /** 全局 Tool 注册表 */
 export const toolRegistry = new ToolRegistry()
+
+capabilityComponentManager.bindRequiredProvider("tool-presentation", nativeToolPresentation)
 
 
 
@@ -74,14 +77,14 @@ export function registerTool(
 }
 
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */
-export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard")) {
+export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard"), componentLease?: RequiredComponentLease) {
   const pool = new ToolPool().addNative(toolRegistry.getAll())
   const tools = pool.project({ audience: "main", names: profile.toolNames, featureGates: profile.featureGates, componentManager: capabilityComponentManager })
-  return resolveToolPresentation(profile.presentation).present(tools, { workspace, emitTrace, extraCtx }) as any
+  return presentSessionTools(tools, { workspace, emitTrace, extraCtx }, profile.presentation, componentLease) as any
 }
 
-function presentProfileTools(tools: readonly AgentTool[], workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard")) {
-  return resolveToolPresentation(profile.presentation).present(tools, { workspace, emitTrace, extraCtx }) as any
+function presentProfileTools(tools: readonly AgentTool[], workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard"), componentLease?: RequiredComponentLease) {
+  return presentSessionTools(tools, { workspace, emitTrace, extraCtx }, profile.presentation, componentLease) as any
 }
 
 function assembleProfileTools(profile: AgentProfile, mcpTools: readonly AgentTool[] = []): AgentTool[] {
@@ -247,9 +250,10 @@ export async function getCustomToolsAsync(
   emitTrace?: ToolTraceEmitter,
   extraCtx?: ToolExecutionExtraContext,
   profile: AgentProfile = resolveAgentProfile("standard"),
+  componentLease?: RequiredComponentLease,
 ): Promise<ReturnType<typeof toolRegistry.toPITools>> {
   // 1. 内置自定义工具
-  const builtin = getCustomTools(workspace, emitTrace, extraCtx, profile)
+  const builtin = getCustomTools(workspace, emitTrace, extraCtx, profile, componentLease)
 
   // Profile capability projection is independent from PermissionMode. A
   // profile that does not expose MCP must not trigger discovery either.
@@ -258,7 +262,7 @@ export async function getCustomToolsAsync(
   // 2. MCP 工具：缓存命中或 workspace 未变直接使用
   const ws = workspace ?? ""
   if (_mcpCacheInitialized && _mcpWorkspace === ws) {
-    return presentProfileTools(assembleProfileTools(profile, _mcpCache), workspace, emitTrace, extraCtx, profile)
+    return presentProfileTools(assembleProfileTools(profile, _mcpCache), workspace, emitTrace, extraCtx, profile, componentLease)
   }
 
   if (_mcpWorkspace !== ws) {
@@ -268,7 +272,7 @@ export async function getCustomToolsAsync(
   }
 
   // incomplete cache 中的健康 raw tools 仍按当前 session 上下文重新包装并提供。
-  const available = presentProfileTools(assembleProfileTools(profile, _mcpCache), workspace, emitTrace, extraCtx, profile)
+  const available = presentProfileTools(assembleProfileTools(profile, _mcpCache), workspace, emitTrace, extraCtx, profile, componentLease)
 
   const current = _mcpInFlight
   if (current && current.workspace === ws && current.epoch === _mcpRequestEpoch) return available

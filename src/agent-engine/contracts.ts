@@ -89,6 +89,7 @@ export interface EngineSessionSnapshot {
   messagesCount?: number;
   tools?: string[];
   profile?: { id: string; revision: number };
+  components?: { generation: number; providers: Record<string, string> };
   planState?: PlanStateSnapshot;
   profileLifecycle?: {
     requested: { id: string; revision: number; generation: number };

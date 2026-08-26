@@ -13,11 +13,14 @@ import { PiAgentEngine, type AgentEngine } from "../agent-engine/index.js"
 
 export {
   CAPABILITY_COMPONENT_SCHEMA_VERSION,
+  CAPABILITY_COMPONENT_SESSION_CUSTOM_TYPE,
   CapabilityComponentError,
   CapabilityComponentManager,
   REQUIRED_COMPONENT_MANIFESTS,
   capabilityComponentManager,
   componentManifestFingerprint,
+  persistCapabilityComponentGeneration,
+  readCapabilityComponentGeneration,
 } from "./capability-components.js"
 export type {
   CapabilityComponentDependency,
@@ -31,8 +34,23 @@ export type {
   CapabilityComponentState,
   CapabilityComponentStatus,
   RegisterComponentOptions,
+  RequiredComponentContract,
   SyncComponentOptions,
 } from "./capability-components.js"
+export {
+  HIGH_RISK_REPLACEMENT_GROUPS,
+  failedReplacementChecks,
+} from "./capability-component-replacement.js"
+export type {
+  RequiredComponentGenerationRef,
+  RequiredComponentLease,
+  RequiredComponentProviderBinding,
+  RequiredReplacementCheck,
+  RequiredReplacementContext,
+  RequiredReplacementOptions,
+  RequiredReplacementPreflightReport,
+  RequiredReplacementResult,
+} from "./capability-component-replacement.js"
 
 export type { AgentRuntime, RuntimeConfig, AgentEngine }
 

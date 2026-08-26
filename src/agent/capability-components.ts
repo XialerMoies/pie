@@ -1,7 +1,18 @@
 import { createHash } from "node:crypto"
 import { readLockedJson, updateLockedJson } from "../data/locked-json-store.js"
+import {
+  failedReplacementChecks,
+  HIGH_RISK_REPLACEMENT_GROUPS,
+  type RequiredComponentGenerationRef,
+  type RequiredComponentLease,
+  type RequiredComponentProviderBinding,
+  type RequiredReplacementContext,
+  type RequiredReplacementOptions,
+  type RequiredReplacementResult,
+} from "./capability-component-replacement.js"
 
 export const CAPABILITY_COMPONENT_SCHEMA_VERSION = 1 as const
+export const CAPABILITY_COMPONENT_SESSION_CUSTOM_TYPE = "my-code-agent.capability-components"
 
 export type CapabilityComponentKind = "required" | "optional"
 export type CapabilityComponentSource = "builtin" | "workspace" | "user" | "mcp"
@@ -18,6 +29,12 @@ export interface CapabilityComponentDependency {
   capability?: string
 }
 
+export interface RequiredComponentContract {
+  version: string
+  permissionBoundary: "host" | "sandboxed"
+  resourceProfile: string
+}
+
 export interface CapabilityComponentManifest {
   schemaVersion?: typeof CAPABILITY_COMPONENT_SCHEMA_VERSION
   id: string
@@ -25,6 +42,7 @@ export interface CapabilityComponentManifest {
   kind: CapabilityComponentKind
   capability: string
   replacementGroup?: string
+  requiredContract?: RequiredComponentContract
   dependencies?: readonly (string | CapabilityComponentDependency)[]
   /** Parent component for host-managed child components. */
   parentId?: string
@@ -51,6 +69,10 @@ export type CapabilityComponentLifecycleAction =
   | "disabled"
   | "health_changed"
   | "uninstalled"
+  | "replacement_preflight"
+  | "replacement_committed"
+  | "replacement_rolled_back"
+  | "disposed"
   | "rejected"
 
 export interface CapabilityComponentLifecycleEvent {
@@ -84,6 +106,9 @@ export interface SyncComponentOptions {
 
 export interface CapabilityComponentStateDocument {
   schemaVersion: typeof CAPABILITY_COMPONENT_SCHEMA_VERSION
+  generation?: number
+  requiredProviders?: Record<string, string>
+  rollbackProviders?: Record<string, string>
   components: Array<{ manifest: CapabilityComponentManifest; trusted: boolean; enabled: boolean; health: CapabilityComponentHealth }>
 }
 
@@ -116,6 +141,7 @@ function stableManifest(manifest: CapabilityComponentManifest): CapabilityCompon
     kind: manifest.kind,
     capability: manifest.capability,
     ...(manifest.replacementGroup ? { replacementGroup: manifest.replacementGroup } : {}),
+    ...(manifest.kind === "required" ? { requiredContract: { ...(manifest.requiredContract || { version: "1", permissionBoundary: "host", resourceProfile: "default" }) } } : {}),
     ...(dependencies.length ? { dependencies } : {}),
     ...(manifest.parentId ? { parentId: manifest.parentId } : {}),
     ...(manifest.providedBy ? { providedBy: manifest.providedBy } : {}),
@@ -153,6 +179,13 @@ function validateManifest(input: CapabilityComponentManifest): Readonly<Capabili
   if (!String(input.capability || "").trim()) throw new CapabilityComponentError("invalid_manifest", `Component ${id} must declare a capability`, id)
   if (input.kind === "required" && !String(input.replacementGroup || "").trim()) {
     throw new CapabilityComponentError("invalid_manifest", `Required component ${id} must declare replacementGroup`, id)
+  }
+  if (input.kind === "required" && input.requiredContract) {
+    if (!String(input.requiredContract.version || "").trim()
+      || !["host", "sandboxed"].includes(input.requiredContract.permissionBoundary)
+      || !String(input.requiredContract.resourceProfile || "").trim()) {
+      throw new CapabilityComponentError("invalid_manifest", `Required component ${id} has an invalid host contract`, id)
+    }
   }
   const dependencies = normalizeDependencies(input.dependencies)
   if (dependencies.some((dependency) => !/^[a-z0-9][a-z0-9._-]*$/u.test(String(dependency.id)))) {
@@ -216,6 +249,52 @@ function statusFor(state: Pick<CapabilityComponentState, "trusted" | "enabled" |
   return "active"
 }
 
+async function runBoundedStage<T>(label: string, timeoutMs: number, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const boundedTimeout = Number.isFinite(timeoutMs) ? Math.max(1, Math.min(300_000, Math.floor(timeoutMs))) : 30_000
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      operation(controller.signal),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort(new Error(`${label} timed out`))
+          reject(new Error(`${label} timed out after ${boundedTimeout}ms`))
+        }, boundedTimeout)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+type ComponentSessionEntryLike = { type?: unknown; customType?: unknown; data?: unknown }
+type ComponentSessionManagerLike = { appendCustomEntry(customType: string, data?: unknown): unknown }
+
+function cloneRequiredRef(ref: RequiredComponentGenerationRef): RequiredComponentGenerationRef {
+  return Object.freeze({ generation: ref.generation, providers: Object.freeze({ ...ref.providers }) })
+}
+
+export function readCapabilityComponentGeneration(entries: readonly ComponentSessionEntryLike[]): RequiredComponentGenerationRef | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]
+    if (entry?.type !== "custom" || entry.customType !== CAPABILITY_COMPONENT_SESSION_CUSTOM_TYPE || !entry.data || typeof entry.data !== "object") continue
+    const data = entry.data as { generation?: unknown; providers?: unknown }
+    if (!Number.isSafeInteger(data.generation) || Number(data.generation) < 0 || !data.providers || typeof data.providers !== "object" || Array.isArray(data.providers)) continue
+    const providers: Record<string, string> = {}
+    for (const [group, id] of Object.entries(data.providers as Record<string, unknown>)) {
+      if (/^[a-z0-9][a-z0-9._-]*$/u.test(group) && typeof id === "string" && /^[a-z0-9][a-z0-9._-]*$/u.test(id)) providers[group] = id
+    }
+    if (Object.keys(providers).length !== Object.keys(data.providers as Record<string, unknown>).length) continue
+    return cloneRequiredRef({ generation: Number(data.generation), providers })
+  }
+  return undefined
+}
+
+export function persistCapabilityComponentGeneration(manager: ComponentSessionManagerLike, ref: RequiredComponentGenerationRef): void {
+  manager.appendCustomEntry(CAPABILITY_COMPONENT_SESSION_CUSTOM_TYPE, cloneRequiredRef(ref))
+}
+
 /**
  * Small in-process component registry. It is deliberately not a plugin
  * loader: registration is declarative, and execution remains owned by the
@@ -224,7 +303,13 @@ function statusFor(state: Pick<CapabilityComponentState, "trusted" | "enabled" |
 export class CapabilityComponentManager {
   readonly #components = new Map<string, CapabilityComponentState>()
   readonly #events: CapabilityComponentLifecycleEvent[] = []
+  readonly #requiredProviders = new Map<string, string>()
+  readonly #rollbackProviders = new Map<string, string>()
+  readonly #providerReferences = new Map<string, number>()
+  readonly #requiredProviderBindings = new Map<string, unknown>()
+  readonly #disposingRequiredProviders = new Set<string>()
   #generation = 0
+  #replacementTail: Promise<void> = Promise.resolve()
 
   constructor(manifests: readonly CapabilityComponentManifest[] = []) {
     for (const manifest of manifests) this.register(manifest)
@@ -235,14 +320,19 @@ export class CapabilityComponentManager {
     if (this.#components.has(normalized.id)) throw new CapabilityComponentError("duplicate_component", `Component already registered: ${normalized.id}`, normalized.id)
     this.#assertNoDependencyCycle(normalized)
     const trusted = options.trusted ?? normalized.source === "builtin"
-    const enabled = options.enabled ?? (normalized.kind === "required" && trusted)
+    const replacementGroup = normalized.replacementGroup
+    const enabled = options.enabled ?? (normalized.kind === "required" && trusted && !!replacementGroup && !this.#requiredProviders.has(replacementGroup))
     const health = options.health ?? (normalized.source === "builtin" ? "healthy" : "unknown")
     if (enabled && !trusted) throw new CapabilityComponentError("untrusted_component", `Cannot enable untrusted component: ${normalized.id}`, normalized.id)
+    if (enabled && normalized.kind === "required" && replacementGroup && this.#requiredProviders.has(replacementGroup)) {
+      throw new CapabilityComponentError("replacement_conflict", `Required provider already active for ${replacementGroup}: ${this.#requiredProviders.get(replacementGroup)}`, normalized.id)
+    }
     if (enabled) {
       const missing = this.#dependencyFailures(normalized)
       if (missing.length > 0) throw new CapabilityComponentError("missing_dependency", `Component ${normalized.id} requires healthy dependencies: ${missing.map((dependency) => dependency.id).join(", ")}`, normalized.id, [normalized.id, ...missing.map((dependency) => dependency.id)])
     }
     const state = this.#publish({ manifest: normalized, trusted, enabled, health }, "registered")
+    if (enabled && normalized.kind === "required" && replacementGroup) this.#requiredProviders.set(replacementGroup, normalized.id)
     return state
   }
 
@@ -259,6 +349,108 @@ export class CapabilityComponentManager {
     const state = this.get(id)
     if (!state) throw new CapabilityComponentError("unknown_component", `Unknown component: ${id || "(empty)"}`, id)
     return state
+  }
+
+  requiredGeneration(): RequiredComponentGenerationRef {
+    return cloneRequiredRef({ generation: this.#generation, providers: Object.fromEntries([...this.#requiredProviders].sort(([left], [right]) => left.localeCompare(right))) })
+  }
+
+  /** Bind a host-owned implementation to one immutable required-provider id. */
+  bindRequiredProvider<T>(id: string, implementation: T): RequiredComponentProviderBinding<T> {
+    const state = this.#requireMutable(id)
+    if (state.manifest.kind !== "required" || !state.manifest.replacementGroup) {
+      return this.#reject("invalid_replacement", `Component is not a required provider: ${id}`, id)
+    }
+    if ((typeof implementation !== "object" || implementation === null) && typeof implementation !== "function") {
+      return this.#reject("invalid_provider_binding", `Required provider implementation is invalid: ${id}`, id)
+    }
+    const existing = this.#requiredProviderBindings.get(id)
+    if (existing !== undefined && existing !== implementation) {
+      return this.#reject("provider_binding_conflict", `Required provider implementation is already bound: ${id}`, id)
+    }
+    this.#requiredProviderBindings.set(id, implementation)
+    return Object.freeze({ componentId: id, replacementGroup: state.manifest.replacementGroup, implementation })
+  }
+
+  hasRequiredProviderBinding(id: string): boolean {
+    return this.#requiredProviderBindings.has(String(id || "").trim())
+  }
+
+  activeRequiredProvider(replacementGroup: string): CapabilityComponentState {
+    const group = String(replacementGroup || "").trim()
+    const id = this.#requiredProviders.get(group)
+    if (!id) throw new CapabilityComponentError("missing_required_provider", `No active required provider for: ${group}`, group)
+    const state = this.require(id)
+    if (!this.#isOperational(id)) throw new CapabilityComponentError("unhealthy_component", `Active required provider is unavailable for ${group}: ${id}`, id)
+    return state
+  }
+
+  /** Pin the required-provider set for one session. Retired providers remain resolvable until release. */
+  acquireRequiredLease(requested: RequiredComponentGenerationRef = this.requiredGeneration()): RequiredComponentLease {
+    const ref = cloneRequiredRef(requested)
+    for (const [group, id] of Object.entries(ref.providers)) {
+      const state = this.#components.get(id)
+      if (!state || state.manifest.kind !== "required" || state.manifest.replacementGroup !== group || !state.trusted || state.health !== "healthy"
+        || this.#disposingRequiredProviders.has(id)) {
+        throw new CapabilityComponentError("unavailable_component_generation", `Required provider is unavailable for ${group}: ${id}`, id, [group, id])
+      }
+    }
+    for (const id of Object.values(ref.providers)) this.#providerReferences.set(id, (this.#providerReferences.get(id) || 0) + 1)
+    let released = false
+    return Object.freeze({
+      ref,
+      resolve: (replacementGroup: string): string => {
+        const id = ref.providers[String(replacementGroup || "").trim()]
+        if (!id) throw new CapabilityComponentError("missing_required_provider", `Lease has no required provider for: ${replacementGroup}`, String(replacementGroup || ""))
+        return id
+      },
+      resolveBinding: <T = unknown>(replacementGroup: string): RequiredComponentProviderBinding<T> => {
+        const group = String(replacementGroup || "").trim()
+        const id = ref.providers[group]
+        if (!id) throw new CapabilityComponentError("missing_required_provider", `Lease has no required provider for: ${replacementGroup}`, group)
+        const implementation = this.#requiredProviderBindings.get(id)
+        if (implementation === undefined) {
+          throw new CapabilityComponentError("unbound_required_provider", `Required provider has no runtime binding for ${group}: ${id}`, id, [group, id])
+        }
+        return Object.freeze({ componentId: id, replacementGroup: group, implementation: implementation as T })
+      },
+      release: (): void => {
+        if (released) return
+        released = true
+        for (const id of Object.values(ref.providers)) {
+          const next = Math.max(0, (this.#providerReferences.get(id) || 0) - 1)
+          if (next === 0) this.#providerReferences.delete(id)
+          else this.#providerReferences.set(id, next)
+        }
+      },
+    })
+  }
+
+  providerReferenceCount(id: string): number { return this.#providerReferences.get(String(id || "").trim()) || 0 }
+
+  replaceRequired(currentId: string, candidateId: string, options: RequiredReplacementOptions): Promise<RequiredReplacementResult> {
+    return this.#enqueueReplacement(() => this.#replaceRequired(currentId, candidateId, options))
+  }
+
+  async disposeRetiredRequired(id: string, dispose: (state: CapabilityComponentState) => Promise<void> | void): Promise<CapabilityComponentState> {
+    const state = this.#requireMutable(id)
+    const group = state.manifest.replacementGroup
+    if (state.manifest.kind !== "required" || !group) return this.#reject("invalid_replacement", `Component is not a required provider: ${id}`, id)
+    if (this.#requiredProviders.get(group) === id || state.enabled) return this.#reject("active_required_component", `Cannot dispose active required provider: ${id}`, id)
+    const references = this.providerReferenceCount(id)
+    if (references > 0) return this.#reject("component_in_use", `Required provider ${id} still has ${references} session reference(s)`, id)
+    if (this.#disposingRequiredProviders.has(id)) return this.#reject("component_disposing", `Required provider is already being disposed: ${id}`, id)
+    this.#disposingRequiredProviders.add(id)
+    try {
+      await dispose(this.#cloneState(state))
+      this.#components.delete(id)
+      this.#requiredProviderBindings.delete(id)
+      if (this.#rollbackProviders.get(group) === id) this.#rollbackProviders.delete(group)
+      this.#record("disposed", id, this.#generation, `replacement group: ${group}`)
+      return this.#cloneState(state)
+    } finally {
+      this.#disposingRequiredProviders.delete(id)
+    }
   }
 
   trust(id: string, trusted = true): CapabilityComponentState {
@@ -315,7 +507,16 @@ export class CapabilityComponentManager {
   setHealth(id: string, health: CapabilityComponentHealth): CapabilityComponentState {
     if (!["unknown", "healthy", "broken", "unavailable"].includes(health)) return this.#reject("invalid_health", `Invalid component health: ${health}`, id)
     const current = this.#requireMutable(id)
-    return this.#publish({ ...current, health }, "health_changed")
+    const changed = this.#publish({ ...current, health }, "health_changed")
+    const group = current.manifest.kind === "required" ? current.manifest.replacementGroup : undefined
+    if (group && health !== "healthy" && this.#requiredProviders.get(group) === id) {
+      const fallbackId = this.#rollbackProviders.get(group)
+      const fallback = fallbackId ? this.#components.get(fallbackId) : undefined
+      if (fallback && fallback.trusted && fallback.health === "healthy") {
+        this.#publishRequiredSwap(this.#requireMutable(id), fallback, "replacement_rolled_back", `health changed to ${health}`)
+      }
+    }
+    return changed
   }
 
   /** Reconcile a host-owned component with an external runtime status source. */
@@ -354,6 +555,9 @@ export class CapabilityComponentManager {
   async save(filePath: string): Promise<void> {
     const document: CapabilityComponentStateDocument = {
       schemaVersion: CAPABILITY_COMPONENT_SCHEMA_VERSION,
+      generation: this.#generation,
+      requiredProviders: { ...this.requiredGeneration().providers },
+      rollbackProviders: Object.fromEntries(this.#rollbackProviders),
       components: this.persistedState().filter((state) => state.manifest.source !== "builtin"),
     }
     await updateLockedJson<CapabilityComponentStateDocument>(filePath, () => ({ schemaVersion: CAPABILITY_COMPONENT_SCHEMA_VERSION, components: [] }), () => document, { recoverInvalidJson: true, space: 2 })
@@ -362,7 +566,8 @@ export class CapabilityComponentManager {
   async restore(filePath: string): Promise<void> {
     const document = await readLockedJson<CapabilityComponentStateDocument>(filePath, () => ({ schemaVersion: CAPABILITY_COMPONENT_SCHEMA_VERSION, components: [] }), { recoverInvalidJson: true })
     if (!document || document.schemaVersion !== CAPABILITY_COMPONENT_SCHEMA_VERSION || !Array.isArray(document.components)) return
-    const restored: Array<{ id: string; enabled: boolean }> = []
+    if (Number.isSafeInteger(document.generation) && Number(document.generation) > this.#generation) this.#generation = Number(document.generation)
+    const restored: Array<{ id: string; enabled: boolean; kind: CapabilityComponentKind }> = []
     for (const entry of document.components) {
       try {
         const manifest = validateManifest(entry.manifest)
@@ -370,12 +575,27 @@ export class CapabilityComponentManager {
         const existing = this.#components.get(manifest.id)
         if (existing) this.#publish({ manifest, trusted: entry.trusted === true, enabled: false, health: entry.health }, "health_changed", "restored")
         else this.register(manifest, { trusted: entry.trusted === true, enabled: false, health: entry.health })
-        restored.push({ id: manifest.id, enabled: entry.enabled === true && entry.trusted === true })
+        restored.push({ id: manifest.id, enabled: entry.enabled === true && entry.trusted === true, kind: manifest.kind })
       } catch {
         // Corrupt optional records are ignored; the host remains fail-closed.
       }
     }
-    for (const entry of restored.filter((candidate) => candidate.enabled)) {
+    for (const [group, targetId] of Object.entries(document.requiredProviders || {})) {
+      try {
+        const currentId = this.#requiredProviders.get(group)
+        const current = currentId ? this.#requireMutable(currentId) : undefined
+        const target = this.#requireMutable(targetId)
+        if (!current || current.manifest.id === target.manifest.id) continue
+        if (target.manifest.kind !== "required" || target.manifest.replacementGroup !== group
+          || target.manifest.capability !== current.manifest.capability || !target.trusted || target.health !== "healthy"
+          || JSON.stringify(target.manifest.requiredContract) !== JSON.stringify(current.manifest.requiredContract)) continue
+        if (this.#requiredProviderBindings.has(current.manifest.id) !== this.#requiredProviderBindings.has(target.manifest.id)) continue
+        this.#publishRequiredSwap(current, target, "replacement_committed", "restored")
+        const rollbackId = document.rollbackProviders?.[group]
+        if (rollbackId && this.#components.has(rollbackId)) this.#rollbackProviders.set(group, rollbackId)
+      } catch { /* Invalid required-provider records remain on the built-in provider. */ }
+    }
+    for (const entry of restored.filter((candidate) => candidate.enabled && candidate.kind === "optional")) {
       try { this.enableTree(entry.id) } catch { /* Invalid dependency graphs remain disabled. */ }
     }
   }
@@ -390,6 +610,8 @@ export class CapabilityComponentManager {
     const dependents = this.#enabledDependents(id)
     if (dependents.length > 0) return this.#rejectDependencyInUse(id, dependents)
     if (current.manifest.kind === "required") {
+      const references = this.providerReferenceCount(id)
+      if (references > 0) return this.#reject("component_in_use", `Required provider ${id} still has ${references} session reference(s)`, id)
       const replacement = this.list().find((candidate) => candidate.manifest.id !== current.manifest.id
         && candidate.manifest.replacementGroup === current.manifest.replacementGroup
         && candidate.manifest.capability === current.manifest.capability
@@ -397,6 +619,8 @@ export class CapabilityComponentManager {
       if (!replacement) return this.#reject("required_component", `Required component has no healthy replacement: ${id}`, id)
     }
     this.#components.delete(current.manifest.id)
+    this.#requiredProviderBindings.delete(current.manifest.id)
+    if (current.manifest.replacementGroup && this.#rollbackProviders.get(current.manifest.replacementGroup) === current.manifest.id) this.#rollbackProviders.delete(current.manifest.replacementGroup)
     this.#record("uninstalled", current.manifest.id, current.generation)
     return current
   }
@@ -407,11 +631,127 @@ export class CapabilityComponentManager {
     schemaVersion: typeof CAPABILITY_COMPONENT_SCHEMA_VERSION
     generation: number
     components: CapabilityComponentState[]
+    requiredProviders: Record<string, string>
+    providerReferences: Record<string, number>
+    boundRequiredProviders: string[]
     fingerprint: string
   } {
     const components = this.list()
-    const payload = { schemaVersion: CAPABILITY_COMPONENT_SCHEMA_VERSION, generation: this.#generation, components }
+    const requiredProviders = Object.fromEntries([...this.#requiredProviders].sort(([left], [right]) => left.localeCompare(right)))
+    const providerReferences = Object.fromEntries([...this.#providerReferences].sort(([left], [right]) => left.localeCompare(right)))
+    const boundRequiredProviders = [...this.#requiredProviderBindings.keys()].sort()
+    const payload = { schemaVersion: CAPABILITY_COMPONENT_SCHEMA_VERSION, generation: this.#generation, components, requiredProviders, providerReferences, boundRequiredProviders }
     return { ...payload, fingerprint: createHash("sha256").update(JSON.stringify(payload)).digest("hex") }
+  }
+
+  #enqueueReplacement<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#replacementTail.then(operation, operation)
+    this.#replacementTail = result.then(() => undefined, () => undefined)
+    return result
+  }
+
+  async #replaceRequired(currentId: string, candidateId: string, options: RequiredReplacementOptions): Promise<RequiredReplacementResult> {
+    const current = this.#requireMutable(currentId)
+    const candidate = this.#requireMutable(candidateId)
+    const group = current.manifest.replacementGroup
+    if (current.manifest.kind !== "required" || candidate.manifest.kind !== "required" || !group
+      || candidate.manifest.replacementGroup !== group || candidate.manifest.capability !== current.manifest.capability) {
+      return this.#reject("incompatible_replacement", `Required replacement contract mismatch: ${currentId} -> ${candidateId}`, candidateId, [currentId, candidateId])
+    }
+    if (this.#requiredProviders.get(group) !== currentId || !current.enabled) {
+      return this.#reject("stale_replacement", `Required provider is no longer active for ${group}: ${currentId}`, currentId)
+    }
+    if (candidate.enabled) return this.#reject("replacement_conflict", `Replacement candidate is already active: ${candidateId}`, candidateId)
+    if (this.#disposingRequiredProviders.has(currentId) || this.#disposingRequiredProviders.has(candidateId)) {
+      return this.#reject("component_disposing", `Required replacement provider is being disposed: ${currentId} -> ${candidateId}`, candidateId, [currentId, candidateId])
+    }
+    if (!candidate.trusted) return this.#reject("untrusted_component", `Cannot activate untrusted replacement: ${candidateId}`, candidateId)
+    if (candidate.health !== "healthy") return this.#reject("unhealthy_component", `Cannot activate unhealthy replacement: ${candidateId}`, candidateId)
+    const hasRuntimeBinding = this.#requiredProviderBindings.has(currentId)
+    if (hasRuntimeBinding !== this.#requiredProviderBindings.has(candidateId)) {
+      return this.#reject("unbound_replacement", `Required runtime binding mismatch: ${currentId} -> ${candidateId}`, candidateId, [currentId, candidateId])
+    }
+    if (hasRuntimeBinding && !options.verify) {
+      return this.#reject("replacement_verification_required", `Post-switch verification is required for runtime-bound provider: ${candidateId}`, candidateId)
+    }
+    if (JSON.stringify(candidate.manifest.requiredContract) !== JSON.stringify(current.manifest.requiredContract)) {
+      return this.#reject("incompatible_replacement", `Required host contract mismatch: ${currentId} -> ${candidateId}`, candidateId, [currentId, candidateId])
+    }
+    const missing = this.#dependencyFailures(candidate.manifest)
+    if (missing.length > 0) return this.#reject("missing_dependency", `Replacement ${candidateId} has unavailable dependencies: ${missing.map((dependency) => dependency.id).join(", ")}`, candidateId)
+    if (this.#dependsOn(candidateId, currentId)) return this.#reject("incompatible_replacement", `Replacement ${candidateId} depends on the retiring provider ${currentId}`, candidateId, [candidateId, currentId])
+    const dependents = this.#enabledDependents(currentId).filter((state) => state.manifest.id !== candidateId)
+    if (dependents.length > 0) return this.#rejectDependencyInUse(currentId, dependents)
+    if (HIGH_RISK_REPLACEMENT_GROUPS.has(group) && options.approved !== true) {
+      return this.#reject("replacement_approval_required", `User approval is required to replace ${group}`, candidateId)
+    }
+
+    const context: Omit<RequiredReplacementContext, "signal"> = { currentId, candidateId, replacementGroup: group, capability: current.manifest.capability }
+    const currentGeneration = current.generation
+    const candidateGeneration = candidate.generation
+    this.#record("replacement_preflight", candidateId, this.#generation, `replacing ${currentId}`)
+    let preflight
+    try {
+      preflight = await runBoundedStage("replacement preflight", options.preflightTimeoutMs ?? 30_000, (signal) => options.preflight({ ...context, signal }))
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      return this.#reject("replacement_preflight_failed", `Replacement preflight failed: ${reason}`, candidateId)
+    }
+    const failedChecks = failedReplacementChecks(preflight)
+    if (failedChecks.length > 0) return this.#reject("replacement_preflight_failed", `Replacement preflight checks failed: ${failedChecks.join(", ")}`, candidateId)
+    if (this.#requiredProviders.get(group) !== currentId
+      || this.#components.get(currentId)?.generation !== currentGeneration
+      || this.#components.get(candidateId)?.generation !== candidateGeneration) {
+      return this.#reject("stale_replacement", `Required replacement changed during preflight: ${currentId} -> ${candidateId}`, candidateId)
+    }
+
+    const committedGeneration = this.#publishRequiredSwap(current, candidate, "replacement_committed")
+    try {
+      await options.persist?.(this.requiredGeneration())
+      if (options.verify) {
+        await runBoundedStage("replacement verification", options.verificationTimeoutMs ?? 30_000, (signal) => options.verify!({ ...context, signal, generation: committedGeneration }))
+      }
+      if (this.#requiredProviders.get(group) !== candidateId) {
+        let reason = "replacement changed during verification"
+        try { await options.persist?.(this.requiredGeneration()) } catch (persistError) {
+          reason += `; rollback persistence failed: ${persistError instanceof Error ? persistError.message : String(persistError)}`
+        }
+        return { status: "rolled_back", replacementGroup: group, previousId: candidateId, activeId: this.#requiredProviders.get(group) || currentId, generation: this.#generation, preflight, reason }
+      }
+      return { status: "committed", replacementGroup: group, previousId: currentId, activeId: candidateId, generation: committedGeneration, preflight }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      const rolledBackGeneration = this.#requiredProviders.get(group) === candidateId
+        ? this.#publishRequiredSwap(this.#requireMutable(candidateId), this.#requireMutable(currentId), "replacement_rolled_back", reason)
+        : this.#generation
+      let rollbackReason = reason
+      try { await options.persist?.(this.requiredGeneration()) } catch (rollbackError) {
+        rollbackReason += `; rollback persistence failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`
+      }
+      return { status: "rolled_back", replacementGroup: group, previousId: candidateId, activeId: this.#requiredProviders.get(group) || currentId, generation: rolledBackGeneration, preflight, reason: rollbackReason }
+    }
+  }
+
+  #publishRequiredSwap(current: CapabilityComponentState, candidate: CapabilityComponentState, action: "replacement_committed" | "replacement_rolled_back", reason?: string): number {
+    const group = current.manifest.replacementGroup!
+    const generation = ++this.#generation
+    const retired = Object.freeze({ ...current, enabled: false, generation, status: "disabled" as const })
+    const active = Object.freeze({ ...candidate, enabled: true, generation, status: "active" as const })
+    this.#components.set(current.manifest.id, retired)
+    this.#components.set(candidate.manifest.id, active)
+    this.#requiredProviders.set(group, candidate.manifest.id)
+    if (action === "replacement_committed") this.#rollbackProviders.set(group, current.manifest.id)
+    else this.#rollbackProviders.delete(group)
+    this.#record(action, candidate.manifest.id, generation, `${current.manifest.id} -> ${candidate.manifest.id}${reason ? `: ${reason}` : ""}`)
+    return generation
+  }
+
+  #dependsOn(componentId: string, dependencyId: string, visited = new Set<string>()): boolean {
+    if (visited.has(componentId)) return false
+    visited.add(componentId)
+    const state = this.#components.get(componentId)
+    if (!state) return false
+    return effectiveDependencies(state.manifest).some((dependency) => dependency.id === dependencyId || this.#dependsOn(dependency.id, dependencyId, visited))
   }
 
   #requireMutable(id: string): CapabilityComponentState {
@@ -523,7 +863,7 @@ export class CapabilityComponentManager {
   }
 
   #cloneState(state: CapabilityComponentState): CapabilityComponentState {
-    return { ...state, manifest: { ...state.manifest, ...(state.manifest.dependencies ? { dependencies: normalizeDependencies(state.manifest.dependencies) } : {}) } }
+    return { ...state, manifest: { ...state.manifest, ...(state.manifest.requiredContract ? { requiredContract: { ...state.manifest.requiredContract } } : {}), ...(state.manifest.dependencies ? { dependencies: normalizeDependencies(state.manifest.dependencies) } : {}) } }
   }
 }
 

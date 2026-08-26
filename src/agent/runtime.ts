@@ -44,6 +44,12 @@ import {
   type PlanStateSource,
   type PlanStateTarget,
 } from "./plan-state.js"
+import {
+  capabilityComponentManager,
+  persistCapabilityComponentGeneration,
+  readCapabilityComponentGeneration,
+} from "./capability-components.js"
+import type { RequiredComponentGenerationRef, RequiredComponentLease } from "./capability-component-replacement.js"
 
 import { setCurrentRuntime as _setGlobalRuntime, getCurrentRuntime as _getGlobalRuntime } from "./globals.js";
 // 重导出供 tools 使用，实际实现在 globals.ts（零依赖，防循环）
@@ -123,6 +129,7 @@ export class AgentRuntime {
   private _activeProfile: AgentProfile = resolveAgentProfile("standard")
   private _activeProfileRef: AgentProfileRef = agentProfileRef(this._activeProfile)
   private _activeProfileLifecycle?: AgentProfileLifecycleFact
+  private _componentLease?: RequiredComponentLease
   private _planState: PlanStateSnapshot = defaultPlanState()
   private _planStateSubscriptions = new Set<PlanStateChangeCallback>()
 
@@ -389,6 +396,12 @@ export class AgentRuntime {
     return this._activeProfileLifecycle ? structuredClone(this._activeProfileLifecycle) : undefined
   }
 
+  /** Required providers pinned when the current session was assembled. */
+  get activeComponentGeneration(): RequiredComponentGenerationRef | undefined {
+    const ref = this._componentLease?.ref
+    return ref ? { generation: ref.generation, providers: { ...ref.providers } } : undefined
+  }
+
   /**
    * Switch only an empty session. The operation is a normal session transition,
    * so all tool assembly and rollback behavior remains serialized with open/new.
@@ -554,6 +567,8 @@ export class AgentRuntime {
     this._planStateSubscriptions.clear()
     const session = this._session
     this._session = undefined
+    this._componentLease?.release()
+    this._componentLease = undefined
     try { session?.dispose() } catch {}
     disconnectMcp()
   }
@@ -622,6 +637,8 @@ export class AgentRuntime {
       profileRef: this._activeProfileRef,
     }
     this._session = undefined
+    this._componentLease?.release()
+    this._componentLease = undefined
     try { previousSession?.abort() } catch {}
     this._eventSubscriptions = this._eventSubscriptions.filter((subscription) => subscription.active)
     for (const subscription of this._eventSubscriptions) {
@@ -759,6 +776,7 @@ export class AgentRuntime {
     }
 
     const entries = this.sessionManager.getEntries()
+    const persistedComponentGeneration = readCapabilityComponentGeneration(entries)
     this._planState = recoverPlanState(readPlanState(entries))
     const persistedSelection = readAgentProfileSelection(entries)
     const persistedLifecycle = readAgentProfileLifecycle(entries)
@@ -789,45 +807,58 @@ export class AgentRuntime {
       status: "applied",
       timestamp: new Date().toISOString(),
     }
-    const systemPrompt = await this._buildSystemPrompt(cwd, profile)
-    const loader = new DefaultResourceLoader({
-      cwd,
-      agentDir,
-      appendSystemPrompt: systemPrompt ? [systemPrompt] : undefined,
-    })
-    await loader.reload()
-    const toolTrace = this._createToolTraceEmitter()
-    const customTools = await getCustomToolsAsync(
-      cwd,
-      toolTrace.emit,
-      buildToolContextExtra(this.config),
-      profile,
-    )
+    const componentLease = capabilityComponentManager.acquireRequiredLease(persistedComponentGeneration)
+    let assembledSession: AgentSession | undefined
+    try {
+      const systemPrompt = await this._buildSystemPrompt(cwd, profile)
+      const loader = new DefaultResourceLoader({
+        cwd,
+        agentDir,
+        appendSystemPrompt: systemPrompt ? [systemPrompt] : undefined,
+      })
+      await loader.reload()
+      const toolTrace = this._createToolTraceEmitter()
+      const customTools = await getCustomToolsAsync(
+        cwd,
+        toolTrace.emit,
+        buildToolContextExtra(this.config),
+        profile,
+        componentLease,
+      )
 
-    console.log(`[runtime] Profile: ${profile.id}@${profile.revision}; 自定义 Tool: ${customTools.map((t: { name: string }) => t.name).join(", ") || "（无）"}`)
+      console.log(`[runtime] Profile: ${profile.id}@${profile.revision}; 自定义 Tool: ${customTools.map((t: { name: string }) => t.name).join(", ") || "（无）"}`)
 
-    const { session } = await createAgentSession({
-      agentDir,
-      modelRuntime: this.modelRuntime,
-      resourceLoader: loader,
-      cwd,
-      sessionManager: this.sessionManager,
-      customTools,
-      // Evidence and file access must go through the governed custom tools.
-      // PI's built-in read/grep/find/ls do not emit our structured trace payloads.
-      noTools: "builtin",
-      // Keep the built-ins out of the registry too, so they cannot be re-enabled later.
-      excludeTools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
-    })
+      const { session } = await createAgentSession({
+        agentDir,
+        modelRuntime: this.modelRuntime,
+        resourceLoader: loader,
+        cwd,
+        sessionManager: this.sessionManager,
+        customTools,
+        // Evidence and file access must go through the governed custom tools.
+        // PI's built-in read/grep/find/ls do not emit our structured trace payloads.
+        noTools: "builtin",
+        // Keep the built-ins out of the registry too, so they cannot be re-enabled later.
+        excludeTools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
+      })
 
-    toolTrace.bindSource(session)
-    this.session = session
-    // Persist only after prompt, tools, and the PI session have all assembled.
-    // A failed switch must not leave an applied lifecycle fact on disk.
-    if (created) persistAgentProfileSelection(this.sessionManager, profile)
-    persistAgentProfileLifecycle(this.sessionManager, lifecycle)
-    if ((created && this._planState.revision === 0) || this._planState.source === "restore") persistPlanState(this.sessionManager, this._planState)
-    this._activeProfileLifecycle = lifecycle
+      assembledSession = session
+      toolTrace.bindSource(session)
+      this.session = session
+      // Persist only after prompt, tools, and the PI session have all assembled.
+      // A failed switch must not leave an applied lifecycle fact on disk.
+      if (created) persistAgentProfileSelection(this.sessionManager, profile)
+      persistAgentProfileLifecycle(this.sessionManager, lifecycle)
+      if (!persistedComponentGeneration) persistCapabilityComponentGeneration(this.sessionManager, componentLease.ref)
+      if ((created && this._planState.revision === 0) || this._planState.source === "restore") persistPlanState(this.sessionManager, this._planState)
+      this._activeProfileLifecycle = lifecycle
+      this._componentLease = componentLease
+    } catch (error) {
+      componentLease.release()
+      if (assembledSession && this._session === assembledSession) this._session = undefined
+      try { assembledSession?.dispose() } catch {}
+      throw error
+    }
   }
 }
 

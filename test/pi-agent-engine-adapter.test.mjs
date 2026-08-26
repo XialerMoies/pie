@@ -32,6 +32,7 @@ function createRuntime() {
   const runtime = {
     currentWorkspace: "E:\\workspace",
     activeProfile: { id: "minimal", revision: 1 },
+    activeComponentGeneration: { generation: 7, providers: { permission: "permission-evaluator" } },
     session,
     modelRegistry: { find: () => session.model },
     onEvent(callback) { listener = callback; return () => { listener = undefined; }; },
@@ -69,6 +70,7 @@ describe("PiAgentEngineAdapter", () => {
     const runtime = createRuntime();
     const engine = adapter(runtime);
     assert.deepStrictEqual(engine.session.profile, { id: "minimal", revision: 1 });
+    assert.deepStrictEqual(engine.session.components, { generation: 7, providers: { permission: "permission-evaluator" } });
     assert.strictEqual(await engine.createNewSession("standard"), "session-2");
     assert.strictEqual(runtime.createdProfileId, "standard");
   });

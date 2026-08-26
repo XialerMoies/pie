@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { SessionManager } from "@xiamol/pi-coding-agent";
 import {
   CapabilityComponentError,
   CapabilityComponentManager,
+  persistCapabilityComponentGeneration,
+  readCapabilityComponentGeneration,
 } from "../src/agent/capability-components.ts";
 import { handleComponents } from "../src/server/routes/components.ts";
 
@@ -17,6 +20,27 @@ const required = {
   replacementGroup: "permission",
   source: "builtin",
 };
+
+const requiredPresentation = {
+  id: "tool-presentation",
+  version: "1",
+  kind: "required",
+  capability: "tool-presentation",
+  replacementGroup: "tool-presentation",
+  source: "builtin",
+};
+
+const passedPreflight = () => Promise.resolve({
+  isolated: true,
+  staticCheck: { status: "passed" },
+  replay: { status: "passed" },
+  failureMatrix: { status: "passed" },
+  shadow: { status: "passed" },
+});
+
+function registerPermissionReplacement(manager, id = "permission-evaluator.v2") {
+  return manager.register({ ...required, id, version: "2", source: "user" }, { trusted: true, health: "healthy" });
+}
 
 describe("CapabilityComponentManager", () => {
   it("registers built-in required components as active", () => {
@@ -111,6 +135,230 @@ describe("CapabilityComponentManager", () => {
     assert.ok(manager.get("permission-evaluator"));
   });
 
+  it("binds one immutable runtime implementation to a required provider lease", () => {
+    const manager = new CapabilityComponentManager([requiredPresentation]);
+    const implementation = { present() { return []; } };
+    manager.bindRequiredProvider("tool-presentation", implementation);
+    assert.strictEqual(manager.bindRequiredProvider("tool-presentation", implementation).implementation, implementation);
+    assert.throws(
+      () => manager.bindRequiredProvider("tool-presentation", { present() { return []; } }),
+      (error) => error.code === "provider_binding_conflict",
+    );
+    const lease = manager.acquireRequiredLease();
+    const binding = lease.resolveBinding("tool-presentation");
+    assert.equal(binding.componentId, "tool-presentation");
+    assert.strictEqual(binding.implementation, implementation);
+    assert.deepEqual(manager.catalog().boundRequiredProviders, ["tool-presentation"]);
+    lease.release();
+  });
+
+  it("rejects replacing a runtime-bound provider with a manifest-only candidate", async () => {
+    const manager = new CapabilityComponentManager([requiredPresentation]);
+    manager.bindRequiredProvider("tool-presentation", { present() { return []; } });
+    manager.register({ ...requiredPresentation, id: "tool-presentation.v2", version: "2", source: "user" }, { trusted: true, health: "healthy" });
+    await assert.rejects(
+      manager.replaceRequired("tool-presentation", "tool-presentation.v2", { preflight: passedPreflight }),
+      (error) => error.code === "unbound_replacement",
+    );
+    assert.equal(manager.activeRequiredProvider("tool-presentation").manifest.id, "tool-presentation");
+  });
+
+  it("requires verification for bound providers and restores the old binding after failure", async () => {
+    const manager = new CapabilityComponentManager([requiredPresentation]);
+    const currentImplementation = { present() { return []; } };
+    const candidateImplementation = { present() { return []; } };
+    manager.bindRequiredProvider("tool-presentation", currentImplementation);
+    manager.register({ ...requiredPresentation, id: "tool-presentation.v2", version: "2", source: "user" }, { trusted: true, health: "healthy" });
+    manager.bindRequiredProvider("tool-presentation.v2", candidateImplementation);
+
+    await assert.rejects(
+      manager.replaceRequired("tool-presentation", "tool-presentation.v2", { preflight: passedPreflight }),
+      (error) => error.code === "replacement_verification_required",
+    );
+    const result = await manager.replaceRequired("tool-presentation", "tool-presentation.v2", {
+      preflight: passedPreflight,
+      verify: async () => { throw new Error("provider probe failed"); },
+    });
+    assert.equal(result.status, "rolled_back");
+    const lease = manager.acquireRequiredLease();
+    assert.equal(lease.resolve("tool-presentation"), "tool-presentation");
+    assert.strictEqual(lease.resolveBinding("tool-presentation").implementation, currentImplementation);
+    lease.release();
+  });
+
+  it("requires approval and a complete isolated preflight for high-risk replacement", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    registerPermissionReplacement(manager);
+    await assert.rejects(manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", { preflight: passedPreflight }), (error) => error.code === "replacement_approval_required");
+    await assert.rejects(manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", {
+      approved: true,
+      preflight: async () => ({ ...(await passedPreflight()), replay: { status: "failed", detail: "fixture mismatch" } }),
+    }), (error) => error.code === "replacement_preflight_failed");
+    assert.equal(manager.activeRequiredProvider("permission").manifest.id, "permission-evaluator");
+  });
+
+  it("atomically replaces a required provider while old sessions retain their lease", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    registerPermissionReplacement(manager);
+    const oldLease = manager.acquireRequiredLease();
+    const result = await manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", { approved: true, preflight: passedPreflight });
+    assert.equal(result.status, "committed");
+    assert.equal(manager.require("permission-evaluator").generation, result.generation);
+    assert.equal(manager.require("permission-evaluator.v2").generation, result.generation);
+    assert.equal(oldLease.resolve("permission"), "permission-evaluator");
+    const newLease = manager.acquireRequiredLease();
+    assert.equal(newLease.resolve("permission"), "permission-evaluator.v2");
+    await assert.rejects(manager.disposeRetiredRequired("permission-evaluator", () => {}), (error) => error.code === "component_in_use");
+    oldLease.release();
+    let disposed = "";
+    await manager.disposeRetiredRequired("permission-evaluator", (state) => { disposed = state.manifest.id; });
+    assert.equal(disposed, "permission-evaluator");
+    assert.equal(manager.get("permission-evaluator"), undefined);
+    newLease.release();
+  });
+
+  it("blocks new leases while a retired provider is being disposed", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    registerPermissionReplacement(manager);
+    const retiredRef = manager.requiredGeneration();
+    await manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", { approved: true, preflight: passedPreflight });
+
+    let finishDispose;
+    const disposing = manager.disposeRetiredRequired("permission-evaluator", () => new Promise((resolve) => { finishDispose = resolve; }));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.throws(
+      () => manager.acquireRequiredLease(retiredRef),
+      (error) => error.code === "unavailable_component_generation",
+    );
+    await assert.rejects(
+      manager.replaceRequired("permission-evaluator.v2", "permission-evaluator", { approved: true, preflight: passedPreflight }),
+      (error) => error.code === "component_disposing",
+    );
+    finishDispose();
+    await disposing;
+    assert.equal(manager.get("permission-evaluator"), undefined);
+  });
+
+  it("rolls back atomically when post-switch verification fails", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    registerPermissionReplacement(manager);
+    const result = await manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", {
+      approved: true,
+      preflight: passedPreflight,
+      verify: async () => { throw new Error("live probe failed"); },
+    });
+    assert.equal(result.status, "rolled_back");
+    assert.equal(result.activeId, "permission-evaluator");
+    assert.equal(manager.activeRequiredProvider("permission").manifest.id, "permission-evaluator");
+    assert.equal(manager.require("permission-evaluator.v2").enabled, false);
+  });
+
+  it("rolls back when replacement persistence fails", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    registerPermissionReplacement(manager);
+    let writes = 0;
+    const result = await manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", {
+      approved: true,
+      preflight: passedPreflight,
+      persist: async () => { writes += 1; if (writes === 1) throw new Error("disk full"); },
+    });
+    assert.equal(result.status, "rolled_back");
+    assert.equal(writes, 2);
+    assert.equal(manager.activeRequiredProvider("permission").manifest.id, "permission-evaluator");
+  });
+
+  it("rolls back to the previous healthy provider when the replacement becomes unhealthy", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    registerPermissionReplacement(manager);
+    await manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", { approved: true, preflight: passedPreflight });
+    manager.setHealth("permission-evaluator.v2", "broken");
+    assert.equal(manager.activeRequiredProvider("permission").manifest.id, "permission-evaluator");
+    assert.equal(manager.require("permission-evaluator.v2").enabled, false);
+  });
+
+  it("rejects replacement contract drift before preflight", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    manager.register({ ...required, id: "permission-evaluator.v2", source: "user", requiredContract: { version: "2", permissionBoundary: "host", resourceProfile: "default" } }, { trusted: true, health: "healthy" });
+    let called = false;
+    await assert.rejects(manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", {
+      approved: true,
+      preflight: async () => { called = true; return passedPreflight(); },
+    }), (error) => error.code === "incompatible_replacement");
+    assert.equal(called, false);
+  });
+
+  it("rejects a stale candidate changed while isolated preflight is running", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    registerPermissionReplacement(manager);
+    let finishPreflight;
+    const replacing = manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", {
+      approved: true,
+      preflight: () => new Promise((resolve) => { finishPreflight = resolve; }),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    manager.setHealth("permission-evaluator.v2", "broken");
+    finishPreflight(await passedPreflight());
+    await assert.rejects(replacing, (error) => error.code === "stale_replacement");
+    assert.equal(manager.activeRequiredProvider("permission").manifest.id, "permission-evaluator");
+  });
+
+  it("aborts a timed-out preflight without changing the active provider", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    registerPermissionReplacement(manager);
+    let preflightSignal;
+    await assert.rejects(manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", {
+      approved: true,
+      preflightTimeoutMs: 10,
+      preflight: ({ signal }) => {
+        preflightSignal = signal;
+        return new Promise(() => {});
+      },
+    }), (error) => error.code === "replacement_preflight_failed" && /timed out/u.test(error.message));
+    assert.equal(preflightSignal?.aborted, true);
+    assert.equal(manager.activeRequiredProvider("permission").manifest.id, "permission-evaluator");
+    assert.equal(manager.require("permission-evaluator.v2").enabled, false);
+  });
+
+  it("aborts timed-out verification and persists the rollback generation", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    registerPermissionReplacement(manager);
+    let verificationSignal;
+    const writes = [];
+    const result = await manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", {
+      approved: true,
+      preflight: passedPreflight,
+      verificationTimeoutMs: 10,
+      persist: async (ref) => { writes.push(structuredClone(ref)); },
+      verify: ({ signal }) => {
+        verificationSignal = signal;
+        return new Promise(() => {});
+      },
+    });
+    assert.equal(result.status, "rolled_back");
+    assert.match(result.reason, /timed out/u);
+    assert.equal(verificationSignal?.aborted, true);
+    assert.equal(writes.length, 2);
+    assert.equal(writes[0].providers.permission, "permission-evaluator.v2");
+    assert.equal(writes[1].providers.permission, "permission-evaluator");
+    assert.equal(manager.activeRequiredProvider("permission").manifest.id, "permission-evaluator");
+  });
+
+  it("persists an automatic health rollback raised during verification", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    registerPermissionReplacement(manager);
+    const writes = [];
+    const result = await manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", {
+      approved: true,
+      preflight: passedPreflight,
+      persist: async (ref) => { writes.push(structuredClone(ref)); },
+      verify: async () => { manager.setHealth("permission-evaluator.v2", "broken"); },
+    });
+    assert.equal(result.status, "rolled_back");
+    assert.equal(writes.length, 2);
+    assert.equal(writes[1].providers.permission, "permission-evaluator");
+    assert.equal(manager.activeRequiredProvider("permission").manifest.id, "permission-evaluator");
+  });
+
   it("allows an optional component to be disabled and uninstalled", () => {
     const manager = new CapabilityComponentManager();
     manager.register({ id: "search-pane", version: "1", kind: "optional", capability: "ui-pane", source: "workspace" }, { trusted: true, health: "healthy" });
@@ -198,6 +446,83 @@ describe("CapabilityComponentManager", () => {
       await restored.restore(filePath);
       assert.equal(restored.require("z-parent").status, "active");
       assert.equal(restored.require("a-child").status, "active");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("persists the active required provider and restores the committed generation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "component-replacement-"));
+    try {
+      const filePath = join(root, "component-state.json");
+      const manager = new CapabilityComponentManager([required]);
+      registerPermissionReplacement(manager);
+      await manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", { approved: true, preflight: passedPreflight });
+      await manager.save(filePath);
+
+      const restored = new CapabilityComponentManager([required]);
+      await restored.restore(filePath);
+      assert.equal(restored.activeRequiredProvider("permission").manifest.id, "permission-evaluator.v2");
+      assert.equal(restored.require("permission-evaluator").enabled, false);
+      assert.equal(restored.acquireRequiredLease().resolve("permission"), "permission-evaluator.v2");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not restore a runtime-bound provider when its executable binding is unavailable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "component-binding-restore-"));
+    try {
+      const filePath = join(root, "component-state.json");
+      const manager = new CapabilityComponentManager([requiredPresentation]);
+      manager.bindRequiredProvider("tool-presentation", { present() { return []; } });
+      manager.register({ ...requiredPresentation, id: "tool-presentation.v2", version: "2", source: "user" }, { trusted: true, health: "healthy" });
+      manager.bindRequiredProvider("tool-presentation.v2", { present() { return []; } });
+      await manager.replaceRequired("tool-presentation", "tool-presentation.v2", { preflight: passedPreflight, verify: async () => {} });
+      await manager.save(filePath);
+
+      const restored = new CapabilityComponentManager([requiredPresentation]);
+      restored.bindRequiredProvider("tool-presentation", { present() { return []; } });
+      await restored.restore(filePath);
+      assert.equal(restored.activeRequiredProvider("tool-presentation").manifest.id, "tool-presentation");
+      assert.equal(restored.require("tool-presentation.v2").enabled, false);
+      assert.equal(restored.hasRequiredProviderBinding("tool-presentation.v2"), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("round-trips a session required-provider generation fact", () => {
+    const entries = [];
+    persistCapabilityComponentGeneration({ appendCustomEntry(customType, data) { entries.push({ type: "custom", customType, data }); } }, {
+      generation: 42,
+      providers: { permission: "permission-evaluator.v2" },
+    });
+    assert.deepEqual(readCapabilityComponentGeneration(entries), {
+      generation: 42,
+      providers: { permission: "permission-evaluator.v2" },
+    });
+  });
+
+  it("keeps a reopened session pinned to its old required provider after replacement", async () => {
+    const root = mkdtempSync(join(tmpdir(), "component-session-pin-"));
+    try {
+      const manager = new CapabilityComponentManager([required]);
+      registerPermissionReplacement(manager);
+      const sessionManager = SessionManager.create(root, root);
+      persistCapabilityComponentGeneration(sessionManager, manager.requiredGeneration());
+      sessionManager.appendMessage({ role: "assistant", content: [], timestamp: Date.now() });
+      const sessionFile = sessionManager.getSessionFile();
+
+      await manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", { approved: true, preflight: passedPreflight });
+      const reopened = SessionManager.open(sessionFile, undefined, root);
+      const persisted = readCapabilityComponentGeneration(reopened.getEntries());
+      const oldLease = manager.acquireRequiredLease(persisted);
+      assert.equal(oldLease.resolve("permission"), "permission-evaluator");
+      const newLease = manager.acquireRequiredLease();
+      assert.equal(newLease.resolve("permission"), "permission-evaluator.v2");
+      oldLease.release();
+      newLease.release();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

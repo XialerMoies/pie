@@ -38,6 +38,7 @@ type RuntimeLike = Pick<
   | "switchProfile"
   | "activeProfile"
   | "activeProfileLifecycle"
+  | "activeComponentGeneration"
   | "planState"
   | "onPlanStateChange"
   | "requestPlanState"
@@ -116,6 +117,7 @@ export class PiAgentEngineAdapter implements AgentEngine {
         .map((tool) => typeof tool.name === "string" ? tool.name : "")
         .filter(Boolean),
       profile: { ...profile },
+      ...(this.#runtime.activeComponentGeneration ? { components: this.#runtime.activeComponentGeneration } : {}),
       planState: this.#runtime.planState,
       ...(this.#runtime.activeProfileLifecycle ? { profileLifecycle: this.#runtime.activeProfileLifecycle } : {}),
     };
