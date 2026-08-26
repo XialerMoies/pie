@@ -459,6 +459,95 @@ export async function runPackagedReplayProviderProbe(
   };
 }
 
+/** Verify the AP-14 capability selector and request-scoped evidence overlay
+ * inside the packaged production renderer. Profile switching is exercised
+ * against the real non-empty session; evidence frames use the same
+ * ChatSseControllerView that handles live/reconnect SSE in production. */
+export async function runPackagedCapabilitySelectorProbe(
+  win: BrowserWindow,
+): Promise<Record<string, unknown>> {
+  return win.webContents.executeJavaScript(`(async () => {
+    const chat = window.App?.Chat;
+    const chatState = window.App?.ChatState;
+    const messageContainer = document.querySelector('#ms');
+    const modeButton = document.querySelector('#fi-mode-btn');
+    if (!chat || !chatState || !messageContainer || !(modeButton instanceof HTMLElement)) {
+      throw new Error('capability selector controls are unavailable');
+    }
+    await chat.syncProfiles?.();
+    const catalogResponse = await fetch('/api/profiles', { cache: 'no-store' });
+    const catalog = await catalogResponse.json();
+    const catalogIds = Array.isArray(catalog?.catalogs) ? catalog.catalogs.map((entry) => entry?.id).filter(Boolean) : [];
+    const expectedIds = ['standard', 'minimal'];
+    const selectorCatalogMatches = JSON.stringify([...catalogIds].sort()) === JSON.stringify([...expectedIds].sort());
+    chat.showModePopup(modeButton);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const popup = document.querySelector('#mode-popup');
+    const selectorOptions = popup ? [...popup.querySelectorAll('[data-profile]')].map((node) => node.dataset.profile).filter(Boolean) : [];
+    const selectedBefore = chat.getProfile?.() || null;
+    const otherProfile = selectedBefore === 'standard' ? 'minimal' : 'standard';
+    const otherOption = popup?.querySelector('[data-profile="' + otherProfile + '"]');
+    otherOption?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const selectedAfterRejectedSwitch = chat.getProfile?.() || null;
+    const nonEmptySwitchRejected = selectedAfterRejectedSwitch === selectedBefore
+      && Boolean(document.querySelector('#mode-popup'));
+    document.querySelector('#mode-popup')?.remove();
+
+    const evidenceStates = [];
+    chatState.replaceMessages([{ role: 'assistant', content: '', streaming: true, blocks: [] }]);
+    chat.updateUI?.();
+    const views = window.App?.ChatViews;
+    if (!views?.ChatSseControllerView) throw new Error('ChatSseControllerView is unavailable');
+    const controller = new views.ChatSseControllerView({
+      scheduleMessagesRender: () => {}, updateUI: () => {}, markLastMessageRendered: () => {},
+      renderMessages: () => {}, refreshComposer: () => {}, setAssistantError: () => {},
+      completeSend: () => {}, failSend: () => {},
+    }, {
+      chat, chatState,
+      chatStream: { isCurrent: () => true, setHandlers: () => true, close: () => {} },
+      chatViews: views,
+    });
+    controller.bind(14);
+    const badge = () => ({
+      text: document.querySelector('#fi-evidence-state')?.textContent || '',
+      hidden: document.querySelector('#fi-evidence-state')?.hidden !== false,
+    });
+    controller.handleMessage(14, { data: JSON.stringify({ type: 'stream_ready', evidenceState: { status: 'active', kind: 'fact_verification', revision: 1 } }) });
+    const activeAfterBaseline = badge();
+    controller.handleMessage(14, { data: JSON.stringify({ type: 'evidence_state', state: { status: 'active', kind: 'fact_verification', revision: 1 } }) });
+    const activeAfterReconnect = badge();
+    controller.handleMessage(14, { data: JSON.stringify({ type: 'done', text: 'verified', blocks: [] }) });
+    const clearedAfterTerminal = badge();
+
+    chat.applyEvidenceState?.({ status: 'active', kind: 'fact_verification', revision: 2 });
+    const activeBeforeSessionSwitch = badge();
+    const sessionsResponse = await fetch('/api/sessions?other=1', { cache: 'no-store' });
+    const sessionsPayload = await sessionsResponse.json();
+    const activeSessionId = sessionsPayload?.activeSessionId || sessionsPayload?.sessions?.[0]?.id || null;
+    if (activeSessionId && window.App?.SessionActivation?.activateById) {
+      await window.App.SessionActivation.activateById(activeSessionId, { silent: true });
+    }
+    const clearedAfterSessionSwitch = badge();
+    return {
+      status: catalogResponse.status,
+      catalogIds,
+      selectorCatalogMatches,
+      selectorOptions,
+      selectorOptionsMatch: JSON.stringify([...selectorOptions].sort()) === JSON.stringify([...expectedIds].sort()),
+      selectedBefore,
+      selectedAfterRejectedSwitch,
+      nonEmptySwitchRejected,
+      activeAfterBaseline,
+      activeAfterReconnect,
+      clearedAfterTerminal,
+      activeBeforeSessionSwitch,
+      clearedAfterSessionSwitch,
+      profileUnchangedByEvidence: (chat.getProfile?.() || null) === selectedBefore,
+    };
+  })()`, true);
+}
+
 /** Cancel a real long-tool send through the packaged UI and verify that the
  * abort request completes and no late terminal frame mutates the cancelled DOM. */
 export async function runPackagedCancellationProbe(

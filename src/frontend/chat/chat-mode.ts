@@ -14,6 +14,11 @@ const chatModeDependencies: ChatModeDependencies = {
 };
 const { preferences, permissions } = chatModeDependencies;
 
+function strategyNotice(message: string, kind: 'info' | 'success' | 'error'): void {
+  const statusBar = chatModeApp.StatusBar;
+  if (typeof statusBar?.setNotice === 'function') statusBar.setNotice(message, kind);
+}
+
 function handleSlash(ci: HTMLTextAreaElement): void {
   const slashEl = $('fi-slash');
   if (!slashEl) return;
@@ -157,7 +162,7 @@ async function setProfile(profileId: string, popup?: HTMLElement): Promise<void>
     if (created) {
       applyProfileState({ profile: created.profile });
       updateProfilePopupSelection(popup);
-      toast(`已切换 Agent 能力：${profileLabel(_profileId)}`, 'info');
+      strategyNotice(`已切换 Agent 能力：${profileLabel(_profileId)}`, 'success');
       return;
     }
     const response = await fetch('/api/sessions/profile', {
@@ -169,10 +174,10 @@ async function setProfile(profileId: string, popup?: HTMLElement): Promise<void>
     if (!response.ok) throw new Error(typeof body?.error === 'string' ? body.error : '能力切换失败');
     applyProfileState({ profile: body.profile });
     updateProfilePopupSelection(popup);
-    toast(`已切换 Agent 能力：${profileLabel(_profileId)}`, 'info');
+    strategyNotice(`已切换 Agent 能力：${profileLabel(_profileId)}`, 'success');
   } catch (error) {
     if (option) option.removeAttribute('aria-busy');
-    toast(error instanceof Error && error.message ? error.message : '能力切换失败', 'error');
+    strategyNotice(error instanceof Error && error.message ? error.message : '能力切换失败', 'error');
     _profileId = previous;
     updateModeButton();
   }

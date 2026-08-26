@@ -164,10 +164,11 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     }
   });
 
-  it("toast 不拦截标签栏点击且淡出后移除 DOM", () => {
+  it("状态栏通知不拦截标签栏点击且会自动清除", () => {
     const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
-    const toastCss = cssBlocks(css, ".toast-el");
-    assertCssDecl(toastCss, "pointer-events", "none");
+    const statusNoticeCss = cssBlocks(css, ".status-notice");
+    assertCssDecl(statusNoticeCss, "overflow", "hidden");
+    assertCssDecl(statusNoticeCss, "padding", "0 16px 0 9px");
 
     const realSetTimeout = globalThis.setTimeout;
     const realClearTimeout = globalThis.clearTimeout;
@@ -188,19 +189,29 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     };
 
     try {
+      win.document.body.innerHTML = '<span id="status-notice" class="status-notice" data-active="false"></span>';
+      win.App.StatusBar = {
+        setNotice(message, type, durationMs = 3200) {
+          const notice = win.document.getElementById("status-notice");
+          notice.textContent = message;
+          notice.dataset.kind = type;
+          notice.dataset.active = "true";
+          setTimeout(() => {
+            notice.textContent = "";
+            notice.dataset.active = "false";
+          }, durationMs);
+        },
+      };
       win.toast("已开启新会话", "success");
-      const toast = win.document.getElementById("toast-el");
-      assert.ok(toast, "toast should be created");
-      assert.strictEqual(toast.textContent, "已开启新会话");
-      assert.ok(toast.classList.contains("success"));
-      assert.ok(!toast.classList.contains("out"));
+      const notice = win.document.getElementById("status-notice");
+      assert.ok(notice, "status notice should exist");
+      assert.strictEqual(notice.textContent, "已开启新会话");
+      assert.strictEqual(notice.dataset.kind, "success");
+      assert.strictEqual(notice.dataset.active, "true");
 
-      runTimer(3000);
-      assert.ok(toast.classList.contains("out"), "toast should fade out after timeout");
-      assert.strictEqual(win.document.getElementById("toast-el"), toast, "toast remains during fade transition");
-
-      runTimer(300);
-      assert.strictEqual(win.document.getElementById("toast-el"), null, "toast should be removed after fade transition");
+      runTimer(3200);
+      assert.strictEqual(notice.textContent, "");
+      assert.strictEqual(notice.dataset.active, "false");
     } finally {
       globalThis.setTimeout = realSetTimeout;
       globalThis.clearTimeout = realClearTimeout;
@@ -212,6 +223,33 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     const tabScrollCss = cssBlocks(css, ".tb-scroll::-webkit-scrollbar");
     assertCssDecl(tabScrollCss, "height", "3px");
     assert.doesNotMatch(css, /\.tb-scroll::-webkit-scrollbar\s*\{[^}]*height\s*:\s*0(?:;|\})/);
+  });
+
+  it("无界前端移除非必要的竖向外框并保留标签分隔线", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    assert.match(css, /\.sbar\{[^}]*border-right:0/);
+    assert.match(css, /\.status-problems\{[^}]*border-right:0/);
+    assert.match(css, /\.tb-more\{[^}]*border-left:0/);
+    assert.match(css, /\.main\{[^}]*border-left:1px solid var\(--bd\)/);
+    assert.match(css, /\.tb-item\{[^}]*border-right:1px solid var\(--bd\)/);
+  });
+
+  it("功能面板标题下不显示横向分隔线", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    assert.match(css, /\.panel-content \.sg-t\{[^}]*border-bottom:0/);
+    assert.match(css, /\.mcp-tabs\{[^}]*border-bottom:0/);
+  });
+
+  it("顶部栏和底部栏只在编辑器主区保留横向分隔线", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    assert.match(css, /\.topbar\{[^}]*border-bottom:0/);
+    assert.match(css, /\.statusbar\{[^}]*border-top:0/);
+    assert.match(css, /\.main\{[^}]*border:1px solid var\(--bd\)[^}]*border-left:1px solid var\(--bd\)/);
+  });
+
+  it("功能栏与主区相连的分隔线端点使用圆角", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    assert.match(css, /\.main\{[^}]*border-radius:4px 0 0 4px/);
   });
 
   it("token usage rail keeps percent text compact and clipped", () => {

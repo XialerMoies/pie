@@ -34,6 +34,7 @@ function layout(): void {
   const app = $('app')!;
   const lightweightDashboard = (window as any).__emptyWorkspaceMode || (window as any).__workspaceStatusMode;
   app.innerHTML = buildTopBar() + buildSideBar() + buildSidePanel() + buildMainArea() + buildStatusBar();
+  renderStatusNotice();
   bindLayoutActions(app);
   initResizeHandle();
   renderTabs();
@@ -155,9 +156,48 @@ function buildMainArea(): string {
 
 function buildProblemsPanel(): string {
   return `<section class="pb-panel" id="pb-panel" aria-label="问题" style="display:none">
+    <div class="pb-resize-handle" id="pb-resize-handle" role="separator" aria-orientation="horizontal" aria-valuemin="48" aria-valuemax="600" aria-valuenow="0" tabindex="0" title="调整问题栏高度"></div>
     <div class="pb-panel-head"><span>问题</span></div>
     <div class="pb-body" id="pb-body"></div>
   </section>`;
+}
+
+type StatusNoticeKind = 'info' | 'success' | 'error';
+
+let _statusNoticeMessage = '';
+let _statusNoticeKind: StatusNoticeKind = 'info';
+let _statusNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+let _statusNoticeGeneration = 0;
+
+function renderStatusNotice(): void {
+  const notice = $('status-notice');
+  if (!notice) return;
+  notice.textContent = _statusNoticeMessage;
+  notice.dataset.kind = _statusNoticeKind;
+  notice.dataset.active = String(Boolean(_statusNoticeMessage));
+}
+
+function setStatusNotice(message: string, kind: StatusNoticeKind = 'info', durationMs = 3200): void {
+  _statusNoticeMessage = message.trim();
+  _statusNoticeKind = kind;
+  const generation = ++_statusNoticeGeneration;
+  if (_statusNoticeTimer) {
+    clearTimeout(_statusNoticeTimer);
+    _statusNoticeTimer = null;
+  }
+  renderStatusNotice();
+  if (_statusNoticeMessage && durationMs > 0) {
+    _statusNoticeTimer = setTimeout(() => {
+      if (generation !== _statusNoticeGeneration) return;
+      _statusNoticeMessage = '';
+      _statusNoticeTimer = null;
+      renderStatusNotice();
+    }, durationMs);
+  }
+}
+
+function clearStatusNotice(): void {
+  setStatusNotice('', 'info', 0);
 }
 
 function buildStatusBar(): string {
@@ -167,6 +207,7 @@ function buildStatusBar(): string {
       <span class="status-problems-label">问题</span>
       <span class="status-problems-counts" id="pb-status-counts"></span>
     </button>
+    <span class="status-notice" id="status-notice" role="status" aria-live="polite" aria-atomic="true" data-active="false"></span>
     <span class="permission-mode-badge" id="permission-mode-badge" aria-label="权限模式"></span>
   </footer>`;
 }
@@ -555,6 +596,63 @@ function _pbToggle(force?: boolean): void {
     trigger.classList.toggle('active', _pbExpanded);
   }
   if (_pbExpanded) _updateProblemsBar();
+  const schedule = window.requestAnimationFrame || ((callback: FrameRequestCallback) => window.setTimeout(callback, 0));
+  schedule(() => (window as any).syncTokenRailPosition?.());
+}
+
+const PB_MIN_HEIGHT = 48;
+
+function _pbMaxHeight(): number {
+  const main = document.querySelector<HTMLElement>('.main');
+  const available = main?.getBoundingClientRect().height || window.innerHeight;
+  return Math.max(PB_MIN_HEIGHT, Math.floor(available * 0.8));
+}
+
+function _pbSetHeight(height: number): void {
+  const panel = $('pb-panel');
+  const handle = $('pb-resize-handle');
+  if (!panel) return;
+  const clamped = Math.max(PB_MIN_HEIGHT, Math.min(Math.round(height), _pbMaxHeight()));
+  panel.style.height = `${clamped}px`;
+  panel.style.maxHeight = 'none';
+  handle?.setAttribute('aria-valuenow', String(clamped));
+  (window as any).syncTokenRailPosition?.();
+}
+
+function _pbInitResize(): void {
+  const handle = $('pb-resize-handle');
+  const panel = $('pb-panel');
+  if (!handle || !panel || handle.dataset.bound === '1') return;
+  handle.dataset.bound = '1';
+
+  handle.addEventListener('mousedown', (event: MouseEvent) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = panel.getBoundingClientRect().height;
+    panel.classList.add('resizing');
+    const onMove = (moveEvent: MouseEvent) => _pbSetHeight(startHeight + startY - moveEvent.clientY);
+    const onUp = () => {
+      panel.classList.remove('resizing');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  handle.addEventListener('keydown', (event: KeyboardEvent) => {
+    const current = panel.getBoundingClientRect().height || PB_MIN_HEIGHT;
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      _pbSetHeight(current + (event.key === 'ArrowUp' ? 16 : -16));
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      _pbSetHeight(PB_MIN_HEIGHT);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      _pbSetHeight(_pbMaxHeight());
+    }
+  });
 }
 
 // 初始化底部栏（由 layout() 在 DOM 创建后调用）
@@ -565,6 +663,7 @@ function _initProblemsBar(): void {
 
   const trigger = $('pb-status-trigger');
   if (trigger) trigger.addEventListener('click', () => _pbToggle());
+  _pbInitResize();
 
   const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
   if (store) {
@@ -587,3 +686,8 @@ window.layout = layout;
   U.layout = layout;
   U.renderTabs = renderTabs;
 } }
+{ const appNamespace = (window as any).App || ((window as any).App = {});
+  const statusBar = appNamespace.StatusBar || (appNamespace.StatusBar = {});
+  statusBar.setNotice = setStatusNotice;
+  statusBar.clearNotice = clearStatusNotice;
+}

@@ -25,6 +25,10 @@ function setupDom() {
   global.cancelAnimationFrame = () => {};
   global.setTimeout = (fn) => { fn(); return 0; };
   global.clearTimeout = () => {};
+  win.requestAnimationFrame = global.requestAnimationFrame;
+  win.cancelAnimationFrame = global.cancelAnimationFrame;
+  win.setTimeout = global.setTimeout;
+  win.clearTimeout = global.clearTimeout;
 
   // 布局脚本依赖的全局助⼿
   global.$ = (id) => doc.getElementById(id);
@@ -88,6 +92,7 @@ describe("Problems Bottom Bar", () => {
         <span class="status-problems-counts" id="pb-status-counts"></span>
       </button>
       <section class="pb-panel" id="pb-panel" aria-label="问题" style="display:none">
+        <div class="pb-resize-handle" id="pb-resize-handle" role="separator" tabindex="0"></div>
         <div class="pb-panel-head"><span>问题</span></div>
         <div class="pb-body" id="pb-body"></div>
       </section>
@@ -113,6 +118,38 @@ describe("Problems Bottom Bar", () => {
     trigger.click();
     assert.strictEqual(panel.style.display, "none");
     assert.strictEqual(trigger.getAttribute("aria-expanded"), "false");
+  });
+
+  it("问题栏提供高度调节句柄并在展开时同步 token rail", () => {
+    const { doc, win } = env;
+    let syncCount = 0;
+    win.syncTokenRailPosition = () => { syncCount += 1; };
+    doc.body.innerHTML = `
+      <button id="pb-status-trigger" type="button" aria-expanded="false"></button>
+      <section class="pb-panel" id="pb-panel" style="display:none">
+        <div class="pb-resize-handle" id="pb-resize-handle" role="separator" tabindex="0"></div>
+        <div class="pb-panel-head"><span>问题</span></div>
+        <div id="pb-body"></div>
+      </section>
+    `;
+
+    globalThis._initProblemsBar();
+    const handle = doc.getElementById("pb-resize-handle");
+    assert.ok(handle, "resize handle should exist");
+    assert.strictEqual(handle.getAttribute("role"), "separator");
+    doc.getElementById("pb-status-trigger").click();
+    assert.ok(syncCount > 0, "opening the panel should resync token rail");
+
+    const panel = doc.getElementById("pb-panel");
+    const main = doc.createElement("div");
+    main.className = "main";
+    main.getBoundingClientRect = () => ({ height: 400 });
+    doc.body.appendChild(main);
+    panel.getBoundingClientRect = () => ({ height: 100 });
+    handle.dispatchEvent(new win.MouseEvent("mousedown", { clientY: 100, bubbles: true }));
+    doc.dispatchEvent(new win.MouseEvent("mousemove", { clientY: 40, bubbles: true }));
+    assert.strictEqual(panel.style.height, "160px", "dragging upward should increase panel height");
+    doc.dispatchEvent(new win.MouseEvent("mouseup", { clientY: 40, bubbles: true }));
   });
 
   it("updates status counts on store change", () => {
@@ -180,6 +217,7 @@ describe("Problems Bottom Bar", () => {
 
       const body = doc.getElementById("pb-body");
       assert.ok(body, "pb-body exists inside pb-panel");
+      assert.ok(doc.getElementById("pb-resize-handle"), "resize handle exists");
 
       const trigger = doc.getElementById("pb-status-trigger");
       assert.ok(trigger, "pb-status-trigger exists in status bar HTML");
@@ -187,9 +225,35 @@ describe("Problems Bottom Bar", () => {
 
       const counts = doc.getElementById("pb-status-counts");
       assert.ok(counts, "pb-status-counts exists");
+
+      const notice = doc.getElementById("status-notice");
+      assert.ok(notice, "status-notice exists on the right side of the status bar");
+      assert.strictEqual(notice.getAttribute("role"), "status");
+      assert.strictEqual(notice.getAttribute("aria-live"), "polite");
     } else {
       // 函数未暴露时跳过（测试用全局函数，非模块环境才有）
       console.log("layout build functions not global, skipping structural test");
     }
+  });
+
+  it("shows and clears action feedback in the status bar", () => {
+    const { doc, win } = env;
+    doc.body.innerHTML = '<span class="status-notice" id="status-notice" data-active="false"></span>';
+
+    win.App.StatusBar.setNotice("能力切换失败", "error", 0);
+    const notice = doc.getElementById("status-notice");
+    assert.strictEqual(notice.textContent, "能力切换失败");
+    assert.strictEqual(notice.dataset.kind, "error");
+    assert.strictEqual(notice.dataset.active, "true");
+
+    win.App.StatusBar.clearNotice();
+    assert.strictEqual(notice.textContent, "");
+    assert.strictEqual(notice.dataset.active, "false");
+  });
+
+  it("问题标题不显示下边框且问题栏支持垂直拖拽", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    assert.match(css, /\.pb-panel-head\{[^}]*border-bottom:0/);
+    assert.match(css, /\.pb-resize-handle\{[^}]*cursor:row-resize/);
   });
 });

@@ -13,6 +13,7 @@ import {
   runPackagedCancellationProbe,
   runPackagedConcurrencyProbe,
   runPackagedReplayProviderProbe,
+  runPackagedCapabilitySelectorProbe,
   runPackagedChatEventFlowProbe,
   runRendererCookieIsolationProbe,
   waitForRendererReady,
@@ -113,6 +114,7 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
     let concurrency: Record<string, unknown> | null = null;
     let replayProvider: Record<string, unknown> | null = null;
     let profileCatalog: Record<string, unknown> | null = null;
+    let capabilitySelector: Record<string, unknown> | null = null;
     let rendererFailureEvidence: Record<string, unknown> | null = null;
     try {
       await waitForRendererReady(win);
@@ -143,6 +145,7 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
       cancellation = await runPackagedCancellationProbe(win);
       concurrency = await runPackagedConcurrencyProbe(win);
       replayProvider = await runPackagedReplayProviderProbe(win);
+      capabilitySelector = await runPackagedCapabilitySelectorProbe(win);
       profileCatalog = await requestJson(initialServerBinding, "/api/profiles");
       // Capture while the replay turn and its correlation ledger still belong
       // to the active server. Later workspace switches intentionally replace
@@ -353,6 +356,7 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
         concurrency,
         replayProvider,
         profileCatalog,
+        capabilitySelector,
         cancellation,
         artifactProbe,
         textIconStatus,
@@ -429,7 +433,7 @@ export function createElectronPackagedE2EProbe(options: ElectronPackagedE2EProbe
             diagnostics: failureDiagnostic.diagnostics,
             requests: (concurrency as { requestRecords?: unknown } | null)?.requestRecords || [],
           },
-          settled: { renderer, chatEventFlow, cancellation, concurrency, replayProvider },
+          settled: { renderer, chatEventFlow, cancellation, concurrency, replayProvider, capabilitySelector },
         },
         secondLaunches: options.secondLaunchRecords().map((launch) => ({
           electronPid: launch.electronPid,

@@ -515,6 +515,7 @@ let _tokenRefreshQueued = false;
 let _tokenUpdateUnsubscribers: Array<() => void> = [];
 let _railResizeObserver: ResizeObserver | null = null;
 let _railResizeTarget: Element | null = null;
+let _railResizeContainer: Element | null = null;
 
 function offsetTopWithin(target: HTMLElement, container: HTMLElement): number {
   let top = 0;
@@ -571,12 +572,16 @@ function syncRailPosition(): void {
 
 function watchRailPosition(): void {
   const fiBox = document.getElementById('fi-box');
-  if (!fiBox || _railResizeTarget === fiBox) return;
+  const mc = document.querySelector('.mc');
+  if (!fiBox || !mc) return;
+  if (_railResizeTarget === fiBox && _railResizeContainer === mc) return;
   _railResizeObserver?.disconnect();
   _railResizeTarget = fiBox;
+  _railResizeContainer = mc;
   if (typeof ResizeObserver === 'undefined') return;
   _railResizeObserver = new ResizeObserver(() => syncRailPosition());
   _railResizeObserver.observe(fiBox);
+  _railResizeObserver.observe(mc);
 }
 
 function startTokenUpdates(): void {

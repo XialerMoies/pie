@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "checkpoint-workspace-rule-entry",
+      "name": "checkpoint-workspace-rule",
+      "scope": "workspace",
+      "source": "user",
+      "createdAt": "2026-08-24T20:32:42.153+08:00",
+      "updatedAt": "2026-08-24T20:32:42.153+08:00",
+      "enabled": true,
+      "traceId": "checkpoint-workspace-rule-trace",
+      "summary": "Checkpoint A 验收专用的当前工作区级记忆。"
+    }
+  ]
+}

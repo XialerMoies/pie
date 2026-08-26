@@ -55,10 +55,11 @@ describe("chat mode server-state boundary", () => {
     global.$ = (id) => win.document.getElementById(id);
     global.E = (value) => String(value);
     const notices = [];
-    global.toast = (message, type) => notices.push({ message, type });
+    global.toast = () => { throw new Error("strategy switching must not use toast bubbles"); };
     win.document.body.innerHTML = '<span id="fi-mode-name"></span>';
     global.App = win.App = {
       Chat: {},
+      StatusBar: { setNotice: (message, type) => notices.push({ message, type }) },
       Permissions: { getMode: () => "standard", refreshMode: async () => "standard", setMode() {} },
       Preferences: { get: (_key, fallback = "") => fallback, set() {} },
     };

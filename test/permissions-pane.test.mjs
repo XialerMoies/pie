@@ -28,7 +28,14 @@ global.confirmAsync = async () => true;
 
 const registerCalls = [];
 global.registerPane = (...args) => registerCalls.push(args);
-win.App = {};
+win.App = {
+  StatusBar: {
+    setNotice: (message, type) => {
+      win.__statusNotices = [...(win.__statusNotices || []), { message, type }];
+    },
+    clearNotice: () => {},
+  },
+};
 global.App = win.App;
 
 const waitTick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -149,6 +156,7 @@ function resetState() {
     },
   ];
   state.calls = [];
+  win.__statusNotices = [];
 }
 
 global.fetch = async (url, options = {}) => {
@@ -483,7 +491,7 @@ describe("permissions pane", { concurrency: 1 }, () => {
       await waitTick();
 
       assert.strictEqual(mode.value, "plan");
-      assert.strictEqual(win.__toasts.filter((toast) => toast.type === "success" && toast.msg.includes("切换")).length, 1);
+      assert.strictEqual(win.__statusNotices.filter((notice) => notice.type === "success" && notice.message.includes("切换")).length, 1);
     } finally {
       container.remove();
       global.fetch = originalFetch;
@@ -608,6 +616,7 @@ describe("permissions pane", { concurrency: 1 }, () => {
     global.fetch = (url, options = {}) => new Promise((resolve) => pending.push({ url: String(url), options, resolve }));
     win.fetch = global.fetch;
     win.__toasts = [];
+    win.__statusNotices = [];
     try {
       const mode = oldContainer.querySelector("#perm-mode");
       mode.value = "yes";
@@ -641,14 +650,14 @@ describe("permissions pane", { concurrency: 1 }, () => {
       await waitTick();
       await waitTick();
       assert.strictEqual(newMode.value, "dontAsk");
-      const toastCountBeforeStaleResponse = win.__toasts.filter((toast) => toast.msg.includes("切换")).length;
+      const statusNoticeCountBeforeStaleResponse = win.__statusNotices.filter((notice) => notice.message.includes("切换")).length;
 
       pending[0].resolve(response({ ok: true, mode: "yes" }));
       await waitTick();
       await waitTick();
       assert.strictEqual(newContainer.querySelector("#perm-mode").value, "dontAsk");
       assert.strictEqual(newContainer.querySelector("#perm-yes-badge").classList.contains("on"), false);
-      assert.strictEqual(win.__toasts.filter((toast) => toast.msg.includes("切换")).length, toastCountBeforeStaleResponse);
+      assert.strictEqual(win.__statusNotices.filter((notice) => notice.message.includes("切换")).length, statusNoticeCountBeforeStaleResponse);
     } finally {
       oldContainer.remove();
       newContainer.remove();

@@ -2483,6 +2483,14 @@ describe("settings DOM boundary", () => {
     assert.strictEqual(settingsSpies.refreshCalls.filter((call) => call.label === "permissions-unmount").length, 0);
   });
 
+  it("keeps the settings title and tab boundary borderless", () => {
+    const css = readFileSync(new URL("../src/frontend/dashboard.css", import.meta.url), "utf8");
+    assert.match(css, /\.modal-header\{[^}]*border-bottom:0/);
+    assert.match(css, /\.modal-sidebar\{[^}]*border-right:0/);
+    assert.match(css, /\.modal-content\{[^}]*border-left:1px solid var\(--bd\)[^}]*border-top:1px solid var\(--bd\)/);
+    assert.match(css, /\.modal-content\{[^}]*border-top-left-radius:4px/);
+  });
+
   it("applies the theme immediately before Monaco is ready", async () => {
     win.App.Settings.openSettingsModal();
     await flushAsyncWork();

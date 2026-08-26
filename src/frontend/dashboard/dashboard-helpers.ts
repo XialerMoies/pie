@@ -190,6 +190,15 @@ function sb(id: string): void {
 
 /** toast notification — type: 'info' | 'error' | 'success' */
 function toast(msg: string, type?: 'info' | 'error' | 'success'): void {
+  const statusBar = (window as any).App?.StatusBar;
+  if (typeof statusBar?.setNotice === 'function') {
+    statusBar.setNotice(msg, type || 'info');
+    return;
+  }
+
+  // Keep the legacy fallback for lightweight/test hosts that do not mount the
+  // dashboard status bar. The real desktop dashboard always takes the branch
+  // above once its layout has been initialized.
   let t = $('toast-el') as HTMLDivElement | null;
   if (!t) {
     t = document.createElement('div');

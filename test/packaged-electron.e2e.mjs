@@ -289,6 +289,23 @@ function assertPackagedReplayProviderResult(result) {
   assert.ok(profileCatalog.body.catalogs.every((catalog) => catalog.health === "ready" && typeof catalog.fingerprint === "string"));
   assert.ok(profileCatalog.body.catalogs.every((catalog) => catalog.featureGates === "*" || Array.isArray(catalog.featureGates)));
   assert.ok(profileCatalog.body.catalogs.every((catalog) => catalog.tools.every((tool) => tool.source === "native" && tool.audiences.includes("main"))));
+
+  const selector = result.capabilitySelector;
+  assert.ok(selector && typeof selector === "object", "packaged capability selector result is missing");
+  assert.equal(selector.status, 200);
+  assert.equal(selector.selectorCatalogMatches, true);
+  assert.equal(selector.selectorOptionsMatch, true);
+  assert.deepEqual(selector.selectorOptions, ["standard", "minimal"]);
+  assert.equal(selector.nonEmptySwitchRejected, true);
+  assert.equal(selector.selectedAfterRejectedSwitch, selector.selectedBefore);
+  assert.equal(selector.activeAfterBaseline?.text, "核验中");
+  assert.equal(selector.activeAfterBaseline?.hidden, false);
+  assert.equal(selector.activeAfterReconnect?.text, "核验中");
+  assert.equal(selector.activeAfterReconnect?.hidden, false);
+  assert.equal(selector.clearedAfterTerminal?.hidden, true);
+  assert.equal(selector.activeBeforeSessionSwitch?.hidden, false);
+  assert.equal(selector.clearedAfterSessionSwitch?.hidden, true);
+  assert.equal(selector.profileUnchangedByEvidence, true);
 }
 
 function assertPackagedCancellationResult(result) {

@@ -270,13 +270,13 @@ async function performPermissionMode(
     updatePermissionModeBadge();
     syncPermissionsPanel();
     publishPermissionModeChanged();
-    toast(`已切换为${mode === "yes" ? " Yes" : ""}权限模式`, "success");
+    permissionsPaneApp.StatusBar?.setNotice?.(`已切换为${mode === "yes" ? " Yes" : ""}权限模式`, "success");
   } catch (error) {
     if (!isCurrentModeMutation(requestModeMutationGeneration, requestMountedGeneration, requestRoot, allowUnmounted)) return;
     resetPermissionModeControls();
     syncPermissionsPanel();
     publishPermissionModeChanged();
-    toast(`权限模式切换失败: ${(error as Error).message}`, "error");
+    permissionsPaneApp.StatusBar?.setNotice?.(`权限模式切换失败: ${(error as Error).message}`, "error");
   }
 }
 

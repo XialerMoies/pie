@@ -208,6 +208,7 @@ interface AppNamespace {
   SessionTabs: AppSessionTabs;
   SessionRestore: AppSessionRestore;
   Permissions: AppPermissions;
+  StatusBar: AppStatusBar;
   Settings: AppSettings;
   SettingsComponents: AppSettingsComponents;
   SettingsCustomProviderEditor: SettingsCustomProviderEditorConstructor;
@@ -219,6 +220,11 @@ interface AppNamespace {
   McpViews: AppMcpViews;
   ExplorerViews: AppExplorerViews;
   Tabs: AppTabs;
+}
+
+interface AppStatusBar {
+  setNotice(message: string, kind?: 'info' | 'success' | 'error', durationMs?: number): void;
+  clearNotice(): void;
 }
 
 interface MonacoAPI {

@@ -1343,6 +1343,8 @@ describe("side panel interaction", () => {
 
   it("opens the requested panel when restored state and startup DOM disagree", () => {
     win.App.State.updatePanel({ active: "chat", closed: false, width: 260 });
+    const app = doc.getElementById("app");
+    app?.classList.add("app");
 
     const oldSidebar = doc.querySelector(".sbar");
     oldSidebar?.remove();
@@ -1368,6 +1370,9 @@ describe("side panel interaction", () => {
 
     win.togglePanel("chat");
     assert.strictEqual(panel.classList.contains("closed"), true, "clicking the visible panel again should close it");
+
+    win.togglePanel("chat");
+    assert.strictEqual(panel.classList.contains("closed"), false, "reopening the visible panel should restore it");
 
     sidebar.remove();
   });
