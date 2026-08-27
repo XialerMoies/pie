@@ -28,7 +28,7 @@ type RuntimeLike = Pick<
   AgentRuntime,
   | "currentWorkspace"
   | "session"
-  | "modelRegistry"
+  | "findModel"
   | "onEvent"
   | "getContextUsageSnapshot"
   | "runWithStableSession"
@@ -217,7 +217,7 @@ export class PiAgentEngineAdapter implements AgentEngine {
   }
 
   async setModel(provider: string, modelId: string): Promise<void> {
-    const model = this.#runtime.modelRegistry.find(provider, modelId);
+    const model = this.#runtime.findModel(provider, modelId);
     if (!model) throw new AgentEngineError({ code: "model_not_found", category: "validation", retryable: false, message: "未找到指定模型" });
     const known = this.#knownModels.get(`${provider}/${modelId}`);
     await this.#runtime.session.setModel((known ?? model) as never);

@@ -7,7 +7,7 @@
 import { readdirSync, existsSync } from "fs"
 import { resolve } from "path"
 import type { AgentSession } from "../agent-engine/pi-runtime.js"
-import { createAgentSession, ModelRuntime, ModelRegistry, SessionManager, DefaultResourceLoader } from "../agent-engine/pi-runtime.js"
+import { createAgentSession, SessionManager, DefaultResourceLoader } from "../agent-engine/pi-runtime.js"
 import { resolveSystemPrompt } from "./prompts.js"
 import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools/index.js"
 import { normalizePermissionPath, resetSessionPermissionState } from "./permissions.js"
@@ -50,6 +50,12 @@ import {
   readCapabilityComponentGeneration,
 } from "./capability-components.js"
 import type { RequiredComponentGenerationRef, RequiredComponentLease } from "./capability-component-replacement.js"
+import {
+  createModelRouterSession,
+  piModelRouterProvider,
+  type ModelRouterSession,
+} from "../model-provider/model-router.js"
+import type { ProviderModel } from "../model-provider/runtime-types.js"
 
 import { setCurrentRuntime as _setGlobalRuntime, getCurrentRuntime as _getGlobalRuntime } from "./globals.js";
 // 重导出供 tools 使用，实际实现在 globals.ts（零依赖，防循环）
@@ -71,6 +77,8 @@ export { buildToolContextExtra } from "./runtime-config.js"
 export type SessionEventCallback = (event: any, sourceSession?: AgentSession) => void
 export type WorkspaceChangeCallback = (workspace: string) => void
 export type PlanStateChangeCallback = (state: PlanStateSnapshot) => void
+
+capabilityComponentManager.bindRequiredProvider("model-router", piModelRouterProvider)
 
 interface SessionEventSubscription {
   cb: SessionEventCallback
@@ -105,8 +113,6 @@ export function recoverConversationLeaf(sessionManager: SessionManager): boolean
 
 export class AgentRuntime {
   private _session?: AgentSession
-  modelRuntime!: ModelRuntime
-  modelRegistry!: ModelRegistry
   sessionManager!: SessionManager
   config!: RuntimeConfig
   currentWorkspace!: string
@@ -130,6 +136,7 @@ export class AgentRuntime {
   private _activeProfileRef: AgentProfileRef = agentProfileRef(this._activeProfile)
   private _activeProfileLifecycle?: AgentProfileLifecycleFact
   private _componentLease?: RequiredComponentLease
+  private _modelRouterSession?: ModelRouterSession
   private _planState: PlanStateSnapshot = defaultPlanState()
   private _planStateSubscriptions = new Set<PlanStateChangeCallback>()
 
@@ -158,13 +165,40 @@ export class AgentRuntime {
     return this._enqueueSessionTransition(operation)
   }
 
+  /** Model capabilities pinned to the current Required Component generation. */
+  get modelRouter(): ModelRouterSession {
+    if (!this._modelRouterSession) throw new Error("[runtime] 当前没有可用的 model router session")
+    return this._modelRouterSession
+  }
+
+  listModels(): readonly ProviderModel[] {
+    return this.modelRouter.listModels()
+  }
+
+  findModel(provider: string, id: string): ProviderModel | undefined {
+    return this.modelRouter.findModel(provider, id)
+  }
+
+  providerAuthStatus(provider: string): { configured?: boolean; source?: string } | undefined {
+    return this.modelRouter.providerAuthStatus(provider)
+  }
+
+  async refreshModelProviders(providers: readonly string[]): Promise<void> {
+    const result = await this.modelRouter.refreshProviders(providers)
+    if (result.aborted) throw new Error("Provider refresh was aborted")
+    const failures = [...result.errors.values()]
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, "Provider refresh failed")
+  }
+
   getContextUsageSnapshot(): ContextUsageSnapshot | undefined {
     return calculateContextUsageSnapshot(this.session)
   }
 
   syncModelProviders(options?: { waitForIdle?: boolean }): Promise<number> {
-    const sync = this.config.syncModelProviders
-    if (!sync) return Promise.resolve(0)
+    const modelRouter = this._modelRouterSession
+    if (!modelRouter) return Promise.resolve(0)
+    const sync = () => modelRouter.syncProviders()
     // 读模型列表等只读查询不应等待 streaming turn 结束，否则长 tool 执行期间
     // 设置页模型/子Agent 标签页、模型选择器会一直卡在加载中。切换模型等需要
     // 稳定 session 的调用保持默认 waitForIdle: true。
@@ -173,7 +207,7 @@ export class AgentRuntime {
     if (this._modelProviderSync && this._modelProviderSyncIdleWait === waitForIdle) {
       if (this._modelProviderSyncStarted) {
         try {
-          this._modelProviderSyncWake = sync(this.modelRuntime)
+          this._modelProviderSyncWake = sync()
         } catch (error) {
           this._modelProviderSyncWake = Promise.reject(error)
         }
@@ -192,11 +226,11 @@ export class AgentRuntime {
           const generation = this._modelProviderSyncGeneration
           const wake = this._modelProviderSyncWake
           this._modelProviderSyncWake = undefined
-          revision = await (wake ?? sync(this.modelRuntime))
-          if (activeModel && session && this._session === session) {
-            const refreshedModel = this.modelRegistry.find(activeModel.provider, activeModel.id)
+          revision = await (wake ?? sync())
+          if (activeModel && session && this._session === session && this._modelRouterSession === modelRouter) {
+            const refreshedModel = modelRouter.findModel(activeModel.provider, activeModel.id)
             if (refreshedModel && refreshedModel !== session.model) {
-              await session.setModel(refreshedModel)
+              await session.setModel(refreshedModel as never)
             }
           }
           if (generation === this._modelProviderSyncGeneration && !this._modelProviderSyncWake) break
@@ -222,7 +256,7 @@ export class AgentRuntime {
 
   /** Sync shared provider state for an embedded subagent without waiting on or rebinding its parent session. */
   syncModelProvidersForSubagent(): Promise<number> {
-    return this.config.syncModelProviders?.(this.modelRuntime) ?? Promise.resolve(0)
+    return this._modelRouterSession?.syncProviders() ?? Promise.resolve(0)
   }
 
   /** 仅在会话完整初始化后更新对外可见对象。 */
@@ -567,9 +601,12 @@ export class AgentRuntime {
     this._planStateSubscriptions.clear()
     const session = this._session
     this._session = undefined
+    const modelRouter = this._modelRouterSession
+    this._modelRouterSession = undefined
+    try { session?.dispose() } catch {}
+    try { modelRouter?.dispose() } catch {}
     this._componentLease?.release()
     this._componentLease = undefined
-    try { session?.dispose() } catch {}
     disconnectMcp()
   }
 
@@ -630,6 +667,8 @@ export class AgentRuntime {
   /** 中止并清理旧 session；dispose 前保留可用于重建的 workspace 和文件。 */
   private async _saveAndDispose(keepMcp: boolean): Promise<SessionRecoveryPoint> {
     const previousSession = this._session
+    const previousModelRouter = this._modelRouterSession
+    const previousComponentLease = this._componentLease
     const recoveryPoint: SessionRecoveryPoint = {
       workspace: this.currentWorkspace,
       sessionFile: previousSession?.sessionFile,
@@ -637,7 +676,7 @@ export class AgentRuntime {
       profileRef: this._activeProfileRef,
     }
     this._session = undefined
-    this._componentLease?.release()
+    this._modelRouterSession = undefined
     this._componentLease = undefined
     try { previousSession?.abort() } catch {}
     this._eventSubscriptions = this._eventSubscriptions.filter((subscription) => subscription.active)
@@ -652,6 +691,8 @@ export class AgentRuntime {
       const message = error instanceof Error ? error.message : String(error)
       console.error(`[runtime] 旧 session 释放失败，仍按不可用处理：${message}`)
     }
+    try { previousModelRouter?.dispose() } catch {}
+    previousComponentLease?.release()
     if (!keepMcp) await disconnectMcp()
     return recoveryPoint
   }
@@ -746,10 +787,6 @@ export class AgentRuntime {
   ): Promise<void> {
     const { agentDir, sessionsDir, authFile, modelsFile } = this.config
 
-    this.modelRuntime = await ModelRuntime.create({ authPath: authFile, modelsPath: modelsFile })
-    await this.config.syncModelProviders?.(this.modelRuntime)
-    this.modelRegistry = new ModelRegistry(this.modelRuntime)
-
     // 优先续写指定文件，否则查找 workspace 现有 session，否则创建新会话
     let created = false
     if (forceNew) {
@@ -809,7 +846,14 @@ export class AgentRuntime {
     }
     const componentLease = capabilityComponentManager.acquireRequiredLease(persistedComponentGeneration)
     let assembledSession: AgentSession | undefined
+    let modelRouterSession: ModelRouterSession | undefined
     try {
+      modelRouterSession = await createModelRouterSession(componentLease, {
+        authFile,
+        modelsFile,
+        syncRuntime: this.config.syncModelProviders,
+      })
+      this._modelRouterSession = modelRouterSession
       const systemPrompt = await this._buildSystemPrompt(cwd, profile)
       const loader = new DefaultResourceLoader({
         cwd,
@@ -830,7 +874,7 @@ export class AgentRuntime {
 
       const { session } = await createAgentSession({
         agentDir,
-        modelRuntime: this.modelRuntime,
+        modelRuntime: modelRouterSession.providerRuntime as never,
         resourceLoader: loader,
         cwd,
         sessionManager: this.sessionManager,
@@ -854,6 +898,8 @@ export class AgentRuntime {
       this._activeProfileLifecycle = lifecycle
       this._componentLease = componentLease
     } catch (error) {
+      if (this._modelRouterSession === modelRouterSession) this._modelRouterSession = undefined
+      try { modelRouterSession?.dispose() } catch {}
       componentLease.release()
       if (assembledSession && this._session === assembledSession) this._session = undefined
       try { assembledSession?.dispose() } catch {}

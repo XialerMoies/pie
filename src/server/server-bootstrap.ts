@@ -28,19 +28,12 @@ export function createServerContext(
       customProviderService: dependencies.customProviderService,
       providerReferenceLock: dependencies.providerReferenceLock,
       model: {
-        get providerRuntime() { return dependencies.runtime.modelRuntime; },
-        get modelRuntime() { return dependencies.runtime.modelRuntime; },
-        get modelRegistry() { return dependencies.runtime.modelRegistry; },
-        listModels: () => dependencies.runtime.modelRegistry.getAvailable(),
-        findModel: (provider, id) => dependencies.runtime.modelRegistry.find(provider, id),
-        providerAuthStatus: (provider) => dependencies.runtime.modelRuntime.getProviderAuthStatus(provider),
-        refreshProviders: async (providers) => {
-          const result = await dependencies.runtime.modelRuntime.refresh({ providers, allowNetwork: false });
-          if (result.aborted) throw new Error("Provider refresh was aborted");
-          const failures = [...result.errors.values()];
-          if (failures.length === 1) throw failures[0];
-          if (failures.length > 1) throw new AggregateError(failures, "Provider refresh failed");
-        },
+        get router() { return dependencies.runtime.modelRouter; },
+        get providerRuntime() { return dependencies.runtime.modelRouter.providerRuntime; },
+        listModels: () => dependencies.runtime.listModels(),
+        findModel: (provider, id) => dependencies.runtime.findModel(provider, id),
+        providerAuthStatus: (provider) => dependencies.runtime.providerAuthStatus(provider),
+        refreshProviders: (providers) => dependencies.runtime.refreshModelProviders(providers),
         syncModelProviders: (options) => dependencies.runtime.syncModelProviders(options),
         runWithStableSession: (operation) => dependencies.runtime.runWithStableSession(operation),
       },

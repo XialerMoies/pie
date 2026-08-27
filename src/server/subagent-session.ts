@@ -47,7 +47,7 @@ export interface EmbeddedSubagentSessionInput {
 
 type RuntimeForSubagents = Pick<
   AgentRuntime,
-  "modelRuntime" | "modelRegistry" | "config" | "session" | "syncModelProvidersForSubagent"
+  "modelRouter" | "config" | "session" | "syncModelProvidersForSubagent"
 >
 export interface EmbeddedSubagentSession {
   messages?: unknown[]
@@ -154,11 +154,11 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
       })
 
     await runtime.syncModelProvidersForSubagent()
-    const model = resolveModel(runtime.modelRegistry, runtime.session.model, input.model)
+    const model = resolveModel(runtime.modelRouter.modelRegistry, runtime.session.model, input.model)
     const created = await createSession({
       cwd: input.workspace,
       agentDir: runtime.config.agentDir,
-      modelRuntime: runtime.modelRuntime,
+      modelRuntime: runtime.modelRouter.providerRuntime,
       model,
       thinkingLevel: "off",
       tools,

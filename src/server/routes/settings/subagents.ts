@@ -29,11 +29,7 @@ export const handleSubagentSettings: RouteHandler = async (req, res, ctx) => {
       const replace = async () => {
         await model.syncModelProviders();
         for (const agent of agents) {
-          const found = agent.model && (typeof model.findModel === "function"
-            ? model.findModel(agent.model.provider, agent.model.id)
-            : typeof model.modelRegistry?.find === "function"
-              ? model.modelRegistry.find(agent.model.provider, agent.model.id)
-              : true);
+          const found = agent.model && model.findModel(agent.model.provider, agent.model.id);
           if (agent.model && !found) {
             throw new Error(`Subagent model is not available: ${agent.model.provider}/${agent.model.id}`);
           }

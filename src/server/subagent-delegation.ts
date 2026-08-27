@@ -16,7 +16,7 @@ import {
 } from "./subagent-session.js";
 import type { SubagentEvent } from "./subagent-events.js";
 
-type DelegationRuntime = Pick<AgentRuntime, "currentWorkspace" | "modelRegistry">;
+type DelegationRuntime = Pick<AgentRuntime, "currentWorkspace" | "findModel">;
 
 type DelegationSupervisor = Pick<
   SubagentSupervisor,
@@ -189,7 +189,7 @@ export function createSubagentDelegationHost(
   const host: SubagentDelegationHost = {
     validateSubagentModel(model: SubagentDelegationModel): boolean {
       if (disposed) return false;
-      return Boolean(options.runtime.modelRegistry.find(model.provider, model.id));
+      return Boolean(options.runtime.findModel(model.provider, model.id));
     },
     delegateTasks,
     dispose(): Promise<void> {

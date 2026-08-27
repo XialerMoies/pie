@@ -12,8 +12,9 @@ import type { ProviderReferenceMutationLock } from "../model-provider/provider-r
 import type { TsserverManager } from "./ts-server.js";
 import type { ServerObservability } from "./observability.js";
 import type { StartupPathsSnapshot } from "./startup-paths.js";
-import type { ProviderModelRegistry, ProviderRuntime } from "../model-provider/runtime-types.js";
+import type { ProviderRuntime } from "../model-provider/runtime-types.js";
 import type { SkillService } from "../agent/skills/skill-service.js";
+import type { ModelRouterSession } from "../model-provider/model-router.js";
 
 export interface ServerCoreContext {
   engine: AgentEngine;
@@ -56,10 +57,9 @@ export interface ServerProviderContext {
 }
 
 export interface ModelProviderContext {
+  /** Session-scoped model router pinned by the active component generation. */
+  readonly router: ModelRouterSession;
   readonly providerRuntime: ProviderRuntime;
-  /** @deprecated test/third-party compatibility; production routes use providerRuntime. */
-  readonly modelRuntime?: ProviderRuntime;
-  readonly modelRegistry: ProviderModelRegistry;
   listModels(): readonly import("../model-provider/runtime-types.js").ProviderModel[];
   findModel(provider: string, id: string): import("../model-provider/runtime-types.js").ProviderModel | undefined;
   providerAuthStatus(provider: string): { configured?: boolean; source?: string } | undefined;

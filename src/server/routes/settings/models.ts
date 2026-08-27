@@ -19,9 +19,7 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
       // 只读模型列表：不等待 streaming turn 结束，避免长 tool 执行期间设置页/
       // 模型选择器一直卡在加载中。provider 注册本身不依赖 session idle。
       await model.syncModelProviders({ waitForIdle: false });
-      const all = typeof model.listModels === "function"
-        ? model.listModels()
-        : model.modelRegistry.getAvailable();
+      const all = model.listModels();
       let authData: Record<string, unknown> = {};
       try {
         if (existsSync(p.PI_CONFIG_DIR)) {
@@ -63,11 +61,7 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
       const settingsFile = (await authorizeRoutePath(ctx, p.PI_CONFIG_DIR, "settings.json", "write", "settings.save")).path;
       const save = async () => {
         await model.syncModelProviders();
-        const found = typeof model.findModel === "function"
-          ? model.findModel(defaultProvider, defaultModel)
-          : typeof model.modelRegistry?.find === "function"
-            ? model.modelRegistry.find(defaultProvider, defaultModel)
-            : true;
+        const found = model.findModel(defaultProvider, defaultModel);
         if (!found) {
           throw new Error("Default model is not available");
         }
@@ -97,11 +91,7 @@ export const handleModelSettings: RouteHandler = async (req, res, ctx) => {
       let found = false;
       const switchModel = () => model.runWithStableSession(async () => {
         await model.syncModelProviders();
-        const targetModel = typeof model.findModel === "function"
-          ? model.findModel(provider, modelId)
-          : typeof model.modelRegistry?.find === "function"
-            ? model.modelRegistry.find(provider, modelId)
-            : undefined;
+        const targetModel = model.findModel(provider, modelId);
         if (!targetModel) return;
         found = true;
         const priorModel = engine.session.model;
