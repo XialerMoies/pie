@@ -26,7 +26,7 @@ import { CustomProviderReferenceConflict, ProviderReferenceChecker } from "../sr
 import { FileProviderReferenceMutationLock } from "../src/model-provider/provider-reference-lock.ts";
 import { ServerPermissionError } from "../src/server/permission-service.ts";
 import { startFakeModelProvider } from "./fixtures/fake-model-provider.mjs";
-import { PiAgentEngineAdapter } from "../src/agent-engine/index.ts";
+import { createMockModelRouter, withServerGroups } from "./helpers/context.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -112,16 +112,13 @@ function mockRuntime(overrides) {
     getAvailable: () => [],
     find: () => undefined,
   };
-  const modelRouter = {
+  const modelRouter = createMockModelRouter({
     providerRuntime: modelRuntime,
     modelRegistry,
-    syncProviders: async () => 0,
     listModels: () => modelRouter.modelRegistry.getAvailable?.() ?? modelRouter.modelRegistry.getModels?.() ?? [],
-    findModel: (provider, id) => modelRouter.modelRegistry.find?.(provider, id),
     providerAuthStatus: (provider) => modelRuntime.getProviderAuthStatus?.(provider),
     refreshProviders: async (providers) => modelRuntime.refresh?.({ providers, allowNetwork: false }) ?? { errors: new Map() },
-    dispose() {},
-  };
+  });
   return {
     session,
     activeProfile: { id: "standard", revision: 1 },
@@ -191,32 +188,7 @@ function mockContext(overrides) {
     paths,
     ...overrides,
   };
-  context.engine = context.engine || new PiAgentEngineAdapter(context.runtime);
-  context.groups = {
-    core: { get engine() { return context.engine; }, get runtime() { return context.runtime; }, get chatStream() { return context.chatStream; }, get appEvents() { return context.appEvents; }, get recordUserNote() { return context.recordUserNote; } },
-    security: { get config() { return context.security; }, get permissionService() { return context.permissionService; }, get rootRegistry() { return context.rootRegistry; }, get permissionMode() { return context.permissionMode; } },
-    storage: { get paths() { return context.paths; }, get workspaceLock() { return context.workspaceLock; } },
-    providers: {
-      get customProviderService() { return context.customProviderService; },
-      get providerReferenceLock() { return context.providerReferenceLock; },
-      model: {
-        get router() { return context.runtime.modelRouter; },
-        get providerRuntime() { return context.runtime.modelRouter.providerRuntime; },
-        listModels: () => context.runtime.listModels(),
-        findModel: (provider, id) => context.runtime.findModel(provider, id),
-        providerAuthStatus: (provider) => context.runtime.providerAuthStatus(provider),
-        refreshProviders: async (providers) => {
-          if (context.runtime.refreshModelProviders) return context.runtime.refreshModelProviders(providers);
-          const result = await context.runtime.modelRouter.refreshProviders(providers);
-          if (result?.aborted) throw new Error("Provider refresh was aborted");
-        },
-        syncModelProviders: (...args) => context.runtime.syncModelProviders?.(...args) || Promise.resolve(0),
-        runWithStableSession: (operation) => context.runtime.runWithStableSession(operation),
-      },
-    },
-    infra: { get tsServer() { return context.tsServer; }, get observability() { return context.observability; } },
-  };
-  return context;
+  return withServerGroups(context);
 }
 
 // ─── 测试辅助 ─────────────────────────────────────────────

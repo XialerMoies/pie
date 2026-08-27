@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { AgentRuntime } from "../src/agent/runtime.ts";
+import { createMockModelRouter } from "./helpers/context.mjs";
 
 /**
  * 构造一个最小 AgentRuntime 实例（跳过真实 PI session 初始化），
@@ -23,16 +24,11 @@ function runtimeWith(session, options = {}) {
   const modelRegistry = options.modelRegistry ?? {
     find: () => session?.model,
   };
-  runtime._modelRouterSession = {
+  runtime._modelRouterSession = createMockModelRouter({
     providerRuntime,
     modelRegistry,
     syncProviders: options.syncProviders ?? (async () => options.config?.syncModelProviders?.(providerRuntime) ?? 0),
-    listModels: () => modelRegistry.getAvailable?.() ?? [],
-    findModel: (provider, id) => modelRegistry.find(provider, id),
-    providerAuthStatus: () => undefined,
-    refreshProviders: async () => ({ errors: new Map() }),
-    dispose() {},
-  };
+  });
   runtime.currentWorkspace = options.workspace ?? "/workspace";
   return runtime;
 }

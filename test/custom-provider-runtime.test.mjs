@@ -9,6 +9,7 @@ import { PiCustomProviderAdapter } from "../src/model-provider/pi-custom-provide
 import { CustomProviderRuntimeCoordinator } from "../src/model-provider/runtime-coordinator.ts"
 import { handleChat } from "../src/server/routes/chat.ts"
 import { makeReq, makeResWithEvents } from "./helpers/http.mjs"
+import { createMockModelContext, createMockModelRouter } from "./helpers/context.mjs"
 
 function snapshot(revision, providerIds = []) {
   return {
@@ -29,16 +30,7 @@ function deferred() {
 }
 
 function attachModelRouter(runtime, { providerRuntime = {}, modelRegistry, syncProviders }) {
-  runtime._modelRouterSession = {
-    providerRuntime,
-    modelRegistry,
-    syncProviders,
-    listModels: () => modelRegistry.getAvailable?.() ?? [],
-    findModel: (provider, id) => modelRegistry.find?.(provider, id),
-    providerAuthStatus: () => undefined,
-    refreshProviders: async () => ({ errors: new Map() }),
-    dispose() {},
-  };
+  runtime._modelRouterSession = createMockModelRouter({ providerRuntime, modelRegistry, syncProviders });
   return runtime;
 }
 
@@ -634,7 +626,12 @@ describe("AgentRuntime custom provider synchronization", () => {
           core: { engine, runtime, chatStream },
           security: {},
           storage: { paths: { APP_ROOT: process.cwd() } },
-          providers: { model: { router: runtime._modelRouterSession, providerRuntime: runtime._modelRouterSession.providerRuntime, listModels: () => [], findModel: () => model, providerAuthStatus: () => undefined, refreshProviders: async () => {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+          providers: { model: createMockModelContext({
+            providerRuntime: runtime._modelRouterSession.providerRuntime,
+            modelRegistry: runtime._modelRouterSession.modelRegistry,
+            findModel: () => model,
+            listModels: () => [],
+          }) },
           infra: {},
         },
       },
