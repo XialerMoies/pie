@@ -25,6 +25,9 @@ scripts/patch-sdk.mjs
 AGENTS.md
 build/
 docs/
+!docs/
+docs/*
+!docs/能力组件插件化清单.md
 .coverage/
 # 测试残留目录（mkdtemp 建于项目根，失败/中断时遗留）
 .tmp-*

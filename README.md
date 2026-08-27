@@ -207,42 +207,8 @@ MCP 服务器配置：
 
 ## 架构
 
-```
-[Electron Main Process]
-       │
-       ├── preload.ts → electronAPI (window/file/terminal)
-       │
-       └── spawn → [pi-server (子进程)]
-              │
-              ├── HTTP API + SSE ← [BrowserWindow]
-              │
-              ├── tsserver (TypeScript 语言服务)
-              │
-              └── AgentEngine contract
-                      └── PiAgentEngineAdapter → PI SDK (ReAct Loop) ← LLM API
-                      │
-                      └── MCP Client → stdio/HTTP/SSE servers
-```
-
-前端数据流：
-
-```
-UiStateStore (persisted JSON)
-     │
-TabStore ──→ File/ Session/ Chat 标签统一管理
-     │
-ProblemsStore ──→ Monaco diagnostics → 底部栏
-     │
- pane/*      5 个注册面板（explorer / chat / search / git / mcp）
-     │
- dashboard/  布局、会话管理、设置、快捷键
-```
-
-三层职责：
-
-- **Desktop** — Electron 主进程，窗口生命周期、崩溃恢复、preload 桥
-- **Agent** — 项目自有 `AgentEngine` 契约由 `PiAgentEngineAdapter` 实现；`AgentRuntime` + `ToolRegistry` + 9 个自定义工具（含 str_replace_editor / file_write / agent_md）+ MCP 工具适配，封装 PI SDK。服务端路由、CLI 和 SSE 只消费 AgentEngine；子 Agent 与自定义 Provider 的剩余 PI 兼容边界将在 E0-b 收口。
-- **PI SDK** — 自 fork 版（v0.80.4），修了 compaction 等底层 bug，新增 max 思考档位
+完整的中文系统流程图、五层职责、依赖方向、会话 generation 和插件边界以
+[架构规范](./docs/架构规范.md) 为准。该文档是唯一架构图来源；本 README 不再维护第二套分层图。
 
 ---
 
