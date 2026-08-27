@@ -19,9 +19,19 @@ function runtimeWith(session, options = {}) {
   runtime._sessionSwitching = options.switching ?? false;
   runtime._transitionTail = options.tail ?? Promise.resolve();
   runtime.config = options.config ?? {};
-  runtime.modelRuntime = options.modelRuntime ?? {};
-  runtime.modelRegistry = options.modelRegistry ?? {
+  const providerRuntime = options.modelRuntime ?? {};
+  const modelRegistry = options.modelRegistry ?? {
     find: () => session?.model,
+  };
+  runtime._modelRouterSession = {
+    providerRuntime,
+    modelRegistry,
+    syncProviders: options.syncProviders ?? (async () => options.config?.syncModelProviders?.(providerRuntime) ?? 0),
+    listModels: () => modelRegistry.getAvailable?.() ?? [],
+    findModel: (provider, id) => modelRegistry.find(provider, id),
+    providerAuthStatus: () => undefined,
+    refreshProviders: async () => ({ errors: new Map() }),
+    dispose() {},
   };
   runtime.currentWorkspace = options.workspace ?? "/workspace";
   return runtime;

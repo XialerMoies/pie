@@ -78,29 +78,42 @@ test("type-checks model provider production modules from the root config", async
   assert.equal(tsconfig.include.includes("src/model-provider/**/*.ts"), true)
 })
 
-test("wires main and subagent sessions through ModelRuntime", async () => {
+test("wires main, subagent, and settings model access through the session-bound model router", async () => {
   const runtimeSource = await readFile(resolve("src/agent/runtime.ts"), "utf8")
+  const routerSource = await readFile(resolve("src/model-provider/model-router.ts"), "utf8")
   const subagentSource = await readFile(resolve("src/server/subagent-session.ts"), "utf8")
+  const serverBootstrapSource = await readFile(resolve("src/server/server-bootstrap.ts"), "utf8")
   const chatSource = await readFile(resolve("src/server/routes/chat.ts"), "utf8")
   const modelsSource = await readFile(resolve("src/server/routes/settings/models.ts"), "utf8")
 
-  assert.match(runtimeSource, /ModelRuntime\.create\(/)
-  assert.match(runtimeSource, /modelRuntime:\s*this\.modelRuntime/)
+  assert.match(routerSource, /ModelRuntime\.create\(/)
+  assert.match(runtimeSource, /bindRequiredProvider\("model-router",\s*piModelRouterProvider\)/)
+  assert.match(runtimeSource, /createModelRouterSession\(componentLease/)
+  assert.match(runtimeSource, /modelRuntime:\s*modelRouterSession\.providerRuntime/)
+  assert.doesNotMatch(runtimeSource, /this\.modelRuntime|this\.modelRegistry/)
+  assert.doesNotMatch(serverBootstrapSource, /get modelRuntime|get modelRegistry/)
   assert.doesNotMatch(runtimeSource, /\bAuthStorage\b/)
-  assert.match(subagentSource, /modelRuntime:\s*runtime\.modelRuntime/)
+  assert.match(subagentSource, /modelRuntime:\s*runtime\.modelRouter\.providerRuntime/)
+  assert.match(subagentSource, /runtime\.modelRouter\.modelRegistry/)
   assert.doesNotMatch(subagentSource, /authStorage:\s*runtime\.authStorage/)
 
-  const createRuntime = runtimeSource.indexOf("ModelRuntime.create(")
-  const initSync = runtimeSource.indexOf("syncModelProviders?.(this.modelRuntime)", createRuntime)
-  const createRegistry = runtimeSource.indexOf("new ModelRegistry(this.modelRuntime)", createRuntime)
-  const createMainSession = runtimeSource.indexOf("createAgentSession({", createRuntime)
-  assert.ok(createRuntime >= 0 && initSync > createRuntime)
-  assert.ok(createRegistry > initSync && createMainSession > initSync)
+  const createRuntime = routerSource.indexOf("ModelRuntime.create(")
+  const initSync = routerSource.indexOf("syncRuntime?.(providerRuntime)", createRuntime)
+  const createRegistry = routerSource.indexOf("new ModelRegistry(providerRuntime", createRuntime)
+  assert.ok(createRuntime >= 0 && initSync > createRuntime && createRegistry > initSync)
+
+  const acquireLease = runtimeSource.indexOf("acquireRequiredLease(persistedComponentGeneration)")
+  const createRouter = runtimeSource.indexOf("createModelRouterSession(componentLease", acquireLease)
+  const createMainSession = runtimeSource.indexOf("createAgentSession({", createRouter)
+  assert.ok(acquireLease >= 0 && createRouter > acquireLease && createMainSession > createRouter)
 
   const subagentSync = subagentSource.indexOf("await runtime.syncModelProvidersForSubagent()")
   assert.ok(subagentSync >= 0)
   assert.ok(subagentSource.indexOf("resolveModel(", subagentSync) > subagentSync)
   assert.ok(subagentSource.indexOf("createSession({", subagentSync) > subagentSync)
+
+  assert.match(serverBootstrapSource, /get providerRuntime\(\)\s*\{\s*return dependencies\.runtime\.modelRouter\.providerRuntime/)
+  assert.match(serverBootstrapSource, /listModels:\s*\(\)\s*=>\s*dependencies\.runtime\.listModels\(\)/)
 
   const resolveChatEngine = chatSource.indexOf("const engine = resolveEngine(ctx)")
   const chatRoute = chatSource.indexOf('url === "/api/chat"')
@@ -110,11 +123,11 @@ test("wires main and subagent sessions through ModelRuntime", async () => {
 
   const listRoute = modelsSource.indexOf('url === "/api/models"')
   const listSync = modelsSource.indexOf("await model.syncModelProviders", listRoute)
-  const listRegistry = modelsSource.indexOf("model.modelRegistry", listRoute)
-  assert.ok(listSync > listRoute && listRegistry > listSync)
+  const listModels = modelsSource.indexOf("model.listModels", listRoute)
+  assert.ok(listSync > listRoute && listModels > listSync)
 
   const switchRoute = modelsSource.indexOf('url === "/api/model/switch"')
   const switchSync = modelsSource.indexOf("await model.syncModelProviders", switchRoute)
-  const switchFind = modelsSource.indexOf("model.modelRegistry.find(provider, modelId)", switchRoute)
+  const switchFind = modelsSource.indexOf("model.findModel(provider, modelId)", switchRoute)
   assert.ok(switchSync > switchRoute && switchFind > switchSync)
 })

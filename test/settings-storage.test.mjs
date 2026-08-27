@@ -12,7 +12,7 @@ import { canonicalWorkspacePath } from "../src/data/data-layout.ts";
 import { recordOpenedWorkspace } from "../src/data/user-settings.ts";
 import { handleSettings } from "../src/server/routes/settings.ts";
 import { previewLegacySessions, workspaceDataPaths } from "../src/server/routes/session-dir.ts";
-import { withServerGroups } from "./helpers/context.mjs";
+import { createMockModelRouter, withServerGroups } from "./helpers/context.mjs";
 
 const roots = [];
 
@@ -53,7 +53,7 @@ async function callSettings(method, url, body, paths, options = {}) {
   const context = withServerGroups({
     runtime: {
       session: {},
-      modelRegistry: {},
+      modelRouter: createMockModelRouter(),
       currentWorkspace: paths.STARTUP?.workspace,
       syncModelProviders: async () => 0,
       runWithStableSession: async (operation) => operation(),
@@ -199,7 +199,7 @@ describe("preferences REST boundary", () => {
         model: { provider: "openai", id: "gpt-prior" },
         setModel: async () => {},
       },
-      modelRegistry: { find: () => model },
+      modelRouter: createMockModelRouter({ modelRegistry: { find: () => model } }),
     };
 
     const [preferences, modelResponse, startup] = await Promise.all([
@@ -246,18 +246,18 @@ describe("custom subagent REST boundary", () => {
     };
 
     const empty = await callSettings("GET", "/api/subagents", undefined, paths, {
-      runtime: { modelRegistry: { find: () => model } },
+      runtime: { modelRouter: createMockModelRouter({ modelRegistry: { find: () => model } }) },
     });
     assert.deepStrictEqual(empty, { status: 200, body: { agents: [] } });
 
     const saved = await callSettings("PUT", "/api/subagents", { agents: [agent] }, paths, {
-      runtime: { modelRegistry: { find: () => model } },
+      runtime: { modelRouter: createMockModelRouter({ modelRegistry: { find: () => model } }) },
     });
     assert.strictEqual(saved.status, 200);
     assert.deepStrictEqual(saved.body, { ok: true, agents: [agent] });
 
     const loaded = await callSettings("GET", "/api/subagents", undefined, paths, {
-      runtime: { modelRegistry: { find: () => model } },
+      runtime: { modelRouter: createMockModelRouter({ modelRegistry: { find: () => model } }) },
     });
     assert.deepStrictEqual(loaded.body, { agents: [agent] });
   });
@@ -278,7 +278,7 @@ describe("custom subagent REST boundary", () => {
 
     const unknownModel = await callSettings("PUT", "/api/subagents", {
       agents: [{ ...base, model: { provider: "missing", id: "none" } }],
-    }, paths, { runtime: { modelRegistry: { find: () => undefined } } });
+    }, paths, { runtime: { modelRouter: createMockModelRouter({ modelRegistry: { find: () => undefined } }) } });
     assert.strictEqual(unknownModel.status, 400);
     assert.match(unknownModel.body.error, /model.*missing\/none/i);
 

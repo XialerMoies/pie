@@ -6,8 +6,38 @@
 
 import { PiAgentEngineAdapter } from "../../src/agent-engine/index.ts";
 
+export function createMockModelRouter(overrides = {}) {
+  const providerRuntime = overrides.providerRuntime || {};
+  const router = {
+    providerRuntime,
+    modelRegistry: overrides.modelRegistry || { find: () => undefined, getAvailable: () => [] },
+    syncProviders: overrides.syncProviders || (async () => 0),
+    listModels: overrides.listModels || (() => router.modelRegistry.getAvailable?.() || []),
+    findModel: overrides.findModel || ((provider, id) => router.modelRegistry.find?.(provider, id)),
+    providerAuthStatus: overrides.providerAuthStatus || (() => undefined),
+    refreshProviders: overrides.refreshProviders || (async () => ({ errors: new Map() })),
+    dispose() {},
+  };
+  return router;
+}
+
+export function createMockModelContext(overrides = {}) {
+  const router = createMockModelRouter(overrides);
+  return {
+    router,
+    providerRuntime: router.providerRuntime,
+    listModels: () => router.listModels(),
+    findModel: (provider, id) => router.findModel(provider, id),
+    providerAuthStatus: (provider) => router.providerAuthStatus(provider),
+    refreshProviders: (providers) => router.refreshProviders(providers),
+    syncModelProviders: overrides.syncModelProviders || (async () => router.syncProviders()),
+    runWithStableSession: overrides.runWithStableSession || (async (operation) => operation()),
+  };
+}
+
 function makeMockRuntime(overrides = {}) {
   const cwd = overrides.cwd || "/test";
+  const modelRouter = createMockModelRouter();
   return {
     session: {
       model: {},
@@ -22,7 +52,11 @@ function makeMockRuntime(overrides = {}) {
       subscribe: () => () => {},
       get state() { return { messages: [] }; },
     },
-    modelRegistry: {},
+    modelRouter,
+    findModel(provider, id) { return this.modelRouter.findModel(provider, id); },
+    listModels() { return this.modelRouter.listModels(); },
+    providerAuthStatus() { return undefined; },
+    async refreshModelProviders() {},
     currentWorkspace: cwd,
     switchWorkspace: async (ws) => {},
     onEvent: () => () => {},
@@ -31,6 +65,19 @@ function makeMockRuntime(overrides = {}) {
 }
 
 export function withServerGroups(context) {
+  const runtime = context.runtime;
+  if (!runtime.modelRouter) {
+    runtime.modelRouter = createMockModelRouter();
+  }
+  context.runtime.findModel ||= function findModel(provider, id) {
+    return this.modelRouter.findModel(provider, id);
+  };
+  context.runtime.listModels ||= function listModels() {
+    return this.modelRouter.listModels();
+  };
+  context.runtime.providerAuthStatus ||= function providerAuthStatus(provider) {
+    return this.modelRouter.providerAuthStatus(provider);
+  };
   context.engine ||= new PiAgentEngineAdapter(context.runtime);
   context.groups = {
     core: {
@@ -55,8 +102,16 @@ export function withServerGroups(context) {
       get customProviderService() { return context.customProviderService; },
       get providerReferenceLock() { return context.providerReferenceLock; },
       model: {
-        get modelRuntime() { return context.runtime.modelRuntime; },
-        get modelRegistry() { return context.runtime.modelRegistry; },
+        get router() { return context.runtime.modelRouter; },
+        get providerRuntime() { return context.runtime.modelRouter.providerRuntime; },
+        listModels: () => context.runtime.listModels(),
+        findModel: (provider, id) => context.runtime.findModel(provider, id),
+        providerAuthStatus: (provider) => context.runtime.providerAuthStatus(provider),
+        refreshProviders: async (providers) => {
+          if (context.runtime.refreshModelProviders) return context.runtime.refreshModelProviders(providers);
+          const result = await context.runtime.modelRouter.refreshProviders(providers);
+          if (result?.aborted) throw new Error("Provider refresh was aborted");
+        },
         syncModelProviders: (...args) => context.runtime.syncModelProviders?.(...args) || Promise.resolve(0),
         runWithStableSession: (operation) => context.runtime.runWithStableSession(operation),
       },

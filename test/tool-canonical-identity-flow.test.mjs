@@ -11,6 +11,7 @@ import { EvidenceLedger } from "../src/server/evidence-ledger.ts";
 import { RetryPolicy } from "../src/server/retry-policy.ts";
 import { attachEngineEvents } from "../src/server/agent-event-router.ts";
 import { parseSessionMessages } from "../src/server/routes/session-message-parser.ts";
+import { createMockModelContext } from "./helpers/context.mjs";
 
 function event(type, seq, extra = {}) {
   return { version: 1, type, sessionId: "s-a05", turnId: "t-a05", seq, timestamp: seq, ...extra };
@@ -79,7 +80,7 @@ describe("A-05 canonical tool identity cross-layer flow", () => {
         core: { engine, runtime: { session: engine.session }, chatStream: chat, appEvents: { publish() {} } },
         security: {},
         storage: { paths: { SESSIONS_DIR: "C:/workspace" } },
-        providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+        providers: { model: createMockModelContext() },
         infra: { observability },
       },
     });

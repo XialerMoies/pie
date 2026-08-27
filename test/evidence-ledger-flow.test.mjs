@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { agentToolToPIToolDefinition, structuredToolError, structuredToolResult } from "../src/agent/types.ts";
 import { EvidenceLedger } from "../src/server/evidence-ledger.ts";
 import { attachEngineEvents } from "../src/server/agent-event-router.ts";
+import { createMockModelContext } from "./helpers/context.mjs";
 
 function event(type, turnId = "turn-1", seq = 1, extra = {}) {
   return { version: 1, type, sessionId: "session-1", turnId, seq, timestamp: seq, ...extra };
@@ -69,7 +70,7 @@ describe("runtime evidence ledger cross-layer flow", () => {
       groups: {
         core: { engine, runtime, chatStream: chat, appEvents: { publish() {} } },
         security: {}, storage: { paths: { SESSIONS_DIR: root } },
-        providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+        providers: { model: createMockModelContext() },
         infra: { observability: { evidenceLedger: ledger } },
       },
     });

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createMockModelContext } from "./helpers/context.mjs";
 
 const root = mkdtempSync(resolve(process.cwd(), ".tmp-a14-a16-"));
 const workspace = resolve(root, "workspace");
@@ -50,7 +51,7 @@ function context(tsServer) {
         SESSIONS_DIR: resolve(data, "pi", "sessions"), SETTINGS_FILE: resolve(data, "settings.json"),
         FRONTEND_DIR: workspace, FRONTEND_SRC_DIR: workspace, HAS_BUILT_FRONTEND: false,
       } },
-      providers: { providerReferenceLock: { runExclusive: (fn) => fn() }, model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (fn) => fn() } },
+      providers: { providerReferenceLock: { runExclusive: (fn) => fn() }, model: createMockModelContext() },
       infra: { tsServer },
     },
   };

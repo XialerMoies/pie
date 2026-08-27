@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { handleTypeScript } from "../src/server/routes/typescript.ts";
+import { createMockModelContext } from "./helpers/context.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -146,7 +147,7 @@ describe("typescript routes", () => {
     core: { runtime: ctx.runtime, chatStream: ctx.chatStream, engine: {}, appEvents: { publish() {} } },
     security: {},
     storage: { get paths() { return ctx.paths; } },
-    providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+    providers: { model: createMockModelContext() },
     infra: { get tsServer() { return ctx.tsServer; } },
   };
 

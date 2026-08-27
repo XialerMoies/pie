@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { createMockModelContext } from "./helpers/context.mjs";
 
 const { handleSkillSettings } = await import("../src/server/routes/settings/skills.ts");
 
@@ -28,7 +29,7 @@ function context(overrides = {}) {
         core: { skillService: service, runtime },
         security: {},
         storage: { paths: {} },
-        providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+        providers: { model: createMockModelContext() },
         infra: {},
       },
     },

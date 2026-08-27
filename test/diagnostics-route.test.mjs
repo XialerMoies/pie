@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { handleDiagnostics } from "../src/server/routes/diagnostics.ts";
 import { StructuredLogger, ToolOutcomeMetrics } from "../src/server/observability.ts";
+import { createMockModelContext } from "./helpers/context.mjs";
 
 function context({ runtime, observability, paths }) {
   return {
@@ -10,7 +11,7 @@ function context({ runtime, observability, paths }) {
       core: { runtime },
       security: {},
       storage: { paths },
-      providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+      providers: { model: createMockModelContext() },
       infra: { observability },
     },
   };

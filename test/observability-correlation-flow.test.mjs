@@ -10,6 +10,7 @@ import { attachEngineEvents } from "../src/server/agent-event-router.ts";
 import { ToolOutcomeMetrics, createToolOutcomeObserver, diagnosticsSnapshot, StructuredLogger } from "../src/server/observability.ts";
 import { replayChatEvents } from "../src/server/chat-stream.ts";
 import { handleDiagnostics } from "../src/server/routes/diagnostics.ts";
+import { createMockModelContext } from "./helpers/context.mjs";
 
 function flow() {
   const sessionId = "session-correlation";
@@ -39,7 +40,7 @@ function flow() {
       core: { engine, runtime, chatStream: chat, appEvents: { publish() {} } },
       security: {},
       storage: { paths: { SESSIONS_DIR: "E:\\sessions", APP_ROOT: "E:\\workspace" } },
-      providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+      providers: { model: createMockModelContext() },
       infra: { observability },
     },
   };

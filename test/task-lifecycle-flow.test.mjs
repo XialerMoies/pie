@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { attachEngineEvents } from "../src/server/agent-event-router.ts";
 import { EvidenceLedger } from "../src/server/evidence-ledger.ts";
 import { TaskLifecycle, inferTaskRequirements } from "../src/server/task-lifecycle.ts";
+import { createMockModelContext } from "./helpers/context.mjs";
 
 function base(type, seq, extra = {}) {
   return { version: 1, type, sessionId: "session-a04", turnId: "turn-a04", seq, timestamp: seq, ...extra };
@@ -32,7 +33,7 @@ function wire(requirements, ledger = new EvidenceLedger(), sessionFile) {
       core: { engine, runtime, chatStream: stream, appEvents: { publish() {} } },
       security: {},
       storage: { paths: { SESSIONS_DIR: tmpdir() } },
-      providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+      providers: { model: createMockModelContext() },
       infra: { observability: { evidenceLedger: ledger } },
     },
   });

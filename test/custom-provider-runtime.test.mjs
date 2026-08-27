@@ -28,6 +28,20 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
+function attachModelRouter(runtime, { providerRuntime = {}, modelRegistry, syncProviders }) {
+  runtime._modelRouterSession = {
+    providerRuntime,
+    modelRegistry,
+    syncProviders,
+    listModels: () => modelRegistry.getAvailable?.() ?? [],
+    findModel: (provider, id) => modelRegistry.find?.(provider, id),
+    providerAuthStatus: () => undefined,
+    refreshProviders: async () => ({ errors: new Map() }),
+    dispose() {},
+  };
+  return runtime;
+}
+
 function runtimeProvider(id = "runtime-provider") {
   return {
     id,
@@ -466,20 +480,20 @@ describe("AgentRuntime custom provider synchronization", () => {
     }
     const runtime = Object.create(AgentRuntime.prototype)
     runtime.session = session
-    runtime.modelRuntime = { kind: "runtime" }
-    runtime.modelRegistry = {
+    const providerRuntime = { kind: "runtime" }
+    const modelRegistry = {
       find(provider, id) {
         events.push(`find:${provider}/${id}`)
         return refreshedModel
       },
     }
     runtime.config = {
-      async syncModelProviders(modelRuntime) {
+      async syncModelProviders(runtime) {
         events.push("sync")
-        assert.strictEqual(modelRuntime, runtime.modelRuntime)
         return 7
       },
     }
+    attachModelRouter(runtime, { providerRuntime, modelRegistry, syncProviders: () => runtime.config.syncModelProviders(providerRuntime) })
 
     const background = runtime.syncModelProviders()
     const foreground = runtime.syncModelProviders()
@@ -518,9 +532,9 @@ describe("AgentRuntime custom provider synchronization", () => {
     })
     const runtime = Object.create(AgentRuntime.prototype)
     runtime.session = { isStreaming: false, model: undefined }
-    runtime.modelRuntime = {}
-    runtime.modelRegistry = { find: () => undefined }
     runtime.config = { syncModelProviders: (modelRuntime) => coordinator.sync(modelRuntime) }
+    const providerRuntime = {}
+    attachModelRouter(runtime, { providerRuntime, modelRegistry: { find: () => undefined }, syncProviders: () => runtime.config.syncModelProviders(providerRuntime) })
 
     const first = runtime.syncModelProviders()
     await firstPreparationStarted.promise
@@ -553,11 +567,11 @@ describe("AgentRuntime custom provider synchronization", () => {
     }
     const runtime = Object.create(AgentRuntime.prototype)
     runtime.session = session
-    runtime.modelRuntime = {}
-    runtime.modelRegistry = {
+    const modelRegistry = {
       find: () => ({ provider: "custom", id: "active", revision }),
     }
     runtime.config = { async syncModelProviders() { return revision } }
+    attachModelRouter(runtime, { modelRegistry, syncProviders: () => runtime.config.syncModelProviders() })
 
     const first = runtime.syncModelProviders()
     await firstRebindStarted.promise
@@ -591,13 +605,15 @@ describe("AgentRuntime custom provider synchronization", () => {
     const runtime = Object.create(AgentRuntime.prototype)
     runtime.session = session
     runtime.currentWorkspace = process.cwd()
-    runtime.modelRuntime = {}
-    runtime.modelRegistry = { find: () => model }
-    runtime.config = {
-      async syncModelProviders() {
+    attachModelRouter(runtime, {
+      modelRegistry: { find: () => model },
+      syncProviders: async () => {
         events.push("sync")
         return 5
       },
+    })
+    runtime.config = {
+      async syncModelProviders() { return 5 },
     }
     const chatStream = {}
     const response = makeResWithEvents()
@@ -618,7 +634,7 @@ describe("AgentRuntime custom provider synchronization", () => {
           core: { engine, runtime, chatStream },
           security: {},
           storage: { paths: { APP_ROOT: process.cwd() } },
-          providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+          providers: { model: { router: runtime._modelRouterSession, providerRuntime: runtime._modelRouterSession.providerRuntime, listModels: () => [], findModel: () => model, providerAuthStatus: () => undefined, refreshProviders: async () => {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
           infra: {},
         },
       },

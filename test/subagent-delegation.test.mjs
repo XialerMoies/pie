@@ -76,11 +76,9 @@ function createRuntime() {
   return {
     runtime: {
       currentWorkspace: "C:/actual-workspace",
-      modelRegistry: {
-        find(provider, id) {
-          finds.push({ provider, id });
-          return provider === knownModel.provider && id === knownModel.id ? knownModel : undefined;
-        },
+      findModel(provider, id) {
+        finds.push({ provider, id });
+        return provider === knownModel.provider && id === knownModel.id ? knownModel : undefined;
       },
     },
     finds,

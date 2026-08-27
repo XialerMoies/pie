@@ -16,16 +16,17 @@ function createHarness() {
   const lifecycle = [];
   let promptResolutions = 0;
 
-  const runtime = {
-    modelRuntime: { kind: "shared-model-runtime" },
-    modelRegistry: {
+  const modelRuntime = { kind: "shared-model-runtime" };
+  const modelRegistry = {
       find(provider, id) {
         lifecycle.push("find");
         modelFinds.push({ provider, id });
         if (provider === overrideModel.provider && id === overrideModel.id) return overrideModel;
         return undefined;
       },
-    },
+  };
+  const runtime = {
+    modelRouter: { providerRuntime: modelRuntime, modelRegistry },
     config: {
       agentDir: "/agent",
       desktopApiToken: "desktop-token",
@@ -67,8 +68,8 @@ function createHarness() {
   return {
     factory,
     runtime,
-    modelRuntime: runtime.modelRuntime,
-    modelRegistry: runtime.modelRegistry,
+    modelRuntime,
+    modelRegistry,
     inheritedModel,
     overrideModel,
     modelFinds,

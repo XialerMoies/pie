@@ -34,7 +34,7 @@ function createRuntime() {
     activeProfile: { id: "minimal", revision: 1 },
     activeComponentGeneration: { generation: 7, providers: { permission: "permission-evaluator" } },
     session,
-    modelRegistry: { find: () => session.model },
+    findModel: () => session.model,
     onEvent(callback) { listener = callback; return () => { listener = undefined; }; },
     emit(event, source = session) { listener?.(event, source); },
     getContextUsageSnapshot() { return usage; },

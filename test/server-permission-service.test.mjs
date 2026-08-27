@@ -26,7 +26,7 @@ import { handleUiState } from "../src/server/routes/ui-state.ts";
 import { RootRegistry } from "../src/server/root-registry.ts";
 import { createPermissionModeController } from "../src/server/permission-mode.ts";
 import { makeReq, makeRes, makeResWithEvents } from "./helpers/http.mjs";
-import { withServerGroups } from "./helpers/context.mjs";
+import { createMockModelRouter, withServerGroups } from "./helpers/context.mjs";
 
 function routeCtx(root, permissionService, permissionMode) {
   return withServerGroups({
@@ -40,7 +40,12 @@ function routeCtx(root, permissionService, permissionMode) {
       openSession: async () => {},
       createNewSession: async () => "new-session",
       getActiveSession: () => null,
-      modelRegistry: { getAvailable: () => [] },
+      modelRouter: createMockModelRouter({
+        modelRegistry: {
+          getAvailable: () => [],
+          find: (provider, id) => ({ provider, id }),
+        },
+      }),
     },
     chatStream: { textBuffer: "", thinkingBuffer: "", response: null, currentWorkspace: "" },
     appEvents: new AppEventHub(),
@@ -1597,7 +1602,7 @@ describe("server permission service", () => {
     try {
       const service = new ServerPermissionService();
       const ctx = routeCtx(root, service);
-      ctx.runtime.modelRegistry = {
+      ctx.runtime.modelRouter.modelRegistry = {
         getAvailable: () => [
           { provider: "openai", id: "gpt-test" },
           { provider: "anthropic", id: "claude-test" },
@@ -1643,7 +1648,7 @@ describe("server permission service", () => {
       });
       const service = new ServerPermissionService({ sessionPermissionState: state });
       const ctx = routeCtx(root, service);
-      ctx.runtime.modelRegistry = {
+      ctx.runtime.modelRouter.modelRegistry = {
         getAvailable: () => [
           { provider: "openai", id: "gpt-secret" },
           { provider: "anthropic", id: "claude-secret" },
@@ -1671,7 +1676,7 @@ describe("server permission service", () => {
     try {
       const service = new ServerPermissionService();
       const ctx = routeCtx(root, service);
-      ctx.runtime.modelRegistry = {
+      ctx.runtime.modelRouter.modelRegistry = {
         getAvailable: () => [
           { provider: "openai", id: "gpt-first-run" },
           { provider: "anthropic", id: "claude-first-run" },

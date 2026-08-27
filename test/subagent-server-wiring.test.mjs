@@ -16,8 +16,8 @@ describe("subagent server wiring", () => {
     const supervisors = [];
     const runtime = {
       currentWorkspace: "C:/workspace-a",
-      modelRuntime: {},
-      modelRegistry: { find() { return undefined; } },
+      modelRouter: { providerRuntime: {}, modelRegistry: { find() { return undefined; } } },
+      findModel() { return undefined; },
       config: { agentDir: "C:/agent" },
       session: { model: { provider: "main", id: "main" } },
     };

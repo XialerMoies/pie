@@ -106,10 +106,30 @@ function mockSession(overrides) {
 
 function mockRuntime(overrides) {
   const session = mockSession();
+  const modelRuntime = overrides?.modelRuntime || {};
+  const modelRegistry = overrides?.modelRegistry || {
+    getModels: () => [],
+    getAvailable: () => [],
+    find: () => undefined,
+  };
+  const modelRouter = {
+    providerRuntime: modelRuntime,
+    modelRegistry,
+    syncProviders: async () => 0,
+    listModels: () => modelRouter.modelRegistry.getAvailable?.() ?? modelRouter.modelRegistry.getModels?.() ?? [],
+    findModel: (provider, id) => modelRouter.modelRegistry.find?.(provider, id),
+    providerAuthStatus: (provider) => modelRuntime.getProviderAuthStatus?.(provider),
+    refreshProviders: async (providers) => modelRuntime.refresh?.({ providers, allowNetwork: false }) ?? { errors: new Map() },
+    dispose() {},
+  };
   return {
     session,
     activeProfile: { id: "standard", revision: 1 },
-    modelRegistry: { getModels: () => [] },
+    modelRouter,
+    listModels() { return modelRouter.listModels(); },
+    findModel(provider, id) { return modelRouter.findModel(provider, id); },
+    providerAuthStatus(provider) { return modelRouter.providerAuthStatus(provider); },
+    async refreshModelProviders(providers) { await modelRouter.refreshProviders(providers); },
     currentWorkspace: ROOT,
     syncModelProviders: async () => 0,
     runWithStableSession: async (operation) => operation(),
@@ -180,8 +200,16 @@ function mockContext(overrides) {
       get customProviderService() { return context.customProviderService; },
       get providerReferenceLock() { return context.providerReferenceLock; },
       model: {
-        get modelRuntime() { return context.runtime.modelRuntime; },
-        get modelRegistry() { return context.runtime.modelRegistry; },
+        get router() { return context.runtime.modelRouter; },
+        get providerRuntime() { return context.runtime.modelRouter.providerRuntime; },
+        listModels: () => context.runtime.listModels(),
+        findModel: (provider, id) => context.runtime.findModel(provider, id),
+        providerAuthStatus: (provider) => context.runtime.providerAuthStatus(provider),
+        refreshProviders: async (providers) => {
+          if (context.runtime.refreshModelProviders) return context.runtime.refreshModelProviders(providers);
+          const result = await context.runtime.modelRouter.refreshProviders(providers);
+          if (result?.aborted) throw new Error("Provider refresh was aborted");
+        },
         syncModelProviders: (...args) => context.runtime.syncModelProviders?.(...args) || Promise.resolve(0),
         runWithStableSession: (operation) => context.runtime.runWithStableSession(operation),
       },
@@ -1155,7 +1183,7 @@ describe("settings routes", () => {
       permissionService: {
         async authorizePath(root, target) {
           runtime.session = newSession;
-          runtime.modelRegistry = { find: (provider, id) => (
+          runtime.modelRouter.modelRegistry = { find: (provider, id) => (
             provider === newModel.provider && id === newModel.id ? newModel : undefined
           ) };
           return { path: resolve(root, target), root };
@@ -1307,7 +1335,7 @@ describe("settings routes", () => {
       });
 
       assert.strictEqual(modelRuntime.getProviderAuthStatus("openai").configured, false);
-      assert.strictEqual(ctx.runtime.modelRegistry.getAvailable().some((model) => model.provider === "openai"), false);
+      assert.strictEqual(ctx.runtime.modelRouter.modelRegistry.getAvailable().some((model) => model.provider === "openai"), false);
 
       const saved = await callHandler(handleSettings, "POST", "/api/auth", {
         provider: "openai",

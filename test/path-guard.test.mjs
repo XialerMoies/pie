@@ -9,6 +9,7 @@ import { contentTypeForStaticAsset, resolveStaticAssetPath } from "../src/server
 import { processAttachments } from "../src/server/routes/attach.ts";
 import { handleExplorer } from "../src/server/routes/explorer.ts";
 import { makeReq, makeRes } from "./helpers/http.mjs";
+import { createMockModelContext } from "./helpers/context.mjs";
 
 function makeTempRoot(prefix) {
   return mkdtempSync(resolve(process.cwd(), `.tmp-${prefix}`));
@@ -35,7 +36,7 @@ function mockCtx(root) {
       core: { engine: {}, runtime: context.runtime, chatStream: context.chatStream, appEvents: { publish() {} } },
       security: {},
       storage: { paths: context.paths },
-      providers: { model: { modelRuntime: {}, modelRegistry: {}, syncModelProviders: async () => 0, runWithStableSession: async (operation) => operation() } },
+      providers: { model: createMockModelContext() },
       infra: {},
     },
   };
