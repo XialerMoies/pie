@@ -7,7 +7,8 @@
 import { readdirSync, existsSync } from "fs"
 import { resolve } from "path"
 import type { AgentSession } from "../agent-engine/pi-runtime.js"
-import { createAgentSession, SessionManager, DefaultResourceLoader } from "../agent-engine/pi-runtime.js"
+import { createAgentSession, DefaultResourceLoader } from "../agent-engine/pi-runtime.js"
+import type { SessionManager } from "../agent-engine/pi-runtime.js"
 import { resolveSystemPrompt } from "./prompts.js"
 import { getCustomToolsAsync, disconnectMcp, reconnectMcp } from "./tools/index.js"
 import { normalizePermissionPath, resetSessionPermissionState } from "./permissions.js"
@@ -55,6 +56,7 @@ import {
   piModelRouterProvider,
   type ModelRouterSession,
 } from "../model-provider/model-router.js"
+import { createPiSessionManager, piSessionStoreProvider } from "../agent-engine/pi-required-components.js"
 import type { ProviderModel } from "../model-provider/runtime-types.js"
 
 import { setCurrentRuntime as _setGlobalRuntime, getCurrentRuntime as _getGlobalRuntime } from "./globals.js";
@@ -79,6 +81,9 @@ export type WorkspaceChangeCallback = (workspace: string) => void
 export type PlanStateChangeCallback = (state: PlanStateSnapshot) => void
 
 capabilityComponentManager.bindRequiredProvider("model-router", piModelRouterProvider)
+if (!capabilityComponentManager.hasRequiredProviderBinding("session-store")) {
+  capabilityComponentManager.bindRequiredProvider("session-store", piSessionStoreProvider)
+}
 
 interface SessionEventSubscription {
   cb: SessionEventCallback
@@ -790,24 +795,24 @@ export class AgentRuntime {
     // 优先续写指定文件，否则查找 workspace 现有 session，否则创建新会话
     let created = false
     if (forceNew) {
-      // 强制新 session：由 SessionManager.create 创建文件
+      // 强制新 session：由 session-store provider 创建文件
       const wsSessionsDir = this.wsSessionDir(cwd)
-      this.sessionManager = SessionManager.create(cwd, wsSessionsDir)
+      this.sessionManager = createPiSessionManager({ cwd, sessionsDir: wsSessionsDir, forceNew: true })
       created = true
     } else if (existingSessionFile) {
-      // SessionManager.open(文件路径, sessionDir, cwd覆盖)
+      // session-store provider 负责打开文件并固定 cwd
       // sessionDir 传 undefined 让 SessionManager 从文件路径推导，避免混到根目录
-      this.sessionManager = SessionManager.open(existingSessionFile, undefined, cwd)
+      this.sessionManager = createPiSessionManager({ cwd, existingSessionFile }) as SessionManager
       recoverConversationLeaf(this.sessionManager)
     } else {
       const latestFile = this.findLatestSessionFile(cwd)
       if (latestFile) {
-        this.sessionManager = SessionManager.open(latestFile, undefined, cwd)
+        this.sessionManager = createPiSessionManager({ cwd, existingSessionFile: latestFile }) as SessionManager
         recoverConversationLeaf(this.sessionManager)
       } else {
         // 新 session 直接创建在 workspace 目录下
         const wsSessionsDir = this.wsSessionDir(cwd)
-        this.sessionManager = SessionManager.create(cwd, wsSessionsDir)
+        this.sessionManager = createPiSessionManager({ cwd, sessionsDir: wsSessionsDir, forceNew: true })
         created = true
       }
     }

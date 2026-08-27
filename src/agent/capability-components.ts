@@ -10,6 +10,7 @@ import {
   type RequiredReplacementOptions,
   type RequiredReplacementResult,
 } from "./capability-component-replacement.js"
+import { assertRequiredProviderContract, type RequiredCapability } from "./capability-contracts.js"
 
 export const CAPABILITY_COMPONENT_SCHEMA_VERSION = 1 as const
 export const CAPABILITY_COMPONENT_SESSION_CUSTOM_TYPE = "my-code-agent.capability-components"
@@ -363,6 +364,24 @@ export class CapabilityComponentManager {
     }
     if ((typeof implementation !== "object" || implementation === null) && typeof implementation !== "function") {
       return this.#reject("invalid_provider_binding", `Required provider implementation is invalid: ${id}`, id)
+    }
+    const contractByGroup: Partial<Record<string, RequiredCapability>> = {
+      "session-store": "session-store",
+      permission: "permission-evaluator",
+      "security-parser": "security-parser",
+      "mcp-host": "mcp-host-integration",
+    }
+    const capability = contractByGroup[state.manifest.replacementGroup]
+    if (capability) {
+      try {
+        assertRequiredProviderContract(capability, implementation)
+      } catch (error) {
+        return this.#reject(
+          "invalid_provider_binding",
+          `Required provider ${id} does not satisfy ${capability}: ${error instanceof Error ? error.message : String(error)}`,
+          id,
+        )
+      }
     }
     const existing = this.#requiredProviderBindings.get(id)
     if (existing !== undefined && existing !== implementation) {

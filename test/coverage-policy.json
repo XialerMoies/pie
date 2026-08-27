@@ -28,5 +28,5 @@
     "frontend"
   ],
   "minimumRawFiles": 100,
-  "maximumRawMb": 1200
+  "maximumRawMb": 1536
 }

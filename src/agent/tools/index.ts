@@ -136,7 +136,7 @@ async function _invalidateMcpService(): Promise<McpServiceGeneration | undefined
   try {
     const service = await import("../mcp/MCPClientService.js")
     const generation = service.bumpGeneration()
-    await service.disconnectAll()
+    await service.mcpHostIntegrationProvider.disconnectAll()
     return { service, generation }
   } catch {
     return undefined
@@ -164,7 +164,7 @@ function _startMcpDiscovery(
       const { service, generation } = serviceState
       if (!_isCurrentMcpRequest(workspace, epoch) || generation !== service.currentGeneration()) return
 
-      const report = await service.connectAllWithReport(workspace, emitTrace)
+      const report = await service.mcpHostIntegrationProvider.connectAllWithReport(workspace, emitTrace)
       if (
         _isCurrentMcpRequest(workspace, epoch)
         && generation === service.currentGeneration()
@@ -220,9 +220,9 @@ export async function disconnectMcp(): Promise<void> {
   _clearMcpCache("")
   _mcpInFlight = undefined
   try {
-    const { disconnectAll, bumpGeneration } = await import("../mcp/MCPClientService.js")
+    const { mcpHostIntegrationProvider: mcpHost, bumpGeneration } = await import("../mcp/MCPClientService.js")
     bumpGeneration()
-    await disconnectAll()
+    await mcpHost.disconnectAll()
   } catch {}
 }
 

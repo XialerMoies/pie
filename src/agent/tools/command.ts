@@ -17,7 +17,7 @@ import { StringDecoder } from "string_decoder"
 import { TextDecoder } from "util"
 import { validateCommandPaths } from "./command/path-validation.js"
 import { isCommandReadOnly } from "./command/read-only.js"
-import { defaultShellDialect, envFlagEnabled, parseCommandForSecurityLegacyFallback, parseCommandForSecurityAsync, parseCommandForSecurityWithTreeSitterAsync } from "./command/security-parser.js"
+import { defaultShellDialect, envFlagEnabled, securityParserProvider } from "./command/security-parser.js"
 import type { SecurityParseResult, ShellDialect } from "./command/security-ast.js"
 import { parseShellCommand, shellDialectFromEnv, tokensWithoutRedirects } from "./command/shell-parser.js"
 import { isPureFileOperation, isRegularGitOperation } from "./command/pure-file-op.js"
@@ -193,8 +193,8 @@ export async function commandSecurityVerdictShadowDiff(
     workspaceRoot: options.workspaceRoot ?? options.cwd,
     shellDialect,
   }
-  const legacyParsed = parseCommandForSecurityLegacyFallback(command, { shellDialect })
-  const treeSitterParsed = await parseCommandForSecurityWithTreeSitterAsync(command, { shellDialect })
+  const legacyParsed = securityParserProvider.parseLegacy(command, { shellDialect })
+  const treeSitterParsed = await securityParserProvider.parseTreeSitter(command, { shellDialect })
   if (treeSitterParsed.kind === "parse-unavailable") return null
 
   const legacy = securityVerdictsForShadow(command, legacyParsed, normalizedOptions)
@@ -514,7 +514,7 @@ export const commandTool: AgentTool = defineAgentTool({
     const workspaceRoot = String(ctx?.workspace || ctx?.cwd || process.cwd())
     const shellDialect = shellDialectForCommand(cmd, ctx)
     confirmationState.shellDialect = shellDialect
-    const parsed = await parseCommandForSecurityAsync(cmd, { shellDialect })
+    const parsed = await securityParserProvider.parse(cmd, { shellDialect })
 
     const danger = isDangerousCommand(cmd, { parsed, shellDialect })
     if (danger.dangerous) {

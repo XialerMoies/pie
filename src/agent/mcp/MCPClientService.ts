@@ -26,6 +26,8 @@ import { TrustStore, hashServerCommand } from "./trust-store.js"
 import { createMcpToolAdapter } from "./MCPToolAdapter.js"
 import type { McpServerConfig, McpServerStatus, McpConnectionState } from "./types.js"
 import { createMcpProcessEnv, sanitizeProcessOutput } from "../../process/env-policy.js"
+import { capabilityComponentManager } from "../capability-components.js"
+import type { McpHostIntegration } from "../capability-contracts.js"
 
 // ─── 常量 ──────────────────────────────────────────
 
@@ -411,4 +413,18 @@ export function reset(): void {
   _statusListeners.clear()
   _lastVisibleSnapshot = "[]"
   _trustStore = undefined
+}
+
+/** Required host contract; individual MCP servers remain Optional Components. */
+export const mcpHostIntegrationProvider: McpHostIntegration = Object.freeze({
+  kind: "mcp-host" as const,
+  connectAllWithReport,
+  disconnectAll,
+  disconnectAllSync,
+  getServersStatus,
+  subscribeStatusChanges,
+})
+
+if (!capabilityComponentManager.hasRequiredProviderBinding("mcp-host-integration")) {
+  capabilityComponentManager.bindRequiredProvider("mcp-host-integration", mcpHostIntegrationProvider)
 }

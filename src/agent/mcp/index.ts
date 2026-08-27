@@ -51,6 +51,7 @@ export {
   disconnectAll,
   disconnectAllSync,
   getServersStatus,
+  mcpHostIntegrationProvider,
   reset as resetMcpService,
 } from "./MCPClientService.js"
 

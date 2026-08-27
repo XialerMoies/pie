@@ -377,7 +377,7 @@ export const handleSessions: RouteHandler = async (req, res, ctx) => {
     return true;
   }
 
-  // Create new session — 由 SessionManager.create() 创建文件，runtime 立即切到新 session
+  // Create new session — 由 runtime 的 session-store provider 创建并立即切换
   if (url === "/api/sessions/new" && method === "POST") {
     try {
       const body = await parseBody(req).catch(() => ({}));

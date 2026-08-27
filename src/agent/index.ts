@@ -51,6 +51,21 @@ export type {
   RequiredReplacementPreflightReport,
   RequiredReplacementResult,
 } from "./capability-component-replacement.js"
+export type {
+  RequiredCapability,
+  SessionStoreEntry,
+  SessionStoreSession,
+  SessionStoreCreateOptions,
+  SessionStoreProvider,
+  PermissionEvaluator,
+  PermissionEvaluatorDelegate,
+  SecurityParserProvider,
+  McpHostIntegration,
+} from "./capability-contracts.js"
+export {
+  assertRequiredProviderContract,
+  createPermissionEvaluatorProvider,
+} from "./capability-contracts.js"
 
 export type { AgentRuntime, RuntimeConfig, AgentEngine }
 

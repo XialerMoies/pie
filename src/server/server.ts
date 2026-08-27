@@ -34,7 +34,7 @@ import { RootRegistry } from "./root-registry.js";
 import { createPermissionModeController } from "./permission-mode.js";
 import { AppEventHub } from "./app-events.js";
 import { WorkspaceFileWatcher } from "./workspace-file-watcher.js";
-import { getServersStatus, subscribeStatusChanges } from "../agent/mcp/MCPClientService.js";
+import { mcpHostIntegrationProvider } from "../agent/mcp/MCPClientService.js";
 import { resolveStartupPaths, startupPathsSnapshot } from "./startup-paths.js";
 import { canonicalWorkspacePath } from "../data/data-layout.js";
 import {
@@ -72,19 +72,20 @@ import { toolRegistry } from "../agent/tools/index.js";
 import { assertProfileCatalogsReady } from "../agent/profile-catalog.js";
 import { setLocalApiToken } from "../agent/tools/local-api.js";
 import { capabilityComponentManager } from "../agent/capability-components.js";
+import { createPermissionEvaluatorProvider } from "../agent/capability-contracts.js";
 
 import { attachEngineEvents, recordUserNoteBlock } from "./agent-event-router.js";
 export { attachEngineEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTaskLifecycle, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
 export { writePresentationEvent } from "./presentation-events.js";
 
 export function attachMcpEvents(appEvents: Pick<AppEventHub, "publish">): () => void {
-  const toolsKey = (snapshot: ReturnType<typeof getServersStatus>): string => JSON.stringify(
+  const toolsKey = (snapshot: ReturnType<typeof mcpHostIntegrationProvider.getServersStatus>): string => JSON.stringify(
     snapshot
       .map((status) => ({ name: status.name, tools: status.tools }))
       .sort((left, right) => left.name.localeCompare(right.name)),
   );
-  let previousTools = toolsKey(getServersStatus());
-  return subscribeStatusChanges((snapshot) => {
+  let previousTools = toolsKey(mcpHostIntegrationProvider.getServersStatus());
+  return mcpHostIntegrationProvider.subscribeStatusChanges((snapshot) => {
     try { appEvents.publish("mcp.changed"); } catch {}
     const nextTools = toolsKey(snapshot);
     if (nextTools !== previousTools) {
@@ -219,6 +220,13 @@ async function main() {
     auditStore: new FilePermissionAuditStore(STARTUP.layout.permissionAuditFile, { maxEntries: 2000 }),
     permissionRuleStore: new FileWorkspacePermissionRuleStore(STARTUP.layout.permissionRulesFile),
   });
+  // Bind the existing service to the narrow Required Component contract. The
+  // routes continue to use the concrete service for now; future replacements
+  // can be introduced without widening the route/runtime dependency surface.
+  const permissionEvaluator = createPermissionEvaluatorProvider(permissionService);
+  if (!capabilityComponentManager.hasRequiredProviderBinding("permission-evaluator")) {
+    capabilityComponentManager.bindRequiredProvider("permission-evaluator", permissionEvaluator);
+  }
   const permissionMode = createPermissionModeController("standard", (mode) => {
     permissionService.recordPermissionModeChange(mode, "permissions.mode");
   });
@@ -281,8 +289,8 @@ async function main() {
     confirmCommand: createCommandConfirmCallback(chatStream),
     desktopApiToken: security.token,
     sessionPermissionState,
-    authorizePath: (root, target, operation, source) => permissionService.authorizePath(root, target, operation, source),
-    authorizeTool: (request) => permissionService.authorizeTool(request),
+    authorizePath: (root, target, operation, source) => permissionEvaluator.authorizePath(root, target, operation, source),
+    authorizeTool: (request) => permissionEvaluator.authorizeTool(request),
     applyPermissionSuggestions: async (suggestions, scope) => {
       await permissionService.applyPermissionSuggestions(suggestions, scope);
     },
