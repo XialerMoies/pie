@@ -87,7 +87,7 @@ class ChatSseControllerView {
     try {
       if (!window.___sseFirst) {
         window.___sseFirst = true;
-        mark('sse_first_event');
+        chatSseControllerApp.UI?.mark?.('sse_first_event');
       }
       const data = JSON.parse(event.data) as ChatSseEvent;
       const messages = this.dependencies.chatState.getMessages();

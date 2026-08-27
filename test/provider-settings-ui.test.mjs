@@ -148,6 +148,10 @@ async function loadController({ fetchImpl, dashboard = null, order = [], refresh
   win.App = {
     Preferences: preferences,
     ChatState: { getDashboard: () => dashboard },
+    UI: { getD: async () => {
+      refreshes += 1;
+      await refreshDashboardImpl?.();
+    } },
     Ui: { ListAddAction: { create: () => document.createElement("button") } },
     SettingsCustomProviderEditor: FakeCustomEditor,
     isCustomProviderRevision: value => Number.isSafeInteger(value) && value >= 0,
@@ -155,10 +159,7 @@ async function loadController({ fetchImpl, dashboard = null, order = [], refresh
   global.App = win.App;
   const toastCalls = [];
   global.toast = (...args) => toastCalls.push(args);
-  global.getD = async () => {
-    refreshes += 1;
-    await refreshDashboardImpl?.();
-  };
+  global.getD = win.App.UI.getD;
   global.fetch = fetchImpl;
 
   const controllerUrl = `../src/frontend/dashboard/settings-provider-model.ts?controller-${Date.now()}-${Math.random()}`;

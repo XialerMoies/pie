@@ -6,9 +6,9 @@ let _monacoLoadPromise: Promise<void> | null = null;
 async function loadMonaco(): Promise<void> {
   if ((window as any).__monaco) return;
   if (!_monacoLoadPromise) {
-    mark("monaco-import-start");
+    (window as any).App.UI.mark("monaco-import-start");
     _monacoLoadPromise = import("../editor/monaco-setup").then(() => {
-      mark("monaco-import-end");
+      (window as any).App.UI.mark("monaco-import-end");
       return undefined;
     }).catch((err) => {
       _monacoLoadPromise = null;
@@ -181,7 +181,7 @@ function tabContextMenu(e: MouseEvent, id: string): void {
   const idx = tabs.findIndex(tab => tab.id === id);
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
-  placeContextMenu(menu, e.clientX, e.clientY);
+  (window as any).App.UI.placeContextMenu(menu, e.clientX, e.clientY);
   const T = (window as any).App?.Tabs;
   const items: { label: string; action: () => void }[] = [
     { label: '关闭', action: () => T?.close(id) },
@@ -208,7 +208,7 @@ function tabMoreMenu(e: MouseEvent): void {
   const maxH = Math.min(allTabs.length * 28 + 70, 450);
   const menu = document.createElement('div');
   menu.className = 'ctx-menu ctx-tabs-menu';
-  placeContextMenu(menu, e.clientX, e.clientY + 4, { maxHeight: maxH });
+  (window as any).App.UI.placeContextMenu(menu, e.clientX, e.clientY + 4, { maxHeight: maxH });
 
   const T = (window as any).App?.Tabs;
   const actions: { label: string; fn: () => void }[] = [
@@ -247,7 +247,7 @@ function tabMoreMenu(e: MouseEvent): void {
 
 // ─── File handler ────────────────────────────
 async function _fileActivate(tab: AppTab): Promise<void> {
-  mark("file-activate-start");
+  (window as any).App.UI.mark("file-activate-start");
   // 激活任意标签都让在途的会话请求过期——统一竞态防护：点文件应取消挂起的会话加载
   App.SessionActivation?.invalidate?.();
   const ts = App.Tabs;
@@ -277,37 +277,37 @@ async function _fileActivate(tab: AppTab): Promise<void> {
   // 文本 — Monaco 编辑器（懒加载）
   const fc = $('file-content');
   if (fc) fc.style.display = '';
-  mark("monaco-load-start");
+  (window as any).App.UI.mark("monaco-load-start");
   if (!(window as any).__monaco) {
     renderFileTextFallback(editorEl, tab.content || '');
     try {
       await loadMonaco();
     } catch {
-      mark("monaco-load-end");
-      mark("file-activate-end");
+      (window as any).App.UI.mark("monaco-load-end");
+      (window as any).App.UI.mark("file-activate-end");
       renderTabs();
       _syncTabsToStore();
       return;
     }
   }
-  mark("monaco-load-end");
+  (window as any).App.UI.mark("monaco-load-end");
   const m = (window as any).__monaco;
   if (m) {
-    mark("editor-create-start");
+    (window as any).App.UI.mark("editor-create-start");
     if (!editorEl.dataset.monacoReady) {
       editorEl.innerHTML = '';
       m.create(editorEl);
       editorEl.dataset.monacoReady = '1';
     }
-    mark("editor-create-end");
+    (window as any).App.UI.mark("editor-create-end");
     m.setValue(tab.content || '');
     m.setLang(tab.id);
   }
-  mark("file-activate-end");
+  (window as any).App.UI.mark("file-activate-end");
   renderTabs();
   _syncTabsToStore();
   // 打印性能摘要
-  logTiming();
+  (window as any).App.UI.logTiming();
   try {
     performance.measure("file-activate-total", "file-activate-start", "file-activate-end");
     performance.measure("monaco-load", "monaco-load-start", "monaco-load-end");

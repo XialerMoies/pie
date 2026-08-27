@@ -245,7 +245,7 @@ function bindLayoutActions(container: HTMLElement): void {
         break;
       }
       case 'window':
-        if (target.dataset.windowAction) winCtrl(target.dataset.windowAction);
+        if (target.dataset.windowAction) App.UI.winCtrl(target.dataset.windowAction);
         break;
       case 'panel':
         if (target.dataset.side) togglePanel(target.dataset.side);
@@ -466,7 +466,7 @@ function restoreActiveTab(): void {
 }
 
 // 页面加载完成后恢复面板宽度
-document.addEventListener('DOMContentLoaded', () => { mark('dom_ready');
+document.addEventListener('DOMContentLoaded', () => { App.UI.mark('dom_ready');
   const si = $('si');
   if (si) {
     const savedWidth = App.State.getSnapshot().panel.width;

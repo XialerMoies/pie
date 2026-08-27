@@ -206,7 +206,7 @@ function initTree(container: HTMLElement): void {
     // 已打开且有内容 → 只激活，不重新读
     if (existingTab && existingTab.content && existingTab.content !== "加载中...") {
       console.log("[explorer] tab already open, activate:", path);
-      mark("file-click");
+      explorerPaneApp.UI?.mark?.("file-click");
       explorerPaneTabs.activate(path);
       return;
     }
@@ -222,15 +222,15 @@ function initTree(container: HTMLElement): void {
     // 新文件 → 先开 tab 显示 loading，后台读取
     const lang = path.split('.').pop() || '';
     explorerPaneApp.UI.openFileTab(path, "加载中...", lang);
-    mark("file-click");
-    mark("file-read-start");
+    explorerPaneApp.UI?.mark?.("file-click");
+    explorerPaneApp.UI?.mark?.("file-read-start");
 
     const fetchPromise = (async (): Promise<string> => {
       try {
         const r = await fetch(`/api/file/read?root=${encodeURIComponent(ws())}&path=${encodeURIComponent(path)}`);
         const d = await r.json();
         if (!r.ok) { toast(d.error || '读取失败', 'error'); return ""; }
-        mark("file-read-end");
+        explorerPaneApp.UI?.mark?.("file-read-end");
         return d.content || "";
       } catch (e: unknown) {
         console.error("[explorer] read failed:", e);
@@ -245,9 +245,9 @@ function initTree(container: HTMLElement): void {
 
     if (content) {
       console.log("[explorer] calling openFileTab:", path);
-      mark("openFileTab-start");
+      explorerPaneApp.UI?.mark?.("openFileTab-start");
       explorerPaneApp.UI.openFileTab(path, content, lang);
-      mark("openFileTab-end");
+      explorerPaneApp.UI?.mark?.("openFileTab-end");
     }
   };
 

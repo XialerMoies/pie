@@ -18,6 +18,7 @@ interface DashboardChatDependencies {
   chatTimeline?: AppChatTimeline;
   chatViews: AppChatViews;
   tabs: AppTabs;
+  ui: AppUI;
   state: AppStateFacade;
   session: AppSession;
   settings: AppSettings;
@@ -34,6 +35,7 @@ const dashboardChatDependencies: DashboardChatDependencies = {
   chatTimeline: dashboardChatApp.ChatTimeline,
   chatViews: dashboardChatApp.ChatViews,
   tabs: dashboardChatApp.Tabs,
+  ui: dashboardChatApp.UI,
   state: dashboardChatApp.State,
   session: dashboardChatApp.Session,
   settings: dashboardChatApp.Settings,
@@ -48,6 +50,7 @@ const dashboardChatStream = dashboardChatDependencies.chatStream;
 const dashboardChatTimeline = dashboardChatDependencies.chatTimeline;
 const dashboardChatViews = dashboardChatDependencies.chatViews;
 const dashboardChatTabs = dashboardChatDependencies.tabs;
+const dashboardChatUI = dashboardChatDependencies.ui;
 const dashboardChatSession = dashboardChatDependencies.session;
 
 let _msgKeys: string[] = [];
@@ -228,7 +231,7 @@ function refreshWorkspaceState(): void {
   const pstore = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
   if (pstore) pstore.clear();
   dashboardChatSession.loadSessions();
-  getD();
+  dashboardChatUI.getD();
   const pc = $('pc');
   if (pc) renderPanel(dashboardChatState.getSnapshot().panel.active || 'explorer', pc);
   const git = dashboardChatDependencies.getGit();

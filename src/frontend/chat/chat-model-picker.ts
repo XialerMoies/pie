@@ -125,7 +125,7 @@ class ChatModelPickerView {
       }).then(response => response.json()).then((result: { ok: boolean; error?: string }) => {
         if (result.ok) {
           toast('已切换 ' + model.id, 'success');
-          getD();
+          chatModelPickerApp.UI?.getD?.();
           void modelPickerChat?.syncThinkingLevel?.();
           this.close();
         } else {

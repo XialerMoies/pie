@@ -84,8 +84,8 @@ describe("desktop API bootstrap", { concurrency: false }, () => {
     assert.match(html, /html\.preferences-loading\s+body\s*\{/);
     assert.doesNotMatch(html, /localStorage\.getItem\(['"]editor-theme['"]\)/);
     assert.match(html, /<script\s+src=["']\.\/gen\/dashboard\/dashboard-startup\.js["']><\/script>/);
-    const layout = startup.indexOf("layout()");
-    const bootstrap = startup.indexOf("await bootstrapApi()");
+    const layout = startup.indexOf("App.UI.layout()");
+    const bootstrap = startup.indexOf("await App.UI.bootstrapApi()");
     const preferences = startup.indexOf("await hydratePreferencesForStartup()");
     assert.ok(bootstrap >= 0, "canonical startup should bootstrap the API");
     assert.ok(preferences > bootstrap, "canonical startup should hydrate preferences after bootstrap");

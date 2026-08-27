@@ -1,5 +1,5 @@
-App.Events.subscribe('dashboard.changed', () => { void getD(); });
-App.Events.subscribe('resync', () => { void getD(); });
+App.Events.subscribe('dashboard.changed', () => { void App.UI.getD(); });
+App.Events.subscribe('resync', () => { void App.UI.getD(); });
 
 const EMPTY_WORKSPACE_MODE = /(?:^|[?&])empty-workspace=1(?:&|$)/.test(
   String((window as any).location?.search || ''),
@@ -155,7 +155,7 @@ function dashboardStartupNow(): number {
 }
 
 function applyLateHydratedPreferences(): void {
-  applyExplorerPreferences();
+  App.UI.applyExplorerPreferences?.();
   applyHydratedTheme();
   App.Chat?.loadModeState?.();
   App.Chat?.refreshReadingSettings?.();
@@ -171,7 +171,7 @@ async function startDashboard(): Promise<void> {
   const t0 = dashboardStartupNow();
   let tBootstrap = t0, tHydrate = t0, tLayout = t0;
   if (!EMPTY_WORKSPACE_MODE && !WORKSPACE_STATUS_MODE) {
-    await bootstrapApi();
+    await App.UI.bootstrapApi();
     tBootstrap = dashboardStartupNow();
     try {
       await hydratePreferencesForStartup();
@@ -181,10 +181,10 @@ async function startDashboard(): Promise<void> {
       tHydrate = dashboardStartupNow();
     }
   }
-  applyExplorerPreferences();
+  App.UI.applyExplorerPreferences?.();
   applyHydratedTheme();
   document.documentElement.classList.remove("preferences-loading");
-  layout();
+  App.UI.layout();
   tLayout = dashboardStartupNow();
   preferenceStartupComplete = true;
 
@@ -201,7 +201,7 @@ async function startDashboard(): Promise<void> {
     }
     const tEvents = dashboardStartupNow();
     await Promise.all([
-      Promise.resolve(getD()),
+      Promise.resolve(App.UI.getD()),
       Promise.resolve(App.Session.whenReady?.()),
       Promise.resolve(App.Session.loadSessions()),
     ]);

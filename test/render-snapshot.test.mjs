@@ -1325,8 +1325,8 @@ describe("side panel interaction", () => {
     panel.className = "sinfo";
     panel.innerHTML = '<div class="panel-content" id="pc"></div>';
 
-    const originalGetPane = globalThis.getPane;
-    globalThis.getPane = (name) => name === "explorer"
+    const originalGetPane = win.App.UI.getPane;
+    win.App.UI.getPane = (name) => name === "explorer"
       ? (container) => { container.innerHTML = '<div id="explorer-pane">Explorer</div>'; }
       : null;
     try {
@@ -1337,7 +1337,7 @@ describe("side panel interaction", () => {
       assert.ok(doc.getElementById("explorer-pane"));
       assert.doesNotMatch(panel.textContent, /未注册/);
     } finally {
-      globalThis.getPane = originalGetPane;
+      win.App.UI.getPane = originalGetPane;
     }
   });
 

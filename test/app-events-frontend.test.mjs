@@ -52,6 +52,17 @@ async function compileClassicScript(file) {
   return result.code.replace(/^export\s+/gm, "");
 }
 
+function attachStartupUi(context) {
+  const app = context.window.App || context.App || {};
+  const ui = app.UI || {};
+  for (const name of ["bootstrapApi", "layout", "getD", "refresh", "applyExplorerPreferences"]) {
+    if (typeof context[name] === "function") ui[name] = context[name];
+  }
+  app.UI = ui;
+  context.App = app;
+  context.window.App = app;
+}
+
 async function createTokenUpdatesHarness(harnessOptions = {}) {
   const subscriptions = new Map();
   const requests = [];
@@ -652,6 +663,7 @@ describe("App.Events frontend event bus", () => {
     context.App = context.window.App;
     const appEventsScript = await compileClassicScript("src/frontend/services/app-events.ts");
     const startupScript = await compileClassicScript("src/frontend/dashboard/dashboard-startup.ts");
+    attachStartupUi(context);
 
     new Script(appEventsScript, { filename: "app-events.js" }).runInNewContext(context);
     const start = context.App.Events.start;
@@ -709,6 +721,7 @@ describe("App.Events frontend event bus", () => {
     };
     context.window.App = context.App;
     const startupScript = await compileClassicScript("src/frontend/dashboard/dashboard-startup.ts");
+    attachStartupUi(context);
 
     new Script(startupScript, { filename: "dashboard-startup.js" }).runInNewContext(context);
     await new Promise((resolve) => setImmediate(resolve));
@@ -766,6 +779,7 @@ describe("App.Events frontend event bus", () => {
     };
     context.window.App = context.App;
     const startupScript = await compileClassicScript("src/frontend/dashboard/dashboard-startup.ts");
+    attachStartupUi(context);
 
     new Script(startupScript, { filename: "dashboard-startup.js" }).runInNewContext(context);
     await new Promise((resolve) => setImmediate(resolve));
@@ -826,6 +840,7 @@ describe("App.Events frontend event bus", () => {
     };
     context.window.App = context.App;
     const startupScript = await compileClassicScript("src/frontend/dashboard/dashboard-startup.ts");
+    attachStartupUi(context);
 
     new Script(startupScript, { filename: "dashboard-startup.js" }).runInNewContext(context);
     await new Promise((resolve) => setImmediate(resolve));
@@ -893,6 +908,7 @@ describe("App.Events frontend event bus", () => {
     };
     context.window.App = context.App;
     const startupScript = await compileClassicScript("src/frontend/dashboard/dashboard-startup.ts");
+    attachStartupUi(context);
 
     new Script(startupScript, { filename: "dashboard-startup.js" }).runInNewContext(context);
     await new Promise((resolve) => setImmediate(resolve));
@@ -942,6 +958,7 @@ describe("App.Events frontend event bus", () => {
     };
     context.window.App = context.App;
     const startupScript = await compileClassicScript("src/frontend/dashboard/dashboard-startup.ts");
+    attachStartupUi(context);
 
     new Script(startupScript, { filename: "dashboard-startup.js" }).runInNewContext(context);
     await new Promise((resolve) => setImmediate(resolve));
@@ -967,6 +984,7 @@ describe("App.Events frontend event bus", () => {
             get: () => "vs-dark",
           },
           Chat: { updateModelName: () => {} },
+          StatusBar: { setNotice: () => {} },
           ChatState: { setDashboard: (data) => dashboardRequests.push({ type: "state", data }), getDashboard: () => null },
           Session: { loadSessions: () => {} },
         },
@@ -988,6 +1006,7 @@ describe("App.Events frontend event bus", () => {
       bootstrapApi: undefined,
       applyExplorerPreferences: () => {},
       document: {
+        getElementById: () => null,
         documentElement: { classList: { toggle: () => {}, remove: () => {} } },
       },
       layout: () => {},
@@ -998,6 +1017,7 @@ describe("App.Events frontend event bus", () => {
     const appEventsScript = await compileClassicScript("src/frontend/services/app-events.ts");
     const helpersScript = await compileClassicScript("src/frontend/dashboard/dashboard-helpers.ts");
     const startupScript = await compileClassicScript("src/frontend/dashboard/dashboard-startup.ts");
+    attachStartupUi(context);
     new Script(`${appEventsScript}\n${helpersScript}\n${startupScript}`, { filename: "dashboard.js" }).runInNewContext(context);
 
     await new Promise((resolve) => setImmediate(resolve));

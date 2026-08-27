@@ -233,7 +233,7 @@
       label: a.label, disabled: a.disabled?.(this._ctxNode!),
       action: () => { this._hideCtxMenu(); a.action(this._ctxNode!, this); },
     })));
-    placeContextMenu(menu, x, y);
+    (window as any).App.UI.placeContextMenu(menu, x, y);
     this._attachMenu(menu);
   };
 
@@ -244,7 +244,7 @@
       label: a.label, disabled: false,
       action: () => { this._hideCtxMenu(); a.action(); },
     })));
-    placeContextMenu(menu, x, y);
+    (window as any).App.UI.placeContextMenu(menu, x, y);
     this._attachMenu(menu);
   };
 

@@ -9,9 +9,6 @@ interface Window {
 // Legacy global-script bridge. These declarations are intentionally explicit;
 // module migration can remove them without changing the frontend typecheck scope.
 declare const App: any;
-declare function mark(name: string): void;
-declare function logTiming(): void;
-declare function placeContextMenu(menu: HTMLElement, x: number, y: number, opts?: { margin?: number; maxHeight?: number }): void;
 declare function reduceFrontendSubagentEvents(values: readonly unknown[]): FrontendSubagentBatch[];
 
 // 公共函数声明（在 HTML onclick 中用）
@@ -41,16 +38,6 @@ declare function confirmPermissionAsync(input: {
 declare function F(s: number): string;
 declare function sb(id: string): void;
 declare function toast(msg: string, type?: 'info' | 'error' | 'success'): void;
-declare function bootstrapApi(): Promise<void>;
-declare function applyExplorerPreferences(): void;
-declare function getD(): Promise<void>;
-declare function refresh(): Promise<void>;
-declare function winCtrl(action: string): void;
-declare function appendDelta(text: string): void;
-declare function retryLastTurn(): void;
-declare function copyLastError(): Promise<void>;
-declare function refreshWorkspaceState(): void;
-declare function loadMonaco(): Promise<void>;
 declare function registerPane(name: string, render: (container: HTMLElement) => void): void;
 declare function tabContextMenu(e: MouseEvent, id: string): void;
 declare function tabMoreMenu(e: MouseEvent): void;

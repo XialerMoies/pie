@@ -248,6 +248,10 @@ interface AppUI {
   bootstrapApi(): Promise<void>;
   getD(): Promise<void>;
   refresh(): Promise<void>;
+  mark(name: string): void;
+  logTiming(): void;
+  applyExplorerPreferences(): void;
+  placeContextMenu(menu: HTMLElement, x: number, y: number, opts?: { margin?: number; maxHeight?: number }): void;
   layout(): void;
   togglePanel(name: string): void;
   renderPanel(name: string, pc?: HTMLElement | null): void;

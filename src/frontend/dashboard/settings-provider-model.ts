@@ -787,7 +787,7 @@ const settingsProviderApp = (window as any).App;
 const settingsProviderController = new SettingsProviderModelController({
   preferences: settingsProviderApp.Preferences,
   chatState: settingsProviderApp.ChatState,
-  refreshDashboard: getD,
+  refreshDashboard: () => settingsProviderApp.UI.getD(),
   notify: toast,
   listAddAction: settingsProviderApp.Ui.ListAddAction,
   customEditorType: settingsProviderApp.SettingsCustomProviderEditor,

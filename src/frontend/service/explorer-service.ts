@@ -5,6 +5,7 @@ interface ExplorerServiceDependencies {
   preferences: AppPreferences;
   state: AppStateFacade;
   events: AppEvents;
+  ui: AppUI;
 }
 
 const explorerServiceApp = (window as any).App;
@@ -12,6 +13,7 @@ const explorerServiceDependencies: ExplorerServiceDependencies = {
   preferences: explorerServiceApp.Preferences,
   state: explorerServiceApp.State,
   events: explorerServiceApp.Events,
+  ui: explorerServiceApp.UI,
 };
 const explorerServicePreferences = explorerServiceDependencies.preferences;
 const explorerServiceState = explorerServiceDependencies.state;
@@ -263,9 +265,9 @@ function applyExplorerPreferences(): void {
   ExplorerService._filterEnabled = explorerServicePreferences.getBoolean('explorer-filter', true);
 }
 
-// 暴露到全局（供 inline onclick 使用）
+// 仅保留资源管理器对象兼容桥；动作通过 UI facade 暴露。
 (window as any).ExplorerService = ExplorerService;
-(window as any).applyExplorerPreferences = applyExplorerPreferences;
+explorerServiceDependencies.ui.applyExplorerPreferences = applyExplorerPreferences;
 
 // 当前 explorer 的 Tree 实例引用（事件刷新时不重建）
 let _explorerTree: Tree | null = null;

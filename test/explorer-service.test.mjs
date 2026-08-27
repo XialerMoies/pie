@@ -36,6 +36,7 @@ const appEvents = {
   stop: () => {},
 };
 global.App = {
+  UI: {},
   File: {
     fileAction: (action) => { if (action === "openFolder") fileOpenFolderCalls += 1; },
   },
@@ -96,10 +97,10 @@ describe("ExplorerService", () => {
   it("defers explorer preference reads until the startup consumer applies hydration", () => {
     assert.strictEqual(preferenceReads, 0);
     store["explorer-filter"] = "0";
-    global.applyExplorerPreferences = global.window.applyExplorerPreferences;
-    assert.strictEqual(typeof global.applyExplorerPreferences, "function");
+    const applyExplorerPreferences = global.App.UI.applyExplorerPreferences;
+    assert.strictEqual(typeof applyExplorerPreferences, "function");
 
-    global.applyExplorerPreferences();
+    applyExplorerPreferences();
 
     assert.strictEqual(preferenceReads, 1);
     assert.strictEqual(ExplorerService.getFilterEnabled(), false);

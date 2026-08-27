@@ -646,14 +646,10 @@ App.UI.winCtrl = winCtrl;
 App.UI.registerPane = registerPane;
 App.UI.getPane = getPane;
 App.UI.placeContextMenu = placeContextMenu;
+App.UI.mark = mark;
+App.UI.logTiming = logTiming;
 App.Tabs = App.Tabs || {};
 
 // 公开 API — 供 onclick 和 init 使用（向后兼容，后续移除）
 window.$ = $; window.S = S; window.E = E; window.F = F;
 window.sb = sb; window.toast = toast as any;
-window.bootstrapApi = bootstrapApi;
-window.getD = getD; window.refresh = refresh;
-window.winCtrl = winCtrl;
-window.placeContextMenu = placeContextMenu;
-window.mark = mark;
-window.logTiming = logTiming;

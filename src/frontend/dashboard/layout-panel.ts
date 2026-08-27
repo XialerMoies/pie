@@ -118,7 +118,7 @@ function renderPanel(name: string, pc?: HTMLElement | null): void {
       + '</div>';
     return;
   }
-  const paneFn = getPane(name);
+  const paneFn = layoutPanelApp.UI?.getPane?.(name);
   if (paneFn) { paneFn(pc); return; }
   pc.innerHTML = `<div class="sg-item dim">面板 "${E(name)}" 未注册</div>`;
 }

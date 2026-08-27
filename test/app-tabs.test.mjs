@@ -140,7 +140,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
       win.electronAPI = { getDesktopSessionToken: async () => "desktop-token" };
       win.App.Chat.updateModelName = () => {};
 
-      await win.getD();
+      await win.App.UI.getD();
 
       assert.strictEqual(calls[0][0], "/api/bootstrap");
       assert.strictEqual(calls[0][1].credentials, "include");
@@ -152,7 +152,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
       assert.strictEqual(calls[2][1].credentials, "include");
       assert.strictEqual(win.App.ChatState.getDashboard().modelId, "bootstrapped-model");
 
-      await win.getD();
+      await win.App.UI.getD();
       assert.strictEqual(calls[3][0], "/api/dashboard");
       assert.strictEqual(calls.length, 4, "successful bootstrap should remain cached");
     } finally {
