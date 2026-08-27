@@ -242,7 +242,6 @@ function tabMoreMenu(e: MouseEvent): void {
 }
 
 // ─── window 别名（函数声明自动暴露到 window，显式赋值只保留公共 API）───
-(window as any).openFileTab = openFileTab;
 (window as any).tabContextMenu = tabContextMenu;
 (window as any).tabMoreMenu = tabMoreMenu;
 
@@ -250,12 +249,12 @@ function tabMoreMenu(e: MouseEvent): void {
 async function _fileActivate(tab: AppTab): Promise<void> {
   mark("file-activate-start");
   // 激活任意标签都让在途的会话请求过期——统一竞态防护：点文件应取消挂起的会话加载
-  if (typeof (window as any).invalidateSessionActivation === 'function') (window as any).invalidateSessionActivation();
+  App.SessionActivation?.invalidate?.();
   const ts = App.Tabs;
   if (ts) ts.activateTab(tab.id);
   // 先渲染标签栏（不依赖 Monaco）——Monaco 慢加载/加载失败也不能阻塞标签切换与显示。
   // 否则首次点击文件时标签栏空白，直到 Monaco 就绪才出现（体验断档）。
-  if (typeof (window as any).renderTabs === 'function') (window as any).renderTabs();
+  App.UI?.renderTabs?.();
   const editorEl = $('fc-editor');
   if (!editorEl) return;
 

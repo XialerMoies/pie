@@ -159,7 +159,7 @@ global.logTiming = () => {};
     json: async () => String(url) === "/api/chat" && init?.method === "POST" ? { ok: true } : {},
   });
   win.fetch = global.fetch;
-  win.msgs = () => testState.M.map((message) => `<div class="m"><div class="mt">${message.content}</div></div>`).join('');
+  win.App.Chat.msgs = () => testState.M.map((message) => `<div class="m"><div class="mt">${message.content}</div></div>`).join('');
 
   return {
     win,
@@ -216,7 +216,7 @@ describe("chat ui state", () => {
     await import(`../src/frontend/dashboard/session-activation.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/session-list-panel.ts?t=${ts}`);
     await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${ts}`);
-    env.win.bind();
+    env.win.App.Chat.bind();
   });
 
   it("selects one local file and adds it as an attachment", async () => {
@@ -267,7 +267,7 @@ describe("chat ui state", () => {
 
   it("消息未变化时 updateUI 不重绘消息区", () => {
     const panel = env.doc.getElementById("ms");
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
     const firstHtml = panel.innerHTML;
 
     let replaces = 0;
@@ -279,7 +279,7 @@ describe("chat ui state", () => {
 
     const input = env.doc.getElementById("ci");
     input.value = "只改变发送按钮状态";
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
 
     assert.strictEqual(replaces, 0, "消息未变化时不应触发 replaceWith");
     assert.strictEqual(panel.innerHTML, firstHtml);
@@ -371,7 +371,7 @@ describe("chat ui state", () => {
     env.win.App.ChatState.setBusy(true);
     const input = env.doc.getElementById("ci");
     input.value = "补充一个检查点";
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
     assert.strictEqual(input.disabled, false);
     input.dispatchEvent(new env.win.KeyboardEvent("keydown", { key: "Enter" }));
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -403,7 +403,7 @@ describe("chat ui state", () => {
       },
     ]);
     env.win.App.ChatState.setBusy(true);
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
 
     const input = env.doc.getElementById("ci");
     input.value = "第二阶段完成后检查 package.json";
@@ -442,7 +442,7 @@ describe("chat ui state", () => {
     env.win.App.ChatStream.close = () => { closed++; };
     env.win.App.ChatState.getMessages().at(-1).streaming = true;
     env.win.App.ChatState.setBusy(true);
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
     const mode = env.doc.getElementById("chat-note-mode");
     assert.notStrictEqual(mode.style.display, "none");
     mode.click();
@@ -474,7 +474,7 @@ describe("chat ui state", () => {
 
   it("消息变化时 updateUI 会重绘消息区", () => {
     const panel = env.doc.getElementById("ms");
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
 
     let replaces = 0;
     const origReplaceWith = env.win.Element.prototype.replaceWith;
@@ -484,7 +484,7 @@ describe("chat ui state", () => {
     };
 
     env.state.M[0].content = "hello again";
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
 
     assert.ok(replaces > 0, "消息变化时应有 replaceWith 调用");
     assert.ok(panel.innerHTML.includes("hello again"));
@@ -514,7 +514,7 @@ describe("chat ui state", () => {
       }),
     });
     await new Promise((resolve) => setImmediate(resolve));
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
 
     assert.strictEqual(panel.lastElementChild, assistantRoot, "流式更新后不应整条替换 assistant 气泡");
     assert.match(assistantRoot.innerHTML, /新内容/);
@@ -522,7 +522,7 @@ describe("chat ui state", () => {
 
   it("同长度内容替换仍触发重绘", () => {
     const panel = env.doc.getElementById("ms");
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
 
     let replaces = 0;
     const origReplaceWith = env.win.Element.prototype.replaceWith;
@@ -533,7 +533,7 @@ describe("chat ui state", () => {
 
     // 同长度替换：hello(5) → world(5)，content.length 不变
     env.state.M[0].content = "world";
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
 
     assert.ok(replaces > 0, "同长度内容替换也应触发 replaceWith");
     assert.ok(panel.innerHTML.includes("world"));
@@ -1251,7 +1251,7 @@ describe("chat ui state", () => {
 
   it("_rv 是唯一检测手段时仍触发重绘（同前缀后缀中间变化）", () => {
     const panel = env.doc.getElementById("ms");
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
 
     let replaces = 0;
     const origReplaceWith = env.win.Element.prototype.replaceWith;
@@ -1263,7 +1263,7 @@ describe("chat ui state", () => {
     const prefix = "A".repeat(40), suffix = "A".repeat(40);
     env.state.M[0].content = prefix + "B".repeat(20) + suffix;
     env.state.M[0]._rv = 1;
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
 
     assert.ok(replaces > 0, "_rv bump 应触发 replaceWith");
     assert.ok(panel.innerHTML.includes("B".repeat(20)));
@@ -1285,7 +1285,7 @@ describe("chat ui state", () => {
       { role: "assistant", content: "回复三" },
     ]);
 
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
     const timeline = env.doc.getElementById("chat-timeline");
     assert.strictEqual(timeline.classList.contains("on"), true);
     const firstButton = timeline.querySelector('[data-timeline-index="0"]');
@@ -1294,7 +1294,7 @@ describe("chat ui state", () => {
     const last = env.win.App.ChatState.getMessages().at(-1);
     last.content = "回复三，继续流式更新";
     last._rv = 1;
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
 
     assert.strictEqual(timeline.querySelector('[data-timeline-index="0"]'), firstButton);
 
@@ -1305,7 +1305,7 @@ describe("chat ui state", () => {
 
   it("空 M 时 updateUI 渲染欢迎屏", () => {
     env.state.M = [];
-    env.win.updateUI();
+    env.win.App.Chat.updateUI();
     const panel = env.doc.getElementById("ms");
     assert.ok(panel.innerHTML.includes("Pi"), "空 M 时应渲染欢迎屏");
     assert.ok(panel.innerHTML.includes("编码"), "欢迎屏应有提示文字");

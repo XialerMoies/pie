@@ -43,7 +43,6 @@ const legacyTabs = {
   getSessionTabIds: () => [],
   getState: () => ({ items: [], activeId: null }),
 };
-win.msgs = () => "";
 win.ExplorerService = global.ExplorerService = {
   iconFor: () => "",
   getWorkspacePath: () => "E:/my-code-agent",
@@ -72,7 +71,7 @@ win.App = {
     setChatOpen: () => {},
     resetWorkspace: () => {},
   },
-  UI: {},
+  UI: { togglePanel: (name) => calls.push(["togglePanel", name]), winCtrl: (action) => calls.push(["winCtrl", action]), S: global.S },
   Chat: {},
   File: {},
   Session: { restoreSessionTabs: () => {} },
@@ -101,6 +100,7 @@ win.App = {
   Git: {},
 };
 global.App = win.App;
+win.App.Chat.msgs = () => "";
 
 before(async () => {
   doc.body.innerHTML = '<div id="app"></div>';
@@ -121,7 +121,7 @@ describe("dashboard action delegation", () => {
       win.__emptyWorkspaceMode = true;
       global.bind = () => { bindCalls += 1; };
 
-      win.layout();
+      win.App.UI.layout();
 
       assert.strictEqual(bindCalls, 0);
     } finally {
@@ -132,7 +132,7 @@ describe("dashboard action delegation", () => {
 
   it("routes layout and file-menu commands without inline handlers", async () => {
     calls.length = 0;
-    win.layout();
+    win.App.UI.layout();
     const app = doc.getElementById("app");
     assert.ok(app);
     assert.strictEqual(app.querySelectorAll("[onclick], [onchange], [oninput]").length, 0);

@@ -2223,7 +2223,7 @@ describe("settings DOM boundary", () => {
     assert.match(source, /interface AppChat[\s\S]*?refreshReadingSettings\(\): void;/);
     assert.match(source, /interface AppPermissions[\s\S]*?mount\(container: HTMLElement\): void;[\s\S]*?refresh\(forceToast\?: boolean\): Promise<void>;[\s\S]*?unmount\(\): void;/);
     assert.match(source, /interface AppNamespace[\s\S]*?Permissions: AppPermissions;/);
-    assert.match(source, /refreshPermissionsPanel\?: \(forceToast\?: boolean\) => Promise<void>;/);
+    assert.doesNotMatch(source, /refreshPermissionsPanel\?: \(forceToast\?: boolean\) => Promise<void>;/);
   });
 
   it("does not use inline event attributes", () => {

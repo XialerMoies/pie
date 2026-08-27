@@ -98,12 +98,6 @@ function launchCli(): void {
   else toast('请先启动 Electron 桌面应用');
 }
 
-// 公开 API
-window.toggleFileMenu = toggleFileMenu;
-window.closeFM = closeFM;
-window.fileAction = fileAction as any;
-window.launchCli = launchCli;
-
 // ─── App 命名空间绑定 ──────────────────────────────────────
 const AppFile = (window as any).App?.File;
 if (AppFile) {

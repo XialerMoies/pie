@@ -28,10 +28,11 @@ let openedFile = null;
 win.App = {
   State: { getWorkspacePath: () => "E:/my-code-agent" },
   Git: {},
+  UI: {},
 };
 global.App = win.App;
 win.ExplorerService = { iconFor: () => "<svg></svg>" };
-global.openFileTab = (filePath, content, lang) => {
+win.App.UI.openFileTab = (filePath, content, lang) => {
   openedFile = { filePath, content, lang };
 };
 
@@ -102,7 +103,6 @@ beforeEach(() => {
 });
 
 after(() => {
-  delete global.openFileTab;
 });
 
 describe("git pane", () => {

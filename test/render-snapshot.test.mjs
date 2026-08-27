@@ -117,7 +117,7 @@ describe("chat component views", () => {
   it("renders tool OUT in the live SSE path before terminal replay", () => {
     state.M = [{ role: "assistant", streaming: true, blocks: [] }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     let handlers;
     win.App.ChatStream = win.App.ChatStream || {
       setHandlers: () => false,
@@ -272,34 +272,34 @@ describe("chat component views", () => {
 describe("msgs() 渲染", () => {
   it("空消息返回欢迎页", () => {
     state.M = [];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes("Pi"));
     assert.ok(html.includes("输入"));
   });
 
   it("用户消息渲染", () => {
     state.M = [{ role: "user", content: "你好" }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes("你"));
     assert.ok(html.includes("你好"));
   });
 
   it("AI 回复渲染", () => {
     state.M = [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes("Pi"));
     assert.ok(html.includes("hello"));
   });
 
   it("流式消息带打字动画", () => {
     state.M = [{ role: "assistant", content: "思考", streaming: true }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes("ty"));
   });
 
   it("div 标签成对闭合", () => {
     state.M = [{ role: "user", content: "a" }, { role: "assistant", content: "b" }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     const opens = (html.match(/<div/g) || []).length;
     const closes = (html.match(/<\/div>/g) || []).length;
     assert.strictEqual(opens, closes);
@@ -307,7 +307,7 @@ describe("msgs() 渲染", () => {
 
   it("markdown 加粗和斜体", () => {
     state.M = [{ role: "assistant", content: "**bold** and *italic*" }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes("<strong>bold</strong>"), "加粗渲染");
     assert.ok(html.includes("<em>italic</em>"), "斜体渲染");
     assert.ok(!html.includes("**bold**"), "原始 markdown 不出现");
@@ -315,7 +315,7 @@ describe("msgs() 渲染", () => {
 
   it("markdown 代码块渲染为 <pre><code>", () => {
     state.M = [{ role: "assistant", content: "```ts\nconst x = 1;\n```" }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes("<pre"), "代码块为 <pre>");
     assert.ok(html.includes("<code"), "代码块为 <code>");
     assert.ok(html.includes("const x = 1;"), "代码内容保留");
@@ -323,7 +323,7 @@ describe("msgs() 渲染", () => {
 
   it("markdown 表格渲染为 <table>", () => {
     state.M = [{ role: "assistant", content: "| a | b |\n|---|---|\n| 1 | 2 |" }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes("<table>"), "表格为 <table>");
     assert.ok(html.includes("<th>"), "表头渲染");
     assert.ok(html.includes("<td>"), "单元格渲染");
@@ -331,7 +331,7 @@ describe("msgs() 渲染", () => {
 
   it("markdown 过滤 <link> 标签", () => {
     state.M = [{ role: "assistant", content: '<link rel="stylesheet" href="/admin/style.css">\nhello' }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(!html.includes('<link rel="stylesheet"'), "<link> 被过滤");
     assert.ok(html.includes("hello"), "其他内容保留");
   });
@@ -342,7 +342,7 @@ describe("msgs() 渲染", () => {
       content: "这是回复内容",
     }];
 
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
 
     assert.ok(html.includes("这是回复内容"), "纯内容消息正常显示");
     assert.ok(!html.includes("task track"), "不显示 trace 相关标记");
@@ -362,7 +362,7 @@ describe("msgs() 渲染", () => {
       trace: [{ type: "tool", status: "error", name: "search", error: "找不到工作区", input: { query: "workspace", type: "text" }, output: "找不到工作区", id: "search@err", turnId: "turn-err" }],
     }];
 
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
 
     assert.ok(html.includes("发送失败：请求 `/api/chat` 失败"), "显示错误类型和原因");
     assert.ok(html.includes("trace-error-rule"), "显示事件流分隔线");
@@ -378,7 +378,7 @@ describe("msgs() 渲染", () => {
     }];
 
     const host = doc.createElement("div");
-    host.innerHTML = win.msgs();
+    host.innerHTML = win.App.Chat.msgs();
     const message = host.querySelector(".m");
     assert.ok(message);
     const html = message.querySelector(".mt")?.outerHTML || "";
@@ -394,7 +394,7 @@ describe("msgs() 渲染", () => {
         { type: "tool_use", status: "running", name: "search", toolCallId: "call1", blockId: "b1", seq: 1 },
       ],
     }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes("搜索代码"), "tool_use 映射为中文标签");
     assert.ok(html.includes("trace-running"), "running 状态");
     assert.ok(html.includes("assistant-blocks"), "使用 block 流容器");
@@ -412,7 +412,7 @@ describe("msgs() 渲染", () => {
         { type: "text", text: "检查完毕", blockId: "t2", seq: 4 },
       ],
     }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes("正在检查代码"), "第一段 text 出现");
     assert.ok(html.includes("检查完毕"), "末尾 text 出现");
     assert.ok(html.includes("搜索代码"), "tool_use 在中间");
@@ -429,7 +429,7 @@ describe("msgs() 渲染", () => {
         { type: "tool_result", toolUseId: "call1", output, blockId: "r1", seq: 2 },
       ],
     }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
 
     assert.strictEqual((html.match(/验证结果/g) || []).length, 1, "工具标题只显示一次");
     assert.strictEqual((html.match(/Git 根目录：C:\/repo/g) || []).length, 1, "工具输出只显示一次");
@@ -451,7 +451,7 @@ describe("msgs() 渲染", () => {
         seq: 1,
       }],
     }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.strictEqual((html.match(/class="trace-card"/g) || []).length, 1, "IN and OUT should share one card");
     assert.ok(html.includes('class="trace-card-section trace-card-in"'), "input should be an IN section");
     assert.ok(html.includes('class="trace-card-section trace-card-out"'), "output should be an OUT section");
@@ -486,7 +486,7 @@ describe("msgs() 渲染", () => {
       }],
     }];
 
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes("trace-diff"), "diff should render as a trace node section");
     assert.ok(html.includes("trace-diff-event"), "diff should use its specialized event content");
     assert.ok(!html.includes("trace-diff-toggle"), "chat diffs should not opt into the Git-only disclosure control");
@@ -525,7 +525,7 @@ describe("msgs() 渲染", () => {
       }],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     panel.querySelector("[data-diff-file-path]").dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true }));
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.ok(win.App.Tabs.getTab("src/app.ts"), "click should open a workspace-relative file tab");
@@ -559,7 +559,7 @@ describe("msgs() 渲染", () => {
       }],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     panel.querySelector("[data-diff-file-path]").dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true }));
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.ok(toastCalls.some((msg) => msg.includes("工作区外") || msg.includes("不在当前工作区")), "outside-workspace path should toast a rejection");
@@ -584,7 +584,7 @@ describe("msgs() 渲染", () => {
         } }, blockId: "edit-3", seq: 3 },
       ],
     }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes('class="trace-edit-summary"'), "edited file summary should render");
     assert.ok(html.includes("已编辑 2 个文件"), "summary should count unique files");
     assert.ok(html.includes(">+9</span>"), "summary should total added lines");
@@ -613,7 +613,7 @@ describe("msgs() 渲染", () => {
         seq: 1,
       }],
     }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes(">+2</span>"), "created-file summary should derive its added line count");
   });
 
@@ -647,7 +647,7 @@ describe("msgs() 渲染", () => {
         { type: "tool_result", toolUseId: "call1", output: "文件不存在", isError: true, blockId: "r1", seq: 2 },
       ],
     }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes("trace-error"), "错误状态 class");
     assert.ok(html.includes("ERROR"), "失败结果显示 ERROR 标签");
     assert.ok(html.includes("文件不存在"), "错误信息显示");
@@ -658,7 +658,7 @@ describe("msgs() 渲染", () => {
       role: "assistant",
       blocks: [{ type: "step", status: "error", variant: "error", text: "validation_error：source_not_allowed", blockId: "error-1", seq: 1 }],
     }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(html.includes("trace-error-node"));
     assert.ok(html.includes("trace-error-rule"));
     assert.ok(html.includes("validation_error：source_not_allowed"));
@@ -672,7 +672,7 @@ describe("msgs() 渲染", () => {
       blocks: [{ type: "text", text: "par", blockId: "text-0", seq: 1 }],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const targetBefore = panel.querySelector('[data-block-id="text-0"]');
     let panelRedraws = 0;
     const descriptor = Object.getOwnPropertyDescriptor(win.Element.prototype, "innerHTML");
@@ -704,7 +704,7 @@ describe("msgs() 渲染", () => {
       blocks: [{ type: "text", text: "旧内容", blockId: "text-stream", seq: 1 }],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const body = panel.querySelector('[data-block-id="text-stream"] .trace-text-body');
     assert.ok(body);
     let rewrites = 0;
@@ -730,7 +730,7 @@ describe("msgs() 渲染", () => {
       blocks: [{ type: "thinking", status: "streaming", text: "旧思考", blockId: "thinking-stream", seq: 1 }],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const body = panel.querySelector('[data-block-id="thinking-stream"] .trace-thinking-text');
     assert.ok(body);
     let rewrites = 0;
@@ -759,7 +759,7 @@ describe("msgs() 渲染", () => {
       ],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const trace = panel.querySelector('.trace.block-trace');
     assert.ok(trace);
     let moves = 0;
@@ -779,7 +779,7 @@ describe("msgs() 渲染", () => {
   it("事件脚本逐步更新时保留已挂载节点身份并只增量改变活动节点", () => {
     state.M = [{ role: "assistant", streaming: true, blocks: [] }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const root = panel.firstElementChild;
     const nodes = new Map();
     const removedBlockIds = [];
@@ -833,7 +833,7 @@ describe("msgs() 渲染", () => {
       blocks: [{ type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" }],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const flowBefore = panel.querySelector('.assistant-blocks');
     const targetBefore = panel.querySelector('[data-block-id="tool-1"]');
 
@@ -854,7 +854,7 @@ describe("msgs() 渲染", () => {
       blocks: [{ type: "thinking", status: "done", text: "先想", blockId: "think-1", seq: 1 }],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const flowBefore = panel.querySelector('.assistant-blocks');
     const firstBefore = panel.querySelector('[data-block-id="think-1"]');
 
@@ -880,7 +880,7 @@ describe("msgs() 渲染", () => {
       ],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     // 新增 seq=2 的 tool，应插入 think-1 与 text-1 之间
     const toolBlock = { type: "tool", status: "running", name: "command", blockId: "tool-1", seq: 2 };
     state.M[0].blocks.push(toolBlock);
@@ -900,7 +900,7 @@ describe("msgs() 渲染", () => {
       ],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const trace = panel.querySelector(".trace.block-trace");
     assert.ok(trace);
     const nodes = new Map([...panel.querySelectorAll("[data-block-id]")].map((node) => [node.dataset.blockId, node]));
@@ -924,7 +924,7 @@ describe("msgs() 渲染", () => {
   it("首个 tool_use block 只填充消息内容区", () => {
     state.M = [{ role: "assistant", content: "", streaming: true }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const messageBefore = panel.querySelector('.m');
 
     const block = { type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" };
@@ -944,7 +944,7 @@ describe("msgs() 渲染", () => {
       blocks: [{ type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" }],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const flowBefore = panel.querySelector('.assistant-blocks');
     const targetBefore = panel.querySelector('[data-block-id="tool-1"]');
 
@@ -965,7 +965,7 @@ describe("msgs() 渲染", () => {
       blocks: [{ type: "tool_use", status: "running", name: "command", toolCallId: "call1", blockId: "tool-1", seq: 1, output: "step 1\n" }],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const messageBefore = panel.querySelector('.m');
     const targetBefore = panel.querySelector('[data-block-id="tool-1"]');
 
@@ -993,7 +993,7 @@ describe("msgs() 渲染", () => {
         { type: "tool_use", status: "done", name: "git-status", toolCallId: "call1", blockId: "b1", seq: 2 },
       ],
     }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
 
     const idxT1 = html.indexOf("先");
     const idxB1 = html.indexOf("验证结果");
@@ -1180,7 +1180,7 @@ describe("msgs() 渲染", () => {
       }],
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const task = panel.querySelector('[data-subagent-task-index="0"]');
     const raw = panel.querySelector('.subagent-raw');
     task.open = true;
@@ -1267,7 +1267,7 @@ describe("msgs() 渲染", () => {
       subagentBatches: globalThis.reduceFrontendSubagentEvents([queued]),
     }];
     const panel = doc.getElementById("ms");
-    panel.innerHTML = win.msgs();
+    panel.innerHTML = win.App.Chat.msgs();
     const batchBefore = panel.querySelector('[data-subagent-batch-id="batch-live"]');
     const taskBefore = panel.querySelector('[data-subagent-task-id="task-live"]');
     taskBefore.open = false;
@@ -1362,16 +1362,16 @@ describe("side panel interaction", () => {
     panel.style.width = "260px";
     panel.innerHTML = '<div class="panel-content" id="pc"></div>';
 
-    win.togglePanel("chat");
+      win.App.UI.togglePanel("chat");
 
     assert.strictEqual(panel.classList.contains("closed"), false, "first click should keep the panel open");
     assert.strictEqual(sidebar.querySelector('[data-side="chat"]')?.classList.contains("on"), true);
     assert.strictEqual(win.App.State.getSnapshot().panel.active, "chat");
 
-    win.togglePanel("chat");
+      win.App.UI.togglePanel("chat");
     assert.strictEqual(panel.classList.contains("closed"), true, "clicking the visible panel again should close it");
 
-    win.togglePanel("chat");
+      win.App.UI.togglePanel("chat");
     assert.strictEqual(panel.classList.contains("closed"), false, "reopening the visible panel should restore it");
 
     sidebar.remove();
@@ -1389,7 +1389,7 @@ describe("markdown security", () => {
       .replace(/'/g, "&#39;");
     globalThis.E = escape;
     state.M = [{ role: "assistant", content: '<script>alert(1)</script> [run](javascript:alert(1)) ![x](data:text/html,alert(1))' }];
-    const html = win.msgs();
+    const html = win.App.Chat.msgs();
     assert.ok(!html.includes("<script>"), "raw script tags must not enter the DOM");
     assert.ok(html.includes("&lt;script&gt;"), "raw HTML should render as text");
     assert.ok(!html.includes('href="javascript:'), "javascript links must be removed");
@@ -1423,7 +1423,7 @@ describe("dashboard refresh", () => {
         container.innerHTML = '<div data-server-backed-pane="1"></div>';
       };
 
-      win.renderPanel("chat", container);
+      win.App.UI.renderPanel("chat", container);
 
       assert.strictEqual(paneCalls, 0);
       assert.ok(container.querySelector('[data-empty-workspace-panel="chat"]'));
@@ -1461,7 +1461,7 @@ describe("dashboard refresh", () => {
     win.fetch = fetchStub;
     // Production concatenates these scripts into one global scope; bridge that scope in ESM tests.
     globalThis.initResizeHandle = () => {};
-    globalThis.renderPanel = (...args) => win.renderPanel(...args);
+    globalThis.renderPanel = (...args) => win.App.UI.renderPanel(...args);
     globalThis.bind = () => {};
     globalThis.getPane = (...args) => win.App.UI.getPane(...args);
 
@@ -1470,7 +1470,7 @@ describe("dashboard refresh", () => {
         container.innerHTML = '<div id="refresh-regression-pane">mounted</div>';
       });
       win.App.State.updatePanel({ active: "refresh-regression", closed: false, width: 260 });
-      win.layout();
+      win.App.UI.layout();
 
       const panelContent = doc.getElementById("pc");
       const resizeHandle = doc.getElementById("si-handle");

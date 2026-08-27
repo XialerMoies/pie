@@ -195,9 +195,9 @@ function initTree(container: HTMLElement): void {
     const imageExt = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico', '.bmp']);
     const videoExt = new Set(['.mp4', '.webm']);
     const unsupportedVideoExt = new Set(['.avi', '.mov', '.mkv', '.wmv', '.flv']);
-    if (imageExt.has(ext)) { openFileTab(path, '', ext, 'image'); return; }
-    if (videoExt.has(ext)) { openFileTab(path, '', ext, 'video'); return; }
-    if (unsupportedVideoExt.has(ext)) { toast(`${ext} 格式不支持浏览器预览，建议用外部播放器打开`, 'info'); openFileTab(path, `[二进制文件，不支持预览: ${ext}]`, ext, 'text'); return; }
+    if (imageExt.has(ext)) { explorerPaneApp.UI.openFileTab(path, '', ext, 'image'); return; }
+    if (videoExt.has(ext)) { explorerPaneApp.UI.openFileTab(path, '', ext, 'video'); return; }
+    if (unsupportedVideoExt.has(ext)) { toast(`${ext} 格式不支持浏览器预览，建议用外部播放器打开`, 'info'); explorerPaneApp.UI.openFileTab(path, `[二进制文件，不支持预览: ${ext}]`, ext, 'text'); return; }
 
     // 文本文件
     const tabs = explorerPaneTabs;
@@ -215,13 +215,13 @@ function initTree(container: HTMLElement): void {
     if (_pendingFetches.has(path)) {
       console.log("[explorer] reuse pending fetch:", path);
       const content = await _pendingFetches.get(path)!;
-      openFileTab(path, content, path.split('.').pop() || '');
+      explorerPaneApp.UI.openFileTab(path, content, path.split('.').pop() || '');
       return;
     }
 
     // 新文件 → 先开 tab 显示 loading，后台读取
     const lang = path.split('.').pop() || '';
-    openFileTab(path, "加载中...", lang);
+    explorerPaneApp.UI.openFileTab(path, "加载中...", lang);
     mark("file-click");
     mark("file-read-start");
 
@@ -246,7 +246,7 @@ function initTree(container: HTMLElement): void {
     if (content) {
       console.log("[explorer] calling openFileTab:", path);
       mark("openFileTab-start");
-      openFileTab(path, content, lang);
+      explorerPaneApp.UI.openFileTab(path, content, lang);
       mark("openFileTab-end");
     }
   };
@@ -275,6 +275,5 @@ function toggleExplorerFilter(): void {
     ExplorerService.refreshTree();
   });
 }
-(window as any).toggleExplorerFilter = toggleExplorerFilter;
 
 registerPane('explorer', explorerRender);

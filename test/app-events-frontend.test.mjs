@@ -1025,7 +1025,7 @@ describe("App.Events frontend event bus", () => {
   it("refreshes token usage from application events without installing a timer", async () => {
     const { context, subscriptions, requests, usageResolvers, intervals } = await createTokenUpdatesHarness();
 
-    context.window.startTokenUpdates();
+    context.window.App.Chat.startTokenUpdates();
     assert.strictEqual(requests.filter((request) => request.url === "/api/usage/current").length, 1);
     assert.deepStrictEqual(intervals, []);
     assert.ok(subscriptions.has("usage.changed"));
@@ -1041,7 +1041,7 @@ describe("App.Events frontend event bus", () => {
 
     usageResolvers.shift()();
     await new Promise((resolve) => setImmediate(resolve));
-    context.window.stopTokenUpdates();
+    context.window.App.Chat.stopTokenUpdates();
     assert.strictEqual(subscriptions.size, 0);
   });
 
@@ -1073,7 +1073,7 @@ describe("App.Events frontend event bus", () => {
         usageData,
       });
 
-      const refresh = context.window.refreshTokenUsage();
+      const refresh = context.window.App.Chat.refreshTokenUsage();
       usageResolvers.shift()();
       await refresh;
       assert.strictEqual(nodes.get("tr-source").textContent, expected);

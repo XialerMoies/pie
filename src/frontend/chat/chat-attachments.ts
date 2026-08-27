@@ -4,6 +4,7 @@
 
 let _pendingAttachments: ChatAttachment[] = [];
 let _attachIdCounter = 0;
+const chatAttachmentsApp = (window as any).App;
 
 function addAttachment(att: Omit<ChatAttachment, 'id'>): void {
   const id = 'att-' + Date.now().toString(36) + '-' + (++_attachIdCounter);
@@ -63,7 +64,7 @@ function renderAttachments(): void {
           .then(d => {
             if (!d) return;
             const content = d.encoding === 'base64' ? '[二进制文件，无法预览]' : d.content;
-            openFileTab(att.path, content, att.path.split('.').pop() || '');
+            chatAttachmentsApp.UI.openFileTab(att.path, content, att.path.split('.').pop() || '');
             setTimeout(() => {
               const monaco = (window as any).__monaco;
               if (monaco?.editor) {
@@ -80,7 +81,7 @@ function renderAttachments(): void {
           .then(d => {
             if (!d) return;
             const content = d.encoding === 'base64' ? '[二进制文件，无法预览]' : d.content;
-            openFileTab(att.path, content, att.path.split('.').pop() || '');
+            chatAttachmentsApp.UI.openFileTab(att.path, content, att.path.split('.').pop() || '');
           });
       }
     });

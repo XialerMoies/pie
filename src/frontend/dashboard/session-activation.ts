@@ -76,7 +76,7 @@ function renderMessages(options: SessionActivationOptions): void {
   const messagesElement = document.getElementById('ms');
   if (!messagesElement) return;
   messagesElement.innerHTML = sessionActivationApp.ChatState.getMessages().length > 0
-    ? ((window as any).msgs ? (window as any).msgs() : '')
+    ? (sessionActivationApp.Chat?.msgs ? sessionActivationApp.Chat.msgs() : '')
     : '';
   if (options.scroll !== 'none') {
     setTimeout(() => { messagesElement.scrollTop = messagesElement.scrollHeight; }, 50);
@@ -192,8 +192,5 @@ const sessionActivationApi: AppSessionActivation = {
 };
 
 sessionActivationApp.SessionActivation = sessionActivationApi;
-(window as any).onceSessionActivated = onceSessionActivated;
-(window as any).emitSessionActivated = emitSessionActivated;
-(window as any).invalidateSessionActivation = invalidateSessionActivation;
 
 export {};

@@ -413,4 +413,3 @@ permissionsPaneApp.Permissions = {
   setMode: (mode: PermissionMode) => requestPermissionMode(mode, true),
   refreshMode: refreshPermissionMode,
 };
-(window as any).refreshPermissionsPanel = refreshPermissionsPanel;

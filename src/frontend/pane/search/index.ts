@@ -235,7 +235,7 @@ async function openSearchResult(filePath: string, line?: number): Promise<void> 
     if (!r.ok) { toast(d.error || "读取失败", "error"); return; }
     const content = d.encoding === "base64" ? "[二进制文件，无法预览]" : d.content;
     const lang = filePath.split(".").pop() || "";
-    openFileTab(filePath, content, lang);
+    searchPaneApp.UI.openFileTab(filePath, content, lang);
     // 如果有行号，等 Monaco 就绪后定位
     if (line) {
       const m = (window as any).__monaco as any;
@@ -480,11 +480,6 @@ function handleSearchPaneClick(event: Event): void {
 
 // ─── Export for App namespace ─────────────────────────────────
 
-(window as any).openSearchResult = openSearchResult;
-(window as any).toggleReplaceSection = toggleReplaceSection;
-(window as any).toggleReplaceRegex = toggleReplaceRegex;
-(window as any).doReplacePreview = doReplacePreview;
-(window as any).doReplaceAll = doReplaceAll;
 
 // ─── Main render function ─────────────────────────────────────
 

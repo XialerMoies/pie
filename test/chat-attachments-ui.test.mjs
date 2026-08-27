@@ -17,8 +17,7 @@ global.ExplorerService = {
   iconFor: () => '<span class="file-icon"></span>',
   getWorkspacePath: () => "",
 };
-global.openFileTab = () => {};
-win.App = { Chat: {} };
+win.App = { Chat: {}, UI: { openFileTab() {} } };
 
 before(async () => {
   await import("../src/frontend/chat/chat-attachments.ts");

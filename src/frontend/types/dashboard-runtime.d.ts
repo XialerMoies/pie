@@ -40,6 +40,14 @@ interface AppChat {
   resizeComposerInput(input: HTMLTextAreaElement): void;
   isBusy(): boolean;
   reconnect?(): void;
+  refreshTokenUsage?(): Promise<void>;
+  startTokenUpdates?(): void;
+  stopTokenUpdates?(): void;
+  syncTokenRailPosition?(): void;
+  openUsagePanel?(): void;
+  closeUsagePanel?(): void;
+  openCompactModal?(): void;
+  closeCompactModal?(): void;
 }
 interface AppChatState {
   getMessages(): Message[];
@@ -113,6 +121,9 @@ interface AppSession {
   restoreSessionTabs(): Promise<void>;
   saveUiState(): void;
   migrateSessionTabLabels(): void;
+  openConvResult?(sessionId: string, msgIndex?: number, matchOrdinal?: number): void;
+  openConvMatch?(sessionId: string, msgIndex?: number, matchOrdinal?: number): void;
+  isConversationSearchActive?(): boolean;
 }
 interface SessionListPanelCallbacks {
   isConversationSearchActive(): boolean;

@@ -51,6 +51,9 @@ global.App = {
     },
     setBoolean: (key, value) => { store[key] = Boolean(value); },
   },
+  Permissions: {
+    refresh: async () => {},
+  },
   Events: appEvents,
 };
 global.window = global;
@@ -374,14 +377,14 @@ describe("ExplorerService", () => {
       const oldConfirmPermissionAsync = global.confirmPermissionAsync;
       const oldConfirmAsync = global.confirmAsync;
       const oldFetch = global.fetch;
-      const oldRefreshPermissionsPanel = global.refreshPermissionsPanel;
+      const oldRefreshPermissions = global.App.Permissions.refresh;
       try {
         global.confirmPermissionAsync = async (input) => {
           calls.push({ type: "confirm", input });
           return "workspace";
         };
         global.confirmAsync = async () => false;
-        global.refreshPermissionsPanel = async () => {
+        global.App.Permissions.refresh = async () => {
           calls.push({ type: "refreshPermissionsPanel" });
         };
         global.fetch = async (url, options = {}) => {
@@ -423,7 +426,7 @@ describe("ExplorerService", () => {
         global.confirmPermissionAsync = oldConfirmPermissionAsync;
         global.confirmAsync = oldConfirmAsync;
         global.fetch = oldFetch;
-        global.refreshPermissionsPanel = oldRefreshPermissionsPanel;
+        global.App.Permissions.refresh = oldRefreshPermissions;
       }
     });
 

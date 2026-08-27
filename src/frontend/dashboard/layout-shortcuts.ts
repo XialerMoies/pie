@@ -70,7 +70,7 @@ function quickOpenFile(): void {
               const d2 = await r2.json();
               if (!r2.ok) return;
               const content = d2.encoding === 'base64' ? '[二进制文件，无法预览]' : d2.content;
-              openFileTab(path, content, (path.split('.').pop() || ''));
+              App.UI.openFileTab(path, content, (path.split('.').pop() || ''));
             } catch {}
           });
         });
@@ -181,11 +181,8 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// ─── window 别名 ──────────────────────────────────
-(window as any).saveCurrentFile = saveCurrentFile;
-(window as any).quickOpenFile = quickOpenFile;
-
 // ─── App 绑定 ──────────────────────────────────────
 { const U = (window as any).App?.UI; if (U) {
   U.saveCurrentFile = saveCurrentFile;
+  U.quickOpenFile = quickOpenFile;
 } }

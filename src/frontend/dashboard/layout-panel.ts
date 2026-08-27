@@ -123,10 +123,6 @@ function renderPanel(name: string, pc?: HTMLElement | null): void {
   pc.innerHTML = `<div class="sg-item dim">面板 "${E(name)}" 未注册</div>`;
 }
 
-// ─── window 别名 ──────────────────────────────────
-window.togglePanel = togglePanel;
-window.renderPanel = renderPanel;
-
 // ─── App 绑定 ──────────────────────────────────────
 { const U = (window as any).App?.UI; if (U) {
   U.togglePanel = togglePanel;

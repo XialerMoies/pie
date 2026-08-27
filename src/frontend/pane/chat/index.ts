@@ -5,6 +5,8 @@
  */
 /// <reference path="../../dashboard.d.ts" />
 
+const chatPaneApp = (window as any).App;
+
 let _convQuery = "";
 let _convTimer: ReturnType<typeof setTimeout> | null = null;
 let _convCache: any = null;
@@ -167,8 +169,8 @@ function openConvMatch(sessionId: string, msgIndex?: number, matchOrdinal?: numb
   };
 
   // 先订阅再 activate（session 限定，只消费匹配的）
-  if (typeof window.onceSessionActivated === "function") {
-    cancel = window.onceSessionActivated(sessionId, () => {
+  if (typeof chatPaneApp.SessionActivation?.onceActivated === "function") {
+    cancel = chatPaneApp.SessionActivation.onceActivated(sessionId, () => {
       if (settled || seq !== _convClickSeq) { cleanup(); return; }
       delayTimer = setTimeout(() => {
         delayTimer = null;
@@ -345,9 +347,9 @@ function chatPaneRender(container: HTMLElement): void {
 }
 
 // 暴露给外部模块和测试
-(window as any).openConvResult = openConvResult;
-(window as any).openConvMatch = openConvMatch;
-(window as any).isConversationSearchActive = isConversationSearchActive;
+chatPaneApp.Session.openConvResult = openConvResult;
+chatPaneApp.Session.openConvMatch = openConvMatch;
+chatPaneApp.Session.isConversationSearchActive = isConversationSearchActive;
 
 registerPane('chat', chatPaneRender);
 

@@ -4,7 +4,7 @@
  * 覆盖：
  *   1. activeView=session → 优先激活会话，忽略 stale localStorage last-active-tab
  *   2. activeView=chat → 不激活任何标签，忽略 stale last-active-tab
- *   3. openFileTab 直接调用能触发 App.Tabs.activate
+ *   3. App.UI.openFileTab 直接调用能触发 App.Tabs.activate
  */
 import { describe, it, before, beforeEach } from "node:test";
 import assert from "node:assert";
@@ -79,7 +79,6 @@ describe("File tab restore", () => {
     global.fetch = async () => ({ ok: true, json: async () => ({ content: "file content" }) });
     await import("../src/frontend/dashboard/dashboard-layout.ts");
     await import("../src/frontend/dashboard/layout-tabs.ts");
-    global.openFileTab = (...args) => win.openFileTab(...args);
   });
 
   beforeEach(() => {
@@ -94,7 +93,7 @@ describe("File tab restore", () => {
     raw.activeView = { type: "session", id: "sess-restore" };
     store["last-active-tab"] = "/stale/old.ts";
 
-    win.restoreFileTabs();
+    win.App.UI.restoreFileTabs();
 
     assert.ok(activateCalls.includes("sess-restore"), "应激活 session，而非 stale file");
     assert.ok(!activateCalls.includes("/stale/old.ts"), "stale last-active-tab 不应被使用");
@@ -104,20 +103,20 @@ describe("File tab restore", () => {
     raw.activeView = { type: "chat" };
     store["last-active-tab"] = "/stale/old.ts";
 
-    win.restoreFileTabs();
+    win.App.UI.restoreFileTabs();
 
     assert.strictEqual(activateCalls.length, 0, "不应激活任何标签");
     assert.ok(!activateCalls.includes("/stale/old.ts"), "stale last-active-tab 不应被使用");
   });
 
-  it("openFileTab 触发 App.Tabs.activate", () => {
-    assert.ok(typeof win.openFileTab === 'function', "openFileTab 应在 window 上");
-    win.openFileTab("/src/main.ts", "console.log('hello');", "ts");
+  it("App.UI.openFileTab 触发 App.Tabs.activate", () => {
+    assert.ok(typeof win.App.UI.openFileTab === 'function', "openFileTab 应在 App.UI 上");
+    win.App.UI.openFileTab("/src/main.ts", "console.log('hello');", "ts");
     assert.ok(activateCalls.includes("/src/main.ts"), "openFileTab 应触发 App.Tabs.activate");
   });
 
-  it("openFileTab 带 renderer 参数时传递给 TabStore", () => {
-    win.openFileTab("/img/photo.png", "", "png", "image");
+  it("App.UI.openFileTab 带 renderer 参数时传递给 TabStore", () => {
+    win.App.UI.openFileTab("/img/photo.png", "", "png", "image");
 
     const tabs = legacyState._fileTabs;
     assert.ok(tabs.some(function(t) { return t.id === "/img/photo.png"; }), "tab 应被打开");
@@ -133,7 +132,7 @@ describe("File tab restore", () => {
       { kind: "file", id: "/src/two.ts", title: "two.ts", order: 2 },
     ];
 
-    win.restoreFileTabs();
+    win.App.UI.restoreFileTabs();
     await new Promise(resolve => setTimeout(resolve, 0));
 
     assert.deepStrictEqual(legacyState._fileTabs.map(tab => tab.id), ["/src/one.ts", "/src/two.ts"], "both file tabs should be restored");

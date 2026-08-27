@@ -4,10 +4,6 @@ interface Window {
   __monaco: MonacoAPI;
   __problemsStore: ProblemsStoreAPI;
   ExplorerService: typeof ExplorerService;
-  isConversationSearchActive?: () => boolean;
-  onceSessionActivated?: OnceSessionActivated;
-  emitSessionActivated?: SessionActivatedCallback;
-  refreshPermissionsPanel?: (forceToast?: boolean) => Promise<void>;
 }
 
 // Legacy global-script bridge. These declarations are intentionally explicit;
@@ -50,37 +46,14 @@ declare function applyExplorerPreferences(): void;
 declare function getD(): Promise<void>;
 declare function refresh(): Promise<void>;
 declare function winCtrl(action: string): void;
-declare function layout(): void;
-declare function togglePanel(name: string): void;
-declare function renderPanel(name: string, pc?: HTMLElement | null): void;
-declare function closeChatTab(): void;
-declare function msgs(): string;
 declare function appendDelta(text: string): void;
-declare function bind(): void;
-declare function updateUI(): void;
-declare function showModelPicker(e: MouseEvent): void;
 declare function retryLastTurn(): void;
 declare function copyLastError(): Promise<void>;
 declare function refreshWorkspaceState(): void;
-declare function toggleFileMenu(ev: MouseEvent, trigger?: HTMLElement): void;
-declare function closeFM(): void;
-declare function fileAction(action: string): void;
-declare function launchCli(): void;
-declare function openSettingsModal(): void;
-declare function closeSettingsModal(): void;
-declare function switchSettingsModal(tab: string): void;
-declare function isConversationSearchActive(): boolean;
 declare function loadMonaco(): Promise<void>;
-declare function openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video', options?: { activate?: boolean }): void;
-declare function renderTabs(): void;
 declare function registerPane(name: string, render: (container: HTMLElement) => void): void;
-declare function saveCurrentFile(): Promise<void>;
 declare function tabContextMenu(e: MouseEvent, id: string): void;
 declare function tabMoreMenu(e: MouseEvent): void;
-declare function toggleExplorerFilter(): void;
-declare function refreshTokenUsage(): Promise<void>;
-declare function startTokenUpdates(): void;
-declare function stopTokenUpdates(): void;
 
 // Tree widget
 interface TreeNode { id: string; label: string; icon: string; isDir: boolean; children?: TreeNode[]; }

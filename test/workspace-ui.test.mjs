@@ -90,7 +90,7 @@ global.logTiming = () => {};
   global.toast = (message, type) => calls.push(["toast", message, type || "info"]);
   global.switchTab = (id) => calls.push(["switchTab", id]);
   global.renderPanel = (name, container) => calls.push(["renderPanel", name, Boolean(container)]);
-  win.msgs = () => "<div class=\"wl\">empty</div>";
+  win.App.Chat.msgs = () => "<div class=\"wl\">empty</div>";
 
   const fetchCalls = [];
   global.fetch = async (url, init = {}) => {
@@ -121,7 +121,7 @@ describe("workspace ui isolation", () => {
   });
 
   it("delegates File > Open Folder to Electron exactly once without local switching", async () => {
-    env.win.fileAction("openFolder");
+    env.win.App.File.fileAction("openFolder");
     await new Promise((resolve) => queueMicrotask(resolve));
     await new Promise((resolve) => queueMicrotask(resolve));
 
@@ -158,7 +158,7 @@ describe("workspace ui isolation", () => {
       return { ok: true, action: "focused-existing", workspace: "E:\\other-workspace" };
     };
 
-    env.win.fileAction("openFolder");
+    env.win.App.File.fileAction("openFolder");
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.strictEqual(env.calls.filter((call) => call[0] === "openWorkspaceFolder").length, 1);
@@ -178,7 +178,7 @@ describe("workspace ui isolation", () => {
       return "E:\\picked.ts";
     };
 
-    env.win.fileAction("openFile");
+    env.win.App.File.fileAction("openFile");
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.strictEqual(selectFileCalls, 1);
@@ -189,7 +189,7 @@ describe("workspace ui isolation", () => {
     let selectFileCalls = 0;
     env.win.electronAPI.selectFile = async () => { selectFileCalls += 1; return null; };
 
-    env.win.fileAction("openFile");
+    env.win.App.File.fileAction("openFile");
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.strictEqual(selectFileCalls, 1);
@@ -203,7 +203,7 @@ describe("workspace ui isolation", () => {
       throw new Error("picker failed");
     };
 
-    env.win.fileAction("openFile");
+    env.win.App.File.fileAction("openFile");
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.strictEqual(selectFileCalls, 1);

@@ -33,8 +33,8 @@ global.toast = () => {};
 global.loadSessions = () => {};
 global.ExplorerService = { iconFor: () => '<svg></svg>', getWorkspacePath: () => "/test" };
 win.ExplorerService = global.ExplorerService;
-// layout-tabs 以裸 `renderTabs` 引用（bundle 中共享作用域可用；模块加载下转发到 window.renderTabs）
-global.renderTabs = () => win.renderTabs?.();
+// layout-tabs 以裸 `renderTabs` 引用（bundle 中共享作用域可用）。
+global.renderTabs = () => win.App.UI.renderTabs?.();
 
 let legacyState;
 
@@ -121,7 +121,7 @@ describe("file tab render before Monaco", { concurrency: false }, () => {
   });
 
   it("openFileTab 同步渲染标签栏 + 切换到文件内容区（Monaco mock 下 DOM 集成）", () => {
-    win.openFileTab("/x.ts", "hello", "ts");
+    win.App.UI.openFileTab("/x.ts", "hello", "ts");
     const el = win.document.getElementById("main-tabs");
     const item = el.querySelector(".tb-item");
     assert.ok(item, "标签栏应出现 tb-item");
@@ -134,8 +134,8 @@ describe("file tab render before Monaco", { concurrency: false }, () => {
   it("点会话A(请求在途)→点文件F→A响应晚到：应保持 F（统一竞态防护覆盖跨类）", async () => {
     const ts = win.App.Tabs;
     ts.openTab({ kind: "session", id: "sess-a", title: "A", sessionId: "sess-a" });
-    win.openFileTab("/f.ts", "FILE", "ts");
-    win.renderTabs();
+    win.App.UI.openFileTab("/f.ts", "FILE", "ts");
+    win.App.UI.renderTabs();
 
     const pendings = new Map();
     const prevFetch = global.fetch;
@@ -167,8 +167,8 @@ describe("file tab render before Monaco", { concurrency: false }, () => {
       create() {}, dispose() {}, setLang() {}, tsCloseFile() {},
       setValue(v) { setValues.push(v); },
     };
-    win.openFileTab("/f1.ts", "content1", "ts");
-    win.openFileTab("/f2.ts", "content2", "ts");
+    win.App.UI.openFileTab("/f1.ts", "content1", "ts");
+    win.App.UI.openFileTab("/f2.ts", "content2", "ts");
     win.App.Tabs.activate("/f2.ts");
     setValues.length = 0; // 清掉打开/激活过程写入的值
 

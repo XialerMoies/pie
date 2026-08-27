@@ -255,6 +255,8 @@ interface AppUI {
   renderTabs(): void;
   renderSessionTabs(activeId?: string): void;
   closeChatTab(): void;
+  restoreFileTabs(): void;
+  quickOpenFile(): void;
   openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video', options?: { activate?: boolean }): void;
   saveCurrentFile(): Promise<void>;
 }

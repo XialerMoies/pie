@@ -295,7 +295,7 @@ class UsageCurrentView {
     requestAnimationFrame(() => {
       const panelBtn = container.querySelector('#panel-compact-btn') as HTMLButtonElement | null;
       if (panelBtn && !panelBtn.disabled) {
-        panelBtn.addEventListener('click', () => { closeUsagePanel(); (window as any).openCompactModal?.(); });
+        panelBtn.addEventListener('click', () => { closeUsagePanel(); chatTokenApp.Chat?.openCompactModal?.(); });
       }
     });
   }
@@ -360,7 +360,7 @@ function renderCurrentSessionUsage(container: HTMLElement): void {
     requestAnimationFrame(() => {
       const panelBtn = container.querySelector('#panel-compact-btn') as HTMLButtonElement | null;
       if (panelBtn && !panelBtn.disabled) {
-        panelBtn.addEventListener('click', () => { closeUsagePanel(); (window as any).openCompactModal?.(); });
+        panelBtn.addEventListener('click', () => { closeUsagePanel(); chatTokenApp.Chat?.openCompactModal?.(); });
       }
     });
 }
@@ -723,7 +723,7 @@ async function doCompact(): Promise<void> {
           })));
           const msgsEl = document.getElementById('ms') as HTMLElement | null;
           if (msgsEl) {
-            msgsEl.innerHTML = window.msgs ? window.msgs() : '';
+            msgsEl.innerHTML = chatTokenApp.Chat?.msgs ? chatTokenApp.Chat.msgs() : '';
             msgsEl.scrollTop = msgsEl.scrollHeight;
           }
         }
@@ -739,11 +739,11 @@ async function doCompact(): Promise<void> {
 
 // ─── 公开 API ───────────────────────────────────────────
 
-(window as any).refreshTokenUsage = refreshTokenUsage;
-(window as any).startTokenUpdates = startTokenUpdates;
-(window as any).stopTokenUpdates = stopTokenUpdates;
-(window as any).syncTokenRailPosition = syncRailPosition;
-(window as any).openUsagePanel = openUsagePanel;
-(window as any).closeUsagePanel = closeUsagePanel;
-(window as any).openCompactModal = openCompactModal;
-(window as any).closeCompactModal = closeCompactModal;
+chatTokenApp.Chat.refreshTokenUsage = refreshTokenUsage;
+chatTokenApp.Chat.startTokenUpdates = startTokenUpdates;
+chatTokenApp.Chat.stopTokenUpdates = stopTokenUpdates;
+chatTokenApp.Chat.syncTokenRailPosition = syncRailPosition;
+chatTokenApp.Chat.openUsagePanel = openUsagePanel;
+chatTokenApp.Chat.closeUsagePanel = closeUsagePanel;
+chatTokenApp.Chat.openCompactModal = openCompactModal;
+chatTokenApp.Chat.closeCompactModal = closeCompactModal;

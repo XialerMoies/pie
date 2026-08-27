@@ -719,7 +719,7 @@ describe("App.Tabs dispatch", { concurrency: false }, () => {
     const realGetSnapshot = win.App.State.getSnapshot;
     win.App.State.getSnapshot = () => ({ ...realGetSnapshot(), activeView: { type: "session", id: "sess-a" } });
     try {
-      win.restoreFileTabs();
+      win.App.UI.restoreFileTabs();
       await new Promise((r) => setTimeout(r, 10)); // 等恢复触发的 fetch 落地
       assert.strictEqual(ts.getState().activeId, "sess-b",
         "用户已交互时恢复不得把 activeId 覆盖回持久化的会话 sess-a");

@@ -79,7 +79,7 @@ async function chatViewOpenDiffFile(filePath: string): Promise<void> {
     const data = await response.json();
     if (!response.ok) throw new Error(data?.error || '文件读取失败');
     const lang = relativePath.split('.').pop() || '';
-    (window as any).openFileTab?.(relativePath, String(data?.content || ''), lang);
+    chatViewApp.UI.openFileTab(relativePath, String(data?.content || ''), lang);
   } catch (error) {
     (window as any).toast?.(error instanceof Error ? error.message : '文件读取失败', 'error');
   }

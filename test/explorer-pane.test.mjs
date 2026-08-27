@@ -11,7 +11,7 @@ global.self = win;
 global.$ = (id) => doc.getElementById(id);
 global.toast = () => {};
 global.mark = () => {};
-global.openFileTab = () => {};
+win.App = { UI: { openFileTab() {} }, Tabs: {} };
 
 let workspace = "";
 let applyCount = 0;

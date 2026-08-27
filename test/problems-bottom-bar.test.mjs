@@ -123,7 +123,7 @@ describe("Problems Bottom Bar", () => {
   it("问题栏提供高度调节句柄并在展开时同步 token rail", () => {
     const { doc, win } = env;
     let syncCount = 0;
-    win.syncTokenRailPosition = () => { syncCount += 1; };
+    win.App.Chat.syncTokenRailPosition = () => { syncCount += 1; };
     doc.body.innerHTML = `
       <button id="pb-status-trigger" type="button" aria-expanded="false"></button>
       <section class="pb-panel" id="pb-panel" style="display:none">

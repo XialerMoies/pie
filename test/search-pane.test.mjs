@@ -63,7 +63,7 @@ global.setSearchType = () => { searchCounts.fallback += 1; };
 global.toggleCaseSensitive = () => { searchCounts.fallback += 1; };
 
 let openFileArg = null;
-global.openFileTab = (filePath, content, lang) => {
+win.App.UI.openFileTab = (filePath, content, lang) => {
   openFileArg = { filePath, content, lang };
   win.__currentFile = filePath;
 };
@@ -96,7 +96,6 @@ before(async () => {
 after(() => {
   delete global.setSearchType;
   delete global.toggleCaseSensitive;
-  delete global.openFileTab;
 });
 
 describe("search pane", () => {
@@ -167,7 +166,7 @@ describe("search pane", () => {
     win.__revealed = null;
     openFileArg = null;
 
-    await win.openSearchResult("demo.txt", 2);
+    await win.App.File.openSearchResult("demo.txt", 2);
 
     assert.deepStrictEqual(openFileArg, {
       filePath: "demo.txt",

@@ -35,7 +35,6 @@ beforeEach(() => {
   pending = new Map();
   requests = [];
   win.document.body.innerHTML = '<div id="ms"></div><textarea id="ci"></textarea><button id="cs"></button>';
-  win.msgs = () => messages.map(message => `<div class="m">${message.content}</div>`).join("");
   win.S = () => "<svg></svg>";
   win.App = {
     State: { getWorkspacePath: () => "E:\\workspace" },
@@ -65,6 +64,7 @@ beforeEach(() => {
   global.window = win;
   global.document = win.document;
   global.App = win.App;
+  win.App.Chat.msgs = () => messages.map(message => `<div class="m">${message.content}</div>`).join("");
   global.$ = id => win.document.getElementById(id);
   global.toast = message => calls.push(["toast", message]);
   global.fetch = (_url, init) => {

@@ -20,6 +20,7 @@ interface DashboardChatDependencies {
   tabs: AppTabs;
   state: AppStateFacade;
   session: AppSession;
+  settings: AppSettings;
   getSessionTabs: () => AppSessionTabs;
   getSessionRestore: () => AppSessionRestore;
   getGit: () => AppGit | undefined;
@@ -35,6 +36,7 @@ const dashboardChatDependencies: DashboardChatDependencies = {
   tabs: dashboardChatApp.Tabs,
   state: dashboardChatApp.State,
   session: dashboardChatApp.Session,
+  settings: dashboardChatApp.Settings,
   getSessionTabs: () => dashboardChatApp.SessionTabs,
   getSessionRestore: () => dashboardChatApp.SessionRestore,
   getGit: () => dashboardChatApp.Git,
@@ -244,7 +246,7 @@ function _applyMsgsDiff(msgsEl: HTMLElement, scroll: boolean): void {
   const M = dashboardChatRuntimeState.getMessages();
   const rm = dashboardChatChat.renderMessage;
   if (!rm) {
-    const fallback = (window as any).msgs ? (window as any).msgs() || "" : "";
+    const fallback = dashboardChatChat.msgs ? dashboardChatChat.msgs() || "" : "";
     msgsEl.innerHTML = fallback;
     dashboardChatTimeline?.sync();
     if (scroll) sb("ms");
@@ -290,7 +292,7 @@ function _applyMsgsDiff(msgsEl: HTMLElement, scroll: boolean): void {
 
   // 空 M → 欢迎屏
   if (M.length === 0) {
-    msgsEl.innerHTML = (window as any).msgs ? (window as any).msgs() : "";
+    msgsEl.innerHTML = dashboardChatChat.msgs ? dashboardChatChat.msgs() : "";
     changed = true;
   }
 
@@ -566,7 +568,7 @@ function bind(): void {
   function renderMessages(scroll = true): void {
     if (renderFrame !== null) { cancelAnimationFrame(renderFrame); renderFrame = null; }
     const msgsEl = $("ms");
-    if (!msgsEl || !(window as any).msgs) return;
+    if (!msgsEl || !dashboardChatChat.msgs) return;
     _applyMsgsDiff(msgsEl, scroll);
   }
 
@@ -615,7 +617,7 @@ function bind(): void {
     modelBtn.addEventListener('click', (e) => {
       const st = dashboardChatRuntimeState.getDashboard();
       if (!st || st.modelId === 'N/A' || st.modelId === 'unknown') {
-        (window as any).openSettingsModal?.();
+        dashboardChatDependencies.settings.openSettingsModal();
       } else {
         showModelPicker(e);
       }
@@ -631,7 +633,7 @@ function bind(): void {
   }
 
   // ─── Token usage events → Token Rail + Usage 面板 ───
-  (window as any).startTokenUpdates?.();
+  dashboardChatChat.startTokenUpdates?.();
 }
 
 function updateModelName(): void {
@@ -654,7 +656,7 @@ function updateModelName(): void {
 function updateUI(): void {
   chatComposerView?.refresh();
   const msgsEl = $("ms");
-  if (msgsEl && (window as any).msgs) {
+  if (msgsEl && dashboardChatChat.msgs) {
     _applyMsgsDiff(msgsEl, false);
   }
 }
@@ -672,10 +674,6 @@ function showModelPicker(e: MouseEvent): void {
 }
 
 // ─── App 命名空间绑定 ──────────────────────────────────────
-window.bind = bind;
-window.updateUI = updateUI;
-window.showModelPicker = showModelPicker;
-
 { const dashboardChatPublicApi = dashboardChatChat; if (dashboardChatPublicApi) {
   dashboardChatPublicApi.bind = bind;
   dashboardChatPublicApi.updateUI = updateUI;

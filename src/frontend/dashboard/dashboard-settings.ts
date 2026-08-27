@@ -126,13 +126,6 @@ function toggleAutoSaveSetting(): void {
   settingsComponents.general.toggleAutoSave();
 }
 
-window.openSettingsModal = openSettingsModal;
-window.closeSettingsModal = closeSettingsModal;
-window.switchSettingsModal = switchSettingsModal;
-window.changeFontSize = changeFontSize;
-window.applyGeneralSetting = applyGeneralSetting;
-window.toggleAutoSaveSetting = toggleAutoSaveSetting;
-
 const settingsFacade = settingsFacadeApp.Settings;
 if (settingsFacade) Object.assign(settingsFacade, {
   openSettingsModal,

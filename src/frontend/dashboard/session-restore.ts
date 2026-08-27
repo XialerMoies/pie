@@ -56,7 +56,7 @@ function _setActiveSessionTabId(id: string | null): void {
 }
 
 function _renderSessionTabs(_activeId?: string): void {
-  if (typeof (window as any).renderTabs === 'function') (window as any).renderTabs();
+  sessionRestoreApp.UI?.renderTabs?.();
 }
 
 function _saveUiState(): void {
@@ -127,7 +127,7 @@ async function restoreSessionTabsImpl(): Promise<void> {
 
   sessionRestoreApp.Tabs?.restoreTabs?.(restoredItems, activeId);
   sessionRestoreApp.State.syncTabs?.(restoredItems, activeId);
-  if (typeof (window as any).restoreFileTabs === 'function') (window as any).restoreFileTabs();
+  sessionRestoreApp.UI?.restoreFileTabs?.();
 
   const ids = restoredItems
     .filter(tab => tab.kind === 'session' || tab.kind === 'chat')

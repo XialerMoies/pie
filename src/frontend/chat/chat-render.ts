@@ -381,7 +381,6 @@ function appendDelta(text: string): void {
 }
 
 // ─── App 命名空间绑定 ──────────────────────────────────────
-window.msgs = msgs;
 { const AppChat = (window as any).App?.Chat; if (AppChat) {
   AppChat.msgs = msgs;
   AppChat.renderMessage = renderMessage;

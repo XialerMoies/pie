@@ -114,14 +114,14 @@ function buildMainArea(): string {
         <span class="tr-cr" id="tr-cr" title="缓存命中率">--%</span>
         <button class="tr-btn" id="tr-btn" title="压缩上下文">压缩</button>
       </div>
-      <div class="msgs" id="ms">${window.msgs ? window.msgs() : ''}</div>
+      <div class="msgs" id="ms">${App.Chat?.msgs ? App.Chat.msgs() : ''}</div>
       <nav class="chat-timeline" id="chat-timeline" aria-label="会话时间线" aria-hidden="true"></nav>
       <div class="file-content" id="file-content" style="display:none">
         <div class="fc-toolbar"><span class="fc-status" id="fc-status"></span></div>
         <div class="fc-editor" id="fc-editor"></div>
       </div>
       <div class="fi-area" id="fi">
-        <button class="chat-jump-latest" id="chat-jump-latest" type="button" title="回到最新消息" aria-label="回到最新消息" aria-hidden="true" tabindex="-1">${window.S('idown', 16)}</button>
+        <button class="chat-jump-latest" id="chat-jump-latest" type="button" title="回到最新消息" aria-label="回到最新消息" aria-hidden="true" tabindex="-1">${App.UI.S('idown', 16)}</button>
         <div class="command-confirm-slot" id="command-confirm-slot" aria-live="polite"></div>
         <div class="fi-box" id="fi-box">
           <div class="fi-drop-zone" id="fi-drop-zone">松开添加文件引用</div>
@@ -141,11 +141,11 @@ function buildMainArea(): string {
           <div class="fi-actions-bar">
             <button class="fi-abtn fi-model" id="fi-model-btn" title="切换模型"><span id="fi-model-name">claude-sonnet</span> <span class="fi-arrow">▾</span></button>
             <button class="fi-abtn fi-mode" id="fi-mode-btn" title="切换策略"><span id="fi-mode-name">自动</span><span id="fi-evidence-state" class="fi-evidence-state" hidden aria-hidden="true"></span> <span class="fi-arrow">▾</span></button>
-            <button class="fi-abtn fi-file" id="fi-file-btn" title="添加本机文件">${window.S('iplus', 14)}</button>
+            <button class="fi-abtn fi-file" id="fi-file-btn" title="添加本机文件">${App.UI.S('iplus', 14)}</button>
             <span class="fi-spacer"></span>
             <button id="chat-note-mode" class="fi-abtn fi-note-mode" title="补充处理时机" style="${chatBusy ? '' : 'display:none'}">当前步骤后</button>
-            <button id="chat-stop" class="fi-stop-btn" title="中止当前任务" aria-label="中止当前任务" style="${chatBusy ? '' : 'display:none'}">${window.S('ipause', 16)}</button>
-            <button id="cs" class="fi-send-btn" title="发送消息">${window.S('iup', 16)}</button>
+            <button id="chat-stop" class="fi-stop-btn" title="中止当前任务" aria-label="中止当前任务" style="${chatBusy ? '' : 'display:none'}">${App.UI.S('ipause', 16)}</button>
+            <button id="cs" class="fi-send-btn" title="发送消息">${App.UI.S('iup', 16)}</button>
           </div>
         </div>
       </div>
@@ -240,7 +240,7 @@ function bindLayoutActions(container: HTMLElement): void {
     const appNamespace = (window as any).App;
     switch (target.dataset.layoutAction) {
       case 'file-menu': {
-        const handler = appNamespace?.File?.toggleFileMenu || (window as any).toggleFileMenu;
+        const handler = appNamespace?.File?.toggleFileMenu;
         if (typeof handler === 'function') handler(event, target);
         break;
       }
@@ -251,12 +251,12 @@ function bindLayoutActions(container: HTMLElement): void {
         if (target.dataset.side) togglePanel(target.dataset.side);
         break;
       case 'launch-cli': {
-        const handler = appNamespace?.File?.launchCli || (window as any).launchCli;
+        const handler = appNamespace?.File?.launchCli;
         if (typeof handler === 'function') handler();
         break;
       }
       case 'settings': {
-        const handler = appNamespace?.Settings?.openSettingsModal || (window as any).openSettingsModal;
+        const handler = appNamespace?.Settings?.openSettingsModal;
         if (typeof handler === 'function') handler();
         break;
       }
@@ -330,7 +330,7 @@ function _syncMainArea(activeId: string | null, items: AppTab[]): void {
     mc?.classList.remove('editing');
   }
   const scheduleRailSync = window.requestAnimationFrame || ((callback: FrameRequestCallback) => window.setTimeout(callback, 0));
-  scheduleRailSync(() => (window as any).syncTokenRailPosition?.());
+  scheduleRailSync(() => App.Chat?.syncTokenRailPosition?.());
 }
 
 // ─── 标签事件委托（替代 inline onclick，修复 ' 转义风险）───
@@ -392,10 +392,10 @@ document.addEventListener('click', (e: MouseEvent) => {
   const rail = (e.target as HTMLElement).closest('.tr-rail') as HTMLElement | null;
   if (!rail) return;
   if ((e.target as HTMLElement).closest('.tr-btn') && !(e.target as HTMLButtonElement).disabled) {
-    (window as any).openCompactModal?.();
+    App.Chat?.openCompactModal?.();
     return;
   }
-  (window as any).openUsagePanel?.();
+  App.Chat?.openUsagePanel?.();
 });
 
 // ─── 滚轮滚动 ────────────────────────
@@ -420,7 +420,7 @@ function restoreFileTabs(): void {
       // 媒体 tab：直接开标签，不读取文本内容
       if (ft.renderer === 'image' || ft.renderer === 'video') {
         const ext = '.' + (ft.id.split('.').pop() || '').toLowerCase();
-        openFileTab(ft.id, '', ext, ft.renderer, { activate: false });
+        App.UI.openFileTab(ft.id, '', ext, ft.renderer, { activate: false });
         loaded++;
         if (loaded >= total) restoreActiveTab();
         continue;
@@ -430,7 +430,7 @@ function restoreFileTabs(): void {
           .then(r => r.ok ? r.json() : null)
           .then(d => {
             if (!d) return;
-            openFileTab(ft.id, d.content, (d.path?.split('.').pop() || ''), ft.renderer, { activate: false });
+            App.UI.openFileTab(ft.id, d.content, (d.path?.split('.').pop() || ''), ft.renderer, { activate: false });
           })
           .catch(() => {})
           .finally(() => {
@@ -564,7 +564,7 @@ async function _pbNavigateToProblem(filePath: string, line: number, col: number)
   const tab = App.Tabs.getTab?.(filePath);
   if (tab) App.Tabs.activate(filePath);
   else {
-    const fn = (window as any).openFileTab as ((id: string, content: string, lang?: string) => void) | undefined;
+    const fn = App.UI.openFileTab;
     if (fn) {
       const root = App.State.getWorkspacePath();
       fetch(`/api/file/read?root=${encodeURIComponent(root)}&path=${encodeURIComponent(filePath)}`)
@@ -597,7 +597,7 @@ function _pbToggle(force?: boolean): void {
   }
   if (_pbExpanded) _updateProblemsBar();
   const schedule = window.requestAnimationFrame || ((callback: FrameRequestCallback) => window.setTimeout(callback, 0));
-  schedule(() => (window as any).syncTokenRailPosition?.());
+  schedule(() => App.Chat?.syncTokenRailPosition?.());
 }
 
 const PB_MIN_HEIGHT = 48;
@@ -627,7 +627,7 @@ function _pbSetHeight(height: number): void {
   panel.style.maxHeight = 'none';
   _pbSyncResizeA11y();
   handle?.setAttribute('aria-valuenow', String(clamped));
-  (window as any).syncTokenRailPosition?.();
+  App.Chat?.syncTokenRailPosition?.();
 }
 
 function _pbInitResize(): void {
@@ -686,17 +686,12 @@ function _initProblemsBar(): void {
   _pbToggle(_pbExpanded);
 }
 
-// ─── window 别名 ──────────────────────────────────
-window.layout = layout;
-(window as any).renderTabs = renderTabs;
-
-(window as any).closeChatTab = closeChatTab;
-(window as any).restoreFileTabs = restoreFileTabs;
-
 // ─── App 命名空间绑定 ──────────────────────────────────────
 { const U = (window as any).App?.UI; if (U) {
   U.layout = layout;
   U.renderTabs = renderTabs;
+  U.closeChatTab = closeChatTab;
+  U.restoreFileTabs = restoreFileTabs;
 } }
 { const appNamespace = (window as any).App || ((window as any).App = {});
   const statusBar = appNamespace.StatusBar || (appNamespace.StatusBar = {});

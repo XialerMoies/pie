@@ -30,6 +30,19 @@ function createLocalStorage() {
 }
 
 describe("dashboard bundle global ownership", () => {
+  it("keeps file opening behind the App.UI facade", () => {
+    const root = resolve(process.cwd(), "src/frontend");
+    const files = frontendTypeScriptFiles(root);
+    const legacyReads = /(?:window|\(window as any\))\.openFileTab\b/;
+    for (const file of files) {
+      const source = readFileSync(file, "utf8");
+      assert.doesNotMatch(source, legacyReads, `${relativeFrontendPath(file)} must not read window.openFileTab`);
+    }
+    const layoutTabs = readFileSync(resolve(root, "dashboard/layout-tabs.ts"), "utf8");
+    assert.doesNotMatch(layoutTabs, /window\.openFileTab\s*=/);
+    assert.match(layoutTabs, /U\.openFileTab\s*=\s*openFileTab/);
+  });
+
   it("keeps UI-state and preference hydration independent in the production scope", async () => {
     const root = resolve(process.cwd(), "src/frontend/services");
     const source = (await Promise.all(["ui-state-store.ts", "preferences.ts"].map(async (file) => {

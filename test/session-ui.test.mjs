@@ -135,7 +135,7 @@ win.App = {
       legacyState._activeSessionTabId = id;
       legacyState._activeFileTab = null;
       win.App.ChatState.replaceMessages([{ role: "user", content: "切换后" }]);
-      if (typeof win.renderTabs === 'function') win.renderTabs();
+      win.App.UI.renderTabs?.();
     },
     close(id) {
       const idx = legacyState._sessionTabs.indexOf(id);
@@ -145,7 +145,7 @@ win.App = {
           const next = legacyState._sessionTabs[Math.min(idx, legacyState._sessionTabs.length - 1)] || null;
           legacyState._activeSessionTabId = next;
         }
-        if (typeof win.renderTabs === 'function') win.renderTabs();
+        win.App.UI.renderTabs?.();
       }
     },
     contextMenu() {},
@@ -303,7 +303,7 @@ before(async () => {
   await import(`../src/frontend/dashboard/session-list-panel.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/dashboard-sessions.ts?t=${ts}`);
   await import(`../src/frontend/pane/chat/index.ts?t=${ts}`);
-  win.renderTabs();
+  win.App.UI.renderTabs();
 }, 10000);
 
 describe("session ui state", () => {
@@ -329,7 +329,7 @@ describe("session ui state", () => {
     legacyState._sessionTabs = [];
     legacyState._fileTabs = [];
     legacyState._activeFileTab = null;
-    win.renderTabs();
+    win.App.UI.renderTabs();
 
     // Layer 0: 无 session/file 标签时主区空白，不自动创建 chat tab
     assert.strictEqual(doc.querySelector("#main-tabs .tb-item[data-tab='chat']"), null);
@@ -881,7 +881,7 @@ describe("session ui state", () => {
 
     try {
       win.App.Tabs.activate = () => {
-        if (typeof win.emitSessionActivated === "function") win.emitSessionActivated("sess-a");
+        win.App.SessionActivation?.emitActivated?.("sess-a");
       };
       tabs.getActiveTab = () => ({ id: "sess-a", kind: "session", title: "sess-a", order: 0 });
       originalMs?.remove();
@@ -902,7 +902,7 @@ describe("session ui state", () => {
         value: () => { scrolled += 1; },
       });
 
-      win.openConvMatch("sess-a", 1);
+      win.App.Session.openConvMatch("sess-a", 1);
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       assert.strictEqual(scrolled, 1, "同步激活通知和立即路径应只滚动一次");
@@ -952,11 +952,11 @@ describe("session ui state", () => {
             '<div class="m"><div class="block-text">latest reply</div></div>',
           ].join("");
           // 模拟 _applySessionMessages 完成后的激活通知
-          if (typeof win.emitSessionActivated === "function") win.emitSessionActivated("sess-next");
+          win.App.SessionActivation?.emitActivated?.("sess-next");
         }, 10);
       };
 
-      win.openConvMatch("sess-next", 1, 0);
+      win.App.Session.openConvMatch("sess-next", 1, 0);
       await new Promise((resolve) => setTimeout(resolve, 120));
 
       assert.ok(scrolledText.includes("target needle reply") || scrolledText.includes("needle"), "应滚动到目标消息而不是最新回复");
@@ -996,8 +996,8 @@ describe("session ui state", () => {
       });
 
       // 连续注册两次（#ms 还不存在 -> doScroll 失败 -> 注册 hook）
-      win.openConvMatch("sess-first", 0);
-      win.openConvMatch("sess-second", 1);
+      win.App.Session.openConvMatch("sess-first", 0);
+      win.App.Session.openConvMatch("sess-second", 1);
 
       // 现在创建 #ms（hook 已注册，等待激活通知）
       const ms = doc.createElement("div");
@@ -1010,13 +1010,13 @@ describe("session ui state", () => {
 
       // 先激活较早点击的会话：应消费旧 hook，但保留最新 sess-second hook
   activeId = "sess-first";
-      if (typeof win.emitSessionActivated === "function") win.emitSessionActivated("sess-first");
+      win.App.SessionActivation?.emitActivated?.("sess-first");
       await new Promise((resolve) => setTimeout(resolve, 80));
       assert.strictEqual(scrolled.length, 0, "较早点击先完成不应吞掉最新点击的订阅");
 
       // 激活第二个（最新点击）— 只有它应触发 scroll
   activeId = "sess-second";
-      if (typeof win.emitSessionActivated === "function") win.emitSessionActivated("sess-second");
+      win.App.SessionActivation?.emitActivated?.("sess-second");
       await new Promise((resolve) => setTimeout(resolve, 80));
 
       assert.strictEqual(scrolled.length, 1, "只触发一次 scroll，非两次");
@@ -1024,7 +1024,7 @@ describe("session ui state", () => {
       assert.ok(!scrolled.some(t => t.includes("alpha")), "较早点击 sess-first 未滚动");
 
       // 激活第一个 — sess-first 的 hook 已被 latest-click 跳过且一发即焚清空
-      if (typeof win.emitSessionActivated === "function") win.emitSessionActivated("sess-first");
+      win.App.SessionActivation?.emitActivated?.("sess-first");
       await new Promise((resolve) => setTimeout(resolve, 80));
 
       assert.strictEqual(scrolled.length, 1, "再次激活后无额外 scroll（hook 已清空）");
@@ -1135,7 +1135,7 @@ describe("session ui state", () => {
     })();
     app.innerHTML = '<div id="main-tabs"></div>';
     // 重新渲染
-    win.renderTabs();
+    win.App.UI.renderTabs();
     // 验证关闭按钮仍可触发委托
     const rebuiltBtn = doc.querySelector("#main-tabs .session-tab .tb-close");
     assert.ok(rebuiltBtn, 'rebuild: close button should exist');

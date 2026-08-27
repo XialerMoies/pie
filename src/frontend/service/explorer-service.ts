@@ -321,7 +321,7 @@ function handlePermissionConfirm(event: AppEvent): void {
           : choice === 'session' ? 'session' : 'once',
       }),
     }).catch(() => undefined);
-    void (window as any).refreshPermissionsPanel?.();
+    void (window as any).App?.Permissions?.refresh?.();
   })();
 }
 

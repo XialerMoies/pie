@@ -377,7 +377,7 @@ function closeSessionTab(id: string): void {
     App.ChatState.setBusy(false);
     renderSessionTabs('');
     const msgsEl = $('ms');
-    if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : '';
+    if (msgsEl) msgsEl.innerHTML = App.Chat?.msgs ? App.Chat.msgs() : '';
     App.ChatTimeline?.sync();
     loadSessions();
     saveUiState();
@@ -390,7 +390,7 @@ function closeSessionTab(id: string): void {
 function getSessionListPanel(): AppSessionListPanel {
   if (!sessionListPanelView) {
     sessionListPanelView = App.SessionViews.createSessionListPanel({
-      isConversationSearchActive: () => Boolean((window as any).isConversationSearchActive?.()),
+      isConversationSearchActive: () => Boolean(App.Session.isConversationSearchActive?.()),
       getActiveSessionTabId: () => App.Tabs.getActiveSessionTabId() || null,
       getOpenSessionIds: readOpenRealSessionIds,
       indexSessionTabs,
@@ -502,7 +502,7 @@ async function deleteSession(id: string): Promise<void> {
           setActiveSessionTabId(null);
           renderSessionTabs('');
           const msgsEl = $('ms');
-          if (msgsEl) { msgsEl.innerHTML = window.msgs ? window.msgs() : ''; msgsEl.scrollTop = 0; }
+          if (msgsEl) { msgsEl.innerHTML = App.Chat?.msgs ? App.Chat.msgs() : ''; msgsEl.scrollTop = 0; }
           App.ChatTimeline?.sync();
         }
 
@@ -510,7 +510,7 @@ async function deleteSession(id: string): Promise<void> {
         const ci = $('ci') as HTMLTextAreaElement | null;
         if (ci) { ci.disabled = false; ci.value = ''; App.Chat?.resizeComposerInput?.(ci); }
         const cs = $('cs') as HTMLButtonElement | null;
-        if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = window.S('iz', 16); }
+        if (cs) { cs.disabled = false; cs.title = '发送消息'; cs.innerHTML = App.UI.S('iz', 16); }
         loadSessions();
       }
       else toast('删除失败');
@@ -550,7 +550,7 @@ function branchSession(id: string): void {
       renderSessionTabs(activeId);
     }
     const msgsEl = $('ms');
-    if (msgsEl) { msgsEl.innerHTML = window.msgs ? window.msgs() : ''; setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50); }
+    if (msgsEl) { msgsEl.innerHTML = App.Chat?.msgs ? App.Chat.msgs() : ''; setTimeout(() => { msgsEl.scrollTop = msgsEl.scrollHeight; }, 50); }
     App.ChatTimeline?.sync();
     toast('已创建分支线程', 'success');
     loadSessions();
@@ -669,7 +669,7 @@ function _sessionClose(tab: AppTab): void {
   setActiveSessionTabId(null);
   renderSessionTabs('');
   const msgsEl = $('ms');
-  if (msgsEl) msgsEl.innerHTML = window.msgs ? window.msgs() : '';
+  if (msgsEl) msgsEl.innerHTML = App.Chat?.msgs ? App.Chat.msgs() : '';
   App.ChatTimeline?.sync();
   loadSessions();
   saveUiState();

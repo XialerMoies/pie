@@ -72,8 +72,8 @@ beforeEach(() => {
     },
     UI: { restorePanel: panel => calls.push(["restorePanel", panel]) },
   };
-  win.restoreFileTabs = () => calls.push(["restoreFileTabs"]);
-  win.renderTabs = () => calls.push(["renderTabs"]);
+  win.App.UI.restoreFileTabs = () => calls.push(["restoreFileTabs"]);
+  win.App.UI.renderTabs = () => calls.push(["renderTabs"]);
   global.window = win;
   global.document = win.document;
   global.App = win.App;

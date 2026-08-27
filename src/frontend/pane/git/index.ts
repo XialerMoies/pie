@@ -337,7 +337,7 @@ async function openGitFile(filePath: string): Promise<void> {
     if (!r.ok) { toast(d.error || "读取失败", "error"); return; }
     const content = d.encoding === "base64" ? "[二进制文件，无法预览]" : d.content;
     const lang = filePath.split(".").pop() || "";
-    openFileTab(filePath, content, lang);
+    gitPaneApp.UI.openFileTab(filePath, content, lang);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     toast("读取失败: " + msg, "error");
