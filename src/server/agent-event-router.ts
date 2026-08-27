@@ -440,6 +440,20 @@ export function emitTrace(
   persistTraceEvent(runtime, normalized, options);
 }
 
+function applyAssistantDelta(event: Extract<EngineEvent, { type: "content.delta" | "thinking.delta" }>, turnId: string, chatStream: ChatStreamState, domainReducer: AssistantDomainReducer, taskLifecycle: TaskLifecycle): void {
+  const kind = event.type === "content.delta" ? "text" : "thinking";
+  if (kind === "text") {
+    taskLifecycle.contentDelta(event.text);
+    chatStream.taskLifecycle = taskLifecycle.snapshot();
+    chatStream.textBuffer += event.text;
+  } else {
+    chatStream.thinkingBuffer += event.text;
+  }
+  const structured = event.phase !== undefined || event.messageSeq !== undefined || event.contentIndex !== undefined;
+  const text = kind === "text" ? chatStream.textBuffer : chatStream.thinkingBuffer;
+  domainReducer.upsertTextBlock(kind, structured ? event.text : text, turnId, structured ? { contentIndex: event.contentIndex, messageSeq: event.messageSeq, phase: event.phase || "delta" } : undefined);
+}
+
 /**
  * Engine-owned event bridge used by the desktop server. Runtime events are
  * reduced before this bridge emits the canonical presentation protocol.
@@ -735,25 +749,11 @@ export function attachEngineEvents(
       return;
     }
     if (event.type === "content.delta" && turnId) {
-      taskLifecycle.contentDelta(event.text);
-      chatStream.taskLifecycle = taskLifecycle.snapshot();
-      chatStream.textBuffer += event.text;
-      const structured = event.phase !== undefined || event.messageSeq !== undefined || event.contentIndex !== undefined;
-      domainReducer.upsertTextBlock("text", structured ? event.text : chatStream.textBuffer, turnId, structured ? {
-        contentIndex: event.contentIndex,
-        messageSeq: event.messageSeq,
-        phase: event.phase || "delta",
-      } : undefined);
+      applyAssistantDelta(event, turnId, chatStream, domainReducer, taskLifecycle);
       return;
     }
     if (event.type === "thinking.delta" && turnId) {
-      chatStream.thinkingBuffer += event.text;
-      const structured = event.phase !== undefined || event.messageSeq !== undefined || event.contentIndex !== undefined;
-      domainReducer.upsertTextBlock("thinking", structured ? event.text : chatStream.thinkingBuffer, turnId, structured ? {
-        contentIndex: event.contentIndex,
-        messageSeq: event.messageSeq,
-        phase: event.phase || "delta",
-      } : undefined);
+      applyAssistantDelta(event, turnId, chatStream, domainReducer, taskLifecycle);
       return;
     }
     if (event.type === "tool.started" && turnId) {
