@@ -299,6 +299,21 @@ export function bootstrapApi(): Promise<void> {
       if (startupWorkspace && !App.State.getWorkspacePath()) {
         App.State.setWorkspacePath(startupWorkspace);
       }
+      // Best-effort projection of host component state. Unknown UI ids remain
+      // enabled so the compatibility bridge works before catalog registration.
+      const syncComponents = () => fetch('/api/components', { credentials: 'include', cache: 'no-store' }).then(async (componentsResponse) => {
+        const catalog = await componentsResponse.json().catch(() => null) as { components?: Array<{ manifest?: { id?: string }; enabled?: boolean; health?: string }> } | null;
+        if (!componentsResponse.ok || !Array.isArray(catalog?.components)) return;
+        const states = new Map(catalog.components.map((entry) => [String(entry.manifest?.id || ''), entry]));
+        App.UIContributions?.configure({ isComponentActive: (id: string) => {
+          const state = states.get(id);
+          return !state || state.enabled !== false && (state.health === undefined || state.health === 'healthy' || state.health === 'unknown');
+        }});
+      }).catch(() => {
+        // Component catalog is diagnostic/optional; bootstrap must stay usable.
+      });
+      // Keep this outside the critical bootstrap/request ordering path.
+      setTimeout(() => { void syncComponents(); }, 1000);
     })();
     _bootstrapPromise = _bootstrapPromise.catch((error) => {
       _bootstrapPromise = null;
@@ -621,9 +636,14 @@ function winCtrl(action: string): void {
   else if (action === 'close') api.close();
 }
 
-// ─── Pane registry ─────────────────────────────────────────
+// ─── Pane registry (compatibility bridge to host UI contributions) ─────
 const _panes: Record<string, (container: HTMLElement) => void> = {};
 function registerPane(name: string, render: (container: HTMLElement) => void): void {
+  const registry = (window as any).App?.UIContributions;
+  if (registry?.register) {
+    const id = `ui.pane.${name}`;
+    if (!registry.get?.(id)) registry.register({ id, componentId: id, kind: 'pane', render });
+  }
   _panes[name] = render;
   console.log(`[pane] registered: "${name}"`);
 }

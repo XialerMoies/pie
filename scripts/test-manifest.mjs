@@ -44,6 +44,7 @@ export const ROUTE_FILES = [
   "agent-profile-catalog-flow.test.mjs",
   "plan-state-flow.test.mjs",
   "tool-pool-profile-flow.test.mjs",
+  "declarative-resources.test.mjs",
 ];
 
 export const SERIAL_ROUTE_FILES = ["multi-instance-e2e.mjs", "multi-instance-launch.test.mjs", "workspace-lock.test.mjs"];
@@ -78,6 +79,7 @@ export const FRONTEND_FILES = [
   "desktop-auth-bootstrap.test.mjs",
   "observer-owner.test.mjs",
   "frontend-component-tree.test.mjs",
+  "ui-contribution-registry.test.mjs",
   "chat-stream.test.mjs",
   "provider-settings-ui.test.mjs",
 ];

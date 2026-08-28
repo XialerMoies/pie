@@ -220,6 +220,33 @@ interface AppNamespace {
   McpViews: AppMcpViews;
   ExplorerViews: AppExplorerViews;
   Tabs: AppTabs;
+  UIContributions: UiContributionRegistry;
+}
+
+interface UiContributionRegistry {
+  configure(context: { isComponentActive?: (componentId: string) => boolean }): void;
+  register(definition: UiContributionDefinition): UiContributionHandle;
+  get(id: string): UiContributionHandle | undefined;
+  list(): UiContributionDefinition[];
+  dispose(id: string): void;
+  clear(): void;
+}
+interface UiContributionDefinition {
+  id: string;
+  componentId: string;
+  kind: 'pane' | 'settings' | 'language-service';
+  mount?: (container: HTMLElement) => void | (() => void);
+  render?: (container: HTMLElement) => void;
+  dispose?: () => void;
+  activate?: () => void | (() => void);
+}
+interface UiContributionHandle {
+  id: string;
+  kind: UiContributionDefinition['kind'];
+  componentId: string;
+  mount(container: HTMLElement): () => void;
+  activate(): () => void;
+  dispose(): void;
 }
 
 interface AppStatusBar {

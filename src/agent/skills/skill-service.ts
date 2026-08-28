@@ -168,6 +168,7 @@ export class SkillService {
         path: entry.relativePath,
         trust,
         enabled,
+        fingerprint: entry.fingerprint,
         parse: entry.parse,
         declaredTools: entry.skill?.declaredTools ?? [],
         ...(diagnostic ? { diagnostic } : {}),

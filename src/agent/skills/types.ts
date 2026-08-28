@@ -30,6 +30,8 @@ export interface SkillSummary {
   path: string
   trust: SkillTrust
   enabled: boolean
+  /** Content fingerprint used by declaration catalogs and trust state. */
+  fingerprint?: string
   parse: SkillParseStatus
   declaredTools: string[]
   diagnostic?: SkillDiagnostic

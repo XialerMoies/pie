@@ -5,6 +5,14 @@ const settingsComponents = settingsFacadeApp.SettingsComponents;
 const settingsPermissions = settingsFacadeApp.Permissions;
 let settingsActiveTab = 'model';
 
+const settingsContributions = (window as any).App?.UIContributions;
+if (settingsContributions?.register && !settingsContributions.get?.('settings.dashboard')) {
+  settingsContributions.register({
+    id: 'settings.dashboard', componentId: 'settings.dashboard', kind: 'settings',
+    activate: () => undefined,
+  });
+}
+
 function bindSettingsModalEvents(overlay: HTMLElement): void {
   overlay.addEventListener('click', event => {
     const target = event.target as HTMLElement;

@@ -100,4 +100,10 @@
   };
 
   (window as any).__problemsStore = store;
+  const contributions = (window as any).App?.UIContributions;
+  if (contributions?.register && !contributions.get?.('ui.problems')) {
+    contributions.register({
+      id: 'ui.problems', componentId: 'ui.problems', kind: 'pane', activate: () => undefined,
+    });
+  }
 })();

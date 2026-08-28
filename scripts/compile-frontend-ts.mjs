@@ -157,6 +157,7 @@ const REQUIRED_BUNDLE_ENTRIES = [
 ];
 const bundleOrder = [
   "gen/services/app-events.js",
+  "gen/ui-contribution-registry.js",
   "gen/dashboard/dashboard-helpers.js",
   "gen/ui/list-add-action.js",
   "gen/dashboard/settings-provider-utils.js",

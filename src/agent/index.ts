@@ -89,6 +89,20 @@ export type {
   CapabilityComponentPackagePermission,
 } from "./component-package.js"
 export {
+  DECLARATIVE_RESOURCE_SCHEMA_VERSION,
+  buildDeclarativeResourceCatalog,
+  declarativeSkillResource,
+  declarativeSubagentResource,
+  declarativeProfileResource,
+} from "./declarative-resources.js"
+export type {
+  DeclarativeResourceKind,
+  DeclarativeResourceSource,
+  DeclarativeComponentResource,
+  DeclarativeResourceCatalog,
+  DeclarativeResourceCatalogInput,
+} from "./declarative-resources.js"
+export {
   HIGH_RISK_REPLACEMENT_GROUPS,
   failedReplacementChecks,
 } from "./capability-component-replacement.js"
