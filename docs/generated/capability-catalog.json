@@ -37,7 +37,13 @@
         "needsPermission": false,
         "workspaceBounded": false
       },
-      "source": "src/agent/tools/command.ts"
+      "source": "src/agent/tools/command.ts",
+      "component": {
+        "id": "tool.command",
+        "packageId": "my-code-agent.tool.command",
+        "packageVersion": "1.0.0",
+        "fingerprint": "0f856fe8f8e69fee75a3d9f9f901ac8a42f4dadd4a50faa62ce1c89db7d6eb48"
+      }
     },
     {
       "name": "delegate_tasks",
@@ -161,7 +167,13 @@
         "needsPermission": false,
         "workspaceBounded": true
       },
-      "source": "src/agent/tools/delegate-tasks.ts"
+      "source": "src/agent/tools/delegate-tasks.ts",
+      "component": {
+        "id": "tool.delegate-tasks",
+        "packageId": "my-code-agent.tool.delegate-tasks",
+        "packageVersion": "1.0.0",
+        "fingerprint": "8ffb8a96d721e55448a97d235d8ebb402412992869fcabfe80fe467add01b24f"
+      }
     },
     {
       "name": "delete_memory",
@@ -192,7 +204,13 @@
         "needsPermission": false,
         "workspaceBounded": false
       },
-      "source": "src/agent/tools/memory.ts"
+      "source": "src/agent/tools/memory.ts",
+      "component": {
+        "id": "tool.memory",
+        "packageId": "my-code-agent.tool.memory",
+        "packageVersion": "1.0.0",
+        "fingerprint": "9ce965a293046fb7fe12c65a4039aac9bba9c2d779e4c994702e0ecf53527bc7"
+      }
     },
     {
       "name": "enter_plan_mode",
@@ -213,7 +231,13 @@
         "needsPermission": false,
         "workspaceBounded": false
       },
-      "source": "src/agent/tools/plan-mode.ts"
+      "source": "src/agent/tools/plan-mode.ts",
+      "component": {
+        "id": "tool.plan-mode",
+        "packageId": "my-code-agent.tool.plan-mode",
+        "packageVersion": "1.0.0",
+        "fingerprint": "d7b59673c70581beb52ef5028d2628268b13561534c7f007410274b5d96665bf"
+      }
     },
     {
       "name": "exit_plan_mode",
@@ -237,7 +261,13 @@
         "needsPermission": false,
         "workspaceBounded": false
       },
-      "source": "src/agent/tools/plan-mode.ts"
+      "source": "src/agent/tools/plan-mode.ts",
+      "component": {
+        "id": "tool.plan-mode",
+        "packageId": "my-code-agent.tool.plan-mode",
+        "packageVersion": "1.0.0",
+        "fingerprint": "d7b59673c70581beb52ef5028d2628268b13561534c7f007410274b5d96665bf"
+      }
     },
     {
       "name": "explorer_list",
@@ -365,7 +395,13 @@
         "needsPermission": false,
         "workspaceBounded": true
       },
-      "source": "src/agent/tools/file-write.ts"
+      "source": "src/agent/tools/file-write.ts",
+      "component": {
+        "id": "tool.file-write",
+        "packageId": "my-code-agent.tool.file-write",
+        "packageVersion": "1.0.0",
+        "fingerprint": "f9c9b339a0a7b6d6a34697b12893af05ecac32f9191e55f612ed2ddcff7de94d"
+      }
     },
     {
       "name": "git-status",
@@ -439,7 +475,13 @@
         "needsPermission": false,
         "workspaceBounded": false
       },
-      "source": "src/agent/tools/memory.ts"
+      "source": "src/agent/tools/memory.ts",
+      "component": {
+        "id": "tool.memory",
+        "packageId": "my-code-agent.tool.memory",
+        "packageVersion": "1.0.0",
+        "fingerprint": "9ce965a293046fb7fe12c65a4039aac9bba9c2d779e4c994702e0ecf53527bc7"
+      }
     },
     {
       "name": "read_memory",
@@ -471,7 +513,13 @@
         "needsPermission": false,
         "workspaceBounded": false
       },
-      "source": "src/agent/tools/memory.ts"
+      "source": "src/agent/tools/memory.ts",
+      "component": {
+        "id": "tool.memory",
+        "packageId": "my-code-agent.tool.memory",
+        "packageVersion": "1.0.0",
+        "fingerprint": "9ce965a293046fb7fe12c65a4039aac9bba9c2d779e4c994702e0ecf53527bc7"
+      }
     },
     {
       "name": "search",
@@ -552,7 +600,13 @@
         "needsPermission": false,
         "workspaceBounded": false
       },
-      "source": "src/agent/tools/memory.ts"
+      "source": "src/agent/tools/memory.ts",
+      "component": {
+        "id": "tool.memory",
+        "packageId": "my-code-agent.tool.memory",
+        "packageVersion": "1.0.0",
+        "fingerprint": "9ce965a293046fb7fe12c65a4039aac9bba9c2d779e4c994702e0ecf53527bc7"
+      }
     },
     {
       "name": "skill_facts",
@@ -584,7 +638,13 @@
         "needsPermission": false,
         "workspaceBounded": true
       },
-      "source": "src/agent/tools/skill-facts.ts"
+      "source": "src/agent/tools/skill-facts.ts",
+      "component": {
+        "id": "tool.skill-facts",
+        "packageId": "my-code-agent.tool.skill-facts",
+        "packageVersion": "1.0.0",
+        "fingerprint": "fcf62f62526fdcaa039bf33f0f96b1c819fc8c66955385ac60cc88f599bf5372"
+      }
     },
     {
       "name": "str_replace_editor",
@@ -642,7 +702,13 @@
         "needsPermission": false,
         "workspaceBounded": true
       },
-      "source": "src/agent/tools/str-replace-editor.ts"
+      "source": "src/agent/tools/str-replace-editor.ts",
+      "component": {
+        "id": "tool.str-replace-editor",
+        "packageId": "my-code-agent.tool.str-replace-editor",
+        "packageVersion": "1.0.0",
+        "fingerprint": "7ee8a9d2c0a0c6be25b2a7ba6b2e00707156ff1886626488024b3a6f17d5ed72"
+      }
     },
     {
       "name": "web-fetch",
@@ -777,7 +843,13 @@
         "needsPermission": false,
         "workspaceBounded": false
       },
-      "source": "src/agent/tools/memory.ts"
+      "source": "src/agent/tools/memory.ts",
+      "component": {
+        "id": "tool.memory",
+        "packageId": "my-code-agent.tool.memory",
+        "packageVersion": "1.0.0",
+        "fingerprint": "9ce965a293046fb7fe12c65a4039aac9bba9c2d779e4c994702e0ecf53527bc7"
+      }
     }
   ],
   "spawnPoints": [

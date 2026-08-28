@@ -346,6 +346,7 @@ function firstPartyToolPackageManifest(input: {
   subprocess?: boolean
   secrets?: readonly string[]
   maxMemoryMb?: number
+  maxCpuMs?: number
   maxNetworkRequests?: number
   maxFileBytes?: number
 }): Readonly<CapabilityComponentPackageManifest> {
@@ -374,7 +375,7 @@ function firstPartyToolPackageManifest(input: {
     },
     resources: {
       maxMemoryMb: input.maxMemoryMb ?? 128,
-      maxCpuMs: 30_000,
+      maxCpuMs: input.maxCpuMs ?? 30_000,
       maxNetworkRequests: input.maxNetworkRequests ?? 1,
       maxFileBytes: input.maxFileBytes ?? 16_777_216,
     },
@@ -454,6 +455,73 @@ export const WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageMa
   maxFileBytes: 1_048_576,
 })
 
+export const STR_REPLACE_EDITOR_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.str-replace-editor",
+  componentId: "tool.str-replace-editor",
+  entry: "src/agent/tools/str-replace-editor.ts",
+  description: "First-party precise workspace file editor",
+  filesystem: ["read", "write"],
+  maxFileBytes: 1_048_576,
+})
+
+export const FILE_WRITE_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.file-write",
+  componentId: "tool.file-write",
+  entry: "src/agent/tools/file-write.ts",
+  description: "First-party workspace file writer",
+  filesystem: ["read", "write", "create"],
+  maxFileBytes: 16_777_216,
+})
+
+export const MEMORY_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.memory",
+  componentId: "tool.memory",
+  entry: "src/agent/tools/memory.ts",
+  description: "First-party scoped memory tools",
+  filesystem: ["read", "write", "create", "remove"],
+  maxFileBytes: 16_777_216,
+})
+
+export const PLAN_MODE_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.plan-mode",
+  componentId: "tool.plan-mode",
+  entry: "src/agent/tools/plan-mode.ts",
+  description: "First-party planning lifecycle tools",
+  filesystem: [],
+  maxFileBytes: 1,
+})
+
+export const SKILL_FACTS_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.skill-facts",
+  componentId: "tool.skill-facts",
+  entry: "src/agent/tools/skill-facts.ts",
+  description: "First-party skill verification facts tool",
+})
+
+export const DELEGATE_TASKS_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.delegate-tasks",
+  componentId: "tool.delegate-tasks",
+  entry: "src/agent/tools/delegate-tasks.ts",
+  description: "First-party sub-agent delegation tool",
+  filesystem: ["read"],
+  maxMemoryMb: 256,
+  maxCpuMs: 120_000,
+})
+
+export const COMMAND_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.command",
+  componentId: "tool.command",
+  entry: "src/agent/tools/command.ts",
+  description: "First-party governed shell command tool",
+  network: true,
+  filesystem: ["read", "write", "create", "remove"],
+  subprocess: true,
+  maxMemoryMb: 256,
+  maxCpuMs: 300_000,
+  maxNetworkRequests: 100,
+  maxFileBytes: 1_073_741_824,
+})
+
 export const FIRST_PARTY_COMPONENT_PACKAGES: readonly Readonly<CapabilityComponentPackageManifest>[] = Object.freeze([
   FILE_READ_COMPONENT_PACKAGE_MANIFEST,
   EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST,
@@ -464,6 +532,13 @@ export const FIRST_PARTY_COMPONENT_PACKAGES: readonly Readonly<CapabilityCompone
   WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST,
   WEB_FETCH_COMPONENT_PACKAGE_MANIFEST,
   WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST,
+  STR_REPLACE_EDITOR_COMPONENT_PACKAGE_MANIFEST,
+  FILE_WRITE_COMPONENT_PACKAGE_MANIFEST,
+  MEMORY_COMPONENT_PACKAGE_MANIFEST,
+  PLAN_MODE_COMPONENT_PACKAGE_MANIFEST,
+  SKILL_FACTS_COMPONENT_PACKAGE_MANIFEST,
+  DELEGATE_TASKS_COMPONENT_PACKAGE_MANIFEST,
+  COMMAND_COMPONENT_PACKAGE_MANIFEST,
 ])
 
 export function firstPartyComponentPackage(packageId: string): Readonly<CapabilityComponentPackageManifest> | undefined {
@@ -499,6 +574,18 @@ const TOOL_COMPONENT_IDS: Readonly<Record<string, string>> = Object.freeze({
   web_fetch: WEB_FETCH_COMPONENT_PACKAGE_MANIFEST.component.id,
   "web-fetch": WEB_FETCH_COMPONENT_PACKAGE_MANIFEST.component.id,
   write_agent_md: WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST.component.id,
+  str_replace_editor: STR_REPLACE_EDITOR_COMPONENT_PACKAGE_MANIFEST.component.id,
+  file_write: FILE_WRITE_COMPONENT_PACKAGE_MANIFEST.component.id,
+  read_memory: MEMORY_COMPONENT_PACKAGE_MANIFEST.component.id,
+  write_memory: MEMORY_COMPONENT_PACKAGE_MANIFEST.component.id,
+  list_memory: MEMORY_COMPONENT_PACKAGE_MANIFEST.component.id,
+  delete_memory: MEMORY_COMPONENT_PACKAGE_MANIFEST.component.id,
+  set_memory_enabled: MEMORY_COMPONENT_PACKAGE_MANIFEST.component.id,
+  enter_plan_mode: PLAN_MODE_COMPONENT_PACKAGE_MANIFEST.component.id,
+  exit_plan_mode: PLAN_MODE_COMPONENT_PACKAGE_MANIFEST.component.id,
+  skill_facts: SKILL_FACTS_COMPONENT_PACKAGE_MANIFEST.component.id,
+  delegate_tasks: DELEGATE_TASKS_COMPONENT_PACKAGE_MANIFEST.component.id,
+  command: COMMAND_COMPONENT_PACKAGE_MANIFEST.component.id,
 })
 
 export function capabilityComponentIdForTool(name: string): string | undefined {

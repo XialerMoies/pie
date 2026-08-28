@@ -16,6 +16,13 @@ import {
   WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST,
   WEB_FETCH_COMPONENT_PACKAGE_MANIFEST,
   WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST,
+  STR_REPLACE_EDITOR_COMPONENT_PACKAGE_MANIFEST,
+  FILE_WRITE_COMPONENT_PACKAGE_MANIFEST,
+  MEMORY_COMPONENT_PACKAGE_MANIFEST,
+  PLAN_MODE_COMPONENT_PACKAGE_MANIFEST,
+  SKILL_FACTS_COMPONENT_PACKAGE_MANIFEST,
+  DELEGATE_TASKS_COMPONENT_PACKAGE_MANIFEST,
+  COMMAND_COMPONENT_PACKAGE_MANIFEST,
   FIRST_PARTY_COMPONENT_PACKAGES,
   firstPartyComponentPackage,
   installFirstPartyComponentPackage,
@@ -103,7 +110,7 @@ describe("capability component package contract", () => {
     manager.uninstall("tool.file-read")
     assert.deepEqual(pool.project({ audience: "main", componentManager: manager }), [])
     assert.equal(firstPartyComponentPackage(FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId), FILE_READ_COMPONENT_PACKAGE_MANIFEST)
-    assert.equal(FIRST_PARTY_COMPONENT_PACKAGES.length, 9)
+    assert.equal(FIRST_PARTY_COMPONENT_PACKAGES.length, 16)
     installFirstPartyComponentPackage(manager, FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId)
     assert.deepEqual(pool.project({ audience: "main", componentManager: manager }).map((tool) => tool.name), ["file_read"])
   })
@@ -119,10 +126,17 @@ describe("capability component package contract", () => {
       WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST,
       WEB_FETCH_COMPONENT_PACKAGE_MANIFEST,
       WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST,
+      STR_REPLACE_EDITOR_COMPONENT_PACKAGE_MANIFEST,
+      FILE_WRITE_COMPONENT_PACKAGE_MANIFEST,
+      MEMORY_COMPONENT_PACKAGE_MANIFEST,
+      PLAN_MODE_COMPONENT_PACKAGE_MANIFEST,
+      SKILL_FACTS_COMPONENT_PACKAGE_MANIFEST,
+      DELEGATE_TASKS_COMPONENT_PACKAGE_MANIFEST,
+      COMMAND_COMPONENT_PACKAGE_MANIFEST,
     ]
     assert.deepEqual(
       manifests.map((manifest) => manifest.component.id),
-      ["tool.file-read", "tool.explorer-list", "tool.search", "tool.git-status", "tool.git-log", "tool.file-outline", "tool.web-search", "tool.web-fetch", "tool.write-agent-md"],
+      ["tool.file-read", "tool.explorer-list", "tool.search", "tool.git-status", "tool.git-log", "tool.file-outline", "tool.web-search", "tool.web-fetch", "tool.write-agent-md", "tool.str-replace-editor", "tool.file-write", "tool.memory", "tool.plan-mode", "tool.skill-facts", "tool.delegate-tasks", "tool.command"],
     )
     assert.equal(new Set(manifests.map((manifest) => manifest.packageId)).size, manifests.length)
     assert.ok(manifests.every((manifest) => manifest.component.kind === "optional" && manifest.component.source === "builtin"))
@@ -142,6 +156,13 @@ describe("capability component package contract", () => {
       WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST,
       WEB_FETCH_COMPONENT_PACKAGE_MANIFEST,
       WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST,
+      STR_REPLACE_EDITOR_COMPONENT_PACKAGE_MANIFEST,
+      FILE_WRITE_COMPONENT_PACKAGE_MANIFEST,
+      MEMORY_COMPONENT_PACKAGE_MANIFEST,
+      PLAN_MODE_COMPONENT_PACKAGE_MANIFEST,
+      SKILL_FACTS_COMPONENT_PACKAGE_MANIFEST,
+      DELEGATE_TASKS_COMPONENT_PACKAGE_MANIFEST,
+      COMMAND_COMPONENT_PACKAGE_MANIFEST,
     ]
     const tools = [
       fileReadTool,
@@ -153,6 +174,18 @@ describe("capability component package contract", () => {
       (await import("../src/agent/tools/web-search.ts")).webSearchTool,
       (await import("../src/agent/tools/web-fetch.ts")).webFetchTool,
       (await import("../src/agent/tools/agent-md.ts")).writeAgentMdTool,
+      (await import("../src/agent/tools/str-replace-editor.ts")).strReplaceEditorTool,
+      (await import("../src/agent/tools/file-write.ts")).fileWriteTool,
+      (await import("../src/agent/tools/memory.ts")).readMemoryTool,
+      (await import("../src/agent/tools/memory.ts")).writeMemoryTool,
+      (await import("../src/agent/tools/memory.ts")).listMemoryTool,
+      (await import("../src/agent/tools/memory.ts")).deleteMemoryTool,
+      (await import("../src/agent/tools/memory.ts")).setMemoryEnabledTool,
+      (await import("../src/agent/tools/plan-mode.ts")).enterPlanModeTool,
+      (await import("../src/agent/tools/plan-mode.ts")).exitPlanModeTool,
+      (await import("../src/agent/tools/skill-facts.ts")).skillFactsTool,
+      (await import("../src/agent/tools/delegate-tasks.ts")).delegateTasksTool,
+      (await import("../src/agent/tools/command.ts")).commandTool,
     ]
     const root = mkdtempSync(join(tmpdir(), "first-party-tools-"))
     try {

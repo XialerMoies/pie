@@ -88,6 +88,18 @@ describe("capability catalog generator", () => {
       ["web-search", "my-code-agent.tool.web-search"],
       ["web-fetch", "my-code-agent.tool.web-fetch"],
       ["write_agent_md", "my-code-agent.tool.write-agent-md"],
+      ["str_replace_editor", "my-code-agent.tool.str-replace-editor"],
+      ["file_write", "my-code-agent.tool.file-write"],
+      ["read_memory", "my-code-agent.tool.memory"],
+      ["write_memory", "my-code-agent.tool.memory"],
+      ["list_memory", "my-code-agent.tool.memory"],
+      ["delete_memory", "my-code-agent.tool.memory"],
+      ["set_memory_enabled", "my-code-agent.tool.memory"],
+      ["enter_plan_mode", "my-code-agent.tool.plan-mode"],
+      ["exit_plan_mode", "my-code-agent.tool.plan-mode"],
+      ["skill_facts", "my-code-agent.tool.skill-facts"],
+      ["delegate_tasks", "my-code-agent.tool.delegate-tasks"],
+      ["command", "my-code-agent.tool.command"],
     ]);
     for (const [name, packageId] of migratedFirstParty) {
       const tool = first.tools.find((candidate) => candidate.name === name);
