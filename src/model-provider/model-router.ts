@@ -6,6 +6,7 @@ import type {
   ProviderRefreshResult,
   ProviderRuntime,
 } from "./runtime-types.js";
+import { registerModelProtocolComponents } from "./protocol-components.js";
 
 export interface ModelRouterSessionOptions {
   authFile: string;
@@ -114,3 +115,6 @@ export const piModelRouterProvider: ModelRouterProvider = Object.freeze({
     });
   },
 });
+
+// Keep protocol adapter components available whenever the model-router host is loaded.
+registerModelProtocolComponents();

@@ -27,6 +27,7 @@ import type { ProviderReferenceChecker } from "./provider-reference-checker.js";
 import type { ProviderReferenceMutationLock } from "./provider-reference-lock.js";
 import { ProviderNetworkClient } from "./provider-network-client.js";
 import type { CustomProviderRuntimeCoordinator } from "./runtime-coordinator.js";
+import { isModelProtocolEnabled } from "./protocol-components.js";
 
 export class CustomProviderIdConflict extends Error {
   constructor(
@@ -128,7 +129,7 @@ export class CustomProviderService {
 
   capabilities(): CustomProviderCapabilities {
     return {
-      protocols: PROVIDER_PROTOCOLS.map((id) => ({
+      protocols: PROVIDER_PROTOCOLS.filter((id) => isModelProtocolEnabled(id)).map((id) => ({
         id,
         authModes: PROVIDER_PROTOCOL_AUTH_MODES[id],
         supportsCompatibility: true,

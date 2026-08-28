@@ -17,6 +17,7 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { piMessagesApi } from "@earendil-works/pi-ai/api/pi-messages.lazy";
 import type { ProviderRuntime } from "./runtime-types.js";
+import { assertModelProtocolEnabled } from "./protocol-components.js";
 
 import {
   validateCustomProviderDefinition,
@@ -241,6 +242,7 @@ export class PiCustomProviderAdapter {
     secrets: ResolvedProviderSecrets,
   ): PreparedCustomProvider {
     const validated = validateCustomProviderDefinition(definition);
+    assertModelProtocolEnabled(validated.protocol);
     const headers = cloneHeaders(validated, secrets);
     const models = mapModels(validated);
     const prepared = Object.freeze({
