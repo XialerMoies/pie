@@ -78,6 +78,19 @@ describe("capability catalog generator", () => {
       packageVersion: "1.0.0",
       fingerprint: fileReader?.component.fingerprint,
     });
+    const migratedFirstParty = new Map([
+      ["file_read", "my-code-agent.tool.file-read"],
+      ["explorer_list", "my-code-agent.tool.explorer-list"],
+      ["search", "my-code-agent.tool.search"],
+      ["git-status", "my-code-agent.tool.git-status"],
+      ["git_log", "my-code-agent.tool.git-log"],
+      ["file_outline", "my-code-agent.tool.file-outline"],
+    ]);
+    for (const [name, packageId] of migratedFirstParty) {
+      const tool = first.tools.find((candidate) => candidate.name === name);
+      assert.equal(tool?.component?.packageId, packageId, `${name} must remain package-backed`);
+      assert.match(tool?.component?.fingerprint ?? "", /^[a-f0-9]{64}$/);
+    }
     assert.ok(first.events.engine.includes("turn.cancelled"));
     assert.ok(first.events.application.includes("permission.confirm"));
     assert.ok(first.routes.some((route) => route.path === "/api/chat" && route.method === "POST"));

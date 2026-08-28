@@ -262,7 +262,13 @@
         "needsPermission": false,
         "workspaceBounded": true
       },
-      "source": "src/agent/tools/explorer-list.ts"
+      "source": "src/agent/tools/explorer-list.ts",
+      "component": {
+        "id": "tool.explorer-list",
+        "packageId": "my-code-agent.tool.explorer-list",
+        "packageVersion": "1.0.0",
+        "fingerprint": "6a9b74fc3237e4ecf28f4fc8acb9615ffcafcb3e6cc3cb5c31e2541cc2b3cecf"
+      }
     },
     {
       "name": "file_outline",
@@ -286,7 +292,13 @@
         "needsPermission": false,
         "workspaceBounded": true
       },
-      "source": "src/agent/tools/file-outline.ts"
+      "source": "src/agent/tools/file-outline.ts",
+      "component": {
+        "id": "tool.file-outline",
+        "packageId": "my-code-agent.tool.file-outline",
+        "packageVersion": "1.0.0",
+        "fingerprint": "9d464adff3e587032be021e6205c4c20cafcb8e90be511d53384d7062532b453"
+      }
     },
     {
       "name": "file_read",
@@ -369,7 +381,13 @@
         "needsPermission": false,
         "workspaceBounded": true
       },
-      "source": "src/agent/tools/git-status.ts"
+      "source": "src/agent/tools/git-status.ts",
+      "component": {
+        "id": "tool.git-status",
+        "packageId": "my-code-agent.tool.git-status",
+        "packageVersion": "1.0.0",
+        "fingerprint": "a1115496317845dd69f374f4d43cc546a088ed713e7bb3e5ab53bd280d60f2ec"
+      }
     },
     {
       "name": "git_log",
@@ -390,7 +408,13 @@
         "needsPermission": false,
         "workspaceBounded": true
       },
-      "source": "src/agent/tools/git-log.ts"
+      "source": "src/agent/tools/git-log.ts",
+      "component": {
+        "id": "tool.git-log",
+        "packageId": "my-code-agent.tool.git-log",
+        "packageVersion": "1.0.0",
+        "fingerprint": "e3d1b02923a0ecc31dec1bc600faf43b5c57846d009bd33de287b9a33404f73a"
+      }
     },
     {
       "name": "list_memory",
@@ -487,7 +511,13 @@
         "needsPermission": false,
         "workspaceBounded": true
       },
-      "source": "src/agent/tools/search.ts"
+      "source": "src/agent/tools/search.ts",
+      "component": {
+        "id": "tool.search",
+        "packageId": "my-code-agent.tool.search",
+        "packageVersion": "1.0.0",
+        "fingerprint": "422e932462a64ed8eabbe67ec59a1b03802fe39df81a1f04450bf80188f958ad"
+      }
     },
     {
       "name": "set_memory_enabled",

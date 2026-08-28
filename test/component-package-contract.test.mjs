@@ -1,10 +1,18 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
+import { mkdtempSync, rmSync } from "node:fs"
+import { join } from "node:path"
+import { tmpdir } from "node:os"
 import {
   CapabilityComponentPackageError,
   CAPABILITY_COMPONENT_PACKAGE_SCHEMA,
   componentPackageManifestFingerprint,
   FILE_READ_COMPONENT_PACKAGE_MANIFEST,
+  EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST,
+  SEARCH_COMPONENT_PACKAGE_MANIFEST,
+  GIT_STATUS_COMPONENT_PACKAGE_MANIFEST,
+  GIT_LOG_COMPONENT_PACKAGE_MANIFEST,
+  FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST,
   FIRST_PARTY_COMPONENT_PACKAGES,
   firstPartyComponentPackage,
   installFirstPartyComponentPackage,
@@ -92,8 +100,68 @@ describe("capability component package contract", () => {
     manager.uninstall("tool.file-read")
     assert.deepEqual(pool.project({ audience: "main", componentManager: manager }), [])
     assert.equal(firstPartyComponentPackage(FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId), FILE_READ_COMPONENT_PACKAGE_MANIFEST)
-    assert.equal(FIRST_PARTY_COMPONENT_PACKAGES.length, 1)
+    assert.equal(FIRST_PARTY_COMPONENT_PACKAGES.length, 6)
     installFirstPartyComponentPackage(manager, FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId)
     assert.deepEqual(pool.project({ audience: "main", componentManager: manager }).map((tool) => tool.name), ["file_read"])
+  })
+
+  it("registers the low-risk first-party tools through one package contract", () => {
+    const manifests = [
+      FILE_READ_COMPONENT_PACKAGE_MANIFEST,
+      EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST,
+      SEARCH_COMPONENT_PACKAGE_MANIFEST,
+      GIT_STATUS_COMPONENT_PACKAGE_MANIFEST,
+      GIT_LOG_COMPONENT_PACKAGE_MANIFEST,
+      FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST,
+    ]
+    assert.deepEqual(
+      manifests.map((manifest) => manifest.component.id),
+      ["tool.file-read", "tool.explorer-list", "tool.search", "tool.git-status", "tool.git-log", "tool.file-outline"],
+    )
+    assert.equal(new Set(manifests.map((manifest) => manifest.packageId)).size, manifests.length)
+    assert.ok(manifests.every((manifest) => manifest.component.kind === "optional" && manifest.component.source === "builtin"))
+    assert.ok(manifests.every((manifest) => manifest.permissions.filesystem.join(",") === "read"))
+  })
+
+  it("projects all migrated tools across disable, uninstall, restart, and reinstall", async () => {
+    const manifests = [
+      FILE_READ_COMPONENT_PACKAGE_MANIFEST,
+      EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST,
+      SEARCH_COMPONENT_PACKAGE_MANIFEST,
+      GIT_STATUS_COMPONENT_PACKAGE_MANIFEST,
+      GIT_LOG_COMPONENT_PACKAGE_MANIFEST,
+      FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST,
+    ]
+    const tools = [
+      fileReadTool,
+      (await import("../src/agent/tools/explorer-list.ts")).explorerListTool,
+      (await import("../src/agent/tools/search.ts")).searchTool,
+      (await import("../src/agent/tools/git-status.ts")).gitStatusTool,
+      (await import("../src/agent/tools/git-log.ts")).gitLogTool,
+      (await import("../src/agent/tools/file-outline.ts")).fileOutlineTool,
+    ]
+    const root = mkdtempSync(join(tmpdir(), "first-party-tools-"))
+    try {
+      const stateFile = join(root, "component-state.json")
+      const manager = new CapabilityComponentManager()
+      for (const manifest of manifests) manager.register(manifest.component, { trusted: true, enabled: true, health: "healthy" })
+      const pool = new ToolPool().addNative(tools)
+      assert.deepEqual(pool.project({ audience: "main", componentManager: manager }).map((tool) => tool.name), tools.map((tool) => tool.name))
+      for (const manifest of manifests) manager.disable(manifest.component.id)
+      assert.deepEqual(pool.project({ audience: "main", componentManager: manager }), [])
+      for (const manifest of manifests) manager.enable(manifest.component.id)
+      for (const manifest of manifests) manager.uninstall(manifest.component.id)
+      await manager.save(stateFile)
+      assert.deepEqual(pool.project({ audience: "main", componentManager: manager }), [])
+
+      const restarted = new CapabilityComponentManager(manifests.map((manifest) => manifest.component))
+      await restarted.restore(stateFile)
+      assert.deepEqual(pool.project({ audience: "main", componentManager: restarted }), [])
+      for (const manifest of manifests) assert.equal(restarted.get(manifest.component.id), undefined)
+      for (const manifest of manifests) installFirstPartyComponentPackage(restarted, manifest.packageId)
+      assert.deepEqual(pool.project({ audience: "main", componentManager: restarted }).map((tool) => tool.name), tools.map((tool) => tool.name))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

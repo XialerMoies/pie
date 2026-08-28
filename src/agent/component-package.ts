@@ -336,31 +336,85 @@ export function componentPackageManifestFingerprint(manifest: CapabilityComponen
   return createHash("sha256").update(JSON.stringify(normalized)).digest("hex")
 }
 
-/** First native-tool pilot package. It is registered by the tool host, not loaded here. */
-export const FILE_READ_COMPONENT_PACKAGE_MANIFEST: Readonly<CapabilityComponentPackageManifest> = normalizeCapabilityComponentPackageManifest({
-  schemaVersion: CAPABILITY_COMPONENT_PACKAGE_SCHEMA_VERSION,
+function firstPartyToolPackageManifest(input: {
+  packageId: string
+  componentId: string
+  entry: string
+  description: string
+}): Readonly<CapabilityComponentPackageManifest> {
+  return normalizeCapabilityComponentPackageManifest({
+    schemaVersion: CAPABILITY_COMPONENT_PACKAGE_SCHEMA_VERSION,
+    packageId: input.packageId,
+    packageVersion: "1.0.0",
+    component: {
+      schemaVersion: 1,
+      id: input.componentId,
+      version: "1.0.0",
+      kind: "optional",
+      capability: "agent-tool",
+      providedBy: input.packageId,
+      source: "builtin",
+      description: input.description,
+    },
+    entry: input.entry,
+    source: { kind: "builtin", origin: "app://my-code-agent" },
+    compatibility: { host: ">=1.0.0", contract: "1", engine: ">=1.0.0" },
+    permissions: { network: false, filesystem: ["read"], subprocess: false, secrets: [] },
+    resources: { maxMemoryMb: 128, maxCpuMs: 30_000, maxNetworkRequests: 1, maxFileBytes: 16_777_216 },
+    isolation: { mode: "in-process", installRoot: `first-party/${input.componentId}`, allowedEntry: input.entry },
+  })
+}
+
+/** First-party native-tool packages are registered by the tool host, not loaded here. */
+export const FILE_READ_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
   packageId: "my-code-agent.tool.file-read",
-  packageVersion: "1.0.0",
-  component: {
-    schemaVersion: 1,
-    id: "tool.file-read",
-    version: "1.0.0",
-    kind: "optional",
-    capability: "agent-tool",
-    providedBy: "my-code-agent.tool.file-read",
-    source: "builtin",
-    description: "First-party bounded workspace file reader",
-  },
+  componentId: "tool.file-read",
   entry: "src/agent/tools/file-read.ts",
-  source: { kind: "builtin", origin: "app://my-code-agent" },
-  compatibility: { host: ">=1.0.0", contract: "1", engine: ">=1.0.0" },
-  permissions: { network: false, filesystem: ["read"], subprocess: false, secrets: [] },
-  resources: { maxMemoryMb: 128, maxCpuMs: 30_000, maxNetworkRequests: 1, maxFileBytes: 16_777_216 },
-  isolation: { mode: "in-process", installRoot: "first-party/tool.file-read", allowedEntry: "src/agent/tools/file-read.ts" },
+  description: "First-party bounded workspace file reader",
+})
+
+export const EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.explorer-list",
+  componentId: "tool.explorer-list",
+  entry: "src/agent/tools/explorer-list.ts",
+  description: "First-party workspace directory explorer",
+})
+
+export const SEARCH_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.search",
+  componentId: "tool.search",
+  entry: "src/agent/tools/search.ts",
+  description: "First-party bounded workspace search",
+})
+
+export const GIT_STATUS_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.git-status",
+  componentId: "tool.git-status",
+  entry: "src/agent/tools/git-status.ts",
+  description: "First-party read-only Git status viewer",
+})
+
+export const GIT_LOG_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.git-log",
+  componentId: "tool.git-log",
+  entry: "src/agent/tools/git-log.ts",
+  description: "First-party read-only Git history viewer",
+})
+
+export const FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.file-outline",
+  componentId: "tool.file-outline",
+  entry: "src/agent/tools/file-outline.ts",
+  description: "First-party source file outline extractor",
 })
 
 export const FIRST_PARTY_COMPONENT_PACKAGES: readonly Readonly<CapabilityComponentPackageManifest>[] = Object.freeze([
   FILE_READ_COMPONENT_PACKAGE_MANIFEST,
+  EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST,
+  SEARCH_COMPONENT_PACKAGE_MANIFEST,
+  GIT_STATUS_COMPONENT_PACKAGE_MANIFEST,
+  GIT_LOG_COMPONENT_PACKAGE_MANIFEST,
+  FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST,
 ])
 
 export function firstPartyComponentPackage(packageId: string): Readonly<CapabilityComponentPackageManifest> | undefined {
@@ -386,6 +440,11 @@ export function installFirstPartyComponentPackage(manager: CapabilityComponentMa
 
 const TOOL_COMPONENT_IDS: Readonly<Record<string, string>> = Object.freeze({
   file_read: FILE_READ_COMPONENT_PACKAGE_MANIFEST.component.id,
+  explorer_list: EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST.component.id,
+  search: SEARCH_COMPONENT_PACKAGE_MANIFEST.component.id,
+  git_status: GIT_STATUS_COMPONENT_PACKAGE_MANIFEST.component.id,
+  git_log: GIT_LOG_COMPONENT_PACKAGE_MANIFEST.component.id,
+  file_outline: FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST.component.id,
 })
 
 export function capabilityComponentIdForTool(name: string): string | undefined {
@@ -393,7 +452,6 @@ export function capabilityComponentIdForTool(name: string): string | undefined {
 }
 
 export function capabilityComponentPackageForTool(name: string): Readonly<CapabilityComponentPackageManifest> | undefined {
-  return capabilityComponentIdForTool(name) === FILE_READ_COMPONENT_PACKAGE_MANIFEST.component.id
-    ? FILE_READ_COMPONENT_PACKAGE_MANIFEST
-    : undefined
+  const componentId = capabilityComponentIdForTool(name)
+  return componentId ? FIRST_PARTY_COMPONENT_PACKAGES.find((manifest) => manifest.component.id === componentId) : undefined
 }
