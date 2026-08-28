@@ -9,7 +9,9 @@
  * 原则：只封装，不 fork。PI 的 agent-loop 不改。
  */
 import { AgentRuntime, type RuntimeConfig } from "./runtime.js"
-import { PiAgentEngine, type AgentEngine } from "../agent-engine/index.js"
+import { type AgentEngine } from "../agent-engine/index.js"
+import { capabilityComponentManager } from "./capability-components.js"
+import type { AgentEngineProvider } from "./capability-contracts.js"
 
 export {
   CAPABILITY_COMPONENT_SCHEMA_VERSION,
@@ -19,9 +21,28 @@ export {
   REQUIRED_COMPONENT_MANIFESTS,
   capabilityComponentManager,
   componentManifestFingerprint,
+  validateCapabilityComponentManifest,
   persistCapabilityComponentGeneration,
   readCapabilityComponentGeneration,
 } from "./capability-components.js"
+export {
+  CAPABILITY_COMPONENT_PACKAGE_SCHEMA,
+  CAPABILITY_COMPONENT_PACKAGE_SCHEMA_VERSION,
+  CAPABILITY_COMPONENT_PACKAGE_RESOURCE_LIMITS,
+  CapabilityComponentPackageError,
+  normalizeCapabilityComponentPackageManifest,
+  parseCapabilityComponentPackageManifest,
+  validateCapabilityComponentPackageManifest,
+  assertCapabilityComponentPackageCompatible,
+  componentPackageManifestFingerprint,
+  FILE_READ_COMPONENT_PACKAGE_MANIFEST,
+  FIRST_PARTY_COMPONENT_PACKAGES,
+  firstPartyComponentPackage,
+  registerFirstPartyComponentPackages,
+  installFirstPartyComponentPackage,
+  capabilityComponentIdForTool,
+  capabilityComponentPackageForTool,
+} from "./component-package.js"
 export type {
   CapabilityComponentDependency,
   CapabilityComponentHealth,
@@ -36,7 +57,22 @@ export type {
   RegisterComponentOptions,
   RequiredComponentContract,
   SyncComponentOptions,
+  RequiredProviderHealthResult,
+  RequiredProviderLifecycle,
 } from "./capability-components.js"
+export type {
+  CapabilityComponentPackageManifest,
+  CapabilityComponentPackageSource,
+  CapabilityComponentPackageSourceKind,
+  CapabilityComponentPackageSignature,
+  CapabilityComponentPackageCompatibility,
+  CapabilityComponentPackageCompatibilityContext,
+  CapabilityComponentPackagePermissions,
+  CapabilityComponentPackageResources,
+  CapabilityComponentPackageIsolation,
+  CapabilityComponentPackageIsolationMode,
+  CapabilityComponentPackagePermission,
+} from "./component-package.js"
 export {
   HIGH_RISK_REPLACEMENT_GROUPS,
   failedReplacementChecks,
@@ -61,7 +97,10 @@ export type {
   PermissionEvaluatorDelegate,
   SecurityParserProvider,
   McpHostIntegration,
+  AgentEngineProvider,
 } from "./capability-contracts.js"
+export { HOST_EXECUTION_CHAIN } from "./types.js"
+export type { HostExecutionStage, ToolExecutionBoundary } from "./types.js"
 export {
   assertRequiredProviderContract,
   createPermissionEvaluatorProvider,
@@ -77,7 +116,11 @@ export interface AgentHost {
 /** Single construction path for every PI-backed host boundary. */
 async function createAgentHost(config: RuntimeConfig): Promise<AgentHost> {
   const runtime = await AgentRuntime.create(config)
-  return { engine: new PiAgentEngine(runtime), runtime }
+  const componentId = runtime.activeComponentGeneration?.providers["agent-engine"]
+  const provider = capabilityComponentManager
+    .getRequiredProviderBinding<AgentEngineProvider>("agent-engine", componentId)
+    .implementation
+  return { engine: provider.create(runtime), runtime }
 }
 
 /** Initialize the stable host-facing engine while PI remains behind the adapter. */

@@ -11,6 +11,10 @@ import {
   readCapabilityComponentGeneration,
 } from "../src/agent/capability-components.ts";
 import { handleComponents } from "../src/server/routes/components.ts";
+import {
+  FILE_READ_COMPONENT_PACKAGE_MANIFEST,
+  installFirstPartyComponentPackage,
+} from "../src/agent/component-package.ts";
 
 const required = {
   id: "permission-evaluator",
@@ -343,6 +347,66 @@ describe("CapabilityComponentManager", () => {
     assert.equal(manager.activeRequiredProvider("permission").manifest.id, "permission-evaluator");
   });
 
+  it("runs bounded provider health checks and marks a timed-out provider unavailable", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    let healthSignal;
+    manager.bindRequiredProvider("permission-evaluator", {
+      kind: "permission-evaluator",
+      authorizeTool: async () => ({ allowed: true }),
+      authorizePath: async () => ({ operation: "read", root: ".", path: ".", relativePath: "." }),
+      authorizePathSync: () => ({ operation: "read", root: ".", path: ".", relativePath: "." }),
+      authorizeWorkspaceRoot: async (workspace) => workspace,
+      health: (signal) => {
+        healthSignal = signal;
+        return new Promise(() => {});
+      },
+    });
+    const state = await manager.healthCheckRequired("permission-evaluator", { timeoutMs: 10 });
+    assert.equal(state.health, "unavailable");
+    assert.equal(healthSignal?.aborted, true);
+  });
+
+  it("uses the bound provider dispose hook after references are released", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    let disposed = 0;
+    manager.bindRequiredProvider("permission-evaluator", {
+      kind: "permission-evaluator",
+      authorizeTool: async () => ({ allowed: true }),
+      authorizePath: async () => ({ operation: "read", root: ".", path: ".", relativePath: "." }),
+      authorizePathSync: () => ({ operation: "read", root: ".", path: ".", relativePath: "." }),
+      authorizeWorkspaceRoot: async (workspace) => workspace,
+      dispose: async () => { disposed += 1; },
+    });
+    manager.register({ ...required, id: "permission-evaluator.v2", version: "2", source: "user" }, { trusted: true, health: "healthy" });
+    manager.bindRequiredProvider("permission-evaluator.v2", {
+      kind: "permission-evaluator",
+      authorizeTool: async () => ({ allowed: true }),
+      authorizePath: async () => ({ operation: "read", root: ".", path: ".", relativePath: "." }),
+      authorizePathSync: () => ({ operation: "read", root: ".", path: ".", relativePath: "." }),
+      authorizeWorkspaceRoot: async (workspace) => workspace,
+    });
+    await manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", { approved: true, preflight: passedPreflight, verify: async () => {} });
+    await manager.disposeRetiredRequired("permission-evaluator");
+    assert.equal(disposed, 1);
+  });
+
+  it("fails closed when provider state migration exceeds its bound", async () => {
+    const manager = new CapabilityComponentManager([required]);
+    registerPermissionReplacement(manager);
+    let migrationSignal;
+    await assert.rejects(manager.replaceRequired("permission-evaluator", "permission-evaluator.v2", {
+      approved: true,
+      migrationTimeoutMs: 10,
+      preflight: passedPreflight,
+      migrateState: ({ signal }) => {
+        migrationSignal = signal;
+        return new Promise(() => {});
+      },
+    }), (error) => error.code === "replacement_migration_failed" && /timed out/u.test(error.message));
+    assert.equal(migrationSignal?.aborted, true);
+    assert.equal(manager.activeRequiredProvider("permission").manifest.id, "permission-evaluator");
+  });
+
   it("persists an automatic health rollback raised during verification", async () => {
     const manager = new CapabilityComponentManager([required]);
     registerPermissionReplacement(manager);
@@ -427,6 +491,31 @@ describe("CapabilityComponentManager", () => {
       await restored.restore(filePath);
       assert.equal(restored.require("demo-tool").status, "active");
       assert.deepEqual(restored.agentProjection(), [{ id: "demo-tool", capability: "tool", version: "1" }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a first-party package uninstalled across restart until explicitly reinstalled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "first-party-package-state-"));
+    try {
+      const filePath = join(root, "component-state.json");
+      const manager = new CapabilityComponentManager([FILE_READ_COMPONENT_PACKAGE_MANIFEST.component]);
+      manager.uninstall(FILE_READ_COMPONENT_PACKAGE_MANIFEST.component.id);
+      await manager.save(filePath);
+      const saved = JSON.parse(readFileSync(filePath, "utf8"));
+      assert.deepEqual(saved.uninstalledFirstPartyPackages, [FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId]);
+
+      const restarted = new CapabilityComponentManager([FILE_READ_COMPONENT_PACKAGE_MANIFEST.component]);
+      await restarted.restore(filePath);
+      assert.equal(restarted.get(FILE_READ_COMPONENT_PACKAGE_MANIFEST.component.id), undefined);
+
+      installFirstPartyComponentPackage(restarted, FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId);
+      await restarted.save(filePath);
+      const reinstalled = new CapabilityComponentManager([FILE_READ_COMPONENT_PACKAGE_MANIFEST.component]);
+      await reinstalled.restore(filePath);
+      assert.equal(reinstalled.require(FILE_READ_COMPONENT_PACKAGE_MANIFEST.component.id).status, "active");
+      assert.deepEqual(reinstalled.catalog().uninstalledFirstPartyPackages, []);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

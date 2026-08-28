@@ -65,6 +65,19 @@ describe("capability catalog generator", () => {
     assert.strictEqual(first.sources.skills, "src/agent/skills/skill-service.ts");
     assert.doesNotMatch(serializeCapabilityCatalog(first), /SKILL\.md body/i);
     assert.ok(first.tools.some((tool) => tool.name === "command" && tool.source === "src/agent/tools/command.ts"));
+    const fileReader = first.tools.find((tool) => tool.name === "file_read");
+    assert.match(fileReader?.component?.fingerprint ?? "", /^[a-f0-9]{64}$/);
+    assert.deepStrictEqual(fileReader?.component && {
+      id: fileReader.component.id,
+      packageId: fileReader.component.packageId,
+      packageVersion: fileReader.component.packageVersion,
+      fingerprint: fileReader.component.fingerprint,
+    }, {
+      id: "tool.file-read",
+      packageId: "my-code-agent.tool.file-read",
+      packageVersion: "1.0.0",
+      fingerprint: fileReader?.component.fingerprint,
+    });
     assert.ok(first.events.engine.includes("turn.cancelled"));
     assert.ok(first.events.application.includes("permission.confirm"));
     assert.ok(first.routes.some((route) => route.path === "/api/chat" && route.method === "POST"));

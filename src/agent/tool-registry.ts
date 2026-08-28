@@ -12,6 +12,8 @@ import type {
   ToolTraceEmitter,
   ExecutionContractDecision,
 } from "./types.js"
+import { HOST_EXECUTION_CHAIN } from "./execution-boundary.js"
+import type { ToolExecutionBoundary } from "./types.js"
 import {
   assertStructuredToolResult,
   classifyThrownToolFailure,
@@ -77,6 +79,11 @@ export async function authorizeToolExecution(tool: AgentTool, args: Record<strin
 }
 
 const AUTHORIZED_TOOL = Symbol.for("my-code-agent.authorized-tool")
+
+const HOST_BOUNDARY: ToolExecutionBoundary = Object.freeze({
+  version: 1,
+  stages: HOST_EXECUTION_CHAIN,
+})
 
 export function defineAgentTool(tool: AgentTool): AgentTool {
   if ((tool as AgentTool & { [AUTHORIZED_TOOL]?: boolean })[AUTHORIZED_TOOL]) return tool
@@ -185,7 +192,21 @@ export function agentToolToPIToolDefinition(tool: AgentTool, workspace?: string,
           return { content: [{ type: "text" as const, text }], details: { evidenceId: cached.evidenceId, deduplicated: true } }
         }
         const onUpdate = (chunk: string) => emitTrace?.({ type: "tool_execution_update", toolCallId: _toolCallId, toolName: authorizedTool.name, partialResult: chunk })
-        const toolContext: ToolContext = { cwd: workspace || "", sessionId: "", workspace, toolCallId: _toolCallId, signal, onUpdate, getExecutionContract: extraCtx?.getExecutionContract, ...extraCtx }
+        // Extension context is input data only. Host-owned execution controls
+        // are assigned last so a plugin cannot replace authorization, abort,
+        // tracing, path policy, or the execution contract.
+        const toolContext: ToolContext = {
+          ...extraCtx,
+          cwd: workspace || "",
+          sessionId: "",
+          workspace,
+          toolCallId: _toolCallId,
+          signal,
+          onUpdate,
+          getExecutionContract: extraCtx?.getExecutionContract,
+          authorizeExecutionContract: extraCtx?.authorizeExecutionContract,
+          executionBoundary: HOST_BOUNDARY,
+        }
         const normalized = assertStructuredToolResult(await authorizedTool.execute(args, toolContext))
         const instructionSource = factVerificationContract && sourceMatches(contract.instructionSources)
         const normalizedMetadata = instructionSource ? Object.fromEntries(Object.entries(normalized.metadata || {}).filter(([key]) => key !== "evidenceFields")) : (normalized.metadata || {})

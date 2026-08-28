@@ -2,9 +2,12 @@ import type { ToolAuthorizationRequest, ToolAuthorizationResult } from "./types.
 import type { McpServerStatus } from "./mcp/types.js"
 import type { SecurityParseOptions, SecurityParseResult } from "./tools/command/security-ast.js"
 import type { AgentTool, ToolTraceEmitter } from "./types.js"
+import type { RequiredProviderHealthResult } from "./capability-components.js"
+import type { AgentEngine } from "../agent-engine/contracts.js"
 
 /** Stable host-facing capability identifiers. These are not implementation IDs. */
 export type RequiredCapability =
+  | "agent-engine"
   | "session-store"
   | "permission-evaluator"
   | "security-parser"
@@ -40,6 +43,25 @@ export interface SessionStoreCreateOptions {
 export interface SessionStoreProvider {
   readonly kind: "session-store"
   createSession(options: SessionStoreCreateOptions): Promise<SessionStoreSession>
+  health?(signal: AbortSignal): RequiredProviderHealthResult | Promise<RequiredProviderHealthResult>
+  dispose?(): void | Promise<void>
+}
+
+/**
+ * Engine providers are factories, not shared AgentEngine instances. The host
+ * passes the session-scoped runtime handle and keeps generation/lease state.
+ * Ownership metadata makes the PI adapter split explicit at the boundary.
+ */
+export interface AgentEngineProvider {
+  readonly kind: "agent-engine"
+  readonly ownership: Readonly<{
+    engine: string
+    subagentAdapter: string
+    providerAdapter: string
+  }>
+  create(runtime: unknown): AgentEngine
+  health?(signal: AbortSignal): RequiredProviderHealthResult | Promise<RequiredProviderHealthResult>
+  dispose?(): void | Promise<void>
 }
 
 /** Permission decisions remain host-owned; components only implement this narrow call surface. */
@@ -60,6 +82,8 @@ export interface PermissionEvaluator {
     source: string,
   ): { operation: "read" | "write" | "create" | "remove"; root: string; path: string; relativePath: string }
   authorizeWorkspaceRoot(workspace: string, source: string): Promise<string>
+  health?(signal: AbortSignal): RequiredProviderHealthResult | Promise<RequiredProviderHealthResult>
+  dispose?(): void | Promise<void>
 }
 
 export interface SecurityParserProvider {
@@ -67,6 +91,8 @@ export interface SecurityParserProvider {
   parse(command: string, options?: SecurityParseOptions): Promise<SecurityParseResult>
   parseLegacy(command: string, options?: SecurityParseOptions): SecurityParseResult
   parseTreeSitter(command: string, options?: SecurityParseOptions): Promise<SecurityParseResult>
+  health?(signal: AbortSignal): RequiredProviderHealthResult | Promise<RequiredProviderHealthResult>
+  dispose?(): void | Promise<void>
 }
 
 export interface McpHostIntegration {
@@ -80,9 +106,12 @@ export interface McpHostIntegration {
   disconnectAllSync(): void
   getServersStatus(): McpServerStatus[]
   subscribeStatusChanges(listener: (snapshot: McpServerStatus[]) => void): () => void
+  health?(signal: AbortSignal): RequiredProviderHealthResult | Promise<RequiredProviderHealthResult>
+  dispose?(): void | Promise<void>
 }
 
 export type RequiredProviderImplementation =
+  | AgentEngineProvider
   | SessionStoreProvider
   | PermissionEvaluator
   | SecurityParserProvider
@@ -102,6 +131,7 @@ export function assertRequiredProviderContract(
     throw new TypeError(`Required provider ${capability} has invalid kind`)
   }
   const requiredMethods: Record<RequiredCapability, readonly string[]> = {
+    "agent-engine": ["create"],
     "session-store": ["createSession"],
     "permission-evaluator": ["authorizeTool", "authorizePath", "authorizePathSync", "authorizeWorkspaceRoot"],
     "security-parser": ["parse", "parseLegacy", "parseTreeSitter"],
@@ -109,6 +139,14 @@ export function assertRequiredProviderContract(
   }
   for (const method of requiredMethods[capability]) {
     if (typeof candidate[method] !== "function") throw new TypeError(`Required provider ${capability} is missing ${method}()`)
+  }
+  if (capability === "agent-engine") {
+    const ownership = candidate.ownership as Record<string, unknown> | undefined
+    for (const key of ["engine", "subagentAdapter", "providerAdapter"]) {
+      if (!ownership || typeof ownership[key] !== "string" || !String(ownership[key]).trim()) {
+        throw new TypeError(`Required provider ${capability} is missing ownership.${key}`)
+      }
+    }
   }
 }
 
@@ -142,6 +180,8 @@ export function createPermissionEvaluatorProvider(service: PermissionEvaluatorDe
       ...service.authorizePathSync(root, target, operation, source), operation,
     }),
     authorizeWorkspaceRoot: (workspace: string, source: string) => service.authorizeWorkspaceRoot(workspace, source),
+    health: () => ({ status: "healthy" as const }),
+    dispose: () => {},
   }
   assertRequiredProviderContract("permission-evaluator", provider)
   return Object.freeze(provider)

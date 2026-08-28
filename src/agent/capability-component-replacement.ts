@@ -1,5 +1,6 @@
 export const HIGH_RISK_REPLACEMENT_GROUPS = new Set([
   "bootstrap",
+  "agent-engine",
   "session-store",
   "permission",
   "security-parser",
@@ -49,7 +50,10 @@ export interface RequiredReplacementOptions {
   approved?: boolean
   preflightTimeoutMs?: number
   verificationTimeoutMs?: number
+  migrationTimeoutMs?: number
   preflight(context: RequiredReplacementContext): Promise<RequiredReplacementPreflightReport>
+  /** Move provider-owned state before the generation is committed. */
+  migrateState?(context: RequiredReplacementContext & { signal: AbortSignal }): Promise<void>
   persist?(ref: RequiredComponentGenerationRef): Promise<void>
   verify?(context: RequiredReplacementContext & { generation: number }): Promise<void>
 }

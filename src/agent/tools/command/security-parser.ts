@@ -290,6 +290,8 @@ export const securityParserProvider: SecurityParserProvider = Object.freeze({
   parse: parseCommandForSecurityAsync,
   parseLegacy: parseCommandForSecurityLegacyFallback,
   parseTreeSitter: parseCommandForSecurityWithTreeSitterAsync,
+  health: () => ({ status: "healthy" as const }),
+  dispose: () => {},
 })
 
 if (!capabilityComponentManager.hasRequiredProviderBinding("security-parser")) {

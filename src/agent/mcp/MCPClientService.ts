@@ -423,6 +423,10 @@ export const mcpHostIntegrationProvider: McpHostIntegration = Object.freeze({
   disconnectAllSync,
   getServersStatus,
   subscribeStatusChanges,
+  health: () => ({
+    status: getServersStatus().some((status) => status.state === "error") ? "degraded" as const : "healthy" as const,
+  }),
+  dispose: disconnectAll,
 })
 
 if (!capabilityComponentManager.hasRequiredProviderBinding("mcp-host-integration")) {

@@ -2,7 +2,7 @@
  * Custom tool registry for the agent.
  *
  * PI 框架内置 7 个工具：read / bash / edit / write / grep / find / ls。
- * 这里注册的是本项目的自定义工具——PI 没有的、你后端独有的功能。
+ * 这里注册的是本项目提供的第一方工具包——PI 没有的、项目后端独有的能力。
  *
  * 所有自定义 Tool 通过 ToolRegistry 统一管理，再由 ToolPresentation 转换为
  * PI SDK 需要的 ToolDefinition[] 格式，传给 createAgentSession()。
@@ -33,12 +33,17 @@ import { resolveAgentProfile, type AgentProfile } from "../agent-profile.js"
 import { nativeToolPresentation, presentNativeTool, presentSessionTools } from "../tool-presentation.js"
 import { buildProfileToolPool, profileAllowsFeature, ToolPool } from "../tool-pool.js"
 import { capabilityComponentManager } from "../capability-components.js"
+import { registerFirstPartyComponentPackages } from "../component-package.js"
 import type { RequiredComponentLease } from "../capability-component-replacement.js"
 
 /** 全局 Tool 注册表 */
 export const toolRegistry = new ToolRegistry()
 
 capabilityComponentManager.bindRequiredProvider("tool-presentation", nativeToolPresentation)
+
+// Seed application-supplied packages before startup restores the user's install state.
+// This only declares shipped implementations; persisted uninstall tombstones win later.
+registerFirstPartyComponentPackages(capabilityComponentManager)
 
 
 
@@ -241,9 +246,9 @@ export async function reconnectMcp(workspace: string, emitTrace?: ToolTraceEmitt
 }
 
 /**
- * 获取所有工具（内置自定义 + MCP），异步。
+ * 获取所有工具（第一方工具包 + MCP），异步。
  * MCP 在后台连接，不阻塞工具注册。
- * 首次调用返回内置工具；MCP 连接完成后缓存，下次返回完整列表。
+ * 首次调用返回第一方工具包；MCP 连接完成后缓存，下次返回完整列表。
  */
 export async function getCustomToolsAsync(
   workspace?: string,
@@ -252,12 +257,12 @@ export async function getCustomToolsAsync(
   profile: AgentProfile = resolveAgentProfile("standard"),
   componentLease?: RequiredComponentLease,
 ): Promise<ReturnType<typeof toolRegistry.toPITools>> {
-  // 1. 内置自定义工具
-  const builtin = getCustomTools(workspace, emitTrace, extraCtx, profile, componentLease)
+  // 1. 第一方工具包（随应用提供，但仍受组件状态管理）
+  const firstParty = getCustomTools(workspace, emitTrace, extraCtx, profile, componentLease)
 
   // Profile capability projection is independent from PermissionMode. A
   // profile that does not expose MCP must not trigger discovery either.
-  if (!profile.allowMcp || !profileAllowsFeature(profile, "mcp")) return builtin
+  if (!profile.allowMcp || !profileAllowsFeature(profile, "mcp")) return firstParty
 
   // 2. MCP 工具：缓存命中或 workspace 未变直接使用
   const ws = workspace ?? ""
@@ -268,7 +273,7 @@ export async function getCustomToolsAsync(
   if (_mcpWorkspace !== ws) {
     console.log(`[tools] MCP 后台连接中...`)
     await _transitionMcpWorkspace(ws, emitTrace)
-    return builtin
+    return firstParty
   }
 
   // incomplete cache 中的健康 raw tools 仍按当前 session 上下文重新包装并提供。
@@ -277,7 +282,7 @@ export async function getCustomToolsAsync(
   const current = _mcpInFlight
   if (current && current.workspace === ws && current.epoch === _mcpRequestEpoch) return available
 
-  // 3. 后台连接 MCP，本次先返回内置工具
+  // 3. 后台连接 MCP，本次先返回第一方工具包
   console.log(`[tools] MCP 后台连接中...`)
   _startMcpDiscovery(ws, _mcpRequestEpoch, emitTrace)
 

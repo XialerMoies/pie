@@ -105,11 +105,23 @@ export interface SyncComponentOptions {
   description?: string
 }
 
+export interface RequiredProviderHealthResult {
+  status: "healthy" | "degraded" | "broken" | "unavailable"
+  reason?: string
+}
+
+export interface RequiredProviderLifecycle {
+  health?: (signal: AbortSignal) => RequiredProviderHealthResult | Promise<RequiredProviderHealthResult>
+  dispose?: () => void | Promise<void>
+}
+
 export interface CapabilityComponentStateDocument {
   schemaVersion: typeof CAPABILITY_COMPONENT_SCHEMA_VERSION
   generation?: number
   requiredProviders?: Record<string, string>
   rollbackProviders?: Record<string, string>
+  /** First-party packages available in the app distribution but explicitly uninstalled by the user. */
+  uninstalledFirstPartyPackages?: string[]
   components: Array<{ manifest: CapabilityComponentManifest; trusted: boolean; enabled: boolean; health: CapabilityComponentHealth }>
 }
 
@@ -172,7 +184,7 @@ function fingerprint(manifest: CapabilityComponentManifest): string {
   return createHash("sha256").update(JSON.stringify(stableManifest(manifest))).digest("hex")
 }
 
-function validateManifest(input: CapabilityComponentManifest): Readonly<CapabilityComponentManifest> {
+export function validateCapabilityComponentManifest(input: CapabilityComponentManifest): Readonly<CapabilityComponentManifest> {
   const id = String(input.id || "").trim()
   if (!/^[a-z0-9][a-z0-9._-]*$/u.test(id)) throw new CapabilityComponentError("invalid_manifest", `Invalid component id: ${id || "(empty)"}`, id)
   if (!String(input.version || "").trim()) throw new CapabilityComponentError("invalid_manifest", `Component ${id} must declare a version`, id)
@@ -304,6 +316,7 @@ export function persistCapabilityComponentGeneration(manager: ComponentSessionMa
 export class CapabilityComponentManager {
   readonly #components = new Map<string, CapabilityComponentState>()
   readonly #events: CapabilityComponentLifecycleEvent[] = []
+  readonly #uninstalledFirstPartyPackages = new Set<string>()
   readonly #requiredProviders = new Map<string, string>()
   readonly #rollbackProviders = new Map<string, string>()
   readonly #providerReferences = new Map<string, number>()
@@ -317,7 +330,7 @@ export class CapabilityComponentManager {
   }
 
   register(manifest: CapabilityComponentManifest, options: RegisterComponentOptions = {}): CapabilityComponentState {
-    const normalized = validateManifest(manifest)
+    const normalized = validateCapabilityComponentManifest(manifest)
     if (this.#components.has(normalized.id)) throw new CapabilityComponentError("duplicate_component", `Component already registered: ${normalized.id}`, normalized.id)
     this.#assertNoDependencyCycle(normalized)
     const trusted = options.trusted ?? normalized.source === "builtin"
@@ -333,6 +346,9 @@ export class CapabilityComponentManager {
       if (missing.length > 0) throw new CapabilityComponentError("missing_dependency", `Component ${normalized.id} requires healthy dependencies: ${missing.map((dependency) => dependency.id).join(", ")}`, normalized.id, [normalized.id, ...missing.map((dependency) => dependency.id)])
     }
     const state = this.#publish({ manifest: normalized, trusted, enabled, health }, "registered")
+    if (normalized.kind === "optional" && normalized.source === "builtin" && normalized.providedBy) {
+      this.#uninstalledFirstPartyPackages.delete(normalized.providedBy)
+    }
     if (enabled && normalized.kind === "required" && replacementGroup) this.#requiredProviders.set(replacementGroup, normalized.id)
     return state
   }
@@ -366,6 +382,7 @@ export class CapabilityComponentManager {
       return this.#reject("invalid_provider_binding", `Required provider implementation is invalid: ${id}`, id)
     }
     const contractByGroup: Partial<Record<string, RequiredCapability>> = {
+      "agent-engine": "agent-engine",
       "session-store": "session-store",
       permission: "permission-evaluator",
       "security-parser": "security-parser",
@@ -393,6 +410,22 @@ export class CapabilityComponentManager {
 
   hasRequiredProviderBinding(id: string): boolean {
     return this.#requiredProviderBindings.has(String(id || "").trim())
+  }
+
+  /** Resolve a bound provider for a group, optionally pinned to a session id. */
+  getRequiredProviderBinding<T = unknown>(replacementGroup: string, componentId?: string): RequiredComponentProviderBinding<T> {
+    const group = String(replacementGroup || "").trim()
+    const id = componentId || this.#requiredProviders.get(group)
+    if (!id) throw new CapabilityComponentError("missing_required_provider", `No active required provider for: ${group}`, group)
+    const state = this.#components.get(id)
+    if (!state || state.manifest.kind !== "required" || state.manifest.replacementGroup !== group) {
+      throw new CapabilityComponentError("invalid_required_provider", `Provider is not registered for ${group}: ${id}`, id)
+    }
+    const implementation = this.#requiredProviderBindings.get(id)
+    if (implementation === undefined) {
+      throw new CapabilityComponentError("unbound_required_provider", `Required provider has no runtime binding for ${group}: ${id}`, id, [group, id])
+    }
+    return Object.freeze({ componentId: id, replacementGroup: group, implementation: implementation as T })
   }
 
   activeRequiredProvider(replacementGroup: string): CapabilityComponentState {
@@ -451,7 +484,7 @@ export class CapabilityComponentManager {
     return this.#enqueueReplacement(() => this.#replaceRequired(currentId, candidateId, options))
   }
 
-  async disposeRetiredRequired(id: string, dispose: (state: CapabilityComponentState) => Promise<void> | void): Promise<CapabilityComponentState> {
+  async disposeRetiredRequired(id: string, dispose?: (state: CapabilityComponentState) => Promise<void> | void): Promise<CapabilityComponentState> {
     const state = this.#requireMutable(id)
     const group = state.manifest.replacementGroup
     if (state.manifest.kind !== "required" || !group) return this.#reject("invalid_replacement", `Component is not a required provider: ${id}`, id)
@@ -459,9 +492,12 @@ export class CapabilityComponentManager {
     const references = this.providerReferenceCount(id)
     if (references > 0) return this.#reject("component_in_use", `Required provider ${id} still has ${references} session reference(s)`, id)
     if (this.#disposingRequiredProviders.has(id)) return this.#reject("component_disposing", `Required provider is already being disposed: ${id}`, id)
+    const providerDispose = (this.#requiredProviderBindings.get(id) as RequiredProviderLifecycle | undefined)?.dispose
+    const disposeImplementation = dispose || (providerDispose ? () => providerDispose() : undefined)
+    if (!disposeImplementation) return this.#reject("dispose_unavailable", `Required provider has no dispose lifecycle: ${id}`, id)
     this.#disposingRequiredProviders.add(id)
     try {
-      await dispose(this.#cloneState(state))
+      await disposeImplementation(this.#cloneState(state))
       this.#components.delete(id)
       this.#requiredProviderBindings.delete(id)
       if (this.#rollbackProviders.get(group) === id) this.#rollbackProviders.delete(group)
@@ -470,6 +506,46 @@ export class CapabilityComponentManager {
     } finally {
       this.#disposingRequiredProviders.delete(id)
     }
+  }
+
+  /** Run the provider health probe and mirror its result into component state. */
+  async healthCheckRequired(id: string, options: { timeoutMs?: number } = {}): Promise<CapabilityComponentState> {
+    const state = this.#requireMutable(id)
+    if (state.manifest.kind !== "required") return this.#reject("invalid_replacement", `Component is not a required provider: ${id}`, id)
+    const implementation = this.#requiredProviderBindings.get(id) as RequiredProviderLifecycle | undefined
+    if (!implementation?.health) return this.#cloneState(state)
+    try {
+      const result = await runBoundedStage("required provider health check", options.timeoutMs ?? 10_000, (signal) => Promise.resolve(implementation.health!(signal)))
+      const health = result.status === "healthy" ? "healthy" : result.status === "broken" ? "broken" : "unavailable"
+      if (state.health === health) return this.#cloneState(state)
+      return this.setHealth(id, health)
+    } catch (error) {
+      return this.setHealth(id, "unavailable")
+    }
+  }
+
+  /** Roll a required group back to its remembered provider or builtin baseline. */
+  rollbackRequired(replacementGroup: string): CapabilityComponentState {
+    const group = String(replacementGroup || "").trim()
+    const currentId = this.#requiredProviders.get(group)
+    if (!currentId) return this.#reject("missing_required_provider", `No active required provider for: ${group}`, group)
+    const current = this.#requireMutable(currentId)
+    if (this.providerReferenceCount(currentId) > 0) return this.#reject("component_in_use", `Required provider ${currentId} still has session references`, currentId)
+    const targetId = this.#rollbackProviders.get(group)
+      || this.list().find((candidate) => candidate.manifest.kind === "required"
+        && candidate.manifest.replacementGroup === group
+        && candidate.manifest.source === "builtin"
+        && candidate.manifest.id !== currentId
+        && candidate.trusted
+        && candidate.health === "healthy")?.manifest.id
+    if (!targetId) return this.#reject("required_component", `Required component has no healthy rollback provider: ${group}`, currentId)
+    const target = this.#requireMutable(targetId)
+    if (!this.#requiredProviderBindings.has(targetId) && this.#requiredProviderBindings.has(currentId)) {
+      return this.#reject("unbound_replacement", `Required rollback provider has no runtime binding: ${targetId}`, targetId)
+    }
+    this.#publishRequiredSwap(current, target, "replacement_rolled_back", "manual recovery")
+    this.#rollbackProviders.delete(group)
+    return this.#cloneState(target)
   }
 
   trust(id: string, trusted = true): CapabilityComponentState {
@@ -556,7 +632,7 @@ export class CapabilityComponentManager {
       ...(options.description || existing?.manifest.description ? { description: options.description || existing?.manifest.description } : {}),
     }
     if (!existing) return this.register(manifest, options)
-    const normalized = validateManifest(manifest)
+    const normalized = validateCapabilityComponentManifest(manifest)
     this.#assertNoDependencyCycle(normalized)
     const unchanged = JSON.stringify(existing.manifest) === JSON.stringify(normalized)
       && existing.trusted === options.trusted
@@ -577,7 +653,9 @@ export class CapabilityComponentManager {
       generation: this.#generation,
       requiredProviders: { ...this.requiredGeneration().providers },
       rollbackProviders: Object.fromEntries(this.#rollbackProviders),
-      components: this.persistedState().filter((state) => state.manifest.source !== "builtin"),
+      uninstalledFirstPartyPackages: [...this.#uninstalledFirstPartyPackages].sort(),
+      components: this.persistedState().filter((state) => state.manifest.source !== "builtin"
+        || (state.manifest.kind === "optional" && !!state.manifest.providedBy)),
     }
     await updateLockedJson<CapabilityComponentStateDocument>(filePath, () => ({ schemaVersion: CAPABILITY_COMPONENT_SCHEMA_VERSION, components: [] }), () => document, { recoverInvalidJson: true, space: 2 })
   }
@@ -586,11 +664,26 @@ export class CapabilityComponentManager {
     const document = await readLockedJson<CapabilityComponentStateDocument>(filePath, () => ({ schemaVersion: CAPABILITY_COMPONENT_SCHEMA_VERSION, components: [] }), { recoverInvalidJson: true })
     if (!document || document.schemaVersion !== CAPABILITY_COMPONENT_SCHEMA_VERSION || !Array.isArray(document.components)) return
     if (Number.isSafeInteger(document.generation) && Number(document.generation) > this.#generation) this.#generation = Number(document.generation)
+    this.#uninstalledFirstPartyPackages.clear()
+    for (const packageId of document.uninstalledFirstPartyPackages || []) {
+      if (typeof packageId === "string" && /^[a-z0-9][a-z0-9._-]*$/u.test(packageId)) this.#uninstalledFirstPartyPackages.add(packageId)
+    }
+    for (const state of this.list()) {
+      if (state.manifest.kind === "optional" && state.manifest.source === "builtin" && state.manifest.providedBy
+        && this.#uninstalledFirstPartyPackages.has(state.manifest.providedBy)) {
+        this.#components.delete(state.manifest.id)
+        this.#record("uninstalled", state.manifest.id, ++this.#generation, "restored first-party uninstall")
+      }
+    }
     const restored: Array<{ id: string; enabled: boolean; kind: CapabilityComponentKind }> = []
     for (const entry of document.components) {
       try {
-        const manifest = validateManifest(entry.manifest)
-        if (manifest.source === "builtin") continue
+        const manifest = validateCapabilityComponentManifest(entry.manifest)
+        if (manifest.source === "builtin") {
+          if (manifest.kind !== "optional" || !manifest.providedBy || this.#uninstalledFirstPartyPackages.has(manifest.providedBy)) continue
+          // First-party code must still be provided by this application version.
+          if (!this.#components.has(manifest.id)) continue
+        }
         const existing = this.#components.get(manifest.id)
         if (existing) this.#publish({ manifest, trusted: entry.trusted === true, enabled: false, health: entry.health }, "health_changed", "restored")
         else this.register(manifest, { trusted: entry.trusted === true, enabled: false, health: entry.health })
@@ -638,6 +731,9 @@ export class CapabilityComponentManager {
       if (!replacement) return this.#reject("required_component", `Required component has no healthy replacement: ${id}`, id)
     }
     this.#components.delete(current.manifest.id)
+    if (current.manifest.kind === "optional" && current.manifest.source === "builtin" && current.manifest.providedBy) {
+      this.#uninstalledFirstPartyPackages.add(current.manifest.providedBy)
+    }
     this.#requiredProviderBindings.delete(current.manifest.id)
     if (current.manifest.replacementGroup && this.#rollbackProviders.get(current.manifest.replacementGroup) === current.manifest.id) this.#rollbackProviders.delete(current.manifest.replacementGroup)
     this.#record("uninstalled", current.manifest.id, current.generation)
@@ -653,13 +749,15 @@ export class CapabilityComponentManager {
     requiredProviders: Record<string, string>
     providerReferences: Record<string, number>
     boundRequiredProviders: string[]
+    uninstalledFirstPartyPackages: string[]
     fingerprint: string
   } {
     const components = this.list()
     const requiredProviders = Object.fromEntries([...this.#requiredProviders].sort(([left], [right]) => left.localeCompare(right)))
     const providerReferences = Object.fromEntries([...this.#providerReferences].sort(([left], [right]) => left.localeCompare(right)))
     const boundRequiredProviders = [...this.#requiredProviderBindings.keys()].sort()
-    const payload = { schemaVersion: CAPABILITY_COMPONENT_SCHEMA_VERSION, generation: this.#generation, components, requiredProviders, providerReferences, boundRequiredProviders }
+    const uninstalledFirstPartyPackages = [...this.#uninstalledFirstPartyPackages].sort()
+    const payload = { schemaVersion: CAPABILITY_COMPONENT_SCHEMA_VERSION, generation: this.#generation, components, requiredProviders, providerReferences, boundRequiredProviders, uninstalledFirstPartyPackages }
     return { ...payload, fingerprint: createHash("sha256").update(JSON.stringify(payload)).digest("hex") }
   }
 
@@ -722,6 +820,13 @@ export class CapabilityComponentManager {
       || this.#components.get(currentId)?.generation !== currentGeneration
       || this.#components.get(candidateId)?.generation !== candidateGeneration) {
       return this.#reject("stale_replacement", `Required replacement changed during preflight: ${currentId} -> ${candidateId}`, candidateId)
+    }
+
+    try {
+      await runBoundedStage("replacement state migration", options.migrationTimeoutMs ?? 30_000, (signal) => options.migrateState?.({ ...context, signal }) ?? Promise.resolve())
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      return this.#reject("replacement_migration_failed", `Replacement state migration failed: ${reason}`, candidateId)
     }
 
     const committedGeneration = this.#publishRequiredSwap(current, candidate, "replacement_committed")
@@ -888,6 +993,7 @@ export class CapabilityComponentManager {
 
 export const REQUIRED_COMPONENT_MANIFESTS: readonly CapabilityComponentManifest[] = Object.freeze([
   { id: "bootstrap-kernel", version: "1", kind: "required", capability: "bootstrap", replacementGroup: "bootstrap", source: "builtin", description: "Minimal host lifecycle contract" },
+  { id: "agent-engine", version: "1", kind: "required", capability: "agent-engine", replacementGroup: "agent-engine", source: "builtin", description: "Session-scoped AgentEngine factory and adapter ownership" },
   { id: "session-store", version: "1", kind: "required", capability: "session-store", replacementGroup: "session-store", source: "builtin" },
   { id: "model-router", version: "1", kind: "required", capability: "model-router", replacementGroup: "model-router", source: "builtin" },
   { id: "permission-evaluator", version: "1", kind: "required", capability: "permission", replacementGroup: "permission", source: "builtin" },

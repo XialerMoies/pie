@@ -5,6 +5,7 @@ import { AgentProfileRegistry, resolveAgentProfile } from "../src/agent/agent-pr
 import { mapPiEvent } from "../src/agent-engine/event-normalizer.ts";
 import { ToolPool, COORDINATOR_TOOL_NAMES, READ_ONLY_SUBAGENT_TOOL_NAMES } from "../src/agent/tool-pool.ts";
 import { CapabilityComponentManager } from "../src/agent/capability-components.ts";
+import { FILE_READ_COMPONENT_PACKAGE_MANIFEST } from "../src/agent/component-package.ts";
 import { nativeToolPresentation } from "../src/agent/tool-presentation.ts";
 import { toolRegistry } from "../src/agent/tools/index.ts";
 import { structuredToolResult } from "../src/agent/types.ts";
@@ -139,6 +140,7 @@ describe("AP-10/AP-11 Profile, host, and ToolPool cross-layer flow", () => {
 
   it("filters MCP tools by the active component generation while preserving native tools", () => {
     const manager = new CapabilityComponentManager();
+    manager.register(FILE_READ_COMPONENT_PACKAGE_MANIFEST.component, { trusted: true, enabled: true, health: "healthy" });
     manager.register({ id: "mcp-server.demo", version: "1", kind: "optional", capability: "mcp.server", source: "mcp" }, { trusted: true, enabled: true, health: "healthy" });
     const pool = new ToolPool().addNative([fixture("file_read")]).addMcp([fixture("mcp__demo__probe")]);
     assert.deepEqual(pool.project({ audience: "main", names: "*", featureGates: "*", componentManager: manager }).map((tool) => tool.name), ["file_read", "mcp__demo__probe"]);

@@ -318,7 +318,13 @@
         "needsPermission": false,
         "workspaceBounded": true
       },
-      "source": "src/agent/tools/file-read.ts"
+      "source": "src/agent/tools/file-read.ts",
+      "component": {
+        "id": "tool.file-read",
+        "packageId": "my-code-agent.tool.file-read",
+        "packageVersion": "1.0.0",
+        "fingerprint": "1219f44d1c53b47a214611e3f480bf6b31aff2fe35a9de5c4d3dc859ce970a0c"
+      }
     },
     {
       "name": "file_write",

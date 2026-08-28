@@ -2,6 +2,7 @@ import { canonicalToolName } from "./tool-identity.js"
 import type { AgentFeatureId, AgentProfile } from "./agent-profile.js"
 import type { AgentTool } from "./types.js"
 import type { CapabilityComponentManager } from "./capability-components.js"
+import { capabilityComponentIdForTool } from "./component-package.js"
 
 export type AgentToolAudience = "main" | "coordinator" | "subagent"
 export type ToolPoolSource = "native" | "mcp"
@@ -73,7 +74,7 @@ export class ToolPool {
   readonly #entries = new Map<string, ToolPoolEntry>()
 
   addNative(tools: readonly AgentTool[]): this {
-    for (const tool of tools) this.#add(tool, "native", nativeToolFeature(tool.name), nativeAudiences(canonicalToolName(tool.name)))
+    for (const tool of tools) this.#add(tool, "native", nativeToolFeature(tool.name), nativeAudiences(canonicalToolName(tool.name)), capabilityComponentIdForTool(tool.name))
     return this
   }
 
@@ -116,6 +117,10 @@ export class ToolPool {
       if (entry.tool.isEnabled && !entry.tool.isEnabled()) return false
       if (request.componentManager && entry.componentId) {
         const component = request.componentManager.get(entry.componentId)
+        // Package-backed native contributions must disappear when their registration is
+        // removed. MCP entries remain compatible until MCP server registration is migrated
+        // to the component manager and can provide an authoritative component state.
+        if (entry.source === "native" && (!component || component.status !== "active")) return false
         if (component && component.status !== "active") return false
       }
       return true

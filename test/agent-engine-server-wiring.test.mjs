@@ -41,7 +41,8 @@ describe("AgentEngine server and CLI wiring", () => {
     const agent = source("src/agent/index.ts");
     assert.match(agent, /async function createAgentHost\(config: RuntimeConfig\)/);
     assert.equal((agent.match(/AgentRuntime\.create\(config\)/g) || []).length, 1);
-    assert.equal((agent.match(/new PiAgentEngine(?:Adapter)?\(runtime\)/g) || []).length, 1);
+    assert.match(agent, /getRequiredProviderBinding<AgentEngineProvider>\("agent-engine", componentId\)/);
+    assert.match(agent, /provider\.create\(runtime\)/);
     assert.doesNotMatch(agent, /export async function initAgent\(/);
     assert.match(agent, /return \(await createAgentHost\(config\)\)\.engine/);
     assert.match(agent, /return createAgentHost\(config\)/);

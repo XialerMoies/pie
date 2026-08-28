@@ -27,6 +27,8 @@ import type {
   AgentToolExecutionResult,
 } from "./tool-outcomes.js"
 import type { PlanStateSnapshot } from "./plan-state.js"
+export { HOST_EXECUTION_CHAIN } from "./execution-boundary.js"
+export type { HostExecutionStage, ToolExecutionBoundary } from "./execution-boundary.js"
 export * from "./tool-outcomes.js"
 
 function targetMatches(target: string, source: string): boolean {
@@ -365,6 +367,8 @@ export interface ToolContext {
   /** Host-owned task contract gate. Model input cannot modify the contract. */
   getExecutionContract?: () => ExecutionContract | undefined
   authorizeExecutionContract?: (toolName: string, input: unknown, scope: ToolEvidenceScope) => ExecutionContractDecision
+  /** Immutable host marker proving this invocation crossed the canonical chain. */
+  executionBoundary?: import("./execution-boundary.js").ToolExecutionBoundary
 }
 
 /** Host-owned capabilities shared by runtime configuration and tool adapters. */

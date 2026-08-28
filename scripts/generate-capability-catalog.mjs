@@ -5,6 +5,7 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { toolRegistry } from "../src/agent/tools/index.ts";
+import { capabilityComponentPackageForTool, componentPackageManifestFingerprint } from "../src/agent/component-package.ts";
 import { ENGINE_EVENT_TYPES } from "../src/agent-engine/contracts.ts";
 import { APP_EVENT_TYPES } from "../src/server/app-events.ts";
 import { PERMISSION_MODES } from "../src/server/permission-mode.ts";
@@ -57,19 +58,30 @@ async function toolSources() {
 
 async function collectTools() {
   const sources = await toolSources();
-  return sortBy(toolRegistry.getAll().map((tool, index) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-    capabilities: {
-      readOnly: tool.isReadOnly,
-      destructive: tool.isDestructive === true,
-      riskLevel: tool.riskLevel || "medium",
-      needsPermission: tool.needsPermission === true,
-      workspaceBounded: tool.workspaceBounded !== false,
-    },
-    source: sources[index] || "src/agent/tools/index.ts",
-  })), (tool) => tool.name);
+  return sortBy(toolRegistry.getAll().map((tool, index) => {
+    const packageManifest = capabilityComponentPackageForTool(tool.name);
+    return {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      capabilities: {
+        readOnly: tool.isReadOnly,
+        destructive: tool.isDestructive === true,
+        riskLevel: tool.riskLevel || "medium",
+        needsPermission: tool.needsPermission === true,
+        workspaceBounded: tool.workspaceBounded !== false,
+      },
+      source: sources[index] || "src/agent/tools/index.ts",
+      ...(packageManifest ? {
+        component: {
+          id: packageManifest.component.id,
+          packageId: packageManifest.packageId,
+          packageVersion: packageManifest.packageVersion,
+          fingerprint: componentPackageManifestFingerprint(packageManifest),
+        },
+      } : {}),
+    };
+  }), (tool) => tool.name);
 }
 
 function lineNumber(source, index) {

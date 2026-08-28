@@ -1,11 +1,31 @@
 /** PI adapters for Required Component contracts. Keep PI types in this file. */
 import { SessionManager } from "./pi-runtime.js"
+import { PiAgentEngine } from "./pi-adapter.js"
+import { capabilityComponentManager } from "../agent/capability-components.js"
 import type {
+  AgentEngineProvider,
   SessionStoreCreateOptions,
   SessionStoreEntry,
   SessionStoreProvider,
   SessionStoreSession,
 } from "../agent/capability-contracts.js"
+
+/** PI owns the engine plus its PI-specific subagent/provider adapters. */
+export const piAgentEngineProvider: AgentEngineProvider = Object.freeze({
+  kind: "agent-engine" as const,
+  ownership: Object.freeze({
+    engine: "pi-agent-engine",
+    subagentAdapter: "pi-subagent-adapter",
+    providerAdapter: "pi-provider-adapter",
+  }),
+  create: (runtime: unknown) => new PiAgentEngine(runtime as never),
+  health: () => ({ status: "healthy" as const }),
+  dispose: () => {},
+})
+
+if (!capabilityComponentManager.hasRequiredProviderBinding("agent-engine")) {
+  capabilityComponentManager.bindRequiredProvider("agent-engine", piAgentEngineProvider)
+}
 
 function asSessionStoreSession(manager: any): SessionStoreSession {
   let disposed = false
@@ -45,6 +65,8 @@ export const piSessionStoreProvider: SessionStoreProvider = Object.freeze({
   async createSession(options: SessionStoreCreateOptions): Promise<SessionStoreSession> {
     return asSessionStoreSession(createPiSessionManager(options))
   },
+  health: () => ({ status: "healthy" as const }),
+  dispose: () => {},
 })
 
 /** Internal PI host handle for AgentSession construction; callers do not expose it as a plugin API. */
