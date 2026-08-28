@@ -81,7 +81,7 @@ export class ToolPool {
   addMcp(tools: readonly AgentTool[]): this {
     for (const tool of tools) {
       const match = /^mcp__(.+?)__.+$/u.exec(canonicalToolName(tool.name))
-      this.#add(tool, "mcp", "mcp", ["main"], match ? `mcp-server.${match[1]}` : undefined)
+      this.#add(tool, "mcp", "mcp", ["main"], match ? `mcp-server.${match[1].toLowerCase()}` : undefined)
     }
     return this
   }

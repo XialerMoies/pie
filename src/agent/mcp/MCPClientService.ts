@@ -23,7 +23,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import type { AgentTool, ToolTraceEmitter } from "../types.js"
 import { loadMcpConfig, getEnabledServers, type McpLoadResult } from "./config.js"
 import { TrustStore, hashServerCommand } from "./trust-store.js"
-import { createMcpToolAdapter } from "./MCPToolAdapter.js"
+import { createMcpToolAdapter, normalizeServerName } from "./MCPToolAdapter.js"
 import type { McpServerConfig, McpServerStatus, McpConnectionState } from "./types.js"
 import { createMcpProcessEnv, sanitizeProcessOutput } from "../../process/env-policy.js"
 import { capabilityComponentManager } from "../capability-components.js"
@@ -46,6 +46,7 @@ interface ConnectionRecord {
 
 const _connections = new Map<string, ConnectionRecord>()
 const _statusMap = new Map<string, McpServerStatus>()
+const _componentIds = new Set<string>()
 export type McpStatusChangeListener = (snapshot: McpServerStatus[]) => void
 const _statusListeners = new Set<McpStatusChangeListener>()
 let _lastVisibleSnapshot = "[]"
@@ -125,6 +126,78 @@ function getTrustStore(): TrustStore {
   return _trustStore
 }
 
+/** Stable component identity for one configured MCP server. */
+export function mcpServerComponentId(name: string): string {
+  return `mcp-server.${normalizeServerName(String(name || "").trim()).toLowerCase()}`
+}
+
+/** Mirror one configured server into the component manager. */
+export function syncMcpServerComponent(
+  workspace: string,
+  source: { name: string; config: McpServerConfig },
+  trusted: boolean,
+  status?: McpServerStatus,
+): void {
+  const state = status?.state
+  const health = state === "connected" ? "healthy" : state === "error" ? "broken" : "unknown"
+  capabilityComponentManager.sync(mcpServerComponentId(source.name), {
+    version: "1",
+    kind: "optional",
+    capability: "mcp.server",
+    parentId: "mcp-host-integration",
+    source: "mcp",
+    trusted,
+    enabled: source.config.enabled !== false && trusted,
+    health,
+    description: status?.error,
+  })
+  _componentIds.add(mcpServerComponentId(source.name))
+  void workspace
+}
+
+/** Remove a configured server's component and close its active connection. */
+export async function uninstallMcpServerComponent(name: string): Promise<void> {
+  await disconnectServer(name)
+  const id = mcpServerComponentId(name)
+  try { capabilityComponentManager.uninstall(id) } catch {}
+  _componentIds.delete(id)
+}
+
+async function syncConfiguredServerComponents(
+  workspace: string,
+  sources: readonly { name: string; config: McpServerConfig }[],
+  trustStore: TrustStore,
+): Promise<void> {
+  const current = new Set(sources.map((source) => mcpServerComponentId(source.name)))
+  // Include restored MCP components as well as components discovered in this process.
+  // This removes servers deleted from configuration even before a connection attempt.
+  const knownIds = new Set([
+    ..._componentIds,
+    ...capabilityComponentManager.list()
+      .filter((state) => state.manifest.source === "mcp" && state.manifest.parentId === "mcp-host-integration")
+      .map((state) => state.manifest.id),
+  ])
+  for (const id of knownIds) {
+    if (current.has(id)) continue
+    try { capabilityComponentManager.uninstall(id) } catch {}
+    _componentIds.delete(id)
+  }
+  for (const source of sources) {
+    const trusted = trustStore.isTrusted(workspace, hashServerCommand(source.config))
+    syncMcpServerComponent(workspace, source, trusted, _statusMap.get(source.name))
+  }
+}
+
+/** Reconcile configured MCP servers with the component catalog without connecting them. */
+export async function reconcileMcpServerComponents(
+  workspace: string,
+  sources: readonly { name: string; config: McpServerConfig }[],
+): Promise<void> {
+  const trustStore = getTrustStore()
+  await trustStore.refresh()
+  await syncConfiguredServerComponents(workspace, sources, trustStore)
+}
+
 /** 递增生成号，旧 connectAll 调用不会写入全局状态 */
 export function bumpGeneration(): number {
   return ++_mcpGen
@@ -172,6 +245,7 @@ export async function connectAllWithReport(
 
   // 清空旧 status，避免跨 workspace 残留
   _clearStatuses()
+  await syncConfiguredServerComponents(workspace, result.servers, trustStore)
 
   for (const source of enabled) {
     if (gen !== _mcpGen) {
@@ -183,6 +257,7 @@ export async function connectAllWithReport(
     if (!trustStore.isTrusted(workspace, hash)) {
       console.log(`[mcp] 跳过未信任的 server: ${source.name}（在 ${source.sourcePath} 中配置）`)
       _setStatus(source.name, "error", `未信任：请确认"${source.name}"后使用`, source.config)
+      syncMcpServerComponent(workspace, source, false, _statusMap.get(source.name))
       complete = false
       continue
     }
@@ -260,6 +335,7 @@ async function connectServer(
     }
     _connections.set(name, { client, transport: transport as any, serverName: name, connectedAt: Date.now() })
     _setStatus(name, "connected", undefined, config, tools.map((t) => t.name))
+    syncMcpServerComponent("", { name, config }, true, _statusMap.get(name))
     console.log(`[mcp] ✅ ${name}: ${tools.length} 个工具可用`)
     return tools
   } catch (err) {
@@ -269,6 +345,7 @@ async function connectServer(
       return []
     }
     _setStatus(name, "error", sanitizeProcessOutput(err, Object.values(config.env ?? {})), config)
+    syncMcpServerComponent("", { name, config }, true, _statusMap.get(name))
     throw err
   }
 }
@@ -315,7 +392,20 @@ export async function disconnectAll(): Promise<void> {
   }
   _connections.clear()
   _clearStatuses()
+  for (const id of _componentIds) {
+    try { capabilityComponentManager.setHealth(id, "unknown") } catch {}
+  }
   await Promise.all(closePromises)
+}
+
+/** Disconnect one server without affecting other MCP connections. */
+export async function disconnectServer(name: string): Promise<void> {
+  const connection = _connections.get(name)
+  _connections.delete(name)
+  if (connection) await safeClose(connection.client)
+  _statusMap.delete(name)
+  _notifyStatusChanges()
+  try { capabilityComponentManager.setHealth(mcpServerComponentId(name), "unknown") } catch {}
 }
 
 // ─── 状态查询（Phase 2 用） ─────────────────────────
@@ -404,6 +494,9 @@ export function disconnectAllSync(): void {
   }
   _connections.clear()
   _clearStatuses()
+  for (const id of _componentIds) {
+    try { capabilityComponentManager.setHealth(id, "unknown") } catch {}
+  }
 }
 
 /** 重置所有状态（测试用） */
@@ -413,6 +506,10 @@ export function reset(): void {
   _statusListeners.clear()
   _lastVisibleSnapshot = "[]"
   _trustStore = undefined
+  for (const id of _componentIds) {
+    try { capabilityComponentManager.uninstall(id) } catch {}
+  }
+  _componentIds.clear()
 }
 
 /** Required host contract; individual MCP servers remain Optional Components. */

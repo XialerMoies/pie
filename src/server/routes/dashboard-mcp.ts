@@ -2,7 +2,8 @@ import type { RouteHandler, ServerContext } from "./types.js";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { parseBody } from "./parse-body.js";
-import { getServersStatus } from "../../agent/mcp/MCPClientService.js";
+import { disconnectServer, getServersStatus, mcpServerComponentId, syncMcpServerComponent, uninstallMcpServerComponent } from "../../agent/mcp/MCPClientService.js";
+import { capabilityComponentManager } from "../../agent/capability-components.js";
 import { defaultGlobalConfigPath, getCandidatePaths, loadMcpConfigFromCandidates } from "../../agent/mcp/config.js";
 import { MCP_CATALOG } from "../../agent/mcp/builtin-list.js";
 import { isPathInside, normalizePermissionPath } from "../../agent/permissions.js";
@@ -76,11 +77,15 @@ export const handleDashboardMcp: RouteHandler = async (req, res, ctx) => {
           content.servers[name].enabled = newEnabled;
           return content;
         });
+        if (!newEnabled) await disconnectServer(name);
+        const trusted = capabilityComponentManager.get(mcpServerComponentId(name))?.trusted === true;
+        syncMcpServerComponent(workspace, { name, config: { ...source.config, enabled: newEnabled } }, trusted, getServersStatus().find((item) => item.name === name));
         publishMcpChanged(ctx);
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: true, name, enabled: newEnabled, restartNeeded: true, message: "请重启会话以应用更改" }));
       } catch (e: any) {
+        console.error("[mcp toggle debug]", e);
         if (writeServerPermissionError(res, cors, e)) return true;
         res.writeHead(500, { "Content-Type": "application/json", ...cors });
         res.end(JSON.stringify({ ok: false, error: e.message }));
@@ -105,6 +110,7 @@ export const handleDashboardMcp: RouteHandler = async (req, res, ctx) => {
         const trustStore = await createAuthorizedTrustStore(ctx, "mcp.trust");
         const hash = hashServerCommand(source.config);
         await trustStore.addTrust(workspace, hash, source.name);
+        syncMcpServerComponent(workspace, source, true, getServersStatus().find((item) => item.name === name));
         publishMcpChanged(ctx);
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
@@ -249,6 +255,7 @@ export const handleDashboardMcp: RouteHandler = async (req, res, ctx) => {
           return config;
         });
         if (removed) {
+          await uninstallMcpServerComponent(name);
           publishMcpChanged(ctx);
         }
 

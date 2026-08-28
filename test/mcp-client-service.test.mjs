@@ -15,7 +15,7 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync } from "nod
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 
-let service, toolsModule, Client, TrustStore, hashServerCommand;
+let service, toolsModule, Client, TrustStore, hashServerCommand, capabilityComponentManager, ToolPool;
 let _origHome, _origProfile, _isolatedHome;
 
 before(async () => {
@@ -30,6 +30,8 @@ before(async () => {
 
   service = await import("../src/agent/mcp/MCPClientService.ts");
   toolsModule = await import("../src/agent/tools/index.ts");
+  ({ capabilityComponentManager } = await import("../src/agent/capability-components.ts"));
+  ({ ToolPool } = await import("../src/agent/tool-pool.ts"));
   ({ Client } = await import("@modelcontextprotocol/sdk/client/index.js"));
   const trust = await import("../src/agent/mcp/trust-store.ts");
   TrustStore = trust.TrustStore;
@@ -593,6 +595,111 @@ describe("状态管理不变式", () => {
     } finally {
       refreshGate.resolve();
       TrustStore.prototype.refresh = originalRefresh;
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("MCP 能力组件投影", () => {
+  afterEach(() => { service.reset(); delete process.env.PI_CONFIG_DIR; });
+
+  it("discovery 自动登记 server component，并在连接成功后投影工具", async () => {
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "mcp-component-discovery-"));
+    const clients = installDeferredMcpClients([{ name: "Mixed Case", tools: ["echo"] }]);
+    try {
+      const config = { command: "mock-mixed" };
+      writeConfig(tmpDir, { "Mixed Case": config });
+      withTrust(tmpDir);
+      await addTrustForConfig(tmpDir, "Mixed Case", config);
+
+      const pending = service.connectAllWithReport(tmpDir);
+      await waitFor(() => clients.attempts.length === 1, "component discovery did not start");
+      const componentId = service.mcpServerComponentId("Mixed Case");
+      assert.equal(componentId, "mcp-server.mixed_case");
+      assert.equal(capabilityComponentManager.get(componentId)?.status, "unhealthy", "连接尚未完成时不得进入 active 投影");
+      assert.equal(capabilityComponentManager.get(componentId)?.health, "unknown");
+
+      clients.attempts[0].gate.resolve();
+      const report = await pending;
+      assert.equal(report.complete, true);
+      assert.equal(capabilityComponentManager.get(componentId)?.health, "healthy");
+      const projected = new ToolPool().addMcp(report.tools).project({
+        audience: "main", names: "*", featureGates: "*", componentManager: capabilityComponentManager,
+      });
+      assert.deepEqual(projected.map((tool) => tool.name), ["mcp__Mixed_Case__echo"]);
+    } finally {
+      clients.restore();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("未信任、连接失败和禁用 server 都不会进入可见 MCP 工具投影", async () => {
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "mcp-component-gates-"));
+    try {
+      writeConfig(tmpDir, {
+        untrusted: { command: "never-run" },
+        broken: { command: "missing-mcp-server" },
+        disabled: { command: "disabled-mcp-server", enabled: false },
+      });
+      withTrust(tmpDir);
+      const { loadMcpConfig } = await import("../src/agent/mcp/config.ts");
+      for (const source of loadMcpConfig({ projectRoot: tmpDir }).servers) {
+        if (source.name !== "untrusted") await addTrustForConfig(tmpDir, source.name, source.config);
+      }
+      const report = await service.connectAllWithReport(tmpDir);
+      assert.equal(report.tools.length, 0);
+      assert.equal(capabilityComponentManager.get("mcp-server.untrusted")?.status, "untrusted");
+      assert.equal(capabilityComponentManager.get("mcp-server.broken")?.status, "unhealthy");
+      assert.equal(capabilityComponentManager.get("mcp-server.disabled")?.status, "disabled");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("断开和卸载会清理工具可见性、连接和 component", async () => {
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "mcp-component-uninstall-"));
+    const clients = installDeferredMcpClients([{ name: "removable", tools: ["echo"] }]);
+    try {
+      const config = { command: "mock-removable" };
+      writeConfig(tmpDir, { removable: config });
+      withTrust(tmpDir);
+      await addTrustForConfig(tmpDir, "removable", config);
+      const pending = service.connectAllWithReport(tmpDir);
+      await waitFor(() => clients.attempts.length === 1, "removable discovery did not start");
+      clients.attempts[0].gate.resolve();
+      const report = await pending;
+      const componentId = service.mcpServerComponentId("removable");
+      assert.equal(new ToolPool().addMcp(report.tools).project({ audience: "main", names: "*", featureGates: "*", componentManager: capabilityComponentManager }).length, 1);
+
+      await service.disconnectAll();
+      assert.equal(clients.attempts[0].closed, true);
+      assert.equal(capabilityComponentManager.get(componentId)?.health, "unknown");
+      assert.equal(new ToolPool().addMcp(report.tools).project({ audience: "main", names: "*", featureGates: "*", componentManager: capabilityComponentManager }).length, 0);
+
+      await service.uninstallMcpServerComponent("removable");
+      assert.equal(capabilityComponentManager.get(componentId), undefined);
+    } finally {
+      clients.restore();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("重新 discovery 会移除配置中已删除的 stale server component", async () => {
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "mcp-component-stale-"));
+    try {
+      const config = { stale: { command: "missing-stale-server" } };
+      writeConfig(tmpDir, config);
+      withTrust(tmpDir);
+      const { loadMcpConfig } = await import("../src/agent/mcp/config.ts");
+      const source = loadMcpConfig({ projectRoot: tmpDir }).servers[0];
+      await addTrustForConfig(tmpDir, source.name, source.config);
+      await service.connectAllWithReport(tmpDir);
+      assert.ok(capabilityComponentManager.get("mcp-server.stale"));
+
+      writeConfig(tmpDir, {});
+      await service.connectAllWithReport(tmpDir);
+      assert.equal(capabilityComponentManager.get("mcp-server.stale"), undefined);
+    } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
