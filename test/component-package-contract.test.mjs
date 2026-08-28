@@ -13,6 +13,9 @@ import {
   GIT_STATUS_COMPONENT_PACKAGE_MANIFEST,
   GIT_LOG_COMPONENT_PACKAGE_MANIFEST,
   FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST,
+  WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST,
+  WEB_FETCH_COMPONENT_PACKAGE_MANIFEST,
+  WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST,
   FIRST_PARTY_COMPONENT_PACKAGES,
   firstPartyComponentPackage,
   installFirstPartyComponentPackage,
@@ -100,7 +103,7 @@ describe("capability component package contract", () => {
     manager.uninstall("tool.file-read")
     assert.deepEqual(pool.project({ audience: "main", componentManager: manager }), [])
     assert.equal(firstPartyComponentPackage(FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId), FILE_READ_COMPONENT_PACKAGE_MANIFEST)
-    assert.equal(FIRST_PARTY_COMPONENT_PACKAGES.length, 6)
+    assert.equal(FIRST_PARTY_COMPONENT_PACKAGES.length, 9)
     installFirstPartyComponentPackage(manager, FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId)
     assert.deepEqual(pool.project({ audience: "main", componentManager: manager }).map((tool) => tool.name), ["file_read"])
   })
@@ -113,14 +116,19 @@ describe("capability component package contract", () => {
       GIT_STATUS_COMPONENT_PACKAGE_MANIFEST,
       GIT_LOG_COMPONENT_PACKAGE_MANIFEST,
       FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST,
+      WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST,
+      WEB_FETCH_COMPONENT_PACKAGE_MANIFEST,
+      WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST,
     ]
     assert.deepEqual(
       manifests.map((manifest) => manifest.component.id),
-      ["tool.file-read", "tool.explorer-list", "tool.search", "tool.git-status", "tool.git-log", "tool.file-outline"],
+      ["tool.file-read", "tool.explorer-list", "tool.search", "tool.git-status", "tool.git-log", "tool.file-outline", "tool.web-search", "tool.web-fetch", "tool.write-agent-md"],
     )
     assert.equal(new Set(manifests.map((manifest) => manifest.packageId)).size, manifests.length)
     assert.ok(manifests.every((manifest) => manifest.component.kind === "optional" && manifest.component.source === "builtin"))
-    assert.ok(manifests.every((manifest) => manifest.permissions.filesystem.join(",") === "read"))
+    assert.deepEqual(WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST.permissions, { network: true, filesystem: ["read"], subprocess: false, secrets: ["provider.apiKey"] })
+    assert.equal(WEB_FETCH_COMPONENT_PACKAGE_MANIFEST.permissions.network, true)
+    assert.deepEqual(WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST.permissions.filesystem, ["create", "read", "write"])
   })
 
   it("projects all migrated tools across disable, uninstall, restart, and reinstall", async () => {
@@ -131,6 +139,9 @@ describe("capability component package contract", () => {
       GIT_STATUS_COMPONENT_PACKAGE_MANIFEST,
       GIT_LOG_COMPONENT_PACKAGE_MANIFEST,
       FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST,
+      WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST,
+      WEB_FETCH_COMPONENT_PACKAGE_MANIFEST,
+      WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST,
     ]
     const tools = [
       fileReadTool,
@@ -139,6 +150,9 @@ describe("capability component package contract", () => {
       (await import("../src/agent/tools/git-status.ts")).gitStatusTool,
       (await import("../src/agent/tools/git-log.ts")).gitLogTool,
       (await import("../src/agent/tools/file-outline.ts")).fileOutlineTool,
+      (await import("../src/agent/tools/web-search.ts")).webSearchTool,
+      (await import("../src/agent/tools/web-fetch.ts")).webFetchTool,
+      (await import("../src/agent/tools/agent-md.ts")).writeAgentMdTool,
     ]
     const root = mkdtempSync(join(tmpdir(), "first-party-tools-"))
     try {
@@ -146,9 +160,9 @@ describe("capability component package contract", () => {
       const manager = new CapabilityComponentManager()
       for (const manifest of manifests) manager.register(manifest.component, { trusted: true, enabled: true, health: "healthy" })
       const pool = new ToolPool().addNative(tools)
-      assert.deepEqual(pool.project({ audience: "main", componentManager: manager }).map((tool) => tool.name), tools.map((tool) => tool.name))
+      assert.deepEqual(pool.project({ audience: "main", featureGates: "*", componentManager: manager }).map((tool) => tool.name), tools.map((tool) => tool.name))
       for (const manifest of manifests) manager.disable(manifest.component.id)
-      assert.deepEqual(pool.project({ audience: "main", componentManager: manager }), [])
+      assert.deepEqual(pool.project({ audience: "main", featureGates: "*", componentManager: manager }), [])
       for (const manifest of manifests) manager.enable(manifest.component.id)
       for (const manifest of manifests) manager.uninstall(manifest.component.id)
       await manager.save(stateFile)
@@ -156,10 +170,10 @@ describe("capability component package contract", () => {
 
       const restarted = new CapabilityComponentManager(manifests.map((manifest) => manifest.component))
       await restarted.restore(stateFile)
-      assert.deepEqual(pool.project({ audience: "main", componentManager: restarted }), [])
+      assert.deepEqual(pool.project({ audience: "main", featureGates: "*", componentManager: restarted }), [])
       for (const manifest of manifests) assert.equal(restarted.get(manifest.component.id), undefined)
       for (const manifest of manifests) installFirstPartyComponentPackage(restarted, manifest.packageId)
-      assert.deepEqual(pool.project({ audience: "main", componentManager: restarted }).map((tool) => tool.name), tools.map((tool) => tool.name))
+      assert.deepEqual(pool.project({ audience: "main", featureGates: "*", componentManager: restarted }).map((tool) => tool.name), tools.map((tool) => tool.name))
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

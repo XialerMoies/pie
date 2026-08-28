@@ -666,7 +666,13 @@
         "needsPermission": false,
         "workspaceBounded": false
       },
-      "source": "src/agent/tools/web-fetch.ts"
+      "source": "src/agent/tools/web-fetch.ts",
+      "component": {
+        "id": "tool.web-fetch",
+        "packageId": "my-code-agent.tool.web-fetch",
+        "packageVersion": "1.0.0",
+        "fingerprint": "d0cfd0daf4976d0e246c190ceccfb3b6e38c9ac392a82926c97cf9d956409180"
+      }
     },
     {
       "name": "web-search",
@@ -690,7 +696,13 @@
         "needsPermission": false,
         "workspaceBounded": false
       },
-      "source": "src/agent/tools/web-search.ts"
+      "source": "src/agent/tools/web-search.ts",
+      "component": {
+        "id": "tool.web-search",
+        "packageId": "my-code-agent.tool.web-search",
+        "packageVersion": "1.0.0",
+        "fingerprint": "5978515287bf54c5f8cb4fd781a04caf59584d6744d7f301099ef259788e1c7f"
+      }
     },
     {
       "name": "write_agent_md",
@@ -714,7 +726,13 @@
         "needsPermission": false,
         "workspaceBounded": true
       },
-      "source": "src/agent/tools/agent-md.ts"
+      "source": "src/agent/tools/agent-md.ts",
+      "component": {
+        "id": "tool.write-agent-md",
+        "packageId": "my-code-agent.tool.write-agent-md",
+        "packageVersion": "1.0.0",
+        "fingerprint": "6fa6dd9aa8124c89d7aec89efbae629ba2612baa7296628d4285fea5b0feec49"
+      }
     },
     {
       "name": "write_memory",

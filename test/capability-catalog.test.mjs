@@ -85,6 +85,9 @@ describe("capability catalog generator", () => {
       ["git-status", "my-code-agent.tool.git-status"],
       ["git_log", "my-code-agent.tool.git-log"],
       ["file_outline", "my-code-agent.tool.file-outline"],
+      ["web-search", "my-code-agent.tool.web-search"],
+      ["web-fetch", "my-code-agent.tool.web-fetch"],
+      ["write_agent_md", "my-code-agent.tool.write-agent-md"],
     ]);
     for (const [name, packageId] of migratedFirstParty) {
       const tool = first.tools.find((candidate) => candidate.name === name);

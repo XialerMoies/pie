@@ -341,6 +341,13 @@ function firstPartyToolPackageManifest(input: {
   componentId: string
   entry: string
   description: string
+  network?: boolean | readonly string[]
+  filesystem?: readonly CapabilityComponentPackagePermission[]
+  subprocess?: boolean
+  secrets?: readonly string[]
+  maxMemoryMb?: number
+  maxNetworkRequests?: number
+  maxFileBytes?: number
 }): Readonly<CapabilityComponentPackageManifest> {
   return normalizeCapabilityComponentPackageManifest({
     schemaVersion: CAPABILITY_COMPONENT_PACKAGE_SCHEMA_VERSION,
@@ -359,8 +366,18 @@ function firstPartyToolPackageManifest(input: {
     entry: input.entry,
     source: { kind: "builtin", origin: "app://my-code-agent" },
     compatibility: { host: ">=1.0.0", contract: "1", engine: ">=1.0.0" },
-    permissions: { network: false, filesystem: ["read"], subprocess: false, secrets: [] },
-    resources: { maxMemoryMb: 128, maxCpuMs: 30_000, maxNetworkRequests: 1, maxFileBytes: 16_777_216 },
+    permissions: {
+      network: input.network ?? false,
+      filesystem: input.filesystem ?? ["read"],
+      subprocess: input.subprocess ?? false,
+      secrets: input.secrets ?? [],
+    },
+    resources: {
+      maxMemoryMb: input.maxMemoryMb ?? 128,
+      maxCpuMs: 30_000,
+      maxNetworkRequests: input.maxNetworkRequests ?? 1,
+      maxFileBytes: input.maxFileBytes ?? 16_777_216,
+    },
     isolation: { mode: "in-process", installRoot: `first-party/${input.componentId}`, allowedEntry: input.entry },
   })
 }
@@ -408,6 +425,35 @@ export const FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageMani
   description: "First-party source file outline extractor",
 })
 
+export const WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.web-search",
+  componentId: "tool.web-search",
+  entry: "src/agent/tools/web-search.ts",
+  description: "First-party web search capability",
+  network: true,
+  secrets: ["provider.apiKey"],
+  maxNetworkRequests: 10,
+})
+
+export const WEB_FETCH_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.web-fetch",
+  componentId: "tool.web-fetch",
+  entry: "src/agent/tools/web-fetch.ts",
+  description: "First-party bounded web fetch capability",
+  network: true,
+  maxNetworkRequests: 10,
+  maxFileBytes: 524_288,
+})
+
+export const WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+  packageId: "my-code-agent.tool.write-agent-md",
+  componentId: "tool.write-agent-md",
+  entry: "src/agent/tools/agent-md.ts",
+  description: "First-party workspace AGENT.md writer",
+  filesystem: ["read", "write", "create"],
+  maxFileBytes: 1_048_576,
+})
+
 export const FIRST_PARTY_COMPONENT_PACKAGES: readonly Readonly<CapabilityComponentPackageManifest>[] = Object.freeze([
   FILE_READ_COMPONENT_PACKAGE_MANIFEST,
   EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST,
@@ -415,6 +461,9 @@ export const FIRST_PARTY_COMPONENT_PACKAGES: readonly Readonly<CapabilityCompone
   GIT_STATUS_COMPONENT_PACKAGE_MANIFEST,
   GIT_LOG_COMPONENT_PACKAGE_MANIFEST,
   FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST,
+  WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST,
+  WEB_FETCH_COMPONENT_PACKAGE_MANIFEST,
+  WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST,
 ])
 
 export function firstPartyComponentPackage(packageId: string): Readonly<CapabilityComponentPackageManifest> | undefined {
@@ -445,6 +494,11 @@ const TOOL_COMPONENT_IDS: Readonly<Record<string, string>> = Object.freeze({
   git_status: GIT_STATUS_COMPONENT_PACKAGE_MANIFEST.component.id,
   git_log: GIT_LOG_COMPONENT_PACKAGE_MANIFEST.component.id,
   file_outline: FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST.component.id,
+  web_search: WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST.component.id,
+  "web-search": WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST.component.id,
+  web_fetch: WEB_FETCH_COMPONENT_PACKAGE_MANIFEST.component.id,
+  "web-fetch": WEB_FETCH_COMPONENT_PACKAGE_MANIFEST.component.id,
+  write_agent_md: WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST.component.id,
 })
 
 export function capabilityComponentIdForTool(name: string): string | undefined {
