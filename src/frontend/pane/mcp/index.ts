@@ -54,10 +54,11 @@ function startMcpUpdates(): void {
 
 // ─── 面板入口 ──────────────────────────────────
 
-function mcpPaneRender(container: HTMLElement): void {
+function mcpPaneRender(container: HTMLElement): () => void {
   container.innerHTML = `<div id="${MCP_PANEL_ID}">${mcpPaneViews.renderPanel()}</div>`;
   startMcpUpdates();
   switchMcpTab("installed");
+  return () => stopMcpUpdates();
 }
 
 // ─── 标签切换 ──────────────────────────────────

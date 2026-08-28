@@ -256,6 +256,10 @@ interface AppUI {
   togglePanel(name: string): void;
   renderPanel(name: string, pc?: HTMLElement | null): void;
   restorePanel(name: string): void;
+  disposeMountedPane(): void;
+  reconcileContributions(): void;
+  syncComponents(): Promise<void>;
+  setProblemsComponentActive(active: boolean): void;
   renderTabs(): void;
   renderSessionTabs(activeId?: string): void;
   closeChatTab(): void;

@@ -14,6 +14,7 @@ import { handleComponents } from "../src/server/routes/components.ts";
 import {
   FILE_READ_COMPONENT_PACKAGE_MANIFEST,
   installFirstPartyComponentPackage,
+  registerFirstPartyComponentPackages,
 } from "../src/agent/component-package.ts";
 
 const required = {
@@ -463,6 +464,8 @@ describe("CapabilityComponentManager", () => {
     const catalog = JSON.parse(body);
     assert.equal(catalog.schemaVersion, 1);
     assert.ok(catalog.components.some((component) => component.manifest.id === "security-parser"));
+    assert.ok(catalog.components.some((component) => component.manifest.id === "ui.pane.search"));
+    assert.ok(catalog.components.some((component) => component.manifest.id === "language-service.typescript"));
     assert.equal(catalog.components.some((component) => "enable" in component), false);
   });
 
@@ -509,6 +512,8 @@ describe("CapabilityComponentManager", () => {
       const restarted = new CapabilityComponentManager([FILE_READ_COMPONENT_PACKAGE_MANIFEST.component]);
       await restarted.restore(filePath);
       assert.equal(restarted.get(FILE_READ_COMPONENT_PACKAGE_MANIFEST.component.id), undefined);
+      registerFirstPartyComponentPackages(restarted);
+      assert.equal(restarted.get(FILE_READ_COMPONENT_PACKAGE_MANIFEST.component.id), undefined, "catalog seeding preserves the uninstall tombstone");
 
       installFirstPartyComponentPackage(restarted, FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId);
       await restarted.save(filePath);

@@ -79,6 +79,7 @@ self.MonacoEnvironment = {
 let editor: monaco.editor.IStandaloneCodeEditor | null = null;
 let _currentFilePath = "";
 let _diagTimer: ReturnType<typeof setInterval> | null = null;
+let _typescriptContributionStop: (() => void) | null = null;
 const translationObserver = new ObserverOwner();
 
 // ─── 诊断轮询 ──────────────────────────────────────────────────
@@ -389,6 +390,8 @@ defineThemes();
 
 export function monacoCreateEditor(container: HTMLElement): void {
   translationObserver.clear();
+  _typescriptContributionStop?.();
+  _typescriptContributionStop = null;
   if (editor) {
     editor.dispose();
     if (_diagTimer) { clearInterval(_diagTimer); _diagTimer = null; }
@@ -629,8 +632,7 @@ export function monacoCreateEditor(container: HTMLElement): void {
     },
   });
 
-  // 启动诊断轮询（每 3 秒轮询当前文件）
-  _diagTimer = setInterval(pollDiagnostics, 3000);
+  reconcileTypeScriptContribution();
 }
 
 export function monacoSetValue(val: string): void {
@@ -719,7 +721,6 @@ export function monacoIsReady(): boolean {
 /** 暂停 diagnostics 轮询 */
 export function monacoPauseDiags(): void {
   if (_diagTimer) { clearInterval(_diagTimer); _diagTimer = null; }
-  _diagFile = "";
 }
 
 /** 恢复 diagnostics 轮询 */
@@ -729,6 +730,22 @@ export function monacoResumeDiags(): void {
   }
 }
 
+/** Keep TypeScript diagnostics attached to its host-managed component state. */
+export function reconcileTypeScriptContribution(): void {
+  const contributions = (window as any).App?.UIContributions;
+  const handle = contributions?.get?.('language-service.typescript');
+  const active = !handle || contributions.isActive?.('language-service.typescript') !== false;
+  if (!active) {
+    _typescriptContributionStop?.();
+    _typescriptContributionStop = null;
+    monacoPauseDiags();
+    return;
+  }
+  if (!editor || _typescriptContributionStop) return;
+  if (handle) _typescriptContributionStop = handle.activate();
+  else monacoResumeDiags();
+}
+
 export async function monacoRefreshDiagnosticsForFile(filePath: string): Promise<void> {
   if (!filePath) return;
   const model = filePath === _currentFilePath ? editor?.getModel() : null;
@@ -736,10 +753,24 @@ export async function monacoRefreshDiagnosticsForFile(filePath: string): Promise
 }
 
 export function monacoDispose(): void {
-  if (_diagTimer) { clearInterval(_diagTimer); _diagTimer = null; }
+  _typescriptContributionStop?.();
+  _typescriptContributionStop = null;
+  monacoPauseDiags();
+  _diagFile = "";
   translationObserver.clear();
   editor?.dispose();
   editor = null;
+}
+
+const tsContributions = (window as any).App?.UIContributions;
+if (tsContributions?.register && !tsContributions.get?.('language-service.typescript')) {
+  tsContributions.register({
+    id: 'language-service.typescript', componentId: 'language-service.typescript', kind: 'language-service',
+    activate: () => {
+      monacoResumeDiags();
+      return () => monacoPauseDiags();
+    },
+  });
 }
 
 // 暴露到全局
@@ -756,6 +787,7 @@ export function monacoDispose(): void {
   blur: monacoBlur,
   pauseDiags: monacoPauseDiags,
   resumeDiags: monacoResumeDiags,
+  reconcileTypeScriptContribution,
   refreshDiagnosticsForFile: monacoRefreshDiagnosticsForFile,
   revealPosition: monacoRevealPosition,
   getCurrentFile: monacoGetCurrentFile,

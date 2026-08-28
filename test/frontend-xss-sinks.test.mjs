@@ -86,7 +86,7 @@ const APPROVED_SINKS = new Map([
   ["src/frontend/dashboard/dashboard-sessions.ts|renameSession|innerHTML|nameEl", approved(1, "6f49cdbd80e1", REVIEW.clear)],
   ["src/frontend/dashboard/dashboard-settings.ts|openSettingsModal|innerHTML|overlay", approved(1, "d53d32d497b7", REVIEW.static)],
   ["src/frontend/dashboard/dashboard-settings.ts|switchSettingsModal|innerHTML|sc", approved(2, "acd6957ac823", REVIEW.static)],
-  ["src/frontend/dashboard/layout-panel.ts|renderPanel|innerHTML|pc", approved(2, "62e6e6d65bde", REVIEW.escaped)],
+  ["src/frontend/dashboard/layout-panel.ts|renderPanel|innerHTML|pc", approved(3, "07e9cc6a4033", REVIEW.escaped)],
   ["src/frontend/dashboard/layout-shortcuts.ts|quickOpenFile|innerHTML|overlay", approved(1, "ad0a8b4a01fc", REVIEW.static)],
   ["src/frontend/dashboard/layout-shortcuts.ts|quickOpenFile|innerHTML|results", approved(5, "89255a92821f", REVIEW.escaped)],
   ["src/frontend/dashboard/layout-shortcuts.ts|showShortcutsHelp|innerHTML|overlay", approved(1, "746aee8bc5f4", REVIEW.static)],

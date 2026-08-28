@@ -1376,6 +1376,52 @@ describe("side panel interaction", () => {
 
     sidebar.remove();
   });
+
+  it("unmounts an inactive optional pane and falls back to Explorer", () => {
+    const originalRegistry = win.App.UIContributions;
+    const originalGetPane = win.App.UI.getPane;
+    let active = true;
+    let disposed = 0;
+    const panel = doc.getElementById("si");
+    assert.ok(panel);
+    panel.className = "sinfo";
+    panel.innerHTML = '<div class="panel-content" id="pc"></div>';
+    const sidebar = doc.createElement("div");
+    sidebar.className = "sbar";
+    sidebar.innerHTML = '<button class="b on" data-side="search"></button><button class="b" data-side="explorer"></button>';
+    doc.body.appendChild(sidebar);
+    const searchHandle = {
+      mount(container) {
+        container.innerHTML = '<div id="optional-search-pane">Search</div>';
+        return () => { disposed += 1; };
+      },
+    };
+    win.App.UIContributions = {
+      get: (id) => id === "ui.pane.search" ? searchHandle : undefined,
+      isActive: (id) => id !== "ui.pane.search" || active,
+    };
+    win.App.UI.getPane = (name) => name === "explorer"
+      ? (container) => { container.innerHTML = '<div id="fallback-explorer-pane">Explorer</div>'; }
+      : undefined;
+
+    try {
+      win.App.State.updatePanel({ active: "search", closed: false, width: 260 });
+      win.App.UI.renderPanel("search");
+      assert.ok(doc.getElementById("optional-search-pane"));
+
+      active = false;
+      win.App.UI.reconcileContributions();
+      assert.equal(disposed, 1, "mounted pane cleanup runs exactly once");
+      assert.equal(sidebar.querySelector('[data-side="search"]')?.hidden, true);
+      assert.equal(win.App.State.getSnapshot().panel.active, "explorer");
+      assert.ok(doc.getElementById("fallback-explorer-pane"));
+    } finally {
+      win.App.UI.disposeMountedPane();
+      win.App.UIContributions = originalRegistry;
+      win.App.UI.getPane = originalGetPane;
+      sidebar.remove();
+    }
+  });
 });
 
 describe("markdown security", () => {

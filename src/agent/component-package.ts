@@ -336,11 +336,12 @@ export function componentPackageManifestFingerprint(manifest: CapabilityComponen
   return createHash("sha256").update(JSON.stringify(normalized)).digest("hex")
 }
 
-function firstPartyToolPackageManifest(input: {
+function firstPartyPackageManifest(input: {
   packageId: string
   componentId: string
   entry: string
   description: string
+  capability?: string
   network?: boolean | readonly string[]
   filesystem?: readonly CapabilityComponentPackagePermission[]
   subprocess?: boolean
@@ -359,7 +360,7 @@ function firstPartyToolPackageManifest(input: {
       id: input.componentId,
       version: "1.0.0",
       kind: "optional",
-      capability: "agent-tool",
+      capability: input.capability ?? "agent-tool",
       providedBy: input.packageId,
       source: "builtin",
       description: input.description,
@@ -384,49 +385,49 @@ function firstPartyToolPackageManifest(input: {
 }
 
 /** First-party native-tool packages are registered by the tool host, not loaded here. */
-export const FILE_READ_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const FILE_READ_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.file-read",
   componentId: "tool.file-read",
   entry: "src/agent/tools/file-read.ts",
   description: "First-party bounded workspace file reader",
 })
 
-export const EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.explorer-list",
   componentId: "tool.explorer-list",
   entry: "src/agent/tools/explorer-list.ts",
   description: "First-party workspace directory explorer",
 })
 
-export const SEARCH_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const SEARCH_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.search",
   componentId: "tool.search",
   entry: "src/agent/tools/search.ts",
   description: "First-party bounded workspace search",
 })
 
-export const GIT_STATUS_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const GIT_STATUS_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.git-status",
   componentId: "tool.git-status",
   entry: "src/agent/tools/git-status.ts",
   description: "First-party read-only Git status viewer",
 })
 
-export const GIT_LOG_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const GIT_LOG_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.git-log",
   componentId: "tool.git-log",
   entry: "src/agent/tools/git-log.ts",
   description: "First-party read-only Git history viewer",
 })
 
-export const FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.file-outline",
   componentId: "tool.file-outline",
   entry: "src/agent/tools/file-outline.ts",
   description: "First-party source file outline extractor",
 })
 
-export const WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.web-search",
   componentId: "tool.web-search",
   entry: "src/agent/tools/web-search.ts",
@@ -436,7 +437,7 @@ export const WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManife
   maxNetworkRequests: 10,
 })
 
-export const WEB_FETCH_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const WEB_FETCH_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.web-fetch",
   componentId: "tool.web-fetch",
   entry: "src/agent/tools/web-fetch.ts",
@@ -446,7 +447,7 @@ export const WEB_FETCH_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifes
   maxFileBytes: 524_288,
 })
 
-export const WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.write-agent-md",
   componentId: "tool.write-agent-md",
   entry: "src/agent/tools/agent-md.ts",
@@ -455,7 +456,7 @@ export const WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageMa
   maxFileBytes: 1_048_576,
 })
 
-export const STR_REPLACE_EDITOR_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const STR_REPLACE_EDITOR_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.str-replace-editor",
   componentId: "tool.str-replace-editor",
   entry: "src/agent/tools/str-replace-editor.ts",
@@ -464,7 +465,7 @@ export const STR_REPLACE_EDITOR_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPacka
   maxFileBytes: 1_048_576,
 })
 
-export const FILE_WRITE_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const FILE_WRITE_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.file-write",
   componentId: "tool.file-write",
   entry: "src/agent/tools/file-write.ts",
@@ -473,7 +474,7 @@ export const FILE_WRITE_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManife
   maxFileBytes: 16_777_216,
 })
 
-export const MEMORY_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const MEMORY_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.memory",
   componentId: "tool.memory",
   entry: "src/agent/tools/memory.ts",
@@ -482,7 +483,7 @@ export const MEMORY_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
   maxFileBytes: 16_777_216,
 })
 
-export const PLAN_MODE_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const PLAN_MODE_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.plan-mode",
   componentId: "tool.plan-mode",
   entry: "src/agent/tools/plan-mode.ts",
@@ -491,14 +492,14 @@ export const PLAN_MODE_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifes
   maxFileBytes: 1,
 })
 
-export const SKILL_FACTS_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const SKILL_FACTS_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.skill-facts",
   componentId: "tool.skill-facts",
   entry: "src/agent/tools/skill-facts.ts",
   description: "First-party skill verification facts tool",
 })
 
-export const DELEGATE_TASKS_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const DELEGATE_TASKS_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.delegate-tasks",
   componentId: "tool.delegate-tasks",
   entry: "src/agent/tools/delegate-tasks.ts",
@@ -508,7 +509,7 @@ export const DELEGATE_TASKS_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageMa
   maxCpuMs: 120_000,
 })
 
-export const COMMAND_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest({
+export const COMMAND_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   packageId: "my-code-agent.tool.command",
   componentId: "tool.command",
   entry: "src/agent/tools/command.ts",
@@ -520,6 +521,64 @@ export const COMMAND_COMPONENT_PACKAGE_MANIFEST = firstPartyToolPackageManifest(
   maxCpuMs: 300_000,
   maxNetworkRequests: 100,
   maxFileBytes: 1_073_741_824,
+})
+
+/** UI packages declare shipped contributions; they never load arbitrary renderer code. */
+function firstPartyUiPackageManifest(input: {
+  packageId: string
+  componentId: string
+  entry: string
+  description: string
+  capability: "desktop.ui-pane" | "desktop.language-service"
+}): Readonly<CapabilityComponentPackageManifest> {
+  return firstPartyPackageManifest({
+    ...input,
+    filesystem: [],
+    maxMemoryMb: 64,
+    maxCpuMs: 10_000,
+    maxNetworkRequests: 1,
+    maxFileBytes: 1,
+  })
+}
+
+export const SEARCH_PANE_COMPONENT_PACKAGE_MANIFEST = firstPartyUiPackageManifest({
+  packageId: "my-code-agent.ui.search-pane",
+  componentId: "ui.pane.search",
+  entry: "src/frontend/pane/search/index.ts",
+  description: "First-party workspace search pane",
+  capability: "desktop.ui-pane",
+})
+
+export const GIT_PANE_COMPONENT_PACKAGE_MANIFEST = firstPartyUiPackageManifest({
+  packageId: "my-code-agent.ui.git-pane",
+  componentId: "ui.pane.git",
+  entry: "src/frontend/pane/git/index.ts",
+  description: "First-party Git pane",
+  capability: "desktop.ui-pane",
+})
+
+export const MCP_PANE_COMPONENT_PACKAGE_MANIFEST = firstPartyUiPackageManifest({
+  packageId: "my-code-agent.ui.mcp-pane",
+  componentId: "ui.pane.mcp",
+  entry: "src/frontend/pane/mcp/index.ts",
+  description: "First-party MCP management pane",
+  capability: "desktop.ui-pane",
+})
+
+export const PROBLEMS_COMPONENT_PACKAGE_MANIFEST = firstPartyUiPackageManifest({
+  packageId: "my-code-agent.ui.problems",
+  componentId: "ui.problems",
+  entry: "src/frontend/services/problems-store.ts",
+  description: "First-party problems status contribution",
+  capability: "desktop.ui-pane",
+})
+
+export const TYPESCRIPT_LANGUAGE_SERVICE_COMPONENT_PACKAGE_MANIFEST = firstPartyUiPackageManifest({
+  packageId: "my-code-agent.language-service.typescript",
+  componentId: "language-service.typescript",
+  entry: "src/frontend/editor/monaco-setup.ts",
+  description: "First-party TypeScript diagnostics service",
+  capability: "desktop.language-service",
 })
 
 export const FIRST_PARTY_COMPONENT_PACKAGES: readonly Readonly<CapabilityComponentPackageManifest>[] = Object.freeze([
@@ -539,6 +598,11 @@ export const FIRST_PARTY_COMPONENT_PACKAGES: readonly Readonly<CapabilityCompone
   SKILL_FACTS_COMPONENT_PACKAGE_MANIFEST,
   DELEGATE_TASKS_COMPONENT_PACKAGE_MANIFEST,
   COMMAND_COMPONENT_PACKAGE_MANIFEST,
+  SEARCH_PANE_COMPONENT_PACKAGE_MANIFEST,
+  GIT_PANE_COMPONENT_PACKAGE_MANIFEST,
+  MCP_PANE_COMPONENT_PACKAGE_MANIFEST,
+  PROBLEMS_COMPONENT_PACKAGE_MANIFEST,
+  TYPESCRIPT_LANGUAGE_SERVICE_COMPONENT_PACKAGE_MANIFEST,
 ])
 
 export function firstPartyComponentPackage(packageId: string): Readonly<CapabilityComponentPackageManifest> | undefined {
@@ -549,7 +613,9 @@ export function firstPartyComponentPackage(packageId: string): Readonly<Capabili
 /** Seed packages supplied by the application before persisted install state is restored. */
 export function registerFirstPartyComponentPackages(manager: CapabilityComponentManager): void {
   for (const manifest of FIRST_PARTY_COMPONENT_PACKAGES) {
-    if (!manager.get(manifest.component.id)) manager.register(manifest.component, { trusted: true, enabled: true, health: "healthy" })
+    if (!manager.get(manifest.component.id) && !manager.isFirstPartyPackageUninstalled(manifest.packageId)) {
+      manager.register(manifest.component, { trusted: true, enabled: true, health: "healthy" })
+    }
   }
 }
 

@@ -717,6 +717,11 @@ export class CapabilityComponentManager {
     return this.list().filter((state) => state.status === "active" && this.#isOperational(state.manifest.id)).map((state) => ({ id: state.manifest.id, capability: state.manifest.capability, version: state.manifest.version }))
   }
 
+  /** Allows shipped-package seeding to preserve an explicit user uninstall. */
+  isFirstPartyPackageUninstalled(packageId: string): boolean {
+    return this.#uninstalledFirstPartyPackages.has(String(packageId || "").trim())
+  }
+
   uninstall(id: string): CapabilityComponentState {
     const current = this.#requireMutable(id)
     const dependents = this.#enabledDependents(id)

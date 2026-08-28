@@ -10,6 +10,21 @@ const layoutPanelDependencies: LayoutPanelDependencies = {
   state: layoutPanelApp.State,
 };
 const layoutPanelState = layoutPanelDependencies.state;
+const OPTIONAL_PANE_NAMES = new Set(["search", "git", "mcp"]);
+let _mountedPaneName: string | null = null;
+let _mountedPaneCleanup: (() => void) | null = null;
+
+function disposeMountedPane(): void {
+  const cleanup = _mountedPaneCleanup;
+  _mountedPaneCleanup = null;
+  _mountedPaneName = null;
+  cleanup?.();
+}
+
+function isContributionActive(id: string): boolean {
+  const registry = layoutPanelApp.UIContributions;
+  return !registry?.get?.(id) || registry.isActive?.(id) !== false;
+}
 
 function _panelWidth(): number {
   const width = layoutPanelState.getSnapshot().panel.width;
@@ -36,6 +51,7 @@ function togglePanel(name: string): void {
   const highlightedButton = document.querySelector('.sbar .b[data-side].on') as HTMLElement | null;
   const visiblePanel = highlightedButton?.dataset.side || activePanel;
   if (visiblePanel === name && !si.classList.contains('closed')) {
+    disposeMountedPane();
     si.classList.add('closed');
     si.style.width = '';
     document.querySelectorAll('.sbar .b[data-side]').forEach(b => (b as HTMLElement).classList.remove('on'));
@@ -64,6 +80,7 @@ function restorePanel(name: string): void {
   const savedWidth = panel.width > 50 ? panel.width : _panelWidth();
 
   if (isClosed) {
+    disposeMountedPane();
     si.classList.add('closed');
     si.style.width = '';
   } else {
@@ -105,6 +122,7 @@ function initResizeHandle(): void {
 function renderPanel(name: string, pc?: HTMLElement | null): void {
   if (!pc) pc = $('pc');
   if (!pc) return;
+  disposeMountedPane();
   if ((window as any).__emptyWorkspaceMode && name !== 'explorer') {
     const labels: Record<string, string> = {
       chat: '\u4f1a\u8bdd',
@@ -118,9 +136,57 @@ function renderPanel(name: string, pc?: HTMLElement | null): void {
       + '</div>';
     return;
   }
+  const contribution = layoutPanelApp.UIContributions?.get?.(`ui.pane.${name}`);
+  if (contribution) {
+    try {
+      _mountedPaneCleanup = contribution.mount(pc);
+      _mountedPaneName = name;
+      return;
+    } catch (error) {
+      if (!isContributionActive(`ui.pane.${name}`)) {
+        pc.innerHTML = `<div class="sg-item dim" data-inactive-contribution="${E(name)}">此能力组件已停用</div>`;
+        return;
+      }
+      throw error;
+    }
+  }
   const paneFn = layoutPanelApp.UI?.getPane?.(name);
-  if (paneFn) { paneFn(pc); return; }
+  if (paneFn) {
+    const cleanup = paneFn(pc);
+    _mountedPaneCleanup = typeof cleanup === 'function' ? cleanup : null;
+    _mountedPaneName = name;
+    return;
+  }
   pc.innerHTML = `<div class="sg-item dim">面板 "${E(name)}" 未注册</div>`;
+}
+
+/** Reconcile existing DOM with the host's component catalog without reloading code. */
+function reconcileContributions(): void {
+  for (const name of OPTIONAL_PANE_NAMES) {
+    const active = isContributionActive(`ui.pane.${name}`);
+    const button = document.querySelector<HTMLElement>(`.sbar .b[data-side="${name}"]`);
+    if (button) {
+      button.hidden = !active;
+      button.tabIndex = active ? 0 : -1;
+      button.setAttribute('aria-hidden', String(!active));
+    }
+    if (name === 'mcp') {
+      const indicator = document.getElementById('mcp-bar') as HTMLElement | null;
+      if (indicator) indicator.hidden = !active;
+    }
+  }
+
+  const problemsActive = isContributionActive('ui.problems');
+  layoutPanelApp.UI?.setProblemsComponentActive?.(problemsActive);
+  layoutPanelApp.UI?.reconcileTypeScriptContribution?.();
+
+  const activePanel = layoutPanelState.getSnapshot().panel.active || 'explorer';
+  if (OPTIONAL_PANE_NAMES.has(activePanel) && !isContributionActive(`ui.pane.${activePanel}`)) {
+    layoutPanelState.updatePanel({ active: 'explorer' });
+    const si = $('si');
+    if (si?.classList.contains('closed')) disposeMountedPane();
+    else renderPanel('explorer');
+  }
 }
 
 // ─── App 绑定 ──────────────────────────────────────
@@ -128,4 +194,6 @@ function renderPanel(name: string, pc?: HTMLElement | null): void {
   U.togglePanel = togglePanel;
   U.renderPanel = renderPanel;
   U.restorePanel = restorePanel;
+  U.disposeMountedPane = disposeMountedPane;
+  U.reconcileContributions = reconcileContributions;
 } }

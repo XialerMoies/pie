@@ -32,6 +32,7 @@ function syncMsgScrollPadding(): void {
 
 function layout(): void {
   const app = $('app')!;
+  App.UI.disposeMountedPane?.();
   const lightweightDashboard = (window as any).__emptyWorkspaceMode || (window as any).__workspaceStatusMode;
   app.innerHTML = buildTopBar() + buildSideBar() + buildSidePanel() + buildMainArea() + buildStatusBar();
   renderStatusNotice();
@@ -59,6 +60,7 @@ function layout(): void {
   }
   // Problems 底部栏初始化（DOM 已就绪）
   _initProblemsBar();
+  App.UI.reconcileContributions?.();
   if (!lightweightDashboard) void refreshPermissionModeBadge();
   // 空闲预加载 Monaco，让首次文件打开不卡（首屏稳定后 1s）
   setTimeout(() => {
@@ -477,6 +479,7 @@ document.addEventListener('DOMContentLoaded', () => { App.UI.mark('dom_ready');
 // ─── Problems 底部栏 ─────────────────────────────────────
 
 let _pbExpanded = false;
+let _problemsComponentActive = true;
 
 function _updateProblemsBar(): void {
   const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
@@ -586,6 +589,7 @@ async function _pbNavigateToProblem(filePath: string, line: number, col: number)
 }
 
 function _pbToggle(force?: boolean): void {
+  if (!_problemsComponentActive) force = false;
   _pbExpanded = force !== undefined ? force : !_pbExpanded;
   const panel = $('pb-panel');
   const trigger = $('pb-status-trigger');
@@ -669,21 +673,37 @@ function _pbInitResize(): void {
 
 // 初始化底部栏（由 layout() 在 DOM 创建后调用）
 let _pbUnsubscribe: (() => void) | null = null;
+function setProblemsComponentActive(active: boolean): void {
+  _problemsComponentActive = active;
+  const trigger = $('pb-status-trigger');
+  if (trigger) {
+    trigger.hidden = !active;
+    trigger.setAttribute('aria-hidden', String(!active));
+  }
+  if (!active) _pbToggle(false);
+  else {
+    _pbToggle(_pbExpanded);
+    _updateProblemsBar();
+  }
+}
+
 function _initProblemsBar(): void {
   // 解除前一次订阅，避免 layout() 重建时累积
   if (_pbUnsubscribe) { _pbUnsubscribe(); _pbUnsubscribe = null; }
 
   const trigger = $('pb-status-trigger');
-  if (trigger) trigger.addEventListener('click', () => _pbToggle());
+  if (trigger) trigger.addEventListener('click', () => {
+    if (_problemsComponentActive) _pbToggle();
+  });
   _pbInitResize();
 
   const store = (window as any).__problemsStore as ProblemsStoreAPI | undefined;
   if (store) {
     _pbUnsubscribe = store.subscribe(() => {
-      if (document.getElementById('pb-status-trigger')) _updateProblemsBar();
+      if (_problemsComponentActive && document.getElementById('pb-status-trigger')) _updateProblemsBar();
     });
   }
-  _pbToggle(_pbExpanded);
+  setProblemsComponentActive(_problemsComponentActive);
 }
 
 // ─── App 命名空间绑定 ──────────────────────────────────────
@@ -692,6 +712,7 @@ function _initProblemsBar(): void {
   U.renderTabs = renderTabs;
   U.closeChatTab = closeChatTab;
   U.restoreFileTabs = restoreFileTabs;
+  U.setProblemsComponentActive = setProblemsComponentActive;
 } }
 { const appNamespace = (window as any).App || ((window as any).App = {});
   const statusBar = appNamespace.StatusBar || (appNamespace.StatusBar = {});

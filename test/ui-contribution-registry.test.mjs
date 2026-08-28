@@ -43,7 +43,15 @@ describe("host UI contribution registry", () => {
     assert.equal(started, 1);
     stop();
     registry.configure({ isComponentActive: () => active = false });
+    assert.equal(registry.isActive("language-service.ts"), false);
     assert.throws(() => handle.activate(), /inactive/);
+  });
+
+  it("reports unknown contributions as inactive without treating them as mounted", () => {
+    const registry = createUiContributionRegistry();
+    assert.equal(registry.isActive("ui.pane.unknown"), false);
+    registry.register({ id: "ui.pane.search", componentId: "ui.pane.search", kind: "pane", render() {} });
+    assert.equal(registry.isActive("ui.pane.search"), true);
   });
 
   it("disposes active language services even when callers do not retain cleanup", () => {

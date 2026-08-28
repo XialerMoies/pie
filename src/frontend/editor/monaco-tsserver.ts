@@ -10,16 +10,6 @@ function monacoTsserverState(): AppStateFacade {
   return monacoTsserverApp.State;
 }
 
-// Registered as a host-managed contribution; this does not expose tsserver
-// or filesystem access to arbitrary UI code.
-const tsContributions = (globalThis as any).App?.UIContributions;
-if (tsContributions?.register && !tsContributions.get?.('language-service.typescript')) {
-  tsContributions.register({
-    id: 'language-service.typescript', componentId: 'language-service.typescript',
-    kind: 'language-service', activate: () => undefined,
-  });
-}
-
 export function tsserverRoot(): string {
   return monacoTsserverState().getWorkspacePath();
 }

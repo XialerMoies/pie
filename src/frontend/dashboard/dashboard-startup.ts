@@ -1,5 +1,8 @@
 App.Events.subscribe('dashboard.changed', () => { void App.UI.getD(); });
-App.Events.subscribe('resync', () => { void App.UI.getD(); });
+App.Events.subscribe('resync', () => {
+  void App.UI.getD();
+  void App.UI.syncComponents?.();
+});
 
 const EMPTY_WORKSPACE_MODE = /(?:^|[?&])empty-workspace=1(?:&|$)/.test(
   String((window as any).location?.search || ''),

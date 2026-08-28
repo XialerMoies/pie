@@ -299,19 +299,6 @@ export function bootstrapApi(): Promise<void> {
       if (startupWorkspace && !App.State.getWorkspacePath()) {
         App.State.setWorkspacePath(startupWorkspace);
       }
-      // Best-effort projection of host component state. Unknown UI ids remain
-      // enabled so the compatibility bridge works before catalog registration.
-      const syncComponents = () => fetch('/api/components', { credentials: 'include', cache: 'no-store' }).then(async (componentsResponse) => {
-        const catalog = await componentsResponse.json().catch(() => null) as { components?: Array<{ manifest?: { id?: string }; enabled?: boolean; health?: string }> } | null;
-        if (!componentsResponse.ok || !Array.isArray(catalog?.components)) return;
-        const states = new Map(catalog.components.map((entry) => [String(entry.manifest?.id || ''), entry]));
-        App.UIContributions?.configure({ isComponentActive: (id: string) => {
-          const state = states.get(id);
-          return !state || state.enabled !== false && (state.health === undefined || state.health === 'healthy' || state.health === 'unknown');
-        }});
-      }).catch(() => {
-        // Component catalog is diagnostic/optional; bootstrap must stay usable.
-      });
       // Keep this outside the critical bootstrap/request ordering path.
       setTimeout(() => { void syncComponents(); }, 1000);
     })();
@@ -321,6 +308,23 @@ export function bootstrapApi(): Promise<void> {
     });
   }
   return _bootstrapPromise;
+}
+
+/** Project host-managed component state into already loaded UI contributions. */
+export async function syncComponents(): Promise<void> {
+  try {
+    const componentsResponse = await fetch('/api/components', { credentials: 'include', cache: 'no-store' });
+    const catalog = await componentsResponse.json().catch(() => null) as { components?: Array<{ manifest?: { id?: string }; enabled?: boolean; health?: string }> } | null;
+    if (!componentsResponse.ok || !Array.isArray(catalog?.components)) return;
+    const states = new Map(catalog.components.map((entry) => [String(entry.manifest?.id || ''), entry]));
+    App.UIContributions?.configure({ isComponentActive: (id: string) => {
+      const state = states.get(id);
+      return !state || state.enabled !== false && (state.health === undefined || state.health === 'healthy' || state.health === 'unknown');
+    }});
+    App.UI.reconcileContributions?.();
+  } catch {
+    // Component catalog is diagnostic/optional; bootstrap must stay usable.
+  }
 }
 
 async function getD(): Promise<void> {
@@ -637,17 +641,17 @@ function winCtrl(action: string): void {
 }
 
 // ─── Pane registry (compatibility bridge to host UI contributions) ─────
-const _panes: Record<string, (container: HTMLElement) => void> = {};
-function registerPane(name: string, render: (container: HTMLElement) => void): void {
+const _panes: Record<string, (container: HTMLElement) => void | (() => void)> = {};
+function registerPane(name: string, render: (container: HTMLElement) => void | (() => void)): void {
   const registry = (window as any).App?.UIContributions;
   if (registry?.register) {
     const id = `ui.pane.${name}`;
-    if (!registry.get?.(id)) registry.register({ id, componentId: id, kind: 'pane', render });
+    if (!registry.get?.(id)) registry.register({ id, componentId: id, kind: 'pane', mount: render });
   }
   _panes[name] = render;
   console.log(`[pane] registered: "${name}"`);
 }
-function getPane(name: string): ((container: HTMLElement) => void) | undefined {
+function getPane(name: string): ((container: HTMLElement) => void | (() => void)) | undefined {
   return _panes[name];
 }
 
@@ -661,6 +665,7 @@ App.UI.sb = sb;
 App.UI.toast = toast;
 App.UI.bootstrapApi = bootstrapApi;
 App.UI.getD = getD;
+App.UI.syncComponents = syncComponents;
 App.UI.refresh = refresh;
 App.UI.winCtrl = winCtrl;
 App.UI.registerPane = registerPane;

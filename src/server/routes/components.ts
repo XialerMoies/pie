@@ -1,5 +1,6 @@
 import type { RouteHandler, ServerContext } from "./types.js"
 import { capabilityComponentManager } from "../../agent/capability-components.js"
+import { registerFirstPartyComponentPackages } from "../../agent/component-package.js"
 import { reconcileMcpServerComponents } from "../../agent/mcp/MCPClientService.js"
 import { defaultTrustStorePath } from "../../agent/mcp/trust-store.js"
 import { loadMcpConfigFromCandidates, defaultGlobalConfigPath, getCandidatePaths } from "../../agent/mcp/config.js"
@@ -9,6 +10,9 @@ import { dirname, join } from "node:path"
 /** Read-only component catalog for the desktop host and diagnostics surfaces. */
 export const handleComponents: RouteHandler = async (req, res, ctx) => {
   if (req.url === "/api/components" && req.method === "GET") {
+    // The catalog can be served by a lightweight route test/CLI path that did
+    // not instantiate the Agent tool host. Seed declarations, never code.
+    registerFirstPartyComponentPackages(capabilityComponentManager)
     const runtime = ctx.groups.core.runtime as any
     const workspace = canonicalWorkspacePath(runtime.currentWorkspace || ctx.groups.storage.paths.APP_ROOT)
     const config = await loadMcpConfigFromCandidates(getCandidatePaths(workspace, defaultGlobalConfigPath()))

@@ -99,6 +99,10 @@ export function createUiContributionRegistry(initialContext: UiContributionConte
 
   const api = {
     configure(nextContext: UiContributionContext): void { context = nextContext || {}; },
+    isActive(id: string): boolean {
+      const definition = definitions.get(id);
+      return Boolean(definition) && (!context.isComponentActive || context.isComponentActive(definition.componentId));
+    },
     register,
     get(id: string): UiContributionHandle | undefined {
       const definition = definitions.get(id);

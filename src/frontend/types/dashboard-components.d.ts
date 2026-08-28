@@ -225,6 +225,7 @@ interface AppNamespace {
 
 interface UiContributionRegistry {
   configure(context: { isComponentActive?: (componentId: string) => boolean }): void;
+  isActive(id: string): boolean;
   register(definition: UiContributionDefinition): UiContributionHandle;
   get(id: string): UiContributionHandle | undefined;
   list(): UiContributionDefinition[];
@@ -267,6 +268,7 @@ interface MonacoAPI {
   blur(): void;
   pauseDiags(): void;
   resumeDiags(): void;
+  reconcileTypeScriptContribution(): void;
   refreshDiagnosticsForFile(filePath: string): Promise<void>;
   revealPosition(line: number, col: number): void;
   getCurrentFile(): string;
