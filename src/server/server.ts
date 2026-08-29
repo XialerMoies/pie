@@ -74,6 +74,7 @@ import { setLocalApiToken } from "../agent/tools/local-api.js";
 import { capabilityComponentManager } from "../agent/capability-components.js";
 import { createPermissionEvaluatorProvider } from "../agent/capability-contracts.js";
 import { defaultTrustStorePath } from "../agent/mcp/trust-store.js";
+import { defaultExtensionPackageStorePath, extensionPackageStore } from "../agent/extension-package-store.js";
 
 import { attachEngineEvents, recordUserNoteBlock } from "./agent-event-router.js";
 export { attachEngineEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTaskLifecycle, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
@@ -167,6 +168,7 @@ async function main() {
     mkdirSync(directory, { recursive: true });
   }
   await capabilityComponentManager.restore(join(PI_CONFIG_DIR, "component-state.json"));
+  await extensionPackageStore.restore(defaultExtensionPackageStorePath());
   try {
     writeFileSync(STARTUP.layout.authFile, JSON.stringify({}, null, 2), { encoding: "utf8", flag: "wx" });
   } catch (error: any) {

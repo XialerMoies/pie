@@ -41,6 +41,7 @@
     "capabilities:generate": "node --import tsx scripts/generate-capability-catalog.mjs",
     "capabilities:check": "node --import tsx scripts/generate-capability-catalog.mjs --check",
     "components:recover": "node --import tsx scripts/component-recovery.mjs",
+    "extensions": "node --import tsx scripts/extensions.mjs",
     "profiles:generate": "node --import tsx scripts/generate-profile-catalog.mjs",
     "profiles:check": "node --import tsx scripts/generate-profile-catalog.mjs --check",
     "release:check": "node scripts/release-check.mjs",

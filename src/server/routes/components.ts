@@ -13,6 +13,11 @@ import { canonicalWorkspacePath } from "../../data/data-layout.js"
 import { dirname, join } from "node:path"
 import { extensionManifestFromPackage } from "../../agent/extension-manifest.js"
 import { extensionLifecycle } from "../../agent/extension-lifecycle.js"
+import {
+  defaultExtensionPackageStorePath,
+  extensionPackageStore,
+} from "../../agent/extension-package-store.js"
+import { parseBody } from "./parse-body.js"
 
 const cors = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" }
 
@@ -24,6 +29,18 @@ async function persistComponentState(): Promise<void> {
   await capabilityComponentManager.save(componentStatePath())
 }
 
+let extensionPackageStoreLoadedPath = ""
+async function ensureExtensionPackageStore(): Promise<void> {
+  const filePath = defaultExtensionPackageStorePath()
+  if (extensionPackageStoreLoadedPath === filePath) return
+  await extensionPackageStore.restore(filePath)
+  extensionPackageStoreLoadedPath = filePath
+}
+
+async function persistExtensionPackageState(): Promise<void> {
+  await extensionPackageStore.save(defaultExtensionPackageStorePath())
+}
+
 function writeComponentError(res: Parameters<RouteHandler>[1], error: unknown): void {
   const known = error instanceof CapabilityComponentError
   res.writeHead(known ? 400 : 500, { "Content-Type": "application/json", ...cors })
@@ -32,6 +49,16 @@ function writeComponentError(res: Parameters<RouteHandler>[1], error: unknown): 
     code: known ? error.code : "component_operation_failed",
     error: error instanceof Error ? error.message : String(error),
     ...(known && error.componentId ? { componentId: error.componentId } : {}),
+  }))
+}
+
+function writeExtensionError(res: Parameters<RouteHandler>[1], error: unknown): void {
+  const status = error instanceof CapabilityComponentError || error instanceof SyntaxError ? 400 : 500
+  res.writeHead(status, { "Content-Type": "application/json", ...cors })
+  res.end(JSON.stringify({
+    ok: false,
+    code: error instanceof CapabilityComponentError ? error.code : "extension_operation_failed",
+    error: error instanceof Error ? error.message : String(error),
   }))
 }
 
@@ -46,7 +73,8 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
 
   // Product extension projection. This is deliberately separate from the
   // internal component catalog and carries no productClass/hostSurface fields.
-  if (parsedUrl.pathname === "/api/extensions" && req.method === "GET") {
+  if ((parsedUrl.pathname === "/api/extensions" || /^\/api\/extensions\/[a-z0-9][a-z0-9._-]*$/u.test(parsedUrl.pathname)) && req.method === "GET") {
+    await ensureExtensionPackageStore()
     registerFirstPartyComponentPackages(capabilityComponentManager)
     const catalog = capabilityComponentManager.catalog()
     const stateById = new Map(catalog.components.map((item) => [item.manifest.id, item]))
@@ -72,8 +100,104 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         status: state?.status || "disabled",
       }
     })
+    const thirdParty = extensionPackageStore.list().map((record) => {
+      const state = stateById.get(record.componentId)
+      const manifest = extensionManifestFromPackage({
+        packageId: record.manifest.packageId,
+        packageVersion: record.manifest.packageVersion,
+        entry: record.manifest.entry,
+        source: record.manifest.source.kind === "registry"
+          ? "registry"
+          : record.manifest.source.kind === "mcp"
+            ? "user"
+            : record.manifest.source.kind,
+        component: record.manifest.component,
+        permissions: record.manifest.permissions,
+        compatibility: record.manifest.compatibility,
+      })
+      return {
+        manifest,
+        packageId: record.packageId,
+        packageVersion: record.packageVersion,
+        fingerprint: record.fingerprint,
+        source: record.source,
+        installed: Boolean(state),
+        enabled: state?.enabled === true,
+        trusted: record.trusted && state?.trusted === true,
+        health: state?.health || "unavailable",
+        status: state?.status || "disabled",
+      }
+    })
+    const allExtensions = [...extensions, ...thirdParty]
+    if (parsedUrl.pathname !== "/api/extensions") {
+      const id = parsedUrl.pathname.slice("/api/extensions/".length)
+      const entry = allExtensions.find((candidate) => candidate.manifest.id === id || ("packageId" in candidate && candidate.packageId === id))
+      if (!entry) {
+        res.writeHead(404, { "Content-Type": "application/json", ...cors })
+        res.end(JSON.stringify({ ok: false, code: "extension_not_found", error: `Unknown extension: ${id}` }))
+        return true
+      }
+      res.writeHead(200, { "Content-Type": "application/json", ...cors })
+      res.end(JSON.stringify({ schemaVersion: 1, generation: catalog.generation, extension: entry }))
+      return true
+    }
     res.writeHead(200, { "Content-Type": "application/json", ...cors })
-    res.end(JSON.stringify({ schemaVersion: 1, generation: catalog.generation, extensions }))
+    res.end(JSON.stringify({ schemaVersion: 1, generation: catalog.generation, extensions: allExtensions }))
+    return true
+  }
+
+  // Third-party management deliberately accepts only a package declaration;
+  // no endpoint imports or executes its entry path.
+  if (parsedUrl.pathname === "/api/extensions/install" && req.method === "POST") {
+    try {
+      await ensureExtensionPackageStore()
+      const body = await parseBody(req)
+      const packageManifest = body && typeof body === "object" && "manifest" in body ? body.manifest : body
+      const snapshot = await extensionLifecycle.installPackage(packageManifest, {}, {
+        compatibility: { hostVersion: "1.0.0", contractVersion: "1.0.0", engineVersion: "1.0.0" },
+        trusted: false,
+      })
+      await persistComponentState()
+      await persistExtensionPackageState()
+      res.writeHead(201, { "Content-Type": "application/json", ...cors })
+      res.end(JSON.stringify({ ok: true, extension: extensionPackageStore.get(snapshot.componentId), lifecycle: snapshot }))
+    } catch (error) {
+      writeExtensionError(res, error)
+    }
+    return true
+  }
+
+  const extensionActionMatch = parsedUrl.pathname.match(/^\/api\/extensions\/([a-z0-9][a-z0-9._-]*)\/(trust|enable|disable|uninstall)$/u)
+  if (extensionActionMatch && req.method === "POST") {
+    const [, componentId, action] = extensionActionMatch
+    try {
+      await ensureExtensionPackageStore()
+      if (!extensionPackageStore.get(componentId)) {
+        res.writeHead(404, { "Content-Type": "application/json", ...cors })
+        res.end(JSON.stringify({ ok: false, code: "extension_not_managed", error: "Only installed third-party extensions use this endpoint" }))
+        return true
+      }
+      extensionLifecycle.adopt(componentId)
+      let lifecycle
+      if (action === "trust") {
+        const body = await parseBody(req)
+        lifecycle = await extensionLifecycle.trust(componentId, body?.trusted !== false)
+      } else if (action === "enable") {
+        await extensionLifecycle.validate(componentId)
+        await extensionLifecycle.enable(componentId)
+        lifecycle = await extensionLifecycle.activate(componentId)
+      } else if (action === "disable") {
+        lifecycle = await extensionLifecycle.dispose(componentId)
+      } else {
+        lifecycle = await extensionLifecycle.uninstall(componentId)
+      }
+      await persistComponentState()
+      await persistExtensionPackageState()
+      res.writeHead(200, { "Content-Type": "application/json", ...cors })
+      res.end(JSON.stringify({ ok: true, lifecycle, extension: extensionPackageStore.get(componentId) || null }))
+    } catch (error) {
+      writeExtensionError(res, error)
+    }
     return true
   }
 

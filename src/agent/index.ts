@@ -75,6 +75,13 @@ export {
   ExtensionLifecycle,
   extensionLifecycle,
 } from "./extension-lifecycle.js"
+export {
+  EXTENSION_PACKAGE_STORE_SCHEMA_VERSION,
+  ExtensionPackageStore,
+  extensionPackageStore,
+  defaultExtensionPackageStorePath,
+} from "./extension-package-store.js"
+export type { InstalledExtensionPackageRecord } from "./extension-package-store.js"
 export type {
   ExtensionActivationContext,
   ExtensionInstallOptions,

@@ -10,6 +10,8 @@ import {
   normalizeCapabilityComponentPackageManifest,
   type CapabilityComponentPackageCompatibilityContext,
 } from "./component-package.js"
+import { extensionPackageStore, type ExtensionPackageStore } from "./extension-package-store.js"
+import { extensionManifestFromPackage } from "./extension-manifest.js"
 
 /** The only lifecycle exposed to installable product extensions. */
 export type ExtensionLifecyclePhase =
@@ -79,10 +81,12 @@ function errorMessage(error: unknown): string {
  */
 export class ExtensionLifecycle {
   readonly #manager: CapabilityComponentManager
+  readonly #packageStore?: ExtensionPackageStore
   readonly #records = new Map<string, ExtensionRecord>()
 
-  constructor(manager: CapabilityComponentManager) {
+  constructor(manager: CapabilityComponentManager, packageStore?: ExtensionPackageStore) {
     this.#manager = manager
+    this.#packageStore = packageStore
   }
 
   /** Bring a shipped extension under lifecycle management without reinstalling it. */
@@ -143,7 +147,21 @@ export class ExtensionLifecycle {
    */
   async installPackage(manifest: unknown, hooks: ExtensionLifecycleHooks = {}, options: ExtensionPackageInstallOptions): Promise<ExtensionLifecycleSnapshot> {
     const normalized = normalizeCapabilityComponentPackageManifest(manifest, options.compatibility)
-    return this.install(normalized.component, hooks, { trusted: options.trusted })
+    if (normalized.source.kind === "mcp") {
+      throw new CapabilityComponentError("integration_required", "MCP servers must use the integration lifecycle, not an extension package", normalized.packageId)
+    }
+    extensionManifestFromPackage({
+      packageId: normalized.packageId,
+      packageVersion: normalized.packageVersion,
+      entry: normalized.entry,
+      source: normalized.source.kind,
+      component: normalized.component,
+      permissions: normalized.permissions,
+      compatibility: normalized.compatibility,
+    })
+    const snapshot = await this.install(normalized.component, hooks, { trusted: options.trusted })
+    this.#packageStore?.register(normalized, snapshot.phase !== "installed")
+    return snapshot
   }
 
   /** Host-mediated trust change that disposes live resources before revocation. */
@@ -155,6 +173,7 @@ export class ExtensionLifecycle {
       record.phase = "disabled"
       record.generation = state.generation
     }
+    this.#packageStore?.setTrusted(componentId, trusted)
     return this.snapshot(componentId)
   }
 
@@ -231,6 +250,7 @@ export class ExtensionLifecycle {
     const record = this.#record(componentId)
     if (record.phase !== "disposed") await this.dispose(componentId)
     this.#manager.uninstall(componentId)
+    this.#packageStore?.remove(componentId)
     record.phase = "uninstalled"
     record.generation = this.#manager.catalog().generation
     return this.snapshot(componentId)
@@ -283,4 +303,4 @@ export class ExtensionLifecycle {
 export type { CapabilityComponentState }
 
 /** Shared host coordinator used by HTTP/CLI management surfaces. */
-export const extensionLifecycle = new ExtensionLifecycle(capabilityComponentManager)
+export const extensionLifecycle = new ExtensionLifecycle(capabilityComponentManager, extensionPackageStore)
