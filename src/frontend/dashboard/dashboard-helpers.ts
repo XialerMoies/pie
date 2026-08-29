@@ -313,14 +313,14 @@ export function bootstrapApi(): Promise<void> {
 /** Project host-managed component state into already loaded UI contributions. */
 export async function syncComponents(): Promise<void> {
   try {
-    const componentsResponse = await fetch('/api/components', { credentials: 'include', cache: 'no-store' });
+    const componentsResponse = await fetch('/api/components?view=management', { credentials: 'include', cache: 'no-store' });
     const catalog = await componentsResponse.json().catch(() => null) as {
-      components?: Array<{ manifest?: { id?: string }; enabled?: boolean; health?: string }>;
-      availablePackages?: Array<{ component?: { id?: string } }>;
+      extensions?: Array<{ manifest?: { id?: string }; enabled?: boolean; health?: string }>;
+      availableExtensions?: Array<{ component?: { id?: string } }>;
     } | null;
-    if (!componentsResponse.ok || !Array.isArray(catalog?.components)) return;
-    const states = new Map(catalog.components.map((entry) => [String(entry.manifest?.id || ''), entry]));
-    const knownOptionalIds = new Set((catalog.availablePackages || []).map((entry) => String(entry.component?.id || '')).filter(Boolean));
+    if (!componentsResponse.ok || !Array.isArray(catalog?.extensions)) return;
+    const states = new Map(catalog.extensions.map((entry) => [String(entry.manifest?.id || ''), entry]));
+    const knownOptionalIds = new Set((catalog.availableExtensions || []).map((entry) => String(entry.component?.id || '')).filter(Boolean));
     App.UIContributions?.configure({ isComponentActive: (id: string) => {
       const state = states.get(id);
       return state

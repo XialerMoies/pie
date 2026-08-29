@@ -180,31 +180,5 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
     return true
   }
 
-  if (req.url === "/api/components" && req.method === "GET") {
-    // The catalog can be served by a lightweight route test/CLI path that did
-    // not instantiate the Agent tool host. Seed declarations, never code.
-    registerFirstPartyComponentPackages(capabilityComponentManager)
-    const runtime = ctx.groups.core.runtime as any
-    const workspace = canonicalWorkspacePath(runtime.currentWorkspace || ctx.groups.storage.paths.APP_ROOT)
-    const config = await loadMcpConfigFromCandidates(getCandidatePaths(workspace, dirname(defaultGlobalConfigPath())))
-    const beforeGeneration = capabilityComponentManager.catalog().generation
-    await reconcileMcpServerComponents(workspace, config.servers)
-    if (capabilityComponentManager.catalog().generation !== beforeGeneration) {
-      try {
-        await persistComponentState()
-      } catch {
-        // A read-only catalog must remain available even when persistence is unavailable.
-      }
-    }
-    res.writeHead(200, {
-      "Content-Type": "application/json",
-      ...cors,
-    })
-    res.end(JSON.stringify({
-      ...capabilityComponentManager.catalog(),
-      availablePackages: firstPartyComponentPackageCatalog(),
-    }))
-    return true
-  }
   return false
 }

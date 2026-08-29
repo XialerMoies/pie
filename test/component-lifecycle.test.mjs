@@ -73,17 +73,17 @@ describe("CapabilityComponentManager", () => {
     lease.release();
   });
 
-  it("publishes a catalog without host-service replacement entries", async () => {
+  it("publishes the management projection without host-service entries", async () => {
     let body = "";
     const handled = await handleComponents(
-      { url: "/api/components", method: "GET" },
+      { url: "/api/components?view=management", method: "GET" },
       { writeHead(status) { assert.equal(status, 200); }, end(value) { body = String(value); } },
       { groups: { core: { runtime: { currentWorkspace: process.cwd() } }, storage: { paths: { APP_ROOT: process.cwd() } } } },
     );
     assert.equal(handled, true);
     const catalog = JSON.parse(body);
-    assert.equal(catalog.components.some((component) => component.manifest.id === "security-parser"), false);
-    assert.ok(catalog.components.some((component) => component.manifest.id === "ui.pane.search"));
+    assert.equal(catalog.extensions.some((component) => component.manifest.id === "security-parser"), false);
+    assert.ok(catalog.extensions.some((component) => component.manifest.id === "ui.pane.search"));
   });
 
   it("projects globally installed MCP servers into the management integrations", async () => {
