@@ -129,14 +129,8 @@ function bindTrustEvents(container: HTMLElement): void {
         const r = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}/trust`, { method: "POST" });
         const data = await r.json();
         if (!data.ok) { toast(`信任失败: ${data.error}`, "error"); return; }
-        toast(`已信任 ${name}，重启后生效`, "info");
-        // 立即更新显示，不再显示旧错误
-        const serverEl = btnEl.closest(".mcp-server");
-        if (serverEl) {
-          const errorEl = serverEl.querySelector(".mcp-server-error");
-          if (errorEl) errorEl.textContent = "✅ 已信任，重启后生效";
-          btnEl.remove();
-        }
+        toast(data.connected ? `已信任并连接 ${name}` : (data.message || `已信任 ${name}`), data.connected ? "success" : "info");
+        await fetchMcpServers();
       } catch (err) { toast(`信任失败: ${(err as Error).message}`, "error"); }
     });
   });

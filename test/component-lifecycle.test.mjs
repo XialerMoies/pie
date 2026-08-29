@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { resolve } from "node:path";
+import { tmpdir } from "node:os";
 import {
   CapabilityComponentManager,
   persistCapabilityComponentGeneration,
@@ -81,6 +84,34 @@ describe("CapabilityComponentManager", () => {
     const catalog = JSON.parse(body);
     assert.equal(catalog.components.some((component) => component.manifest.id === "security-parser"), false);
     assert.ok(catalog.components.some((component) => component.manifest.id === "ui.pane.search"));
+  });
+
+  it("projects globally installed MCP servers into the management integrations", async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "component-mcp-"));
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    try {
+      process.env.HOME = dir;
+      process.env.USERPROFILE = dir;
+      const globalDir = resolve(dir, ".pi", "agent");
+      mkdirSync(globalDir, { recursive: true });
+      writeFileSync(resolve(globalDir, "mcp.json"), JSON.stringify({
+        servers: { duckduckgo: { command: "npx", args: ["-y", "duckduckgo-mcp-server"], enabled: false } },
+      }));
+      let body = "";
+      const handled = await handleComponents(
+        { url: "/api/components?view=management", method: "GET", headers: { host: "localhost" } },
+        { writeHead(status) { assert.equal(status, 200); }, end(value) { body = String(value); } },
+        { groups: { core: { runtime: { currentWorkspace: dir } }, storage: { paths: { APP_ROOT: dir } } } },
+      );
+      const catalog = JSON.parse(body);
+      assert.equal(handled, true);
+      assert.ok(catalog.integrations.some((component) => component.manifest.id === "mcp-server.duckduckgo"));
+    } finally {
+      process.env.HOME = previousHome;
+      process.env.USERPROFILE = previousUserProfile;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("round-trips a session generation fact", () => {

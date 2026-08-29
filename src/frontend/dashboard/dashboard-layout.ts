@@ -315,8 +315,6 @@ function _syncMainArea(activeId: string | null, items: AppTab[]): void {
   const componentContent = $('component-content');
   const mc = document.querySelector('.mc');
   if (!ms || !fi) return;
-  if (activeId !== 'mcp-management') disposeMcpManagementTab();
-
   if (!activeId) {
     ms.style.display = 'none';
     if (fc) fc.style.display = 'none';
@@ -340,13 +338,6 @@ function _syncMainArea(activeId: string | null, items: AppTab[]): void {
     if (componentContent) componentContent.style.display = '';
     mc?.classList.remove('editing');
     renderComponentTab(activeTab);
-  } else if (activeTab?.kind === 'mcp-management') {
-    ms.style.display = 'none';
-    if (fc) fc.style.display = 'none';
-    fi.style.display = 'none';
-    if (componentContent) componentContent.style.display = '';
-    mc?.classList.remove('editing');
-    renderMcpManagementTab();
   } else {
     ms.style.display = '';
     if (fc) fc.style.display = 'none';
@@ -356,26 +347,6 @@ function _syncMainArea(activeId: string | null, items: AppTab[]): void {
   }
   const scheduleRailSync = window.requestAnimationFrame || ((callback: FrameRequestCallback) => window.setTimeout(callback, 0));
   scheduleRailSync(() => App.Chat?.syncTokenRailPosition?.());
-}
-
-let _mcpManagementCleanup: (() => void) | null = null;
-
-function disposeMcpManagementTab(): void {
-  _mcpManagementCleanup?.();
-  _mcpManagementCleanup = null;
-  $('component-content')?.removeAttribute('data-mcp-mode');
-}
-
-function renderMcpManagementTab(): void {
-  const root = $('component-content');
-  if (!root || _mcpManagementCleanup) return;
-  root.dataset.mcpMode = 'catalog';
-  const contribution = App.UIContributions?.get?.('ui.pane.mcp');
-  if (contribution) {
-    _mcpManagementCleanup = contribution.mount(root);
-  } else {
-    root.innerHTML = '<div class="component-detail"><h1>添加 MCP Server</h1><p>MCP Server 安装界面尚未加载。</p></div>';
-  }
 }
 
 type ComponentTabManifest = NonNullable<AppTab['componentManifest']>;
@@ -483,24 +454,11 @@ function openComponentTab(component: ComponentTabManifest): void {
   renderTabs();
 }
 
-function openMcpManagementTab(): void {
-  const id = 'mcp-management';
-  const existing = App.Tabs.getTab?.(id);
-  if (existing) { App.Tabs.activate(id); return; }
-  App.Tabs.openTab({ kind: 'mcp-management', id, title: '添加 MCP Server' });
-  App.Tabs.activate(id);
-  renderTabs();
-}
-
 { const tabs = App.Tabs;
   if (tabs?.registerTabBehavior) {
     tabs.registerTabBehavior('component', {
       activate(tab: AppTab) { tabs.activateTab(tab.id); renderTabs(); },
       close(tab: AppTab) { tabs.closeTab(tab.id); renderTabs(); },
-    });
-    tabs.registerTabBehavior('mcp-management', {
-      activate(tab: AppTab) { tabs.activateTab(tab.id); renderTabs(); },
-      close(tab: AppTab) { disposeMcpManagementTab(); tabs.closeTab(tab.id); renderTabs(); },
     });
   }
 }
@@ -631,10 +589,6 @@ function restoreActiveTab(): void {
     }
     if (activeView?.type === 'component' && activeView.id) {
       const exists = App.Tabs.getTab?.(activeView.id)?.kind === 'component';
-      if (exists) { App?.Tabs?.activate(activeView.id); return; }
-    }
-    if (activeView?.type === 'mcp-management' && activeView.id) {
-      const exists = App.Tabs.getTab?.(activeView.id)?.kind === 'mcp-management';
       if (exists) { App?.Tabs?.activate(activeView.id); return; }
     }
     if (activeView?.type === 'file' && activeView.id) {
@@ -891,7 +845,6 @@ function _initProblemsBar(): void {
   U.closeChatTab = closeChatTab;
   U.restoreFileTabs = restoreFileTabs;
   U.openComponentTab = openComponentTab;
-  U.openMcpManagementTab = openMcpManagementTab;
   U.setProblemsComponentActive = setProblemsComponentActive;
 } }
 { const appNamespace = (window as any).App || ((window as any).App = {});

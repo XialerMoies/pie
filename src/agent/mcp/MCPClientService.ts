@@ -353,6 +353,15 @@ async function connectServer(
   }
 }
 
+/** Reconnect one already-configured server after a trust or configuration change. */
+export async function reconnectMcpServer(
+  source: { name: string; config: McpServerConfig; sourcePath: string },
+  emitTrace?: ToolTraceEmitter,
+): Promise<AgentTool[]> {
+  await disconnectServer(source.name)
+  return connectServer(source.name, source.config, source.sourcePath, emitTrace)
+}
+
 /** 根据配置创建对应传输层实例 */
 function createTransport(config: McpServerConfig): import("@modelcontextprotocol/sdk/shared/transport.js").Transport {
   const transport = config.transport || "stdio"

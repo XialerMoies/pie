@@ -161,7 +161,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
     registerFirstPartyComponentPackages(capabilityComponentManager)
     const runtime = ctx.groups.core.runtime as any
     const workspace = canonicalWorkspacePath(runtime.currentWorkspace || ctx.groups.storage.paths.APP_ROOT)
-    const config = await loadMcpConfigFromCandidates(getCandidatePaths(workspace, defaultGlobalConfigPath()))
+    const config = await loadMcpConfigFromCandidates(getCandidatePaths(workspace, dirname(defaultGlobalConfigPath())))
     await reconcileMcpServerComponents(workspace, config.servers)
     const catalog = capabilityComponentManager.catalog()
     const isIntegration = (component: { manifest: { source?: string; hostSurface?: string } }): boolean => component.manifest.source === "mcp" || component.manifest.hostSurface === "mcp-service"
@@ -186,7 +186,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
     registerFirstPartyComponentPackages(capabilityComponentManager)
     const runtime = ctx.groups.core.runtime as any
     const workspace = canonicalWorkspacePath(runtime.currentWorkspace || ctx.groups.storage.paths.APP_ROOT)
-    const config = await loadMcpConfigFromCandidates(getCandidatePaths(workspace, defaultGlobalConfigPath()))
+    const config = await loadMcpConfigFromCandidates(getCandidatePaths(workspace, dirname(defaultGlobalConfigPath())))
     const beforeGeneration = capabilityComponentManager.catalog().generation
     await reconcileMcpServerComponents(workspace, config.servers)
     if (capabilityComponentManager.catalog().generation !== beforeGeneration) {

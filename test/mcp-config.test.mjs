@@ -244,6 +244,21 @@ describe("loadMcpConfig", () => {
     }
   });
 
+  it("兼容 VS Code/Claude 的 mcpServers 顶层字段", () => {
+    const tmpDir = mkdtempSync(resolve(tmpdir(), "mcp-config-test-"));
+    try {
+      writeJson(`${tmpDir}/.mcp.json`, {
+        mcpServers: { "duckduckgo": { command: "npx", args: ["-y", "duckduckgo-mcp-server"] } },
+      });
+      const result = mod.loadMcpConfig({ projectRoot: tmpDir });
+      assert.strictEqual(result.errors.length, 0);
+      assert.strictEqual(result.servers.length, 1);
+      assert.strictEqual(result.servers[0].name, "duckduckgo");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("高优先级覆盖低优先级同名 server", () => {
     const tmpDir = mkdtempSync(resolve(tmpdir(), "mcp-config-test-"));
     try {

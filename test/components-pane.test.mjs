@@ -34,9 +34,8 @@ describe("扩展与集成 pane", () => {
       }],
       availableExtensions: [{ packageId: "my-code-agent.ui.search-pane", packageVersion: "1.0.0", component: { id: "ui.pane.search", kind: "optional", capability: "desktop.ui-pane", source: "builtin", providedBy: "my-code-agent.ui.search-pane" } }],
     };
-    let openedMcpCatalog = 0;
     win.App = {
-      UI: { confirmAsync: async () => true, openComponentTab(component) { opened.push(component); }, openMcpManagementTab() { openedMcpCatalog += 1; } },
+      UI: { confirmAsync: async () => true, openComponentTab(component) { opened.push(component); } },
       UIContributions: { register(definition) { registrations.set(definition.id.replace("ui.pane.", ""), definition.mount); return { id: definition.id }; }, get() { return undefined; } },
       StatusBar: { setNotice(message, kind) { notices.push({ message, kind }); } },
     };
@@ -60,7 +59,8 @@ describe("扩展与集成 pane", () => {
     const addMcp = container.querySelector('[aria-label="添加 MCP Server"]');
     assert.ok(addMcp, "MCP Server 分组应提供集合级新增动作");
     addMcp?.click();
-    assert.equal(openedMcpCatalog, 1);
+    assert.ok(doc.querySelector("#components-mcp-install-modal"), "MCP Server 新增动作应在组件栏打开自定义安装对话框");
+    doc.querySelector("#components-mcp-install-modal .mcp-modal-close")?.dispatchEvent(new win.Event("click", { bubbles: true }));
     container.querySelector('[data-component-id="mcp.server.demo"] .component-row-main')?.dispatchEvent(new win.Event("click", { bubbles: true }));
     assert.equal(opened[0]?.id, "mcp.server.demo", "MCP Server 实例应直接打开自己的详情页");
     const desktopOrigin = container.querySelector('[data-group="extensions"] .components-origin-heading');

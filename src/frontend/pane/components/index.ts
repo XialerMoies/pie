@@ -103,6 +103,8 @@ function componentStatusLabel(component: ComponentPaneState): string {
   if (component.status === "active") return "已启用";
   if (component.status === "disabled") return "已停用";
   if (component.status === "untrusted") return "未信任";
+  if (component.health === "unknown" && component.enabled) return "连接中";
+  if (component.health === "broken") return "连接失败";
   return "不可用";
 }
 
@@ -131,6 +133,47 @@ async function confirmComponentAction(message: string): Promise<boolean> {
 
 function setNotice(message: string, kind: "success" | "error"): void {
   componentPaneApp.StatusBar?.setNotice?.(message, kind);
+}
+
+function openMcpInstallDialog(refresh: () => void): void {
+  if (document.getElementById("components-mcp-install-modal")) return;
+  const overlay = makeElement("div", "mcp-modal-overlay") as HTMLDivElement;
+  overlay.id = "components-mcp-install-modal";
+  overlay.innerHTML = `<div class="mcp-modal" role="dialog" aria-modal="true" aria-labelledby="components-mcp-install-title">
+    <div class="mcp-modal-header"><span class="mcp-modal-title" id="components-mcp-install-title">自定义安装 MCP Server</span><button class="mcp-modal-close" type="button" aria-label="关闭">&times;</button></div>
+    <div class="mcp-modal-body"><div class="mcp-modal-field"><label class="mcp-modal-label" for="components-mcp-name">名称</label><input type="text" id="components-mcp-name" class="mcp-input" placeholder="如 my-server"></div>
+    <div class="mcp-modal-field"><label class="mcp-modal-label" for="components-mcp-command">启动命令</label><input type="text" id="components-mcp-command" class="mcp-input" placeholder="如 npx -y @modelcontextprotocol/server-filesystem /path"></div><div class="mcp-custom-msg" role="status"></div></div>
+    <div class="mcp-modal-footer"><button class="mcp-btn mcp-btn-cancel" type="button">取消</button><button class="mcp-btn mcp-btn-install-custom" type="button">安装</button></div>
+  </div>`;
+  document.body.append(overlay);
+  const close = (): void => overlay.remove();
+  overlay.querySelector(".mcp-modal-close")?.addEventListener("click", close);
+  overlay.querySelector(".mcp-btn-cancel")?.addEventListener("click", close);
+  overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); });
+  const nameInput = overlay.querySelector<HTMLInputElement>("#components-mcp-name");
+  const commandInput = overlay.querySelector<HTMLInputElement>("#components-mcp-command");
+  const message = overlay.querySelector<HTMLElement>(".mcp-custom-msg");
+  const install = overlay.querySelector<HTMLButtonElement>(".mcp-btn-install-custom");
+  install?.addEventListener("click", async () => {
+    const name = nameInput?.value.trim() || "";
+    const commandLine = commandInput?.value.trim() || "";
+    if (!name || !commandLine) { if (message) message.textContent = "名称和命令不能为空"; return; }
+    const [command, ...args] = commandLine.split(/\s+/u);
+    install.disabled = true;
+    if (message) message.textContent = "安装中…";
+    try {
+      const response = await fetch("/api/mcp/install/custom", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, command, args }) });
+      const body = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!response.ok || body?.ok === false) throw new Error(body?.error || "MCP Server 安装失败");
+      setNotice(`${name} 已添加，重启后生效`, "success");
+      close();
+      refresh();
+    } catch (error) {
+      if (message) message.textContent = error instanceof Error ? error.message : "MCP Server 安装失败";
+      install.disabled = false;
+    }
+  });
+  nameInput?.focus();
 }
 
 function componentMatches(component: ComponentPaneState, query: string, filter: ComponentPaneFilter): boolean {
@@ -323,6 +366,7 @@ export function componentsPaneRender(container: HTMLElement): () => void {
       paint();
     });
     if (category === "integrations" && subgroup === "mcp-server") {
+      heading.classList.add("has-action");
       groupAction = makeElement("button", "components-group-action") as HTMLButtonElement;
       groupAction.type = "button";
       groupAction.title = "添加 MCP Server";
@@ -330,7 +374,7 @@ export function componentsPaneRender(container: HTMLElement): () => void {
       groupAction.append(makeIcon("iplus", 14));
       groupAction.addEventListener("click", (event) => {
         event.stopPropagation();
-        componentPaneApp.UI?.openMcpManagementTab?.();
+        openMcpInstallDialog(() => void refresh());
       });
     }
     section.append(heading);

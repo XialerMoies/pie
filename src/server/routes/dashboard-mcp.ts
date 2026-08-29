@@ -2,7 +2,7 @@ import type { RouteHandler, ServerContext } from "./types.js";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { parseBody } from "./parse-body.js";
-import { disconnectServer, getMcpIntegrationRecords, getServersStatus, mcpServerComponentId, syncMcpServerComponent, uninstallMcpServerComponent } from "../../agent/mcp/MCPClientService.js";
+import { disconnectServer, getMcpIntegrationRecords, getServersStatus, mcpServerComponentId, reconnectMcpServer, syncMcpServerComponent, uninstallMcpServerComponent } from "../../agent/mcp/MCPClientService.js";
 import { capabilityComponentManager } from "../../agent/capability-components.js";
 import { defaultGlobalConfigPath, getCandidatePaths, loadMcpConfigFromCandidates } from "../../agent/mcp/config.js";
 import { MCP_CATALOG } from "../../agent/mcp/builtin-list.js";
@@ -112,11 +112,27 @@ export const handleDashboardMcp: RouteHandler = async (req, res, ctx) => {
         const trustStore = await createAuthorizedTrustStore(ctx, "mcp.trust");
         const hash = hashServerCommand(source.config);
         await trustStore.addTrust(workspace, hash, source.name);
+        let connected = false;
+        let connectionError: string | undefined;
+        if (source.config.enabled !== false) {
+          try {
+            await reconnectMcpServer(source, undefined);
+            connected = getServersStatus().find((item) => item.name === name)?.state === "connected";
+          } catch (error) {
+            connectionError = error instanceof Error ? error.message : String(error);
+          }
+        }
         syncMcpServerComponent(workspace, source, true, getServersStatus().find((item) => item.name === name));
         publishMcpChanged(ctx);
 
         res.writeHead(200, { "Content-Type": "application/json", ...cors });
-        res.end(JSON.stringify({ ok: true, name, restartNeeded: true, message: `已信任 ${name}，请重启会话以加载工具` }));
+        res.end(JSON.stringify({
+          ok: true,
+          name,
+          connected,
+          restartNeeded: false,
+          message: connected ? `已信任并连接 ${name}` : connectionError ? `已信任 ${name}，连接失败：${connectionError}` : `已信任 ${name}`,
+        }));
       } catch (e: any) {
         if (writeServerPermissionError(res, cors, e)) return true;
         res.writeHead(500, { "Content-Type": "application/json", ...cors });
@@ -332,8 +348,19 @@ async function updateMcpConfigFile(
   updater: (config: any) => any,
   recoverInvalidJson = false,
 ): Promise<void> {
+  const applyUpdater = (config: any): any => {
+    const usesMcpServers = config && typeof config === "object"
+      && !Object.hasOwn(config, "servers") && Object.hasOwn(config, "mcpServers");
+    if (usesMcpServers) config.servers = config.mcpServers;
+    const updated = updater(config);
+    if (usesMcpServers && updated && typeof updated === "object") {
+      updated.mcpServers = updated.servers || {};
+      delete updated.servers;
+    }
+    return updated;
+  };
   if (normalizePermissionPath(resolve(filePath)) === normalizePermissionPath(resolve(defaultGlobalConfigPath()))) {
-    await updateLockedJson<any>(filePath, () => ({}), updater, { recoverInvalidJson });
+    await updateLockedJson<any>(filePath, () => ({}), applyUpdater, { recoverInvalidJson });
     return;
   }
 
@@ -344,7 +371,7 @@ async function updateMcpConfigFile(
     if (!recoverInvalidJson) throw error;
     config = {};
   }
-  const updated = updater(config);
+  const updated = applyUpdater(config);
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, `${JSON.stringify(updated, null, 2)}\n`, "utf8");
 }

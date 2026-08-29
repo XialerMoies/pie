@@ -697,6 +697,22 @@ describe("dashboard routes", () => {
       } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 
+    it("POST toggle 兼容 mcpServers 配置并保留原字段名", async () => {
+      const dir = mkdtempSync(resolve(tmpdir(), "mcp-test-"));
+      try {
+        writeFileSync(resolve(dir, ".mcp.json"), JSON.stringify({
+          mcpServers: { image_mcp: { command: "node", enabled: false } },
+        }));
+        const ctx = mockContext({ runtime: { ...mockRuntime(), currentWorkspace: dir }, paths: { APP_ROOT: dir } });
+        const { status, body } = await callHandler(handleDashboard, "POST", "/api/mcp/servers/image_mcp/toggle", undefined, ctx);
+        assert.strictEqual(status, 200);
+        assert.strictEqual(parseJSON(body).enabled, true, "已被启用");
+        const file = JSON.parse(readFileSync(resolve(dir, ".mcp.json"), "utf-8"));
+        assert.strictEqual(file.mcpServers.image_mcp.enabled, true, "保留 mcpServers 字段");
+        assert.equal("servers" in file, false, "不新增 servers 字段");
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
     it("POST toggle 支持 URL-encoded server 名", async () => {
       const dir = mkdtempSync(resolve(tmpdir(), "mcp-test-"));
       try {
@@ -759,6 +775,7 @@ describe("dashboard routes", () => {
         const data = parseJSON(body);
         assert.strictEqual(data.ok, true, "信任成功");
         assert.strictEqual(data.name, "test-srv");
+        assert.strictEqual(data.restartNeeded, false, "信任后不要求重启");
         assert.deepStrictEqual(ctx.appEvents.published.map((event) => event.type), ["mcp.changed"]);
       } finally {
         process.env.HOME = origHome;

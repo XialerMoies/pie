@@ -244,23 +244,27 @@ export function loadMcpConfigFromCandidates(candidates: readonly McpConfigCandid
 
     result.loadedPaths.push(candidate.path)
 
-    // 校验顶层结构：servers 必须是对象（不能是数组或基本类型）
+    // 接受项目自身的 servers 以及 VS Code/Claude 常用的 mcpServers 形式。
+    // 两者都只映射到同一内部结构，不改变优先级或权限边界。
+    const root = raw && typeof raw === "object" ? raw as Record<string, unknown> : undefined
+    const serversValue = root && ("servers" in root ? root.servers : root.mcpServers)
+    // 校验顶层结构：server 映射必须是对象（不能是数组或基本类型）
     if (
-      !raw || typeof raw !== "object"
-      || !("servers" in (raw as Record<string, unknown>))
-      || typeof (raw as Record<string, unknown>).servers !== "object"
-      || (raw as Record<string, unknown>).servers === null
-      || Array.isArray((raw as Record<string, unknown>).servers)
+      !root
+      || !("servers" in root || "mcpServers" in root)
+      || typeof serversValue !== "object"
+      || serversValue === null
+      || Array.isArray(serversValue)
     ) {
       result.errors.push({
         path: candidate.path,
-        message: '缺少顶层 "servers" 字段',
+        message: '缺少顶层 "servers" 或 "mcpServers" 字段',
         sourceLabel: candidate.label,
       })
       continue
     }
 
-    const file = raw as McpConfigFile
+    const file: McpConfigFile = { servers: serversValue as McpConfigFile["servers"] }
 
     for (const [name, serverRaw] of Object.entries(file.servers || {})) {
       const { config, errors } = normalizeServerConfig(name, serverRaw)

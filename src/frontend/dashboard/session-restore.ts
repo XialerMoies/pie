@@ -115,7 +115,7 @@ async function restoreSessionTabsImpl(): Promise<void> {
   }
 
   const items = store.tabs.items || [];
-  const restoredItems = items.filter(tab => !(tab.kind === 'chat' && _isDraftSessionId(tab.id)));
+  const restoredItems = items.filter(tab => tab.kind !== 'mcp-management' && !(tab.kind === 'chat' && _isDraftSessionId(tab.id)));
   const persistedActiveId = store.tabs.activeId
     || (store.activeView.type !== 'chat' ? store.activeView.id : null);
   const preferredActiveId = persistedActiveId && !_isDraftSessionId(persistedActiveId)
@@ -123,7 +123,7 @@ async function restoreSessionTabsImpl(): Promise<void> {
     : null;
   const activeId = preferredActiveId && restoredItems.some(tab => tab.id === preferredActiveId)
     ? preferredActiveId
-    : restoredItems.find(tab => tab.kind === 'session' || tab.kind === 'component' || tab.kind === 'mcp-management')?.id || null;
+    : restoredItems.find(tab => tab.kind === 'session' || tab.kind === 'component')?.id || null;
 
   sessionRestoreApp.Tabs?.restoreTabs?.(restoredItems, activeId);
   sessionRestoreApp.State.syncTabs?.(restoredItems, activeId);
