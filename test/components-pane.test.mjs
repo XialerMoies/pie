@@ -56,13 +56,18 @@ describe("扩展与集成 pane", () => {
     assert.equal(container.querySelector(".components-title")?.textContent, "扩展与集成");
     assert.deepEqual([...container.querySelectorAll(".components-group-label")].map((group) => group.textContent), ["扩展", "集成"]);
     assert.deepEqual([...container.querySelectorAll(".components-origin-label")].map((group) => group.textContent), ["桌面端", "Agent", "服务端", "MCP Server"]);
+    const agentCollection = container.querySelector('[data-component-id="extension.agent-tools"] .component-row-main');
+    assert.ok(agentCollection, "第一方 Agent 工具应合并为一个集合条目");
+    agentCollection?.dispatchEvent(new win.Event("click", { bubbles: true }));
+    assert.equal(opened[0]?.id, "extension.agent-tools");
+    assert.equal(opened[0]?.children?.[0]?.id, "tool.search");
     const addMcp = container.querySelector('[aria-label="添加 MCP Server"]');
     assert.ok(addMcp, "MCP Server 分组应提供集合级新增动作");
     addMcp?.click();
     assert.ok(doc.querySelector("#components-mcp-install-modal"), "MCP Server 新增动作应在组件栏打开自定义安装对话框");
     doc.querySelector("#components-mcp-install-modal .mcp-modal-close")?.dispatchEvent(new win.Event("click", { bubbles: true }));
     container.querySelector('[data-component-id="mcp.server.demo"] .component-row-main')?.dispatchEvent(new win.Event("click", { bubbles: true }));
-    assert.equal(opened[0]?.id, "mcp.server.demo", "MCP Server 实例应直接打开自己的详情页");
+    assert.equal(opened[1]?.id, "mcp.server.demo", "MCP Server 实例应直接打开自己的详情页");
     const desktopOrigin = container.querySelector('[data-group="extensions"] .components-origin-heading');
     assert.equal(desktopOrigin?.getAttribute("aria-expanded"), "true");
     desktopOrigin?.dispatchEvent(new win.Event("click", { bubbles: true }));
@@ -85,7 +90,7 @@ describe("扩展与集成 pane", () => {
     assert.equal(container.querySelector(".components-header-actions use[href='#imore']"), null);
     assert.equal(container.querySelectorAll(".components-header-actions button").length, 1);
     container.querySelector('[data-component-id="tool.third-party"] .component-row-main')?.dispatchEvent(new win.Event("click", { bubbles: true }));
-    assert.equal(opened[1]?.id, "tool.third-party");
+    assert.equal(opened[2]?.id, "tool.third-party");
     const action = container.querySelector('[data-component-id="ui.pane.search"] .component-action');
     assert.equal(action?.getAttribute("aria-label"), "启用 ui.pane.search", action?.outerHTML || container.innerHTML);
     action.click();

@@ -23,6 +23,7 @@ interface ComponentPaneState {
   trusted: boolean;
   health: "unknown" | "healthy" | "broken" | "unavailable";
   status: "active" | "disabled" | "untrusted" | "unhealthy";
+  children?: ComponentPaneState[];
 }
 
 interface ComponentPanePackage {
@@ -61,6 +62,7 @@ function makeIcon(symbol: string, size = 16): SVGSVGElement {
 function componentKindLabel(component: ComponentPaneState | ComponentPaneManifest): string {
   const manifest = "manifest" in component ? component.manifest : component;
   if (manifest.source === "mcp") return "MCP";
+  if (manifest.capability === "agent-tool-collection") return "工具集合";
   if (manifest.capability === "desktop.ui-pane") return "界面";
   if (manifest.capability === "desktop.language-service") return "语言服务";
   return "工具";
@@ -109,7 +111,40 @@ function componentStatusLabel(component: ComponentPaneState): string {
 }
 
 function isManagedBuiltin(component: ComponentPaneState): boolean {
+  if (component.children?.length) return false;
   return component.manifest.kind === "optional" && component.manifest.source === "builtin" && Boolean(component.manifest.providedBy);
+}
+
+function isFirstPartyAgentTool(component: ComponentPaneState): boolean {
+  const manifest = component.manifest;
+  return !component.children?.length && manifest.source === "builtin" && manifest.capability === "agent-tool" && componentDomain(component) === "agent";
+}
+
+function makeAgentToolCollection(components: ComponentPaneState[]): ComponentPaneState | null {
+  if (components.length === 0) return null;
+  const children = [...components].sort((left, right) => componentTitle(left).localeCompare(componentTitle(right), "zh-CN"));
+  const allDisabled = children.every((child) => child.status === "disabled");
+  const anyUntrusted = children.some((child) => child.status === "untrusted");
+  const anyBroken = children.some((child) => child.status === "unhealthy" || child.health === "broken");
+  const manifest: ComponentPaneManifest = {
+    id: "extension.agent-tools",
+    kind: "optional",
+    capability: "agent-tool-collection",
+    source: "builtin",
+    productClass: "native",
+    hostSurface: "agent",
+    providedBy: "my-code-agent.agent-tools",
+    displayName: "Agent 工具",
+    description: "Agent 可用的第一方工具集合",
+  };
+  return {
+    manifest,
+    children,
+    enabled: children.some((child) => child.enabled),
+    trusted: children.every((child) => child.trusted),
+    health: anyBroken ? "broken" : children.every((child) => child.health === "healthy") ? "healthy" : "unknown",
+    status: anyUntrusted ? "untrusted" : allDisabled ? "disabled" : "active",
+  };
 }
 
 async function fetchComponentCatalog(): Promise<ComponentPaneCatalog> {
@@ -206,11 +241,11 @@ function renderInstalledRows(container: HTMLElement, components: ComponentPaneSt
     const main = makeElement("div", "component-row-main");
     main.append(
       makeElement("div", "component-name", componentTitle(component)),
-      makeElement("div", "component-row-summary", component.manifest.description || componentKindLabel(component)),
+      makeElement("div", "component-row-summary", component.children?.length ? `${component.children.length} 个工具` : (component.manifest.description || componentKindLabel(component))),
       makeElement("div", "component-row-meta", `${componentOriginLabel(component)} · ${componentKindLabel(component)} · ${componentStatusLabel(component)}`),
     );
     row.append(icon, main);
-    const openDetails = (): void => componentPaneApp.UI?.openComponentTab?.({ ...component.manifest, enabled: component.enabled, status: component.status, installed: true });
+    const openDetails = (): void => componentPaneApp.UI?.openComponentTab?.({ ...component.manifest, ...(component.children?.length ? { children: component.children.map((child) => ({ ...child.manifest, id: child.manifest.id, enabled: child.enabled, status: child.status, health: child.health })) } : {}), enabled: component.enabled, status: component.status, installed: true });
     row.addEventListener("click", (event) => {
       if ((event.target as Element)?.closest("button")) return;
       openDetails();
@@ -456,9 +491,18 @@ export function componentsPaneRender(container: HTMLElement): () => void {
       return;
     }
 
-    const extensions = catalog.extensions
+    const rawExtensions = catalog.extensions;
+    const agentTools = rawExtensions.filter(isFirstPartyAgentTool);
+    const agentCollection = makeAgentToolCollection(agentTools);
+    const extensions = rawExtensions
+      .filter((component) => !isFirstPartyAgentTool(component))
       .filter((component) => componentMatches(component, query, filter))
       .sort((left, right) => left.manifest.id.localeCompare(right.manifest.id));
+    if (agentCollection) {
+      const collectionMatches = agentTools.some((component) => componentMatches(component, query, filter));
+      if (collectionMatches) extensions.push(agentCollection);
+    }
+    extensions.sort((left, right) => componentTitle(left).localeCompare(componentTitle(right), "zh-CN"));
     const integrations = catalog.integrations
       .filter((component) => componentMatches(component, query, filter))
       .sort((left, right) => left.manifest.id.localeCompare(right.manifest.id));

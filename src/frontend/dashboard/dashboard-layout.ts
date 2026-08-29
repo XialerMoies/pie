@@ -351,10 +351,52 @@ function _syncMainArea(activeId: string | null, items: AppTab[]): void {
 
 type ComponentTabManifest = NonNullable<AppTab['componentManifest']>;
 
+function renderAgentToolCollectionTab(tab: AppTab, manifest: ComponentTabManifest, root: HTMLElement): void {
+  const children = manifest.children || [];
+  const title = manifest.displayName || "Agent 工具";
+  const value = (item: unknown): string => typeof item === 'string' && item.trim() ? E(item) : '未提供';
+  const rows = children.map((child) => {
+    const state = child.status === 'active' ? '已启用' : child.status === 'disabled' ? '已停用' : child.status === 'untrusted' ? '未信任' : '不可用';
+    const canManage = Boolean(child.id);
+    return `<article class="component-tool-row" data-tool-id="${E(child.id)}"><div class="component-tool-main"><strong>${E(child.displayName || child.id)}</strong><span>${value(child.description)}</span></div><span class="component-tool-status">${state}</span>${canManage ? `<button class="component-detail-action component-tool-toggle" data-tool-action="toggle" type="button">${state === '已停用' ? '启用' : '停用'}</button>` : ''}</article>`;
+  }).join('');
+  root.innerHTML = `<article class="component-detail component-tool-collection" data-component-detail="${E(manifest.id)}">
+    <header class="component-detail-header"><div class="component-detail-title"><span class="component-detail-icon">${S('ipuzzle', 22)}</span><div><h1>${E(title)}</h1><p>${value(manifest.description)}</p></div></div></header>
+    <section class="component-detail-section"><h2>集合信息</h2><dl class="component-detail-grid"><div><dt>归属</dt><dd>Agent</dd></div><div><dt>类型</dt><dd>功能扩展集合</dd></div><div><dt>工具数量</dt><dd>${children.length}</dd></div></dl></section>
+    <section class="component-detail-section"><h2>包含工具</h2><div class="component-tool-list">${rows || '<p class="component-detail-deps">暂无已登记工具</p>'}</div></section>
+  </article>`;
+  root.querySelectorAll<HTMLButtonElement>('[data-tool-action="toggle"]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const row = button.closest<HTMLElement>('[data-tool-id]');
+      const id = row?.dataset.toolId;
+      const child = children.find((item) => item.id === id);
+      if (!id || !child) return;
+      button.disabled = true;
+      const enabling = child.status === 'disabled';
+      try {
+        const response = await fetch(`/api/components/${encodeURIComponent(id)}/${enabling ? 'enable' : 'disable'}`, { method: 'POST', credentials: 'include' });
+        if (!response.ok) throw new Error(`工具${enabling ? '启用' : '停用'}失败`);
+        child.status = enabling ? 'active' : 'disabled';
+        child.enabled = enabling;
+        App.UI.toast?.(`${child.displayName || id} ${enabling ? '已启用' : '已停用'}`, 'success');
+        renderAgentToolCollectionTab(tab, manifest, root);
+        App.UI.syncComponents?.();
+      } catch (error) {
+        App.UI.toast?.(error instanceof Error ? error.message : '工具操作失败', 'error');
+        button.disabled = false;
+      }
+    });
+  });
+}
+
 function renderComponentTab(tab: AppTab): void {
   const root = $('component-content');
   const manifest = tab.componentManifest;
   if (!root || !manifest) return;
+  if (manifest.capability === 'agent-tool-collection') {
+    renderAgentToolCollectionTab(tab, manifest, root);
+    return;
+  }
   if (manifest.source === 'mcp') {
     void renderMcpServerTab(tab, manifest, root);
     return;

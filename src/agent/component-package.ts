@@ -393,6 +393,7 @@ export const FILE_READ_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   componentId: "tool.file-read",
   entry: "src/agent/tools/file-read.ts",
   description: "First-party bounded workspace file reader",
+  displayName: "文件读取",
 })
 
 export const EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
@@ -400,6 +401,7 @@ export const EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifes
   componentId: "tool.explorer-list",
   entry: "src/agent/tools/explorer-list.ts",
   description: "First-party workspace directory explorer",
+  displayName: "目录浏览",
 })
 
 export const SEARCH_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
@@ -407,6 +409,7 @@ export const SEARCH_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   componentId: "tool.search",
   entry: "src/agent/tools/search.ts",
   description: "First-party bounded workspace search",
+  displayName: "工作区搜索",
 })
 
 export const GIT_STATUS_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
@@ -414,6 +417,7 @@ export const GIT_STATUS_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   componentId: "tool.git-status",
   entry: "src/agent/tools/git-status.ts",
   description: "First-party read-only Git status viewer",
+  displayName: "Git 状态",
 })
 
 export const GIT_LOG_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
@@ -421,6 +425,7 @@ export const GIT_LOG_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   componentId: "tool.git-log",
   entry: "src/agent/tools/git-log.ts",
   description: "First-party read-only Git history viewer",
+  displayName: "Git 提交历史",
 })
 
 export const FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
@@ -428,6 +433,7 @@ export const FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest
   componentId: "tool.file-outline",
   entry: "src/agent/tools/file-outline.ts",
   description: "First-party source file outline extractor",
+  displayName: "文件结构",
 })
 
 export const WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
@@ -435,6 +441,7 @@ export const WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   componentId: "tool.web-search",
   entry: "src/agent/tools/web-search.ts",
   description: "First-party web search capability",
+  displayName: "网页搜索",
   network: true,
   secrets: ["provider.apiKey"],
   maxNetworkRequests: 10,
@@ -445,6 +452,7 @@ export const WEB_FETCH_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   componentId: "tool.web-fetch",
   entry: "src/agent/tools/web-fetch.ts",
   description: "First-party bounded web fetch capability",
+  displayName: "网页读取",
   network: true,
   maxNetworkRequests: 10,
   maxFileBytes: 524_288,
@@ -455,6 +463,7 @@ export const WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManife
   componentId: "tool.write-agent-md",
   entry: "src/agent/tools/agent-md.ts",
   description: "First-party workspace AGENT.md writer",
+  displayName: "项目指南写入",
   filesystem: ["read", "write", "create"],
   maxFileBytes: 1_048_576,
 })
@@ -464,6 +473,7 @@ export const STR_REPLACE_EDITOR_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageMa
   componentId: "tool.str-replace-editor",
   entry: "src/agent/tools/str-replace-editor.ts",
   description: "First-party precise workspace file editor",
+  displayName: "精确编辑",
   filesystem: ["read", "write"],
   maxFileBytes: 1_048_576,
 })
@@ -473,6 +483,7 @@ export const FILE_WRITE_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   componentId: "tool.file-write",
   entry: "src/agent/tools/file-write.ts",
   description: "First-party workspace file writer",
+  displayName: "文件写入",
   filesystem: ["read", "write", "create"],
   maxFileBytes: 16_777_216,
 })
@@ -482,6 +493,7 @@ export const MEMORY_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   componentId: "tool.memory",
   entry: "src/agent/tools/memory.ts",
   description: "First-party scoped memory tools",
+  displayName: "记忆管理",
   filesystem: ["read", "write", "create", "remove"],
   maxFileBytes: 16_777_216,
 })
@@ -491,6 +503,7 @@ export const PLAN_MODE_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   componentId: "tool.plan-mode",
   entry: "src/agent/tools/plan-mode.ts",
   description: "First-party planning lifecycle tools",
+  displayName: "规划模式",
   filesystem: [],
   maxFileBytes: 1,
 })
@@ -500,6 +513,7 @@ export const SKILL_FACTS_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest(
   componentId: "tool.skill-facts",
   entry: "src/agent/tools/skill-facts.ts",
   description: "First-party skill verification facts tool",
+  displayName: "技能事实核验",
 })
 
 export const DELEGATE_TASKS_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
@@ -507,6 +521,7 @@ export const DELEGATE_TASKS_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManife
   componentId: "tool.delegate-tasks",
   entry: "src/agent/tools/delegate-tasks.ts",
   description: "First-party sub-agent delegation tool",
+  displayName: "子 Agent 委派",
   filesystem: ["read"],
   maxMemoryMb: 256,
   maxCpuMs: 120_000,
@@ -517,6 +532,7 @@ export const COMMAND_COMPONENT_PACKAGE_MANIFEST = firstPartyPackageManifest({
   componentId: "tool.command",
   entry: "src/agent/tools/command.ts",
   description: "First-party governed shell command tool",
+  displayName: "受控命令",
   network: true,
   filesystem: ["read", "write", "create", "remove"],
   subprocess: true,
@@ -554,6 +570,7 @@ export const SEARCH_PANE_COMPONENT_PACKAGE_MANIFEST = firstPartyUiPackageManifes
   componentId: "ui.pane.search",
   entry: "src/frontend/pane/search/index.ts",
   description: "First-party workspace search pane",
+  displayName: "搜索面板",
   capability: "desktop.ui-pane",
 })
 
@@ -562,6 +579,7 @@ export const GIT_PANE_COMPONENT_PACKAGE_MANIFEST = firstPartyUiPackageManifest({
   componentId: "ui.pane.git",
   entry: "src/frontend/pane/git/index.ts",
   description: "First-party Git pane",
+  displayName: "Git 面板",
   capability: "desktop.ui-pane",
 })
 
@@ -570,6 +588,7 @@ export const PROBLEMS_COMPONENT_PACKAGE_MANIFEST = firstPartyUiPackageManifest({
   componentId: "ui.problems",
   entry: "src/frontend/services/problems-store.ts",
   description: "First-party problems status contribution",
+  displayName: "问题状态",
   capability: "desktop.ui-pane",
 })
 
@@ -578,6 +597,7 @@ export const TYPESCRIPT_LANGUAGE_SERVICE_COMPONENT_PACKAGE_MANIFEST = firstParty
   componentId: "language-service.typescript",
   entry: "src/frontend/editor/monaco-setup.ts",
   description: "First-party TypeScript diagnostics service",
+  displayName: "TypeScript 诊断",
   capability: "desktop.language-service",
 })
 
