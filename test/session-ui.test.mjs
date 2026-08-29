@@ -24,9 +24,6 @@ global.localStorage = {
 
 const registeredPanes = new Map();
 const timelineCalls = [];
-global.registerPane = (name, render) => {
-  registeredPanes.set(name, render);
-};
 
 global.$ = (id) => doc.getElementById(id);
 global.E = (value) => String(value ?? "")
@@ -91,6 +88,7 @@ win.App = {
     touchSession: () => {},
   },
   UI: {},
+  UIContributions: { register(definition) { registeredPanes.set(definition.id.replace("ui.pane.", ""), definition.mount); return { id: definition.id }; }, get() { return undefined; } },
   Chat: {},
   ChatTimeline: { sync: () => timelineCalls.push("sync") },
   File: {},

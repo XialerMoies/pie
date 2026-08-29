@@ -264,4 +264,7 @@ document.addEventListener("click", (e) => {
   if (tab?.dataset?.tab) switchMcpTab(tab.dataset.tab as "installed" | "explore");
 });
 
-registerPane("mcp", mcpPaneRender);
+const mcpContributionRegistry = (window as any).App?.UIContributions;
+if (mcpContributionRegistry && !mcpContributionRegistry.get?.("ui.pane.mcp")) {
+  mcpContributionRegistry.register({ id: "ui.pane.mcp", componentId: "ui.pane.mcp", kind: "pane", mount: mcpPaneRender });
+}

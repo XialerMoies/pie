@@ -276,4 +276,7 @@ function toggleExplorerFilter(): void {
   });
 }
 
-registerPane('explorer', explorerRender);
+const explorerContributionRegistry = (window as any).App?.UIContributions;
+if (explorerContributionRegistry && !explorerContributionRegistry.get?.("ui.pane.explorer")) {
+  explorerContributionRegistry.register({ id: "ui.pane.explorer", componentId: "ui.pane.explorer", kind: "pane", mount: explorerRender });
+}

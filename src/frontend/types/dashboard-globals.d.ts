@@ -38,7 +38,6 @@ declare function confirmPermissionAsync(input: {
 declare function F(s: number): string;
 declare function sb(id: string): void;
 declare function toast(msg: string, type?: 'info' | 'error' | 'success'): void;
-declare function registerPane(name: string, render: (container: HTMLElement) => void | (() => void)): void;
 declare function tabContextMenu(e: MouseEvent, id: string): void;
 declare function tabMoreMenu(e: MouseEvent): void;
 

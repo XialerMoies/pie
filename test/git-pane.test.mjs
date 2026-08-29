@@ -19,7 +19,6 @@ global.E = (value) => String(value ?? "")
 global.toast = () => {};
 
 const registerCalls = [];
-global.registerPane = (name, render) => registerCalls.push([name, render]);
 
 const maliciousPath = `src/quote'\"<img src=x onerror=alert(1)>.ts`;
 const requests = [];
@@ -29,6 +28,7 @@ win.App = {
   State: { getWorkspacePath: () => "E:/my-code-agent" },
   Git: {},
   UI: {},
+  UIContributions: { register(definition) { registerCalls.push([definition.id.replace("ui.pane.", ""), definition.mount]); return { id: definition.id }; }, get() { return undefined; } },
 };
 global.App = win.App;
 win.ExplorerService = { iconFor: () => "<svg></svg>" };

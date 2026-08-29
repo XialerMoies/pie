@@ -37,7 +37,7 @@ win.ExplorerService = global.ExplorerService;
 global.Tree = class {
   setData() {}
 };
-global.registerPane = (name, render) => registerCalls.push([name, render]);
+win.App.UIContributions = { register(definition) { registerCalls.push([definition.id.replace("ui.pane.", ""), definition.mount]); return { id: definition.id }; }, get() { return undefined; } };
 
 before(async () => {
   await import(`../src/frontend/pane/explorer/explorer-views.ts?t=${Date.now()}`);

@@ -473,4 +473,7 @@ function gitAddAppBindings(): void {
 }
 gitAddAppBindings();
 
-registerPane("git", gitPaneRender);
+const gitContributionRegistry = (window as any).App?.UIContributions;
+if (gitContributionRegistry && !gitContributionRegistry.get?.("ui.pane.git")) {
+  gitContributionRegistry.register({ id: "ui.pane.git", componentId: "ui.pane.git", kind: "pane", mount: gitPaneRender });
+}

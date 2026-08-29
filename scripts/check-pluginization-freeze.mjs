@@ -51,7 +51,9 @@ function collectMetrics() {
   const capabilityCatalog = existsSync(capabilityCatalogPath)
     ? JSON.parse(readFileSync(capabilityCatalogPath, "utf8"))
     : { routes: [] }
-  const paneRegistrations = paneFiles.reduce((sum, file) => sum + countMatches(file, /\bregisterPane\s*\(/gu), 0)
+  const paneRegistrations = paneFiles
+    .filter((file) => !/[\\/]pane[\\/]components[\\/]index\.ts$/u.test(file))
+    .reduce((sum, file) => sum + countMatches(file, /\.register\(\{\s*id:\s*["']ui\.pane\./gu), 0)
   const testReport = buildTestReport()
 
   return {
@@ -64,7 +66,7 @@ function collectMetrics() {
     firstPartyComponentPackages: countMatches(packageFile, /^\s{2}[A-Z0-9_]+_COMPONENT_PACKAGE_MANIFEST,?$/gmu),
     uiPaneRegistrations: paneRegistrations,
     httpRouteEntries: Array.isArray(capabilityCatalog.routes) ? capabilityCatalog.routes.length : 0,
-    componentCatalogEntrypoints: countMatches(resolve(ROOT, "src/frontend/pane/components/index.ts"), /registerPane\?\.\(\s*["']components/gu),
+    componentCatalogEntrypoints: countMatches(resolve(ROOT, "src/frontend/pane/components/index.ts"), /componentsContributionRegistry\.register\(/gu),
   }
 }
 

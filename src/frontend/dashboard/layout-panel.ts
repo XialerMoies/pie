@@ -151,13 +151,6 @@ function renderPanel(name: string, pc?: HTMLElement | null): void {
       throw error;
     }
   }
-  const paneFn = layoutPanelApp.UI?.getPane?.(name);
-  if (paneFn) {
-    const cleanup = paneFn(pc);
-    _mountedPaneCleanup = typeof cleanup === 'function' ? cleanup : null;
-    _mountedPaneName = name;
-    return;
-  }
   pc.innerHTML = `<div class="sg-item dim">面板 "${E(name)}" 未注册</div>`;
 }
 

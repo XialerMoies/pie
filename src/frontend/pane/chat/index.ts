@@ -351,5 +351,8 @@ chatPaneApp.Session.openConvResult = openConvResult;
 chatPaneApp.Session.openConvMatch = openConvMatch;
 chatPaneApp.Session.isConversationSearchActive = isConversationSearchActive;
 
-registerPane('chat', chatPaneRender);
+const chatContributionRegistry = (window as any).App?.UIContributions;
+if (chatContributionRegistry && !chatContributionRegistry.get?.("ui.pane.chat")) {
+  chatContributionRegistry.register({ id: "ui.pane.chat", componentId: "ui.pane.chat", kind: "pane", mount: chatPaneRender });
+}
 

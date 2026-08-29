@@ -173,6 +173,10 @@ async function createMcpPaneHarness() {
           },
         },
         McpState: { normalize: () => "connected", label: () => "connected" },
+        UIContributions: {
+          register(definition) { if (definition.id === "ui.pane.mcp") renderPane = definition.mount; return { id: definition.id }; },
+          get(id) { return id === "ui.pane.mcp" && renderPane ? { mount: renderPane } : undefined; },
+        },
       },
     },
     App: null,
@@ -198,9 +202,6 @@ async function createMcpPaneHarness() {
     E: (value) => String(value),
     toast: () => {},
     confirm: () => true,
-    registerPane(name, render) {
-      if (name === "mcp") renderPane = render;
-    },
   };
   context.App = context.window.App;
 

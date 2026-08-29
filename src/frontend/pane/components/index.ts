@@ -452,4 +452,7 @@ export function componentsPaneRender(container: HTMLElement): () => void {
   return () => { disposed = true; };
 }
 
-componentPaneApp.UI?.registerPane?.("components", componentsPaneRender);
+const componentsContributionRegistry = componentPaneApp.UIContributions;
+if (componentsContributionRegistry && !componentsContributionRegistry.get?.("ui.pane.components")) {
+  componentsContributionRegistry.register({ id: "ui.pane.components", componentId: "ui.pane.components", kind: "pane", mount: componentsPaneRender });
+}

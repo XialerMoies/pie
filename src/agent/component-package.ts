@@ -636,15 +636,6 @@ export function registerFirstPartyComponentPackages(manager: CapabilityComponent
   }
 }
 
-/** Install a package already shipped by this application; no arbitrary code is loaded. */
-export function installFirstPartyComponentPackage(manager: CapabilityComponentManager, packageId: string): Readonly<CapabilityComponentPackageManifest> {
-  const manifest = firstPartyComponentPackage(packageId)
-  if (!manifest) throw new CapabilityComponentPackageError("unknown_first_party_package", `Unknown first-party package: ${packageId || "(empty)"}`)
-  if (manager.get(manifest.component.id)) throw new CapabilityComponentError("duplicate_component", `Component already installed: ${manifest.component.id}`, manifest.component.id)
-  manager.register(manifest.component, { trusted: true, enabled: true, health: "healthy" })
-  return manifest
-}
-
 const TOOL_COMPONENT_IDS: Readonly<Record<string, string>> = Object.freeze({
   file_read: FILE_READ_COMPONENT_PACKAGE_MANIFEST.component.id,
   explorer_list: EXPLORER_LIST_COMPONENT_PACKAGE_MANIFEST.component.id,

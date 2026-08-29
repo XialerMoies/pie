@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { buildTestManifest, validateTestManifest } from "./test-manifest.mjs";
 
@@ -28,8 +28,26 @@ export function buildTestReport() {
     filesByLayer: countBy(entries, "layer"),
     testsBySuite: testsBy("suite"),
     testsByLayer: testsBy("layer"),
+    refactorMetrics: buildRefactorMetrics(),
     entries,
   };
+}
+
+function buildRefactorMetrics() {
+  const sourceRoot = resolve(ROOT, "src");
+  const files = [];
+  const walk = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name === "gen" || entry.name === "node_modules") continue;
+      const path = resolve(directory, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (/\.(?:ts|tsx|js|mjs)$/u.test(entry.name)) files.push(path);
+    }
+  };
+  walk(sourceRoot);
+  const lines = files.reduce((sum, file) => sum + readFileSync(file, "utf8").split(/\r?\n/u).length - 1, 0);
+  const publicEntrypoints = files.reduce((sum, file) => sum + (readFileSync(file, "utf8").match(/^export\s+(?:function|const|class|type|interface)/gmu)?.length ?? 0), 0);
+  return { productionFiles: files.length, productionLines: lines, publicEntrypoints };
 }
 
 export function reportMarkdown(report) {
@@ -45,6 +63,7 @@ export function reportMarkdown(report) {
     `- Files by layer: ${Object.entries(report.filesByLayer).map(([key, value]) => `\`${key}\` ${value}`).join(", ")}`,
     `- Declared blocks by suite: ${Object.entries(report.testsBySuite).map(([key, value]) => `\`${key}\` ${value}`).join(", ")}`,
     `- Declared blocks by layer: ${Object.entries(report.testsByLayer).map(([key, value]) => `\`${key}\` ${value}`).join(", ")}`,
+    `- Refactor production footprint: **${report.refactorMetrics.productionLines}** lines in **${report.refactorMetrics.productionFiles}** modules; public entrypoints **${report.refactorMetrics.publicEntrypoints}**`,
     "",
     "Runtime pass/fail/skip counts must come from the test runner output for the run; this report never substitutes discovered files for executed tests.",
     "",

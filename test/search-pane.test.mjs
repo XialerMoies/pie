@@ -30,9 +30,6 @@ global.ExplorerService = { iconFor: () => "<svg></svg>" };
 win.ExplorerService = global.ExplorerService;
 
 const registerCalls = [];
-global.registerPane = (name, render) => {
-  registerCalls.push([name, render]);
-};
 
 const searchCounts = { file: 0, text: 0, case: 0, fallback: 0 };
 
@@ -43,6 +40,7 @@ win.App = {
     setWorkspacePath: (path) => win.localStorage.setItem("workspace_path", path),
   },
   UI: {},
+  UIContributions: { register(definition) { registerCalls.push([definition.id.replace("ui.pane.", ""), definition.mount]); return { id: definition.id }; }, get() { return undefined; } },
   File: {},
   Settings: {
     setSearchType(type) {

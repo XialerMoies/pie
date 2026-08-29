@@ -54,7 +54,6 @@ export {
   FIRST_PARTY_COMPONENT_PACKAGES,
   firstPartyComponentPackage,
   registerFirstPartyComponentPackages,
-  installFirstPartyComponentPackage,
   capabilityComponentIdForTool,
   capabilityComponentPackageForTool,
 } from "./component-package.js"

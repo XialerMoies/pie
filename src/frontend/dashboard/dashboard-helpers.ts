@@ -646,21 +646,6 @@ function winCtrl(action: string): void {
   else if (action === 'close') api.close();
 }
 
-// ─── Pane registry (compatibility bridge to host UI contributions) ─────
-const _panes: Record<string, (container: HTMLElement) => void | (() => void)> = {};
-function registerPane(name: string, render: (container: HTMLElement) => void | (() => void)): void {
-  const registry = (window as any).App?.UIContributions;
-  if (registry?.register) {
-    const id = `ui.pane.${name}`;
-    if (!registry.get?.(id)) registry.register({ id, componentId: id, kind: 'pane', mount: render });
-  }
-  _panes[name] = render;
-  console.log(`[pane] registered: "${name}"`);
-}
-function getPane(name: string): ((container: HTMLElement) => void | (() => void)) | undefined {
-  return _panes[name];
-}
-
 // ─── App 命名空间绑定 ──────────────────────────────────────
 const App: AppNamespace = window.App;
 App.UI.$ = $;
@@ -675,8 +660,6 @@ App.UI.getD = getD;
 App.UI.syncComponents = syncComponents;
 App.UI.refresh = refresh;
 App.UI.winCtrl = winCtrl;
-App.UI.registerPane = registerPane;
-App.UI.getPane = getPane;
 App.UI.placeContextMenu = placeContextMenu;
 App.UI.mark = mark;
 App.UI.logTiming = logTiming;

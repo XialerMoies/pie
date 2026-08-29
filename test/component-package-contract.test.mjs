@@ -29,7 +29,6 @@ import {
   TYPESCRIPT_LANGUAGE_SERVICE_COMPONENT_PACKAGE_MANIFEST,
   FIRST_PARTY_COMPONENT_PACKAGES,
   firstPartyComponentPackage,
-  installFirstPartyComponentPackage,
   capabilityComponentIdForTool,
   normalizeCapabilityComponentPackageManifest,
   assertCapabilityComponentPackageCompatible,
@@ -115,7 +114,7 @@ describe("capability component package contract", () => {
     assert.deepEqual(pool.project({ audience: "main", componentManager: manager }), [])
     assert.equal(firstPartyComponentPackage(FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId), FILE_READ_COMPONENT_PACKAGE_MANIFEST)
     assert.equal(FIRST_PARTY_COMPONENT_PACKAGES.length, 20)
-    installFirstPartyComponentPackage(manager, FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId)
+    manager.register(FILE_READ_COMPONENT_PACKAGE_MANIFEST.component, { trusted: true, enabled: true, health: "healthy" })
     assert.deepEqual(pool.project({ audience: "main", componentManager: manager }).map((tool) => tool.name), ["file_read"])
   })
 
@@ -218,7 +217,7 @@ describe("capability component package contract", () => {
       await restarted.restore(stateFile)
       assert.deepEqual(pool.project({ audience: "main", featureGates: "*", componentManager: restarted }), [])
       for (const manifest of manifests) assert.equal(restarted.get(manifest.component.id), undefined)
-      for (const manifest of manifests) installFirstPartyComponentPackage(restarted, manifest.packageId)
+      for (const manifest of manifests) restarted.register(manifest.component, { trusted: true, enabled: true, health: "healthy" })
       assert.deepEqual(pool.project({ audience: "main", featureGates: "*", componentManager: restarted }).map((tool) => tool.name), tools.map((tool) => tool.name))
     } finally {
       rmSync(root, { recursive: true, force: true })

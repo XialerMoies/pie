@@ -558,4 +558,7 @@ function addAppBindings(): void {
 }
 addAppBindings();
 
-registerPane("search", searchPaneRender);
+const searchContributionRegistry = (window as any).App?.UIContributions;
+if (searchContributionRegistry && !searchContributionRegistry.get?.("ui.pane.search")) {
+  searchContributionRegistry.register({ id: "ui.pane.search", componentId: "ui.pane.search", kind: "pane", mount: searchPaneRender });
+}

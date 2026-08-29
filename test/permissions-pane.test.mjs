@@ -27,7 +27,6 @@ global.toast = (msg, type) => {
 global.confirmAsync = async () => true;
 
 const registerCalls = [];
-global.registerPane = (...args) => registerCalls.push(args);
 win.App = {
   StatusBar: {
     setNotice: (message, type) => {
@@ -35,6 +34,7 @@ win.App = {
     },
     clearNotice: () => {},
   },
+  UIContributions: { register(definition) { registerCalls.push([definition.id.replace("ui.pane.", ""), definition.mount]); return { id: definition.id }; }, get() { return undefined; } },
 };
 global.App = win.App;
 

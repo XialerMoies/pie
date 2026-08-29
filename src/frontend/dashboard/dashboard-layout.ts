@@ -370,10 +370,9 @@ function renderMcpManagementTab(): void {
   const root = $('component-content');
   if (!root || _mcpManagementCleanup) return;
   root.dataset.mcpMode = 'catalog';
-  const render = App.UI.getPane?.('mcp');
-  if (render) {
-    const cleanup = render(root);
-    _mcpManagementCleanup = typeof cleanup === 'function' ? cleanup : null;
+  const contribution = App.UIContributions?.get?.('ui.pane.mcp');
+  if (contribution) {
+    _mcpManagementCleanup = contribution.mount(root);
   } else {
     root.innerHTML = '<div class="component-detail"><h1>添加 MCP Server</h1><p>MCP Server 安装界面尚未加载。</p></div>';
   }

@@ -145,7 +145,6 @@ export function syncMcpServerComponent(
     version: "1",
     kind: "optional",
     capability: "mcp.server",
-    parentId: "mcp-host-integration",
     source: "mcp",
     productClass: "mcp",
     hostSurface: "mcp-service",
@@ -178,7 +177,7 @@ async function syncConfiguredServerComponents(
   const knownIds = new Set([
     ..._componentIds,
     ...capabilityComponentManager.list()
-      .filter((state) => state.manifest.source === "mcp" && state.manifest.parentId === "mcp-host-integration")
+      .filter((state) => state.manifest.source === "mcp")
       .map((state) => state.manifest.id),
   ])
   for (const id of knownIds) {

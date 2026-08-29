@@ -49,7 +49,6 @@ win.toast = globalThis.toast;
 globalThis.confirmAsync = async () => true;
 globalThis.winCtrl = () => {};
 globalThis.refresh = async () => {};
-globalThis.getPane = () => null;
 globalThis.S = (name, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24"><use href="#${name}"/></svg>`;
 globalThis.E = (s) => String(s ?? "");
 globalThis.F = (s) => Math.floor(s/60) + '分' + Math.floor(s%60) + '秒';
@@ -107,6 +106,13 @@ before(async () => {
   await import(`../src/frontend/chat/chat-event-node.ts?t=${ts}`);
   await import(`../src/frontend/chat/chat-render.ts?t=${ts}`);
   await import(`../src/frontend/chat/chat-sse-controller.ts?t=${ts}`);
+  const definitions = new Map();
+  win.App.UIContributions = {
+    register(definition) { definitions.set(definition.id, definition); return { id: definition.id, mount: definition.mount }; },
+    get(id) { const definition = definitions.get(id); return definition ? { mount: definition.mount } : undefined; },
+    isActive(id) { return definitions.has(id); },
+    configure() {},
+  };
   await import(`../src/frontend/dashboard/dashboard-layout.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/layout-tabs.ts?t=${ts}`);
   await import(`../src/frontend/dashboard/layout-panel.ts?t=${ts}`);
@@ -1325,10 +1331,7 @@ describe("side panel interaction", () => {
     panel.className = "sinfo";
     panel.innerHTML = '<div class="panel-content" id="pc"></div>';
 
-    const originalGetPane = win.App.UI.getPane;
-    win.App.UI.getPane = (name) => name === "explorer"
-      ? (container) => { container.innerHTML = '<div id="explorer-pane">Explorer</div>'; }
-      : null;
+    win.App.UIContributions.register({ id: "ui.pane.explorer", componentId: "ui.pane.explorer", kind: "pane", mount: (container) => { container.innerHTML = '<div id="explorer-pane">Explorer</div>'; } });
     try {
       win.App.State.updatePanel({ active: "permissions", closed: false, width: 260 });
       win.App.UI.restorePanel("permissions");
@@ -1337,7 +1340,6 @@ describe("side panel interaction", () => {
       assert.ok(doc.getElementById("explorer-pane"));
       assert.doesNotMatch(panel.textContent, /未注册/);
     } finally {
-      win.App.UI.getPane = originalGetPane;
     }
   });
 
@@ -1379,7 +1381,6 @@ describe("side panel interaction", () => {
 
   it("unmounts an inactive optional pane and falls back to Explorer", () => {
     const originalRegistry = win.App.UIContributions;
-    const originalGetPane = win.App.UI.getPane;
     let active = true;
     let disposed = 0;
     const panel = doc.getElementById("si");
@@ -1397,12 +1398,9 @@ describe("side panel interaction", () => {
       },
     };
     win.App.UIContributions = {
-      get: (id) => id === "ui.pane.search" ? searchHandle : undefined,
+      get: (id) => id === "ui.pane.search" ? searchHandle : id === "ui.pane.explorer" ? { mount: (container) => { container.innerHTML = '<div id="fallback-explorer-pane">Explorer</div>'; } } : undefined,
       isActive: (id) => id !== "ui.pane.search" || active,
     };
-    win.App.UI.getPane = (name) => name === "explorer"
-      ? (container) => { container.innerHTML = '<div id="fallback-explorer-pane">Explorer</div>'; }
-      : undefined;
 
     try {
       win.App.State.updatePanel({ active: "search", closed: false, width: 260 });
@@ -1418,7 +1416,6 @@ describe("side panel interaction", () => {
     } finally {
       win.App.UI.disposeMountedPane();
       win.App.UIContributions = originalRegistry;
-      win.App.UI.getPane = originalGetPane;
       sidebar.remove();
     }
   });
@@ -1458,16 +1455,11 @@ describe("shortcut modal", () => {
 describe("dashboard refresh", () => {
   it("renders a static empty state instead of server-backed panes without a workspace", () => {
     const originalEmptyWorkspaceMode = win.__emptyWorkspaceMode;
-    const originalGetPane = globalThis.getPane;
     const container = doc.createElement("div");
     let paneCalls = 0;
 
     try {
       win.__emptyWorkspaceMode = true;
-      globalThis.getPane = () => () => {
-        paneCalls += 1;
-        container.innerHTML = '<div data-server-backed-pane="1"></div>';
-      };
 
       win.App.UI.renderPanel("chat", container);
 
@@ -1476,7 +1468,6 @@ describe("dashboard refresh", () => {
       assert.strictEqual(container.querySelector('[data-server-backed-pane="1"]'), null);
     } finally {
       win.__emptyWorkspaceMode = originalEmptyWorkspaceMode;
-      globalThis.getPane = originalGetPane;
     }
   });
 
@@ -1487,7 +1478,6 @@ describe("dashboard refresh", () => {
     const originalInitResizeHandle = globalThis.initResizeHandle;
     const originalRenderPanel = globalThis.renderPanel;
     const originalBind = globalThis.bind;
-    const originalGetPane = globalThis.getPane;
     const response = (body = {}) => ({
       ok: true,
       json: async () => body,
@@ -1509,12 +1499,11 @@ describe("dashboard refresh", () => {
     globalThis.initResizeHandle = () => {};
     globalThis.renderPanel = (...args) => win.App.UI.renderPanel(...args);
     globalThis.bind = () => {};
-    globalThis.getPane = (...args) => win.App.UI.getPane(...args);
 
     try {
-      win.App.UI.registerPane("refresh-regression", (container) => {
+      win.App.UIContributions.register({ id: "ui.pane.refresh-regression", componentId: "ui.pane.refresh-regression", kind: "pane", mount: (container) => {
         container.innerHTML = '<div id="refresh-regression-pane">mounted</div>';
-      });
+      }});
       win.App.State.updatePanel({ active: "refresh-regression", closed: false, width: 260 });
       win.App.UI.layout();
 
@@ -1536,7 +1525,6 @@ describe("dashboard refresh", () => {
       globalThis.initResizeHandle = originalInitResizeHandle;
       globalThis.renderPanel = originalRenderPanel;
       globalThis.bind = originalBind;
-      globalThis.getPane = originalGetPane;
     }
   });
 });

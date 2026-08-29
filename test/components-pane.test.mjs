@@ -36,7 +36,8 @@ describe("扩展与集成 pane", () => {
     };
     let openedMcpCatalog = 0;
     win.App = {
-      UI: { registerPane(id, render) { registrations.set(id, render); }, confirmAsync: async () => true, openComponentTab(component) { opened.push(component); }, openMcpManagementTab() { openedMcpCatalog += 1; } },
+      UI: { confirmAsync: async () => true, openComponentTab(component) { opened.push(component); }, openMcpManagementTab() { openedMcpCatalog += 1; } },
+      UIContributions: { register(definition) { registrations.set(definition.id.replace("ui.pane.", ""), definition.mount); return { id: definition.id }; }, get() { return undefined; } },
       StatusBar: { setNotice(message, kind) { notices.push({ message, kind }); } },
     };
     global.fetch = async (url, options = {}) => {
