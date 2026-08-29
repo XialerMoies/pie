@@ -11,7 +11,7 @@
 
 // ─── 类型 ───────────────────────────────────────────────
 
-export type TabKind = 'chat' | 'session' | 'file';
+export type TabKind = 'chat' | 'session' | 'file' | 'component' | 'mcp-management';
 
 export interface AppTab {
   workspace?: string;
@@ -28,6 +28,22 @@ export interface AppTab {
   renderer?: 'text' | 'image' | 'video'; // file 专用：渲染器类型
   sessionId?: string;            // session 专用：真实 session id
   draftId?: string;              // chat 专用：草稿前缀 draft:<ts>-<rand>
+  componentId?: string;
+  componentManifest?: {
+    id: string;
+    version?: string;
+    kind?: 'required' | 'optional';
+    capability?: string;
+    source?: string;
+    productClass?: string;
+    hostSurface?: string;
+    displayName?: string;
+    description?: string;
+    dependencies?: Array<string | { id: string; version?: string; optional?: boolean; capability?: string }>;
+  };
+  componentEnabled?: boolean;
+  componentStatus?: 'active' | 'disabled' | 'untrusted' | 'unhealthy';
+  componentInstalled?: boolean;
 }
 
 export interface TabsState {

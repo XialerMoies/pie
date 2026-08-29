@@ -341,6 +341,7 @@ function firstPartyPackageManifest(input: {
   componentId: string
   entry: string
   description: string
+  displayName?: string
   capability?: string
   network?: boolean | readonly string[]
   filesystem?: readonly CapabilityComponentPackagePermission[]
@@ -350,6 +351,8 @@ function firstPartyPackageManifest(input: {
   maxCpuMs?: number
   maxNetworkRequests?: number
   maxFileBytes?: number
+  productClass?: "native" | "mcp"
+  hostSurface?: "desktop" | "agent" | "server"
 }): Readonly<CapabilityComponentPackageManifest> {
   return normalizeCapabilityComponentPackageManifest({
     schemaVersion: CAPABILITY_COMPONENT_PACKAGE_SCHEMA_VERSION,
@@ -363,6 +366,9 @@ function firstPartyPackageManifest(input: {
       capability: input.capability ?? "agent-tool",
       providedBy: input.packageId,
       source: "builtin",
+      productClass: input.productClass ?? "native",
+      hostSurface: input.hostSurface ?? "agent",
+      ...(input.displayName ? { displayName: input.displayName } : {}),
       description: input.description,
     },
     entry: input.entry,
@@ -529,10 +535,15 @@ function firstPartyUiPackageManifest(input: {
   componentId: string
   entry: string
   description: string
+  displayName?: string
   capability: "desktop.ui-pane" | "desktop.language-service"
+  productClass?: "native"
+  hostSurface?: "desktop"
 }): Readonly<CapabilityComponentPackageManifest> {
   return firstPartyPackageManifest({
     ...input,
+    productClass: input.productClass ?? "native",
+    hostSurface: input.hostSurface ?? "desktop",
     filesystem: [],
     maxMemoryMb: 64,
     maxCpuMs: 10_000,
@@ -554,14 +565,6 @@ export const GIT_PANE_COMPONENT_PACKAGE_MANIFEST = firstPartyUiPackageManifest({
   componentId: "ui.pane.git",
   entry: "src/frontend/pane/git/index.ts",
   description: "First-party Git pane",
-  capability: "desktop.ui-pane",
-})
-
-export const MCP_PANE_COMPONENT_PACKAGE_MANIFEST = firstPartyUiPackageManifest({
-  packageId: "my-code-agent.ui.mcp-pane",
-  componentId: "ui.pane.mcp",
-  entry: "src/frontend/pane/mcp/index.ts",
-  description: "First-party MCP management pane",
   capability: "desktop.ui-pane",
 })
 
@@ -600,7 +603,6 @@ export const FIRST_PARTY_COMPONENT_PACKAGES: readonly Readonly<CapabilityCompone
   COMMAND_COMPONENT_PACKAGE_MANIFEST,
   SEARCH_PANE_COMPONENT_PACKAGE_MANIFEST,
   GIT_PANE_COMPONENT_PACKAGE_MANIFEST,
-  MCP_PANE_COMPONENT_PACKAGE_MANIFEST,
   PROBLEMS_COMPONENT_PACKAGE_MANIFEST,
   TYPESCRIPT_LANGUAGE_SERVICE_COMPONENT_PACKAGE_MANIFEST,
 ])
@@ -608,6 +610,21 @@ export const FIRST_PARTY_COMPONENT_PACKAGES: readonly Readonly<CapabilityCompone
 export function firstPartyComponentPackage(packageId: string): Readonly<CapabilityComponentPackageManifest> | undefined {
   const normalizedId = String(packageId || "").trim()
   return FIRST_PARTY_COMPONENT_PACKAGES.find((manifest) => manifest.packageId === normalizedId)
+}
+
+/** Resolve a shipped package from its stable component identity. */
+export function firstPartyComponentPackageForComponent(componentId: string): Readonly<CapabilityComponentPackageManifest> | undefined {
+  const normalizedId = String(componentId || "").trim()
+  return FIRST_PARTY_COMPONENT_PACKAGES.find((manifest) => manifest.component.id === normalizedId)
+}
+
+/** Safe package facts for desktop catalog and recovery UI. */
+export function firstPartyComponentPackageCatalog(): ReadonlyArray<Readonly<Pick<CapabilityComponentPackageManifest, "packageId" | "packageVersion" | "component">>> {
+  return FIRST_PARTY_COMPONENT_PACKAGES.map((manifest) => Object.freeze({
+    packageId: manifest.packageId,
+    packageVersion: manifest.packageVersion,
+    component: manifest.component,
+  }))
 }
 
 /** Seed packages supplied by the application before persisted install state is restored. */

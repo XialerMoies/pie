@@ -95,6 +95,30 @@ export {
   declarativeSubagentResource,
   declarativeProfileResource,
 } from "./declarative-resources.js"
+export {
+  EXTENSION_MANIFEST_SCHEMA_VERSION,
+  normalizeExtensionManifest,
+  validateExtensionManifest,
+  extensionManifestFromPackage,
+} from "./extension-manifest.js"
+export type {
+  ExtensionManifest,
+  ExtensionManifestCompatibility,
+  ExtensionManifestPermissions,
+  ExtensionContributionType,
+  ExtensionPermission,
+} from "./extension-manifest.js"
+export {
+  INTEGRATION_RECORD_SCHEMA_VERSION,
+  mcpIntegrationRecord,
+} from "./integrations.js"
+export type {
+  IntegrationRecord,
+  IntegrationKind,
+  IntegrationHealth,
+  IntegrationLifecycle,
+  McpIntegrationInput,
+} from "./integrations.js"
 export type {
   DeclarativeResourceKind,
   DeclarativeResourceSource,

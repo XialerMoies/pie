@@ -314,12 +314,18 @@ export function bootstrapApi(): Promise<void> {
 export async function syncComponents(): Promise<void> {
   try {
     const componentsResponse = await fetch('/api/components', { credentials: 'include', cache: 'no-store' });
-    const catalog = await componentsResponse.json().catch(() => null) as { components?: Array<{ manifest?: { id?: string }; enabled?: boolean; health?: string }> } | null;
+    const catalog = await componentsResponse.json().catch(() => null) as {
+      components?: Array<{ manifest?: { id?: string }; enabled?: boolean; health?: string }>;
+      availablePackages?: Array<{ component?: { id?: string } }>;
+    } | null;
     if (!componentsResponse.ok || !Array.isArray(catalog?.components)) return;
     const states = new Map(catalog.components.map((entry) => [String(entry.manifest?.id || ''), entry]));
+    const knownOptionalIds = new Set((catalog.availablePackages || []).map((entry) => String(entry.component?.id || '')).filter(Boolean));
     App.UIContributions?.configure({ isComponentActive: (id: string) => {
       const state = states.get(id);
-      return !state || state.enabled !== false && (state.health === undefined || state.health === 'healthy' || state.health === 'unknown');
+      return state
+        ? state.enabled !== false && (state.health === undefined || state.health === 'healthy' || state.health === 'unknown')
+        : !knownOptionalIds.has(id);
     }});
     App.UI.reconcileContributions?.();
   } catch {
@@ -663,6 +669,7 @@ App.UI.E = E;
 App.UI.F = F;
 App.UI.sb = sb;
 App.UI.toast = toast;
+App.UI.confirmAsync = confirmAsync;
 App.UI.bootstrapApi = bootstrapApi;
 App.UI.getD = getD;
 App.UI.syncComponents = syncComponents;

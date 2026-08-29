@@ -123,7 +123,7 @@ async function restoreSessionTabsImpl(): Promise<void> {
     : null;
   const activeId = preferredActiveId && restoredItems.some(tab => tab.id === preferredActiveId)
     ? preferredActiveId
-    : restoredItems.find(tab => tab.kind === 'session')?.id || null;
+    : restoredItems.find(tab => tab.kind === 'session' || tab.kind === 'component' || tab.kind === 'mcp-management')?.id || null;
 
   sessionRestoreApp.Tabs?.restoreTabs?.(restoredItems, activeId);
   sessionRestoreApp.State.syncTabs?.(restoredItems, activeId);

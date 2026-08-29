@@ -21,7 +21,7 @@ const FILE_NAME = "ui-state.json";
 export interface WorkspaceUiState {
   schemaVersion: number;
   workspacePath: string;
-  activeView: { type: "chat" } | { type: "session"; id: string } | { type: "file"; id: string };
+  activeView: { type: "chat" } | { type: "session"; id: string } | { type: "file"; id: string } | { type: "component"; id: string } | { type: "mcp-management"; id: string };
   tabs: {
     sessions: string[];
     files: Array<{ id: string; label: string; lang?: string }>;

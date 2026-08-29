@@ -28,6 +28,10 @@ docs/
 !docs/
 docs/*
 !docs/能力组件插件化清单.md
+!docs/插件化减法重构清单.md
+!docs/generated/
+docs/generated/*
+!docs/generated/pluginization-baseline.json
 .coverage/
 # 测试残留目录（mkdtemp 建于项目根，失败/中断时遗留）
 .tmp-*

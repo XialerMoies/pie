@@ -162,7 +162,7 @@ interface AppConstants {
 interface WorkspaceUiSnapshot {
   schemaVersion: 2;
   workspacePath: string;
-  activeView: { type: 'chat' } | { type: 'session'; id: string } | { type: 'file'; id: string };
+  activeView: { type: 'chat' } | { type: 'session'; id: string } | { type: 'file'; id: string } | { type: 'component'; id: string } | { type: 'mcp-management'; id: string };
   tabs: {
     sessions: string[];
     files: Array<{ id: string; label: string; content?: string; lang?: string }>;

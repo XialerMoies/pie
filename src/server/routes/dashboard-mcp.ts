@@ -2,7 +2,7 @@ import type { RouteHandler, ServerContext } from "./types.js";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { parseBody } from "./parse-body.js";
-import { disconnectServer, getServersStatus, mcpServerComponentId, syncMcpServerComponent, uninstallMcpServerComponent } from "../../agent/mcp/MCPClientService.js";
+import { disconnectServer, getMcpIntegrationRecords, getServersStatus, mcpServerComponentId, syncMcpServerComponent, uninstallMcpServerComponent } from "../../agent/mcp/MCPClientService.js";
 import { capabilityComponentManager } from "../../agent/capability-components.js";
 import { defaultGlobalConfigPath, getCandidatePaths, loadMcpConfigFromCandidates } from "../../agent/mcp/config.js";
 import { MCP_CATALOG } from "../../agent/mcp/builtin-list.js";
@@ -30,6 +30,7 @@ export const handleDashboardMcp: RouteHandler = async (req, res, ctx) => {
         const workspace = (runtime as any).currentWorkspace || p.APP_ROOT;
         const runtimeStatus = getServersStatus();
         const configResult = await loadAuthorizedMcpConfig(ctx, workspace, "mcp.servers.config");
+        const integrations = await getMcpIntegrationRecords(workspace, configResult.servers);
         const merged = configResult.servers.map((source) => {
           const runtime = runtimeStatus.find((s) => s.name === source.name);
           return {
@@ -38,6 +39,7 @@ export const handleDashboardMcp: RouteHandler = async (req, res, ctx) => {
             tools: runtime?.tools ?? [],
             error: runtime?.error,
             config: { command: source.config.command, args: source.config.args, url: source.config.url, transport: source.config.transport ?? "stdio", enabled: source.config.enabled ?? true },
+            integration: integrations.find((integration) => integration.name === source.name),
             canDelete: true,
           };
         });
@@ -301,7 +303,7 @@ async function authorizeMcpConfigFileRead(ctx: ServerContext, workspace: string,
   throw new ServerPermissionError("MCP config path is outside workspace/global config roots", 403, "permission_denied");
 }
 
-async function loadAuthorizedMcpConfig(ctx: ServerContext, workspace: string, source: string) {
+export async function loadAuthorizedMcpConfig(ctx: ServerContext, workspace: string, source: string) {
   const candidates = [];
   for (const candidate of getCandidatePaths(workspace)) {
     if (!pathExists(candidate.path)) continue;

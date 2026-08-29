@@ -80,6 +80,7 @@ export const FRONTEND_FILES = [
   "observer-owner.test.mjs",
   "frontend-component-tree.test.mjs",
   "ui-contribution-registry.test.mjs",
+  "components-pane.test.mjs",
   "chat-stream.test.mjs",
   "provider-settings-ui.test.mjs",
 ];

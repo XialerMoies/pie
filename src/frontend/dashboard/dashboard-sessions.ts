@@ -429,6 +429,9 @@ function newSession(): void {
   const draftId = createDraftSessionId();
   _setupDraftSession(draftId);
   writeSessionTabLabel(draftId, '新会话');
+  // _setupDraftSession renders before the label cache is written; repaint so
+  // the new tab presents its user-facing title instead of the draft id.
+  renderSessionTabs(draftId);
   toast('已开启新会话', 'success');
 }
 

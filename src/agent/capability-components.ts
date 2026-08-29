@@ -19,6 +19,9 @@ export type CapabilityComponentKind = "required" | "optional"
 export type CapabilityComponentSource = "builtin" | "workspace" | "user" | "mcp"
 export type CapabilityComponentHealth = "unknown" | "healthy" | "broken" | "unavailable"
 export type CapabilityComponentStatus = "active" | "disabled" | "untrusted" | "unhealthy"
+/** Product-facing ownership. This is deliberately separate from source/kind. */
+export type CapabilityComponentProductClass = "system" | "native" | "third-party" | "mcp"
+export type CapabilityComponentHostSurface = "runtime" | "desktop" | "agent" | "server" | "mcp-service"
 
 export interface CapabilityComponentDependency {
   id: string
@@ -50,6 +53,12 @@ export interface CapabilityComponentManifest {
   /** Provider package that owns this component's implementation. */
   providedBy?: string
   source?: CapabilityComponentSource
+  /** Explicit product classification used by the component manager UI. */
+  productClass?: CapabilityComponentProductClass
+  /** Explicit host/function ownership used for the second-level grouping. */
+  hostSurface?: CapabilityComponentHostSurface
+  /** User-facing component name. The stable id remains internal. */
+  displayName?: string
   description?: string
 }
 
@@ -99,6 +108,9 @@ export interface SyncComponentOptions {
   dependencies?: readonly (string | CapabilityComponentDependency)[]
   parentId?: string
   providedBy?: string
+  productClass?: CapabilityComponentProductClass
+  hostSurface?: CapabilityComponentHostSurface
+  displayName?: string
   trusted: boolean
   enabled: boolean
   health: CapabilityComponentHealth
@@ -159,6 +171,9 @@ function stableManifest(manifest: CapabilityComponentManifest): CapabilityCompon
     ...(manifest.parentId ? { parentId: manifest.parentId } : {}),
     ...(manifest.providedBy ? { providedBy: manifest.providedBy } : {}),
     source: manifest.source || "workspace",
+    ...(manifest.productClass ? { productClass: manifest.productClass } : {}),
+    ...(manifest.hostSurface ? { hostSurface: manifest.hostSurface } : {}),
+    ...(manifest.displayName ? { displayName: manifest.displayName } : {}),
     ...(manifest.description ? { description: manifest.description } : {}),
   }
 }
@@ -218,6 +233,45 @@ export function validateCapabilityComponentManifest(input: CapabilityComponentMa
   const providedBy = input.providedBy ? String(input.providedBy).trim() : undefined
   if (providedBy && !/^[a-z0-9][a-z0-9._-]*$/u.test(providedBy)) {
     throw new CapabilityComponentError("invalid_manifest", `Component ${id} has an invalid providedBy`, id)
+  }
+  const productClass = input.productClass
+  if (productClass !== undefined && !["system", "native", "third-party", "mcp"].includes(productClass)) {
+    throw new CapabilityComponentError("invalid_manifest", `Component ${id} has an invalid productClass`, id)
+  }
+  const hostSurface = input.hostSurface
+  if (hostSurface !== undefined && !["runtime", "desktop", "agent", "server", "mcp-service"].includes(hostSurface)) {
+    throw new CapabilityComponentError("invalid_manifest", `Component ${id} has an invalid hostSurface`, id)
+  }
+  const effectiveSource = input.source || "workspace"
+  if (productClass === "system" && input.kind !== "required") {
+    throw new CapabilityComponentError("invalid_manifest", `System component ${id} must be required`, id)
+  }
+  if (productClass === "system" && effectiveSource !== "builtin") {
+    throw new CapabilityComponentError("invalid_manifest", `System component ${id} must come from builtin`, id)
+  }
+  if (input.kind === "required" && productClass && productClass !== "system") {
+    throw new CapabilityComponentError("invalid_manifest", `Required component ${id} must belong to system`, id)
+  }
+  if (productClass === "native" && effectiveSource !== "builtin") {
+    throw new CapabilityComponentError("invalid_manifest", `Native component ${id} must come from builtin`, id)
+  }
+  if (productClass === "third-party" && !["workspace", "user"].includes(effectiveSource)) {
+    throw new CapabilityComponentError("invalid_manifest", `Third-party component ${id} must come from workspace or user`, id)
+  }
+  if (productClass === "mcp" && input.source !== "mcp") {
+    throw new CapabilityComponentError("invalid_manifest", `MCP component ${id} must declare source=mcp`, id)
+  }
+  if (input.source === "mcp" && productClass && productClass !== "mcp") {
+    throw new CapabilityComponentError("invalid_manifest", `MCP source component ${id} must belong to mcp`, id)
+  }
+  if (hostSurface === "runtime" && productClass && productClass !== "system") {
+    throw new CapabilityComponentError("invalid_manifest", `Runtime component ${id} must belong to system`, id)
+  }
+  if (["desktop", "agent", "server"].includes(hostSurface || "") && productClass && !["native", "third-party"].includes(productClass)) {
+    throw new CapabilityComponentError("invalid_manifest", `Product component ${id} must be native or third-party`, id)
+  }
+  if (hostSurface === "mcp-service" && productClass !== "mcp") {
+    throw new CapabilityComponentError("invalid_manifest", `MCP surface component ${id} must belong to mcp`, id)
   }
   return Object.freeze(stableManifest({ ...input, id, dependencies, ...(parentId ? { parentId } : {}), ...(providedBy ? { providedBy } : {}) }))
 }
@@ -629,6 +683,9 @@ export class CapabilityComponentManager {
       ...(options.providedBy || existing?.manifest.providedBy ? { providedBy: options.providedBy || existing?.manifest.providedBy } : {}),
       ...(options.replacementGroup || existing?.manifest.replacementGroup ? { replacementGroup: options.replacementGroup || existing?.manifest.replacementGroup } : {}),
       source: options.source || existing?.manifest.source || "workspace",
+      ...(options.productClass || existing?.manifest.productClass ? { productClass: options.productClass || existing?.manifest.productClass } : {}),
+      ...(options.hostSurface || existing?.manifest.hostSurface ? { hostSurface: options.hostSurface || existing?.manifest.hostSurface } : {}),
+      ...(options.displayName || existing?.manifest.displayName ? { displayName: options.displayName || existing?.manifest.displayName } : {}),
       ...(options.description || existing?.manifest.description ? { description: options.description || existing?.manifest.description } : {}),
     }
     if (!existing) return this.register(manifest, options)
@@ -997,14 +1054,14 @@ export class CapabilityComponentManager {
 }
 
 export const REQUIRED_COMPONENT_MANIFESTS: readonly CapabilityComponentManifest[] = Object.freeze([
-  { id: "bootstrap-kernel", version: "1", kind: "required", capability: "bootstrap", replacementGroup: "bootstrap", source: "builtin", description: "Minimal host lifecycle contract" },
-  { id: "agent-engine", version: "1", kind: "required", capability: "agent-engine", replacementGroup: "agent-engine", source: "builtin", description: "Session-scoped AgentEngine factory and adapter ownership" },
-  { id: "session-store", version: "1", kind: "required", capability: "session-store", replacementGroup: "session-store", source: "builtin" },
-  { id: "model-router", version: "1", kind: "required", capability: "model-router", replacementGroup: "model-router", source: "builtin" },
-  { id: "permission-evaluator", version: "1", kind: "required", capability: "permission", replacementGroup: "permission", source: "builtin" },
-  { id: "security-parser", version: "1", kind: "required", capability: "security-parser", replacementGroup: "security-parser", source: "builtin" },
-  { id: "tool-presentation", version: "1", kind: "required", capability: "tool-presentation", replacementGroup: "tool-presentation", source: "builtin" },
-  { id: "mcp-host-integration", version: "1", kind: "required", capability: "mcp-host", replacementGroup: "mcp-host", source: "builtin" },
+  { id: "bootstrap-kernel", version: "1", kind: "required", capability: "bootstrap", replacementGroup: "bootstrap", source: "builtin", productClass: "system", hostSurface: "runtime", description: "Minimal host lifecycle contract" },
+  { id: "agent-engine", version: "1", kind: "required", capability: "agent-engine", replacementGroup: "agent-engine", source: "builtin", productClass: "system", hostSurface: "runtime", description: "Session-scoped AgentEngine factory and adapter ownership" },
+  { id: "session-store", version: "1", kind: "required", capability: "session-store", replacementGroup: "session-store", source: "builtin", productClass: "system", hostSurface: "runtime" },
+  { id: "model-router", version: "1", kind: "required", capability: "model-router", replacementGroup: "model-router", source: "builtin", productClass: "system", hostSurface: "runtime" },
+  { id: "permission-evaluator", version: "1", kind: "required", capability: "permission", replacementGroup: "permission", source: "builtin", productClass: "system", hostSurface: "runtime" },
+  { id: "security-parser", version: "1", kind: "required", capability: "security-parser", replacementGroup: "security-parser", source: "builtin", productClass: "system", hostSurface: "runtime" },
+  { id: "tool-presentation", version: "1", kind: "required", capability: "tool-presentation", replacementGroup: "tool-presentation", source: "builtin", productClass: "system", hostSurface: "runtime" },
+  { id: "mcp-host-integration", version: "1", kind: "required", capability: "mcp-host", replacementGroup: "mcp-host", source: "builtin", productClass: "system", hostSurface: "runtime" },
 ])
 
 export const capabilityComponentManager = new CapabilityComponentManager(REQUIRED_COMPONENT_MANIFESTS)

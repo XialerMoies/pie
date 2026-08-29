@@ -154,7 +154,14 @@ describe("dashboard action delegation", () => {
     assert.match(css, /@media\(max-width:/);
     assert.strictEqual(app.querySelector("[data-layout-action='open-project-instance']"), null);
 
+    const componentsButton = app.querySelector("[data-layout-action='panel'][data-side='components']");
+    assert.ok(componentsButton, "能力组件应从左侧工具栏进入");
+    assert.match(componentsButton.innerHTML, /#ipuzzle/u, "能力组件入口应使用拼图 SVG 图标");
+    assert.equal(app.querySelector("[data-layout-action='panel'][data-side='mcp']"), null, "MCP 不应再有独立工具栏入口");
+    assert.equal(app.querySelector("#mcp-bar"), null, "MCP 计数条应并入能力组件目录");
+
     app.querySelector("[data-layout-action='panel'][data-side='search']")?.click();
+    componentsButton?.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
     app.querySelector("[data-layout-action='window'][data-window-action='minimize']")?.click();
     app.querySelector("[data-layout-action='launch-cli']")?.click();
     app.querySelector("[data-layout-action='settings']")?.click();
@@ -174,6 +181,7 @@ describe("dashboard action delegation", () => {
     await new Promise(resolve => queueMicrotask(resolve));
 
     assert.ok(calls.some(call => call[0] === "togglePanel" && call[1] === "search"));
+    assert.ok(calls.some(call => call[0] === "togglePanel" && call[1] === "components"));
     assert.ok(calls.some(call => call[0] === "winCtrl" && call[1] === "minimize"));
     assert.ok(calls.some(call => call[0] === "spawnTerminal"));
     assert.ok(calls.some(call => call[0] === "settings"));

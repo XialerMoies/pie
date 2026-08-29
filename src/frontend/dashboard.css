@@ -241,6 +241,52 @@ body{background:var(--bg);height:100vh}
 .sbar .spcr{flex:1}
 .sbar .bb{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:2px;padding-bottom:6px}
 
+/* ─── 能力组件（VS Code 风格扩展视图） ─────────────────────── */
+.components-header{padding:0 8px 10px;background:var(--bs)}
+.components-title-line{height:28px;display:flex;align-items:center;justify-content:space-between}
+.components-title{margin:0;color:var(--tx);font:600 .78rem var(--fb);letter-spacing:0}
+.components-header-actions{display:flex;align-items:center;gap:1px}
+.components-icon-button{width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:transparent;color:var(--tm);cursor:pointer}
+.components-icon-button:hover{background:var(--bh);color:var(--tx)}
+.components-icon-button svg,.components-filter-button svg{display:block}
+.components-search-row{display:flex;align-items:center;gap:4px;margin-top:7px}
+.components-search-row .ch-search{flex:1;min-width:0}
+.components-filter-button{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:3px;background:transparent;color:var(--tm);cursor:pointer}
+.components-filter-button:hover,.components-filter-button.on{border-color:var(--bd);background:var(--bh);color:var(--am)}
+.components-groups{padding:0 0 10px}
+.components-group{margin:0}
+.components-group-heading{width:100%;height:30px;display:flex;align-items:center;gap:3px;padding:0 9px;border:0;border-top:1px solid var(--bd);background:transparent;color:var(--ts);font:600 .69rem var(--fb);text-align:left;cursor:pointer}
+.components-group-heading:hover{background:var(--bh);color:var(--tx)}
+.components-chevron{width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;color:var(--tm)}
+.components-group-label{flex:1}
+.components-group-count{min-width:19px;height:18px;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;border-radius:9px;background:var(--bc);color:var(--ts);font:600 .59rem var(--fm)}
+.components-group-body{padding:0 0 4px}
+.components-origin-group{position:relative;margin:0}
+.components-origin-heading{width:100%;display:flex;align-items:center;gap:3px;height:25px;padding:0 12px 0 25px;border:0;border-top:1px solid color-mix(in srgb,var(--bd) 55%,transparent);background:transparent;color:var(--tm);font:600 .62rem var(--fb);text-align:left;cursor:pointer}
+.components-origin-heading:hover{background:var(--bh);color:var(--tx)}
+.components-origin-label{flex:1}
+.components-group-action{position:absolute;z-index:1;top:2px;right:8px;width:21px;height:21px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:3px;background:transparent;color:var(--tm);cursor:pointer}
+.components-group-action:hover{background:var(--bh);color:var(--am)}
+.components-origin-body{padding:0}
+.component-row{position:relative;display:flex;align-items:flex-start;gap:9px;min-height:54px;padding:8px 9px;border-bottom:1px solid color-mix(in srgb,var(--bd) 72%,transparent);background:transparent;transition:background .1s}
+.component-row:hover{background:var(--bh)}
+.component-row-icon{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 22px;margin-top:1px;color:var(--am)}
+.component-row-icon-muted{color:var(--tm)}
+.component-row-main{min-width:0;flex:1;padding-right:2px}
+.component-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tx);font:600 .69rem var(--fb)}
+.component-row-summary{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px;color:var(--ts);font:.64rem var(--fb)}
+.component-row-meta{margin-top:3px;color:var(--tm);font:.58rem var(--fm)}
+.component-actions{display:flex;align-items:center;gap:1px;flex:0 0 auto;opacity:0;transition:opacity .1s}
+.component-row:hover .component-actions,.component-row:focus-within .component-actions{opacity:1}
+.component-action{width:25px;height:25px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:transparent;color:var(--tm);cursor:pointer}
+.component-action:hover:not(:disabled){background:var(--bc);color:var(--am)}
+.component-action-muted:hover:not(:disabled){color:var(--rs)}
+.component-action-restore{margin-left:auto;opacity:0}
+.component-row:hover .component-action-restore,.component-row:focus-within .component-action-restore{opacity:1}
+.component-action:disabled{cursor:wait;opacity:.45}
+.components-empty{padding:18px 12px;color:var(--tm);font:.68rem var(--fb);text-align:center}
+.components-error{color:var(--rs)}
+
 /* ─── Info Panel ────────────────────────────────────────────── */
 .sg{margin-bottom:12px}
 .sg-t{font-size:.6rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--tm);margin-bottom:6px;padding-bottom:4px;border-bottom:0;font-family:var(--fd)}
@@ -854,6 +900,13 @@ textarea.cpe-input{resize:vertical;line-height:1.45}
 .tb-close:hover{background:var(--bh);color:var(--tx)}
 
 .file-content{flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+.component-content{flex:1;overflow:auto;background:var(--bg);padding:28px clamp(22px,5vw,72px);color:var(--tx)}
+.component-content>.mcp-panel{max-width:900px;margin:0 auto;padding:0}.component-content .mcp-header{padding:0 0 12px;margin-bottom:12px}.component-content .mcp-server,.component-content .mcp-explore-item{padding:12px 14px;margin-bottom:8px}.component-content .mcp-content{min-height:0}
+.component-detail{max-width:900px;margin:0 auto}
+.component-detail-header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding-bottom:22px;border-bottom:1px solid var(--bd)}
+.component-detail-title{display:flex;gap:14px;align-items:flex-start;min-width:0}.component-detail-icon{width:42px;height:42px;display:inline-flex;align-items:center;justify-content:center;color:var(--am);background:var(--bc);border-radius:8px;flex:none}.component-detail-title h1{margin:0;font:600 1.2rem var(--fd);letter-spacing:0;overflow-wrap:anywhere}.component-detail-title p{margin:7px 0 0;color:var(--ts);font-size:.76rem}.component-detail-actions{display:flex;gap:8px;flex:none}.component-detail-action{border:1px solid var(--bd);border-radius:4px;background:var(--bh);color:var(--tx);padding:7px 12px;font-size:.7rem;cursor:pointer}.component-detail-action:hover{border-color:var(--am);color:var(--am)}.component-detail-action.danger{color:var(--rs)}
+.component-detail-section{padding:24px 0;border-bottom:1px solid color-mix(in srgb,var(--bd) 65%,transparent)}.component-detail-section h2{margin:0 0 16px;font:600 .8rem var(--fb);color:var(--ts)}.component-detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px 28px;margin:0}.component-detail-grid div{min-width:0}.component-detail-grid dt{font-size:.65rem;color:var(--tm);margin-bottom:5px}.component-detail-grid dd{margin:0;font:.74rem var(--fm);color:var(--tx);overflow-wrap:anywhere}.component-detail-deps{margin:0;color:var(--tx);font:.72rem var(--fm)}
+@media (max-width:700px){.component-detail{max-width:none}.component-detail-header{display:block}.component-detail-actions{margin-top:18px}.component-detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .fc-toolbar{height:1px;background:var(--bd);flex-shrink:0;overflow:visible}
 .fc-toolbar .fc-status{display:none}
 .fc-save{padding:3px 10px;border-radius:4px;border:1px solid var(--am);background:transparent;color:var(--am);cursor:pointer;font-size:11px;font-family:var(--fb);transition:all .1s}
@@ -1095,7 +1148,6 @@ textarea.cpe-input{resize:vertical;line-height:1.45}
 .mcp-btn{font-size:.62rem;padding:2px 8px;border:none;border-radius:4px;cursor:pointer;font-family:var(--fb);transition:all .1s}
 .mcp-btn-toggle{background:var(--bd);color:var(--ts)}
 .mcp-btn-toggle:hover{background:var(--bl);color:var(--tx)}
-.mcp-bar{font-size:.55rem;color:var(--tm);text-align:center;padding:3px 0;cursor:default;font-family:var(--fm);letter-spacing:.5px;border-top:1px solid var(--bd);margin:0 6px}
 .mcp-tabs{display:flex;border-bottom:0;margin-bottom:6px}
 .mcp-tab{flex:1;padding:4px 0;border:none;background:transparent;color:var(--tm);font-size:.7rem;cursor:pointer;font-family:var(--fb);transition:all .1s;border-bottom:2px solid transparent}
 .mcp-tab.active{color:var(--tx);border-bottom-color:var(--am)}

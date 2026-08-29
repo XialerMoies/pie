@@ -16,7 +16,7 @@ export interface FileTabState { id: string; label: string; content?: string; lan
 export interface WorkspaceUiState {
   schemaVersion: 2;
   workspacePath: string;
-  activeView: { type: "chat" } | { type: "session"; id: string } | { type: "file"; id: string };
+  activeView: { type: "chat" } | { type: "session"; id: string } | { type: "file"; id: string } | { type: "component"; id: string } | { type: "mcp-management"; id: string };
   tabs: {
     // 旧格式（兼容）
     sessions: string[];
@@ -232,6 +232,8 @@ function syncTabs(items: AppTab[], activeId: string | null): void {
   };
   if (activeTab?.kind === "file") _state.activeView = { type: "file", id: activeTab.id };
   else if (activeTab?.kind === "session" || activeTab?.kind === "chat") _state.activeView = { type: "session", id: activeTab.id };
+  else if (activeTab?.kind === "component") _state.activeView = { type: "component", id: activeTab.id };
+  else if (activeTab?.kind === "mcp-management") _state.activeView = { type: "mcp-management", id: activeTab.id };
   else _state.activeView = { type: "chat" };
   _notify();
   _scheduleSave();

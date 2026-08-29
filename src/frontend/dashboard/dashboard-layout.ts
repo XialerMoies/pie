@@ -91,8 +91,7 @@ function buildSideBar(): string {
     <button class="b" data-side="chat" data-layout-action="panel" title="会话资源管理器">${S('imsg',20)}</button>
     <button class="b" data-side="search" data-layout-action="panel" title="搜索">${S('isearch',20)}</button>
     <button class="b" data-side="git" data-layout-action="panel" title="Git">${S('igit',20)}</button>
-    <button class="b" data-side="mcp" data-layout-action="panel" title="MCP">${S('iatom',20)}</button>
-    <div class="mcp-bar" id="mcp-bar" title="MCP 服务器">MCP <span id="mcp-bar-count">0</span></div>
+    <button class="b" data-side="components" data-layout-action="panel" title="扩展与集成">${S('ipuzzle',20)}</button>
     <div class="spcr"></div>
     <div class="bb">
       <button class="b" title="CLI" data-layout-action="launch-cli">${S('iterm',20)}</button>
@@ -122,6 +121,7 @@ function buildMainArea(): string {
         <div class="fc-toolbar"><span class="fc-status" id="fc-status"></span></div>
         <div class="fc-editor" id="fc-editor"></div>
       </div>
+      <div class="component-content" id="component-content" style="display:none" aria-live="polite"></div>
       <div class="fi-area" id="fi">
         <button class="chat-jump-latest" id="chat-jump-latest" type="button" title="回到最新消息" aria-label="回到最新消息" aria-hidden="true" tabindex="-1">${App.UI.S('idown', 16)}</button>
         <div class="command-confirm-slot" id="command-confirm-slot" aria-live="polite"></div>
@@ -277,7 +277,7 @@ function renderTabs(): void {
   const activeId = state.activeId;
   // TabStore 中 session/chat tab 的 title 为 '新会话'（openTab 时写入），
   // 从 App.Session 实时解析真实名称
-  items = items.map(t => t.kind !== 'file'
+  items = items.map(t => t.kind === 'session' || t.kind === 'chat'
     ? { ...t, title: App.Session.getTabLabel(t.id) || t.title }
     : t);
 
@@ -285,9 +285,13 @@ function renderTabs(): void {
   for (let i = 0; i < items.length; i++) {
     const tab = items[i];
     const active = tab.id === activeId;
-    const kindClass = tab.kind !== 'file' ? ' session-tab' : '';
+    // Keep the historical session-tab hook for both persisted sessions and
+    // draft chats; extensions can still target their specific kind class.
+    const kindClass = tab.kind === 'file' ? '' : ` ${tab.kind === 'session' || tab.kind === 'chat' ? 'session-tab ' : ''}${tab.kind}-tab`;
+    const icon = tab.kind === 'file' ? ExplorerService.iconFor(tab.title, false)
+      : tab.kind === 'component' ? S('ipuzzle', 13) : S('ic', 13);
     scroll += `<div class="tb-item${active ? ' active' : ''}${kindClass}" draggable="true" data-tab-index="${i}" data-tab="${E(tab.id)}" data-kind="${tab.kind}">
-      <span class="tb-icon">${tab.kind === 'file' ? ExplorerService.iconFor(tab.title, false) : S('ic',13)}</span>
+      <span class="tb-icon">${icon}</span>
       <span class="tb-label">${E(tab.title)}</span>
       <button type="button" class="tb-close" draggable="false" aria-label="${tab.kind === 'file' ? '关闭文件标签' : '关闭标签'}">✕</button>
     </div>`;
@@ -308,12 +312,15 @@ function _syncMainArea(activeId: string | null, items: AppTab[]): void {
   const ms = $('ms');
   const fc = $('file-content');
   const fi = $('fi');
+  const componentContent = $('component-content');
   const mc = document.querySelector('.mc');
   if (!ms || !fi) return;
+  if (activeId !== 'mcp-management') disposeMcpManagementTab();
 
   if (!activeId) {
     ms.style.display = 'none';
     if (fc) fc.style.display = 'none';
+    if (componentContent) componentContent.style.display = 'none';
     fi.style.display = 'none';
     mc?.classList.remove('editing');
     return;
@@ -325,14 +332,178 @@ function _syncMainArea(activeId: string | null, items: AppTab[]): void {
     if (fc) fc.style.display = '';
     mc?.classList.add('editing');
     fi.style.display = 'none';
+    if (componentContent) componentContent.style.display = 'none';
+  } else if (activeTab?.kind === 'component') {
+    ms.style.display = 'none';
+    if (fc) fc.style.display = 'none';
+    fi.style.display = 'none';
+    if (componentContent) componentContent.style.display = '';
+    mc?.classList.remove('editing');
+    renderComponentTab(activeTab);
+  } else if (activeTab?.kind === 'mcp-management') {
+    ms.style.display = 'none';
+    if (fc) fc.style.display = 'none';
+    fi.style.display = 'none';
+    if (componentContent) componentContent.style.display = '';
+    mc?.classList.remove('editing');
+    renderMcpManagementTab();
   } else {
     ms.style.display = '';
     if (fc) fc.style.display = 'none';
+    if (componentContent) componentContent.style.display = 'none';
     fi.style.display = '';
     mc?.classList.remove('editing');
   }
   const scheduleRailSync = window.requestAnimationFrame || ((callback: FrameRequestCallback) => window.setTimeout(callback, 0));
   scheduleRailSync(() => App.Chat?.syncTokenRailPosition?.());
+}
+
+let _mcpManagementCleanup: (() => void) | null = null;
+
+function disposeMcpManagementTab(): void {
+  _mcpManagementCleanup?.();
+  _mcpManagementCleanup = null;
+  $('component-content')?.removeAttribute('data-mcp-mode');
+}
+
+function renderMcpManagementTab(): void {
+  const root = $('component-content');
+  if (!root || _mcpManagementCleanup) return;
+  root.dataset.mcpMode = 'catalog';
+  const render = App.UI.getPane?.('mcp');
+  if (render) {
+    const cleanup = render(root);
+    _mcpManagementCleanup = typeof cleanup === 'function' ? cleanup : null;
+  } else {
+    root.innerHTML = '<div class="component-detail"><h1>添加 MCP Server</h1><p>MCP Server 安装界面尚未加载。</p></div>';
+  }
+}
+
+type ComponentTabManifest = NonNullable<AppTab['componentManifest']>;
+
+function renderComponentTab(tab: AppTab): void {
+  const root = $('component-content');
+  const manifest = tab.componentManifest;
+  if (!root || !manifest) return;
+  if (manifest.source === 'mcp') {
+    void renderMcpServerTab(tab, manifest, root);
+    return;
+  }
+  const source = manifest.source === 'builtin' ? '原生' : manifest.source === 'mcp' ? 'MCP' : '第三方';
+  const kind = manifest.kind === 'required' ? '必需组件' : '可选组件';
+  const state = tab.componentEnabled === false || tab.componentStatus === 'disabled' ? '已停用' : '已启用';
+  const canManage = manifest.source === 'builtin' && manifest.kind === 'optional' && tab.componentInstalled !== false;
+  const value = (item: unknown): string => typeof item === 'string' && item.trim() ? E(item) : '未提供';
+  root.innerHTML = `<article class="component-detail" data-component-detail="${E(manifest.id)}">
+    <header class="component-detail-header"><div class="component-detail-title"><span class="component-detail-icon">${S('ipuzzle', 22)}</span><div><h1>${E(manifest.displayName || manifest.id)}</h1><p>${value(manifest.description)}</p></div></div>${canManage ? `<div class="component-detail-actions"><button class="component-detail-action" data-component-action="toggle" type="button">${state === '已停用' ? '启用' : '停用'}</button><button class="component-detail-action danger" data-component-action="uninstall" type="button">卸载</button></div>` : ''}</header>
+    <section class="component-detail-section"><h2>组件信息</h2><dl class="component-detail-grid"><div><dt>归属</dt><dd>${value(manifest.hostSurface)}</dd></div><div><dt>类型</dt><dd>${kind}</dd></div><div><dt>来源</dt><dd>${source}</dd></div><div><dt>版本</dt><dd>${value(manifest.version)}</dd></div><div><dt>能力</dt><dd>${value(manifest.capability)}</dd></div><div><dt>状态</dt><dd>${state}</dd></div></dl></section>
+    <section class="component-detail-section"><h2>依赖</h2><p class="component-detail-deps">${manifest.dependencies?.length ? manifest.dependencies.map((dependency) => E(typeof dependency === 'string' ? dependency : dependency.id)).join('、') : '无声明依赖'}</p></section>
+  </article>`;
+  const bindAction = (name: string, endpoint: string, success: string) => root.querySelector<HTMLButtonElement>(`[data-component-action="${name}"]`)?.addEventListener('click', async () => {
+    const button = root.querySelector<HTMLButtonElement>(`[data-component-action="${name}"]`);
+    if (!button) return;
+    if (name === 'uninstall' && !window.confirm(`确定卸载组件 ${manifest.id}？`)) return;
+    button.disabled = true;
+    try {
+      const response = await fetch(`/api/components/${encodeURIComponent(manifest.id)}/${endpoint}`, { method: 'POST', credentials: 'include' });
+      if (!response.ok) throw new Error(`组件${success}失败`);
+      if (name === 'uninstall') { App.UI.toast?.(`${manifest.id} 已卸载`, 'success'); App.Tabs.close(tab.id); }
+      else { App.UI.toast?.(`${manifest.id} ${success}`, 'success'); App.Tabs.replaceTab?.(tab.id, { componentEnabled: success !== '已停用', componentStatus: success === '已停用' ? 'disabled' : 'active' }); renderComponentTab({ ...tab, componentEnabled: success !== '已停用', componentStatus: success === '已停用' ? 'disabled' : 'active' }); }
+      App.UI.syncComponents?.();
+    } catch (error) { App.UI.toast?.(error instanceof Error ? error.message : `组件${success}失败`, 'error'); button.disabled = false; }
+  });
+  if (canManage) {
+    bindAction('toggle', state === '已停用' ? 'enable' : 'disable', state === '已停用' ? '已启用' : '已停用');
+    bindAction('uninstall', 'uninstall', '卸载');
+  }
+}
+
+async function renderMcpServerTab(tab: AppTab, manifest: ComponentTabManifest, root: HTMLElement): Promise<void> {
+  const name = manifest.displayName || manifest.id.replace(/^mcp-server\./, '');
+  root.innerHTML = `<article class="component-detail" data-component-detail="${E(manifest.id)}"><header class="component-detail-header"><div class="component-detail-title"><span class="component-detail-icon">${S('ipuzzle', 22)}</span><div><h1>${E(name)}</h1><p>MCP Server</p></div></div></header><p class="component-detail-deps">正在读取 MCP Server 状态…</p></article>`;
+  try {
+    const response = await fetch('/api/mcp/servers', { credentials: 'include', cache: 'no-store' });
+    const servers = await response.json().catch(() => []) as McpServerStatus[];
+    if (!response.ok || !Array.isArray(servers)) throw new Error('无法读取 MCP Server 状态');
+    const server = servers.find((candidate) => candidate.name === name);
+    if (!server) {
+      root.innerHTML = `<article class="component-detail"><header class="component-detail-header"><div class="component-detail-title"><span class="component-detail-icon">${S('ipuzzle', 22)}</span><div><h1>${E(name)}</h1><p>MCP Server 已不在当前配置中。</p></div></div></header></article>`;
+      return;
+    }
+    const connection = App.McpState.normalize(server.state);
+    const enabled = server.config?.enabled !== false;
+    const endpoint = server.config?.transport === 'http' || server.config?.transport === 'sse'
+      ? server.config.url || '未提供'
+      : [server.config?.command, ...(server.config?.args || [])].filter(Boolean).join(' ') || '未提供';
+    root.innerHTML = `<article class="component-detail" data-component-detail="${E(manifest.id)}">
+      <header class="component-detail-header"><div class="component-detail-title"><span class="component-detail-icon">${S('ipuzzle', 22)}</span><div><h1>${E(server.name)}</h1><p>${E(App.McpState.label(connection))}${server.error ? ` · ${E(server.error)}` : ''}</p></div></div>
+      <div class="component-detail-actions"><button class="component-detail-action" data-mcp-action="toggle" type="button">${enabled ? '停用' : '启用'}</button>${server.error?.includes('未信任') ? '<button class="component-detail-action" data-mcp-action="trust" type="button">信任</button>' : ''}${server.canDelete !== false ? '<button class="component-detail-action danger" data-mcp-action="remove" type="button">删除</button>' : ''}</div></header>
+      <section class="component-detail-section"><h2>连接</h2><dl class="component-detail-grid"><div><dt>状态</dt><dd>${E(App.McpState.label(connection))}</dd></div><div><dt>启用</dt><dd>${enabled ? '是' : '否'}</dd></div><div><dt>传输</dt><dd>${E(server.config?.transport || 'stdio')}</dd></div><div><dt>目标</dt><dd>${E(endpoint)}</dd></div></dl></section>
+      <section class="component-detail-section"><h2>已发现工具</h2><p class="component-detail-deps">${server.tools.length ? server.tools.map((tool) => E(tool)).join('、') : '当前未发现工具'}</p></section>
+    </article>`;
+    const call = async (action: 'toggle' | 'trust' | 'remove'): Promise<void> => {
+      const button = root.querySelector<HTMLButtonElement>(`[data-mcp-action="${action}"]`);
+      if (!button) return;
+      if (action === 'remove' && !window.confirm(`确定删除 MCP Server ${server.name}？`)) return;
+      button.disabled = true;
+      try {
+        const request = action === 'remove'
+          ? fetch('/api/mcp/uninstall', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: server.name }) })
+          : fetch(`/api/mcp/servers/${encodeURIComponent(server.name)}/${action}`, { method: 'POST', credentials: 'include' });
+        const result = await request;
+        const body = await result.json().catch(() => null) as { ok?: boolean; error?: string; message?: string } | null;
+        if (!result.ok || body?.ok === false) throw new Error(body?.error || 'MCP Server 操作失败');
+        if (action === 'remove') {
+          App.UI.toast?.(`${server.name} 已删除`, 'success');
+          App.Tabs.close(tab.id);
+        } else {
+          App.UI.toast?.(body?.message || `${server.name} 已更新`, 'success');
+          await App.UI.syncComponents?.();
+          await renderMcpServerTab(tab, manifest, root);
+        }
+      } catch (error) {
+        App.UI.toast?.(error instanceof Error ? error.message : 'MCP Server 操作失败', 'error');
+        button.disabled = false;
+      }
+    };
+    root.querySelector<HTMLButtonElement>('[data-mcp-action="toggle"]')?.addEventListener('click', () => void call('toggle'));
+    root.querySelector<HTMLButtonElement>('[data-mcp-action="trust"]')?.addEventListener('click', () => void call('trust'));
+    root.querySelector<HTMLButtonElement>('[data-mcp-action="remove"]')?.addEventListener('click', () => void call('remove'));
+  } catch (error) {
+    root.innerHTML = `<article class="component-detail"><header class="component-detail-header"><div class="component-detail-title"><span class="component-detail-icon">${S('ipuzzle', 22)}</span><div><h1>${E(name)}</h1><p>${E(error instanceof Error ? error.message : '无法读取 MCP Server 状态')}</p></div></div></header></article>`;
+  }
+}
+
+function openComponentTab(component: ComponentTabManifest): void {
+  const id = `component:${component.id}`;
+  const existing = App.Tabs.getTab?.(id);
+  if (existing) { App.Tabs.activate(id); return; }
+  const { enabled, status, installed, ...manifest } = component as ComponentTabManifest & { enabled?: boolean; status?: AppTab['componentStatus']; installed?: boolean };
+  App.Tabs.openTab({ kind: 'component', id, title: component.displayName || component.id, componentId: component.id, componentManifest: { ...manifest }, componentEnabled: enabled, componentStatus: status, componentInstalled: installed });
+  App.Tabs.activate(id);
+  renderTabs();
+}
+
+function openMcpManagementTab(): void {
+  const id = 'mcp-management';
+  const existing = App.Tabs.getTab?.(id);
+  if (existing) { App.Tabs.activate(id); return; }
+  App.Tabs.openTab({ kind: 'mcp-management', id, title: '添加 MCP Server' });
+  App.Tabs.activate(id);
+  renderTabs();
+}
+
+{ const tabs = App.Tabs;
+  if (tabs?.registerTabBehavior) {
+    tabs.registerTabBehavior('component', {
+      activate(tab: AppTab) { tabs.activateTab(tab.id); renderTabs(); },
+      close(tab: AppTab) { tabs.closeTab(tab.id); renderTabs(); },
+    });
+    tabs.registerTabBehavior('mcp-management', {
+      activate(tab: AppTab) { tabs.activateTab(tab.id); renderTabs(); },
+      close(tab: AppTab) { disposeMcpManagementTab(); tabs.closeTab(tab.id); renderTabs(); },
+    });
+  }
 }
 
 // ─── 标签事件委托（替代 inline onclick，修复 ' 转义风险）───
@@ -458,6 +629,14 @@ function restoreActiveTab(): void {
     if (activeView?.type === 'session' && activeView.id) {
       App?.Tabs?.activate(activeView.id);
       return;
+    }
+    if (activeView?.type === 'component' && activeView.id) {
+      const exists = App.Tabs.getTab?.(activeView.id)?.kind === 'component';
+      if (exists) { App?.Tabs?.activate(activeView.id); return; }
+    }
+    if (activeView?.type === 'mcp-management' && activeView.id) {
+      const exists = App.Tabs.getTab?.(activeView.id)?.kind === 'mcp-management';
+      if (exists) { App?.Tabs?.activate(activeView.id); return; }
     }
     if (activeView?.type === 'file' && activeView.id) {
       const exists = App.Tabs.getTab?.(activeView.id)?.kind === 'file';
@@ -712,6 +891,8 @@ function _initProblemsBar(): void {
   U.renderTabs = renderTabs;
   U.closeChatTab = closeChatTab;
   U.restoreFileTabs = restoreFileTabs;
+  U.openComponentTab = openComponentTab;
+  U.openMcpManagementTab = openMcpManagementTab;
   U.setProblemsComponentActive = setProblemsComponentActive;
 } }
 { const appNamespace = (window as any).App || ((window as any).App = {});

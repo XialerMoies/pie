@@ -57,7 +57,7 @@ function startMcpUpdates(): void {
 function mcpPaneRender(container: HTMLElement): () => void {
   container.innerHTML = `<div id="${MCP_PANEL_ID}">${mcpPaneViews.renderPanel()}</div>`;
   startMcpUpdates();
-  switchMcpTab("installed");
+  switchMcpTab(container.getAttribute?.("data-mcp-mode") === "catalog" ? "explore" : "installed");
   return () => stopMcpUpdates();
 }
 
@@ -94,9 +94,6 @@ async function fetchMcpServers(): Promise<void> {
 
     if (_activeMcpTab !== "installed") return;
 
-    const barCount = document.getElementById("mcp-bar-count");
-
-    if (barCount) barCount.textContent = String(servers.length);
     content.innerHTML = mcpPaneViews.renderServers(servers);
 
     bindToggleEvents(content);

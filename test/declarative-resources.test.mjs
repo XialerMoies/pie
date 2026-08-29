@@ -12,12 +12,26 @@ describe("declarative resource catalog", () => {
       skills: [{ id: "verify", name: "Verify", description: "facts", source: "workspace", path: "verify/SKILL.md", trust: "trusted", enabled: true, parse: "valid", declaredTools: ["file_read"], fingerprint: "a" }],
       subagents: [{ id: "reviewer", name: "Reviewer", description: "read only", prompt: "secret prompt", tools: ["search"] }],
       profiles: [{ id: "minimal", revision: 1, generation: 3, health: "ready", source: "builtin", profile: { id: "minimal", revision: 1, description: "small", toolNames: ["file_read"], presentation: "native", promptSections: [], featureGates: [], allowMcp: false, includeSkills: false }, fingerprint: "p" }],
+      providers: [{ id: "openai", name: "OpenAI", source: "builtin", configured: true, protocol: "openai", modelCount: 2 }],
+      memories: [{ id: "memory-1", name: "rule", scope: "workspace", source: "user", createdAt: "2026-01-01", updatedAt: "2026-01-02", enabled: true, traceId: "trace", summary: "Use strict typing" }],
     });
-    assert.deepEqual(catalog.resources.map((item) => item.kind), ["profile", "skill", "subagent"]);
+    assert.deepEqual(catalog.resources.map((item) => item.kind), ["memory", "profile", "provider", "skill", "subagent"]);
     assert.ok(catalog.resources.every((item) => item.schemaVersion === 1 && item.id && item.fingerprint));
     assert.equal("prompt" in catalog.resources.find((item) => item.kind === "subagent").declaration, false);
     assert.equal("body" in catalog.resources.find((item) => item.kind === "skill").declaration, false);
     assert.equal("path" in catalog.resources.find((item) => item.kind === "skill").declaration, false);
+  });
+
+  it("keeps provider and memory resources metadata-only", () => {
+    const catalog = buildDeclarativeResourceCatalog({
+      providers: [{ id: "custom", name: "Custom", source: "user", configured: true, protocol: "openai", modelCount: 1 }],
+      memories: [{ id: "m", name: "m", scope: "user", source: "user", createdAt: "a", updatedAt: "b", enabled: true, traceId: "secret-trace", summary: "summary" }],
+    });
+    const provider = catalog.resources.find((item) => item.kind === "provider");
+    const memory = catalog.resources.find((item) => item.kind === "memory");
+    assert.equal("baseUrl" in provider.declaration, false);
+    assert.equal("apiKey" in provider.declaration, false);
+    assert.equal("traceId" in memory.declaration, false);
   });
 
   it("keeps trust and enablement explicit and fingerprint-stable", () => {

@@ -123,12 +123,13 @@ function renderPanel(name: string, pc?: HTMLElement | null): void {
   if (!pc) pc = $('pc');
   if (!pc) return;
   disposeMountedPane();
-  if ((window as any).__emptyWorkspaceMode && name !== 'explorer') {
+  if ((window as any).__emptyWorkspaceMode && name !== 'explorer' && name !== 'components') {
     const labels: Record<string, string> = {
       chat: '\u4f1a\u8bdd',
       search: '\u641c\u7d22',
       git: 'Git',
       mcp: 'MCP',
+      components: '扩展与集成',
     };
     pc.innerHTML = `<div class="sg-t">${E(labels[name] || name)}</div>`
       + `<div data-empty-workspace-panel="${E(name)}" style="padding:12px;font-size:.72rem;color:var(--tm);text-align:center">`
@@ -169,10 +170,6 @@ function reconcileContributions(): void {
       button.hidden = !active;
       button.tabIndex = active ? 0 : -1;
       button.setAttribute('aria-hidden', String(!active));
-    }
-    if (name === 'mcp') {
-      const indicator = document.getElementById('mcp-bar') as HTMLElement | null;
-      if (indicator) indicator.hidden = !active;
     }
   }
 

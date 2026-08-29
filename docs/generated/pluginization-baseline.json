@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-29",
+  "commit": "4b4297c",
+  "workingTree": "dirty",
+  "source": "scripts/check-pluginization-freeze.mjs",
+  "scope": {
+    "production": "src/**/*.ts|tsx|js|mjs, excluding generated src/**/gen/**",
+    "tests": "scripts/test-report.mjs discovered test manifest",
+    "frozen": [
+      "requiredComponentManifests",
+      "firstPartyComponentPackages",
+      "uiPaneRegistrations"
+    ],
+    "rule": "frozen metrics may decrease; increases require an intentional baseline update"
+  },
+  "metrics": {
+    "productionFiles": 278,
+    "productionLines": 61335,
+    "testFiles": 191,
+    "declaredTestBlocks": 2596,
+    "toolRegistrations": 21,
+    "requiredComponentManifests": 8,
+    "firstPartyComponentPackages": 20,
+    "uiPaneRegistrations": 5,
+    "httpRouteEntries": 110,
+    "componentCatalogEntrypoints": 1
+  }
+}

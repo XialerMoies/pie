@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import type { AgentProfileSnapshot } from "./agent-profile.js"
 import type { SkillSummary } from "./skills/types.js"
 import type { SubagentDefinition } from "../data/subagent-config.js"
+import type { MemoryMetadata } from "./memory-store.js"
 
 /**
  * A declaration-only view of user/workspace capabilities.
@@ -11,7 +12,7 @@ import type { SubagentDefinition } from "../data/subagent-config.js"
  * reader cannot turn discovery into code loading or instruction injection.
  */
 export const DECLARATIVE_RESOURCE_SCHEMA_VERSION = 1 as const
-export type DeclarativeResourceKind = "skill" | "subagent" | "profile"
+export type DeclarativeResourceKind = "skill" | "subagent" | "profile" | "provider" | "memory"
 export type DeclarativeResourceSource = "builtin" | "workspace" | "user"
 
 export interface DeclarativeComponentResource {
@@ -110,10 +111,61 @@ export function declarativeProfileResource(snapshot: AgentProfileSnapshot): Decl
   }, snapshot.fingerprint || { id: snapshot.id, revision: snapshot.revision, health: snapshot.health, declaration })
 }
 
+export interface DeclarativeProviderInput {
+  id: string
+  name: string
+  source: "builtin" | "user"
+  configured: boolean
+  protocol?: string
+  modelCount?: number
+}
+
+/** Provider configuration is a resource; credentials and endpoint values stay out of the catalog. */
+export function declarativeProviderResource(provider: DeclarativeProviderInput, generation = 0): DeclarativeComponentResource {
+  const declaration = {
+    name: provider.name,
+    configured: provider.configured,
+    ...(provider.protocol ? { protocol: provider.protocol } : {}),
+    ...(provider.modelCount === undefined ? {} : { modelCount: provider.modelCount }),
+  }
+  return base({
+    id: provider.id,
+    kind: "provider",
+    source: provider.source,
+    trusted: true,
+    enabled: provider.configured,
+    generation,
+    revision: 1,
+    declaration,
+  }, declaration)
+}
+
+/** Memory is a user/workspace data resource, not an installable component. */
+export function declarativeMemoryResource(memory: MemoryMetadata, generation = 0): DeclarativeComponentResource {
+  const declaration = {
+    name: memory.name,
+    scope: memory.scope,
+    summary: memory.summary,
+    updatedAt: memory.updatedAt,
+  }
+  return base({
+    id: memory.id,
+    kind: "memory",
+    source: memory.scope,
+    trusted: memory.source !== "legacy",
+    enabled: memory.enabled,
+    generation,
+    revision: memory.updatedAt,
+    declaration,
+  }, { id: memory.id, ...declaration })
+}
+
 export interface DeclarativeResourceCatalogInput {
   skills?: readonly SkillSummary[]
   subagents?: readonly SubagentDefinition[]
   profiles?: readonly AgentProfileSnapshot[]
+  providers?: readonly DeclarativeProviderInput[]
+  memories?: readonly MemoryMetadata[]
   generation?: number
 }
 
@@ -122,6 +174,8 @@ export function buildDeclarativeResourceCatalog(input: DeclarativeResourceCatalo
     ...(input.skills || []).map((skill) => declarativeSkillResource(skill)),
     ...(input.subagents || []).map((agent) => declarativeSubagentResource(agent)),
     ...(input.profiles || []).map((profile) => declarativeProfileResource(profile)),
+    ...(input.providers || []).map((provider) => declarativeProviderResource(provider)),
+    ...(input.memories || []).map((memory) => declarativeMemoryResource(memory)),
   ].sort((left, right) => `${left.kind}:${left.id}`.localeCompare(`${right.kind}:${right.id}`))
   const generation = input.generation ?? Math.max(0, ...resources.map((resource) => resource.generation))
   const payload = { schemaVersion: DECLARATIVE_RESOURCE_SCHEMA_VERSION, generation, resources }

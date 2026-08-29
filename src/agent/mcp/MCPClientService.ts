@@ -25,6 +25,7 @@ import { loadMcpConfig, getEnabledServers, type McpLoadResult } from "./config.j
 import { TrustStore, hashServerCommand } from "./trust-store.js"
 import { createMcpToolAdapter, normalizeServerName } from "./MCPToolAdapter.js"
 import type { McpServerConfig, McpServerStatus, McpConnectionState } from "./types.js"
+import { mcpIntegrationRecord, type IntegrationRecord } from "../integrations.js"
 import { createMcpProcessEnv, sanitizeProcessOutput } from "../../process/env-policy.js"
 import { capabilityComponentManager } from "../capability-components.js"
 import type { McpHostIntegration } from "../capability-contracts.js"
@@ -146,6 +147,9 @@ export function syncMcpServerComponent(
     capability: "mcp.server",
     parentId: "mcp-host-integration",
     source: "mcp",
+    productClass: "mcp",
+    hostSurface: "mcp-service",
+    displayName: source.name,
     trusted,
     enabled: source.config.enabled !== false && trusted,
     health,
@@ -485,6 +489,29 @@ export function subscribeStatusChanges(listener: McpStatusChangeListener): () =>
 /** 获取所有 MCP server 的当前状态 */
 export function getServersStatus(): McpServerStatus[] {
   return cloneStatuses([..._statusMap.values()])
+}
+
+/** Product-facing integration projection; connection configuration stays opaque. */
+export async function getMcpIntegrationRecords(
+  workspace: string,
+  sources: readonly { name: string; config: McpServerConfig }[],
+): Promise<ReadonlyArray<IntegrationRecord>> {
+  const trustStore = getTrustStore()
+  await trustStore.refresh()
+  const runtimeStatuses = getServersStatus()
+  return sources.map((source) => {
+    const status = runtimeStatuses.find((item) => item.name === source.name)
+    const state = status?.state || (source.config.enabled === false ? "disconnected" : "connecting")
+    return mcpIntegrationRecord({
+      name: source.name,
+      workspace,
+      trustFingerprint: hashServerCommand(source.config),
+      trusted: trustStore.isTrusted(workspace, hashServerCommand(source.config)),
+      enabled: source.config.enabled !== false,
+      state,
+      tools: status?.tools,
+    })
+  })
 }
 
 /** 同步版本——给 _saveAndDispose / dispose 等同步上下文用（不 await close） */

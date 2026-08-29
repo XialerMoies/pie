@@ -25,7 +25,6 @@ import {
   COMMAND_COMPONENT_PACKAGE_MANIFEST,
   SEARCH_PANE_COMPONENT_PACKAGE_MANIFEST,
   GIT_PANE_COMPONENT_PACKAGE_MANIFEST,
-  MCP_PANE_COMPONENT_PACKAGE_MANIFEST,
   PROBLEMS_COMPONENT_PACKAGE_MANIFEST,
   TYPESCRIPT_LANGUAGE_SERVICE_COMPONENT_PACKAGE_MANIFEST,
   FIRST_PARTY_COMPONENT_PACKAGES,
@@ -115,7 +114,7 @@ describe("capability component package contract", () => {
     manager.uninstall("tool.file-read")
     assert.deepEqual(pool.project({ audience: "main", componentManager: manager }), [])
     assert.equal(firstPartyComponentPackage(FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId), FILE_READ_COMPONENT_PACKAGE_MANIFEST)
-    assert.equal(FIRST_PARTY_COMPONENT_PACKAGES.length, 21)
+    assert.equal(FIRST_PARTY_COMPONENT_PACKAGES.length, 20)
     installFirstPartyComponentPackage(manager, FILE_READ_COMPONENT_PACKAGE_MANIFEST.packageId)
     assert.deepEqual(pool.project({ audience: "main", componentManager: manager }).map((tool) => tool.name), ["file_read"])
   })
@@ -140,21 +139,20 @@ describe("capability component package contract", () => {
       COMMAND_COMPONENT_PACKAGE_MANIFEST,
       SEARCH_PANE_COMPONENT_PACKAGE_MANIFEST,
       GIT_PANE_COMPONENT_PACKAGE_MANIFEST,
-      MCP_PANE_COMPONENT_PACKAGE_MANIFEST,
       PROBLEMS_COMPONENT_PACKAGE_MANIFEST,
       TYPESCRIPT_LANGUAGE_SERVICE_COMPONENT_PACKAGE_MANIFEST,
     ]
     assert.deepEqual(
       manifests.map((manifest) => manifest.component.id),
-      ["tool.file-read", "tool.explorer-list", "tool.search", "tool.git-status", "tool.git-log", "tool.file-outline", "tool.web-search", "tool.web-fetch", "tool.write-agent-md", "tool.str-replace-editor", "tool.file-write", "tool.memory", "tool.plan-mode", "tool.skill-facts", "tool.delegate-tasks", "tool.command", "ui.pane.search", "ui.pane.git", "ui.pane.mcp", "ui.problems", "language-service.typescript"],
+      ["tool.file-read", "tool.explorer-list", "tool.search", "tool.git-status", "tool.git-log", "tool.file-outline", "tool.web-search", "tool.web-fetch", "tool.write-agent-md", "tool.str-replace-editor", "tool.file-write", "tool.memory", "tool.plan-mode", "tool.skill-facts", "tool.delegate-tasks", "tool.command", "ui.pane.search", "ui.pane.git", "ui.problems", "language-service.typescript"],
     )
     assert.equal(new Set(manifests.map((manifest) => manifest.packageId)).size, manifests.length)
     assert.ok(manifests.every((manifest) => manifest.component.kind === "optional" && manifest.component.source === "builtin"))
     assert.deepEqual(
-      manifests.slice(-5).map((manifest) => manifest.component.capability),
-      ["desktop.ui-pane", "desktop.ui-pane", "desktop.ui-pane", "desktop.ui-pane", "desktop.language-service"],
+      manifests.slice(-4).map((manifest) => manifest.component.capability),
+      ["desktop.ui-pane", "desktop.ui-pane", "desktop.ui-pane", "desktop.language-service"],
     )
-    assert.ok(manifests.slice(-5).every((manifest) => manifest.permissions.network === false && manifest.permissions.filesystem.length === 0))
+    assert.ok(manifests.slice(-4).every((manifest) => manifest.permissions.network === false && manifest.permissions.filesystem.length === 0))
     assert.deepEqual(WEB_SEARCH_COMPONENT_PACKAGE_MANIFEST.permissions, { network: true, filesystem: ["read"], subprocess: false, secrets: ["provider.apiKey"] })
     assert.equal(WEB_FETCH_COMPONENT_PACKAGE_MANIFEST.permissions.network, true)
     assert.deepEqual(WRITE_AGENT_MD_COMPONENT_PACKAGE_MANIFEST.permissions.filesystem, ["create", "read", "write"])

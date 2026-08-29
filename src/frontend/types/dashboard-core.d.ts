@@ -211,7 +211,7 @@ interface StorageLocationInfo {
 }
 
 // ─── Unified Tab System types ─────────────────────────
-type TabKind = 'chat' | 'session' | 'file';
+type TabKind = 'chat' | 'session' | 'file' | 'component' | 'mcp-management';
 
 interface AppTab {
   workspace?: string;
@@ -228,6 +228,22 @@ interface AppTab {
   renderer?: 'text' | 'image' | 'video'; // file 专用：渲染器类型
   sessionId?: string;            // session 专用
   draftId?: string;              // chat 专用
+  componentId?: string;
+  componentManifest?: {
+    id: string;
+    version?: string;
+    kind?: 'required' | 'optional';
+    capability?: string;
+    source?: string;
+    productClass?: string;
+    hostSurface?: string;
+    displayName?: string;
+    description?: string;
+    dependencies?: Array<string | { id: string; version?: string; optional?: boolean; capability?: string }>;
+  };
+  componentEnabled?: boolean;
+  componentStatus?: 'active' | 'disabled' | 'untrusted' | 'unhealthy';
+  componentInstalled?: boolean;
 }
 
 interface TabsState {
@@ -266,5 +282,8 @@ interface AppUI {
   restoreFileTabs(): void;
   quickOpenFile(): void;
   openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video', options?: { activate?: boolean }): void;
+  openComponentTab(component: { id: string; version?: string; kind?: 'required' | 'optional'; capability?: string; source?: string; productClass?: string; hostSurface?: string; displayName?: string; description?: string; dependencies?: Array<string | { id: string; version?: string; optional?: boolean; capability?: string }>; enabled?: boolean; status?: 'active' | 'disabled' | 'untrusted' | 'unhealthy'; installed?: boolean }): void;
+  /** Opens the MCP Server discovery/install workspace, not a component detail. */
+  openMcpManagementTab(): void;
   saveCurrentFile(): Promise<void>;
 }

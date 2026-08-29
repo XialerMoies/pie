@@ -9,6 +9,7 @@ import {
   CapabilityComponentManager,
   persistCapabilityComponentGeneration,
   readCapabilityComponentGeneration,
+  validateCapabilityComponentManifest,
 } from "../src/agent/capability-components.ts";
 import { handleComponents } from "../src/server/routes/components.ts";
 import {
@@ -48,6 +49,14 @@ function registerPermissionReplacement(manager, id = "permission-evaluator.v2") 
 }
 
 describe("CapabilityComponentManager", () => {
+  it("requires product-facing classification to keep system and MCP boundaries explicit", () => {
+    assert.throws(() => validateCapabilityComponentManifest({ id: "bad-system", version: "1", kind: "optional", capability: "runtime", productClass: "system" }), /must be required/);
+    assert.throws(() => validateCapabilityComponentManifest({ id: "bad-system-source", version: "1", kind: "required", capability: "runtime", replacementGroup: "runtime", productClass: "system" }), /must come from builtin/);
+    assert.throws(() => validateCapabilityComponentManifest({ id: "bad-mcp", version: "1", kind: "optional", capability: "mcp.server", source: "workspace", productClass: "mcp" }), /source=mcp/);
+    const normalized = validateCapabilityComponentManifest({ id: "good-mcp", version: "1", kind: "optional", capability: "mcp.server", source: "mcp", productClass: "mcp", hostSurface: "mcp-service" });
+    assert.equal(normalized.productClass, "mcp");
+    assert.equal(normalized.hostSurface, "mcp-service");
+  });
   it("registers built-in required components as active", () => {
     const manager = new CapabilityComponentManager([required]);
     const state = manager.require("permission-evaluator");
@@ -451,7 +460,7 @@ describe("CapabilityComponentManager", () => {
     assert.equal(manager.list().length, 0);
   });
 
-  it("publishes a read-only host catalog without exposing management actions", async () => {
+  it("publishes a catalog without exposing management functions", async () => {
     const headers = {};
     let body = "";
     const handled = await handleComponents(
@@ -467,6 +476,57 @@ describe("CapabilityComponentManager", () => {
     assert.ok(catalog.components.some((component) => component.manifest.id === "ui.pane.search"));
     assert.ok(catalog.components.some((component) => component.manifest.id === "language-service.typescript"));
     assert.equal(catalog.components.some((component) => "enable" in component), false);
+  });
+
+  it("projects a user management catalog without exposing kernel components", async () => {
+    const headers = {};
+    let body = "";
+    const handled = await handleComponents(
+      { url: "/api/components?view=management", method: "GET" },
+      { writeHead(status, values) { headers.status = status; Object.assign(headers, values); }, end(value) { body = String(value); } },
+      { groups: { core: { runtime: { currentWorkspace: process.cwd() } }, storage: { paths: { APP_ROOT: process.cwd() } } } },
+    );
+    assert.equal(handled, true);
+    assert.equal(headers.status, 200);
+    const projection = JSON.parse(body);
+    assert.ok(Array.isArray(projection.extensions));
+    assert.ok(Array.isArray(projection.integrations));
+    assert.ok(projection.extensions.some((component) => component.manifest.id === "ui.pane.search"));
+    assert.equal(projection.extensions.some((component) => component.manifest.id === "security-parser"), false);
+    assert.equal(projection.extensions.some((component) => component.manifest.kind === "required"), false);
+    assert.equal(projection.integrations.every((component) => component.manifest.source === "mcp" || component.manifest.hostSurface === "mcp-service"), true);
+  });
+
+  it("allows only shipped optional packages to be toggled from the desktop component route", async () => {
+    const root = mkdtempSync(join(tmpdir(), "components-route-"));
+    const previousConfig = process.env.PI_USER_CONFIG;
+    const responseFor = async (url) => {
+      const headers = {};
+      let body = "";
+      const handled = await handleComponents(
+        { url, method: "POST" },
+        { writeHead(status, values) { headers.status = status; Object.assign(headers, values); }, end(value) { body = String(value); } },
+        { groups: { core: { runtime: { currentWorkspace: process.cwd() } }, storage: { paths: { APP_ROOT: process.cwd() } } } },
+      );
+      return { handled, headers, body: JSON.parse(body) };
+    };
+    try {
+      process.env.PI_USER_CONFIG = root;
+      const disabled = await responseFor("/api/components/ui.pane.search/disable");
+      assert.equal(disabled.handled, true);
+      assert.equal(disabled.headers.status, 200);
+      assert.equal(disabled.body.component.status, "disabled");
+      const enabled = await responseFor("/api/components/ui.pane.search/enable");
+      assert.equal(enabled.headers.status, 200);
+      assert.equal(enabled.body.component.status, "active");
+      const rejected = await responseFor("/api/components/security-parser/disable");
+      assert.equal(rejected.headers.status, 404);
+      assert.equal(rejected.body.code, "component_not_managed");
+    } finally {
+      if (previousConfig === undefined) delete process.env.PI_USER_CONFIG;
+      else process.env.PI_USER_CONFIG = previousConfig;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("does not create a new generation when an external status is unchanged", () => {

@@ -16,6 +16,7 @@ import { handlePermissions } from "./permissions.js";
 import { handleDiagnostics } from "./diagnostics.js";
 import { handleComponents } from "./components.js";
 import { handleDeclarativeResources } from "./resources.js";
+import { handleIntegrations } from "./integrations.js";
 
 const handlers: RouteHandler[] = [
   handleChat,
@@ -31,6 +32,7 @@ const handlers: RouteHandler[] = [
   handleDiagnostics,
   handleComponents,
   handleDeclarativeResources,
+  handleIntegrations,
 ];
 
 /**

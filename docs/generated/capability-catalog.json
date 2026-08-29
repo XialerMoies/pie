@@ -42,7 +42,7 @@
         "id": "tool.command",
         "packageId": "my-code-agent.tool.command",
         "packageVersion": "1.0.0",
-        "fingerprint": "0f856fe8f8e69fee75a3d9f9f901ac8a42f4dadd4a50faa62ce1c89db7d6eb48"
+        "fingerprint": "eb936256b6475680134216ca1c46601d17b1a88f76ff12eef7a3df7d46a029fb"
       }
     },
     {
@@ -172,7 +172,7 @@
         "id": "tool.delegate-tasks",
         "packageId": "my-code-agent.tool.delegate-tasks",
         "packageVersion": "1.0.0",
-        "fingerprint": "8ffb8a96d721e55448a97d235d8ebb402412992869fcabfe80fe467add01b24f"
+        "fingerprint": "8d7f8b460d1600e2942f54878b09897991a62e438e7a686915022109c2124379"
       }
     },
     {
@@ -209,7 +209,7 @@
         "id": "tool.memory",
         "packageId": "my-code-agent.tool.memory",
         "packageVersion": "1.0.0",
-        "fingerprint": "9ce965a293046fb7fe12c65a4039aac9bba9c2d779e4c994702e0ecf53527bc7"
+        "fingerprint": "01f9cf2cd1721c4e651258c9f8501293efdc9955ceaeb2754ed2bb0e2b35ec81"
       }
     },
     {
@@ -236,7 +236,7 @@
         "id": "tool.plan-mode",
         "packageId": "my-code-agent.tool.plan-mode",
         "packageVersion": "1.0.0",
-        "fingerprint": "d7b59673c70581beb52ef5028d2628268b13561534c7f007410274b5d96665bf"
+        "fingerprint": "c6887a689ada2bf21ef4c56c493e340a92c72a7256792745d1e04e288102ac47"
       }
     },
     {
@@ -266,7 +266,7 @@
         "id": "tool.plan-mode",
         "packageId": "my-code-agent.tool.plan-mode",
         "packageVersion": "1.0.0",
-        "fingerprint": "d7b59673c70581beb52ef5028d2628268b13561534c7f007410274b5d96665bf"
+        "fingerprint": "c6887a689ada2bf21ef4c56c493e340a92c72a7256792745d1e04e288102ac47"
       }
     },
     {
@@ -297,7 +297,7 @@
         "id": "tool.explorer-list",
         "packageId": "my-code-agent.tool.explorer-list",
         "packageVersion": "1.0.0",
-        "fingerprint": "6a9b74fc3237e4ecf28f4fc8acb9615ffcafcb3e6cc3cb5c31e2541cc2b3cecf"
+        "fingerprint": "03b912c9656b49be05bb4ff23845c585eb1d7b4e642c20e894ef095ae01b7236"
       }
     },
     {
@@ -327,7 +327,7 @@
         "id": "tool.file-outline",
         "packageId": "my-code-agent.tool.file-outline",
         "packageVersion": "1.0.0",
-        "fingerprint": "9d464adff3e587032be021e6205c4c20cafcb8e90be511d53384d7062532b453"
+        "fingerprint": "00f0e9690418038556f6cd630cc68630db20b30729bd782ca182b56dd1a32132"
       }
     },
     {
@@ -365,7 +365,7 @@
         "id": "tool.file-read",
         "packageId": "my-code-agent.tool.file-read",
         "packageVersion": "1.0.0",
-        "fingerprint": "1219f44d1c53b47a214611e3f480bf6b31aff2fe35a9de5c4d3dc859ce970a0c"
+        "fingerprint": "08d6c70ea25fe8c38af899a9080a50fb3a7225e99552773c2e067465e3672bb8"
       }
     },
     {
@@ -400,7 +400,7 @@
         "id": "tool.file-write",
         "packageId": "my-code-agent.tool.file-write",
         "packageVersion": "1.0.0",
-        "fingerprint": "f9c9b339a0a7b6d6a34697b12893af05ecac32f9191e55f612ed2ddcff7de94d"
+        "fingerprint": "29c5da7155e71784f1a971134bbb3d1ed80188cd4ad21a56e7eef6fa9dd80073"
       }
     },
     {
@@ -422,7 +422,7 @@
         "id": "tool.git-status",
         "packageId": "my-code-agent.tool.git-status",
         "packageVersion": "1.0.0",
-        "fingerprint": "a1115496317845dd69f374f4d43cc546a088ed713e7bb3e5ab53bd280d60f2ec"
+        "fingerprint": "61aee3147b0cdd0f5f0879466d7fc9a237c876b5a3569bed375719f853985828"
       }
     },
     {
@@ -449,7 +449,7 @@
         "id": "tool.git-log",
         "packageId": "my-code-agent.tool.git-log",
         "packageVersion": "1.0.0",
-        "fingerprint": "e3d1b02923a0ecc31dec1bc600faf43b5c57846d009bd33de287b9a33404f73a"
+        "fingerprint": "e8144bd3d41f7c9bab68f7ca2899e65605365ca94495648e661c877caf9227ec"
       }
     },
     {
@@ -480,7 +480,7 @@
         "id": "tool.memory",
         "packageId": "my-code-agent.tool.memory",
         "packageVersion": "1.0.0",
-        "fingerprint": "9ce965a293046fb7fe12c65a4039aac9bba9c2d779e4c994702e0ecf53527bc7"
+        "fingerprint": "01f9cf2cd1721c4e651258c9f8501293efdc9955ceaeb2754ed2bb0e2b35ec81"
       }
     },
     {
@@ -518,7 +518,7 @@
         "id": "tool.memory",
         "packageId": "my-code-agent.tool.memory",
         "packageVersion": "1.0.0",
-        "fingerprint": "9ce965a293046fb7fe12c65a4039aac9bba9c2d779e4c994702e0ecf53527bc7"
+        "fingerprint": "01f9cf2cd1721c4e651258c9f8501293efdc9955ceaeb2754ed2bb0e2b35ec81"
       }
     },
     {
@@ -564,7 +564,7 @@
         "id": "tool.search",
         "packageId": "my-code-agent.tool.search",
         "packageVersion": "1.0.0",
-        "fingerprint": "422e932462a64ed8eabbe67ec59a1b03802fe39df81a1f04450bf80188f958ad"
+        "fingerprint": "826c3f95b0e7c5f0be42fbdeb33129883ba4412fbdba1ba09a789cdfa0d87e19"
       }
     },
     {
@@ -605,7 +605,7 @@
         "id": "tool.memory",
         "packageId": "my-code-agent.tool.memory",
         "packageVersion": "1.0.0",
-        "fingerprint": "9ce965a293046fb7fe12c65a4039aac9bba9c2d779e4c994702e0ecf53527bc7"
+        "fingerprint": "01f9cf2cd1721c4e651258c9f8501293efdc9955ceaeb2754ed2bb0e2b35ec81"
       }
     },
     {
@@ -643,7 +643,7 @@
         "id": "tool.skill-facts",
         "packageId": "my-code-agent.tool.skill-facts",
         "packageVersion": "1.0.0",
-        "fingerprint": "fcf62f62526fdcaa039bf33f0f96b1c819fc8c66955385ac60cc88f599bf5372"
+        "fingerprint": "6c6332a959ca5b635dbfc0a7b9631f27b281a1b2b4770634dcf08141fb1e2fad"
       }
     },
     {
@@ -707,7 +707,7 @@
         "id": "tool.str-replace-editor",
         "packageId": "my-code-agent.tool.str-replace-editor",
         "packageVersion": "1.0.0",
-        "fingerprint": "7ee8a9d2c0a0c6be25b2a7ba6b2e00707156ff1886626488024b3a6f17d5ed72"
+        "fingerprint": "507fa8d64daae73cbef730e30813aac5add89bb2bea09778954b72d2f3e03cf1"
       }
     },
     {
@@ -737,7 +737,7 @@
         "id": "tool.web-fetch",
         "packageId": "my-code-agent.tool.web-fetch",
         "packageVersion": "1.0.0",
-        "fingerprint": "d0cfd0daf4976d0e246c190ceccfb3b6e38c9ac392a82926c97cf9d956409180"
+        "fingerprint": "c12318be385dbbb89a8f8d8d222e616c352e1c9b0797ad5dfa7b76a19f8a1cfb"
       }
     },
     {
@@ -767,7 +767,7 @@
         "id": "tool.web-search",
         "packageId": "my-code-agent.tool.web-search",
         "packageVersion": "1.0.0",
-        "fingerprint": "5978515287bf54c5f8cb4fd781a04caf59584d6744d7f301099ef259788e1c7f"
+        "fingerprint": "1f797a52285624052cca103dcdd7db5917b982b4be7554c2d271cbecc717e342"
       }
     },
     {
@@ -797,7 +797,7 @@
         "id": "tool.write-agent-md",
         "packageId": "my-code-agent.tool.write-agent-md",
         "packageVersion": "1.0.0",
-        "fingerprint": "6fa6dd9aa8124c89d7aec89efbae629ba2612baa7296628d4285fea5b0feec49"
+        "fingerprint": "6da874e82471da1a069e5242ad1249299ea90b39932dcc0c157433f063e91671"
       }
     },
     {
@@ -848,7 +848,7 @@
         "id": "tool.memory",
         "packageId": "my-code-agent.tool.memory",
         "packageVersion": "1.0.0",
-        "fingerprint": "9ce965a293046fb7fe12c65a4039aac9bba9c2d779e4c994702e0ecf53527bc7"
+        "fingerprint": "01f9cf2cd1721c4e651258c9f8501293efdc9955ceaeb2754ed2bb0e2b35ec81"
       }
     }
   ],
@@ -870,6 +870,20 @@
     {
       "file": "scripts/build-frontend.mjs",
       "line": 40,
+      "api": "execFileSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/check-pluginization-freeze.mjs",
+      "line": 11,
+      "api": "execFileSync",
+      "category": "build-or-test",
+      "owner": "tooling"
+    },
+    {
+      "file": "scripts/check-pluginization-freeze.mjs",
+      "line": 19,
       "api": "execFileSync",
       "category": "build-or-test",
       "owner": "tooling"
@@ -1058,28 +1072,28 @@
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 49,
+      "line": 50,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 58,
+      "line": 59,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 68,
+      "line": 69,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/test-gates.mjs",
-      "line": 86,
+      "line": 87,
       "api": "spawn",
       "category": "build-or-test",
       "owner": "tooling"
@@ -1121,7 +1135,7 @@
     },
     {
       "file": "src/agent/mcp/MCPClientService.ts",
-      "line": 357,
+      "line": 361,
       "api": "StdioClientTransport",
       "category": "mcp",
       "owner": "mcp-client",
@@ -1389,6 +1403,13 @@
       "handler": "handleExplorer",
       "source": "src/server/routes/explorer.ts",
       "category": "explorer"
+    },
+    {
+      "method": "GET",
+      "path": "/api/extensions",
+      "handler": "handleComponents",
+      "source": "src/server/routes/components.ts",
+      "category": "extensions"
     },
     {
       "method": "POST",

@@ -22,6 +22,7 @@ const profiles = {
 
 export const GATES = [
   { name: "governance", deps: [], profile: "light", command: process.execPath, args: ["scripts/test-exceptions.mjs", "--check"] },
+  { name: "pluginization-freeze", deps: ["governance"], profile: "light", command: process.execPath, args: ["scripts/check-pluginization-freeze.mjs", "--check"] },
   { name: "manifest", deps: ["governance"], profile: "light", command: process.execPath, args: ["scripts/test-manifest.mjs", "--check"] },
   { name: "profile-catalog", deps: ["manifest"], profile: "light", command: npmCommand, args: ["run", "profiles:generate"] },
   { name: "report", deps: ["manifest", "profile-catalog"], profile: "light", command: process.execPath, args: ["scripts/test-report.mjs", "--check"] },

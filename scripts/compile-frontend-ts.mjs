@@ -205,6 +205,7 @@ const bundleOrder = [
   "gen/pane/mcp/mcp-state.js",
   "gen/pane/mcp/mcp-views.js",
   "gen/pane/mcp/index.js",
+  "gen/pane/components/index.js",
   "gen/pane/permissions/permissions-views.js",
   "gen/pane/permissions/index.js",
   "gen/dashboard/dashboard-menus.js",
