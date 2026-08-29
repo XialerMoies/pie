@@ -39,6 +39,9 @@ export function resolveToolPresentation(mode: ToolPresentationMode | undefined):
 export function resolveSessionToolPresentation(mode: ToolPresentationMode | undefined, lease?: RequiredComponentLease): ToolPresentation {
   const expected = resolveToolPresentation(mode)
   if (!lease) return expected
+  // ToolPresentation is host-owned in R3; old leases may still carry the
+  // legacy slot, so only resolve it when the session explicitly pins one.
+  if (!lease.ref.providers["tool-presentation"]) return expected
   const binding = lease.resolveBinding<ToolPresentation>("tool-presentation")
   const implementation = binding.implementation
   if (!implementation || implementation.mode !== expected.mode || typeof implementation.present !== "function") {

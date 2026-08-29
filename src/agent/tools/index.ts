@@ -39,8 +39,6 @@ import type { RequiredComponentLease } from "../capability-component-replacement
 /** 全局 Tool 注册表 */
 export const toolRegistry = new ToolRegistry()
 
-capabilityComponentManager.bindRequiredProvider("tool-presentation", nativeToolPresentation)
-
 // Seed application-supplied packages before startup restores the user's install state.
 // This only declares shipped implementations; persisted uninstall tombstones win later.
 registerFirstPartyComponentPackages(capabilityComponentManager)

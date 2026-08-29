@@ -3,6 +3,7 @@ import { readLockedJson, updateLockedJson } from "../data/locked-json-store.js"
 import {
   failedReplacementChecks,
   HIGH_RISK_REPLACEMENT_GROUPS,
+  CORE_REPLACEMENT_GROUPS,
   type RequiredComponentGenerationRef,
   type RequiredComponentLease,
   type RequiredComponentProviderBinding,
@@ -376,10 +377,14 @@ export class CapabilityComponentManager {
   readonly #providerReferences = new Map<string, number>()
   readonly #requiredProviderBindings = new Map<string, unknown>()
   readonly #disposingRequiredProviders = new Set<string>()
+  readonly #legacyReplacementGroups = new Set<string>()
   #generation = 0
   #replacementTail: Promise<void> = Promise.resolve()
 
   constructor(manifests: readonly CapabilityComponentManifest[] = []) {
+    for (const manifest of manifests) {
+      if (manifest.replacementGroup && !CORE_REPLACEMENT_GROUPS.has(manifest.replacementGroup)) this.#legacyReplacementGroups.add(manifest.replacementGroup)
+    }
     for (const manifest of manifests) this.register(manifest)
   }
 
@@ -493,7 +498,14 @@ export class CapabilityComponentManager {
 
   /** Pin the required-provider set for one session. Retired providers remain resolvable until release. */
   acquireRequiredLease(requested: RequiredComponentGenerationRef = this.requiredGeneration()): RequiredComponentLease {
-    const ref = cloneRequiredRef(requested)
+    // Ignore provider ids from pre-R3 persisted sessions when their component
+    // no longer exists. Core slots are merged from the current host baseline.
+    const retained = Object.entries(requested.providers)
+      .filter(([group, id]) => CORE_REPLACEMENT_GROUPS.has(group) || this.#components.has(id))
+    const ref = cloneRequiredRef({
+      generation: requested.generation,
+      providers: { ...this.requiredGeneration().providers, ...Object.fromEntries(retained) },
+    })
     for (const [group, id] of Object.entries(ref.providers)) {
       const state = this.#components.get(id)
       if (!state || state.manifest.kind !== "required" || state.manifest.replacementGroup !== group || !state.trusted || state.health !== "healthy"
@@ -833,6 +845,9 @@ export class CapabilityComponentManager {
     const current = this.#requireMutable(currentId)
     const candidate = this.#requireMutable(candidateId)
     const group = current.manifest.replacementGroup
+    if (!group || (!CORE_REPLACEMENT_GROUPS.has(group) && !this.#legacyReplacementGroups.has(group))) {
+      return this.#reject("core_replacement_only", `Only core replacement slots may be replaced: ${group}`, currentId)
+    }
     if (current.manifest.kind !== "required" || candidate.manifest.kind !== "required" || !group
       || candidate.manifest.replacementGroup !== group || candidate.manifest.capability !== current.manifest.capability) {
       return this.#reject("incompatible_replacement", `Required replacement contract mismatch: ${currentId} -> ${candidateId}`, candidateId, [currentId, candidateId])
@@ -1054,14 +1069,9 @@ export class CapabilityComponentManager {
 }
 
 export const REQUIRED_COMPONENT_MANIFESTS: readonly CapabilityComponentManifest[] = Object.freeze([
-  { id: "bootstrap-kernel", version: "1", kind: "required", capability: "bootstrap", replacementGroup: "bootstrap", source: "builtin", productClass: "system", hostSurface: "runtime", description: "Minimal host lifecycle contract" },
   { id: "agent-engine", version: "1", kind: "required", capability: "agent-engine", replacementGroup: "agent-engine", source: "builtin", productClass: "system", hostSurface: "runtime", description: "Session-scoped AgentEngine factory and adapter ownership" },
   { id: "session-store", version: "1", kind: "required", capability: "session-store", replacementGroup: "session-store", source: "builtin", productClass: "system", hostSurface: "runtime" },
   { id: "model-router", version: "1", kind: "required", capability: "model-router", replacementGroup: "model-router", source: "builtin", productClass: "system", hostSurface: "runtime" },
-  { id: "permission-evaluator", version: "1", kind: "required", capability: "permission", replacementGroup: "permission", source: "builtin", productClass: "system", hostSurface: "runtime" },
-  { id: "security-parser", version: "1", kind: "required", capability: "security-parser", replacementGroup: "security-parser", source: "builtin", productClass: "system", hostSurface: "runtime" },
-  { id: "tool-presentation", version: "1", kind: "required", capability: "tool-presentation", replacementGroup: "tool-presentation", source: "builtin", productClass: "system", hostSurface: "runtime" },
-  { id: "mcp-host-integration", version: "1", kind: "required", capability: "mcp-host", replacementGroup: "mcp-host", source: "builtin", productClass: "system", hostSurface: "runtime" },
 ])
 
 export const capabilityComponentManager = new CapabilityComponentManager(REQUIRED_COMPONENT_MANIFESTS)

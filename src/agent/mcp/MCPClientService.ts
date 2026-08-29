@@ -552,7 +552,3 @@ export const mcpHostIntegrationProvider: McpHostIntegration = Object.freeze({
   }),
   dispose: disconnectAll,
 })
-
-if (!capabilityComponentManager.hasRequiredProviderBinding("mcp-host-integration")) {
-  capabilityComponentManager.bindRequiredProvider("mcp-host-integration", mcpHostIntegrationProvider)
-}

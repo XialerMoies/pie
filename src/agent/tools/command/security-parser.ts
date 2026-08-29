@@ -1,7 +1,6 @@
 import { parseShellCommand, shellDialectFromEnv, tokensWithoutRedirects, type ShellRedirect, type ShellSegment } from "./shell-parser.js"
 import type { SecurityParseOptions, SecurityParseResult, SecurityRedirect, ShellDialect, SimpleCommand } from "./security-ast.js"
 import { parseBashCommandWithTreeSitter } from "./tree-sitter-bash-parser.js"
-import { capabilityComponentManager } from "../../capability-components.js"
 import type { SecurityParserProvider } from "../../capability-contracts.js"
 
 const MAX_SECURITY_COMMAND_LENGTH = 20_000
@@ -293,7 +292,3 @@ export const securityParserProvider: SecurityParserProvider = Object.freeze({
   health: () => ({ status: "healthy" as const }),
   dispose: () => {},
 })
-
-if (!capabilityComponentManager.hasRequiredProviderBinding("security-parser")) {
-  capabilityComponentManager.bindRequiredProvider("security-parser", securityParserProvider)
-}

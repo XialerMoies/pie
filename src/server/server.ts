@@ -220,13 +220,8 @@ async function main() {
     auditStore: new FilePermissionAuditStore(STARTUP.layout.permissionAuditFile, { maxEntries: 2000 }),
     permissionRuleStore: new FileWorkspacePermissionRuleStore(STARTUP.layout.permissionRulesFile),
   });
-  // Bind the existing service to the narrow Required Component contract. The
-  // routes continue to use the concrete service for now; future replacements
-  // can be introduced without widening the route/runtime dependency surface.
+  // Permission remains a host-owned service, outside the three replacement slots.
   const permissionEvaluator = createPermissionEvaluatorProvider(permissionService);
-  if (!capabilityComponentManager.hasRequiredProviderBinding("permission-evaluator")) {
-    capabilityComponentManager.bindRequiredProvider("permission-evaluator", permissionEvaluator);
-  }
   const permissionMode = createPermissionModeController("standard", (mode) => {
     permissionService.recordPermissionModeChange(mode, "permissions.mode");
   });

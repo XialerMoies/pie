@@ -472,7 +472,9 @@ describe("CapabilityComponentManager", () => {
     assert.equal(headers.status, 200);
     const catalog = JSON.parse(body);
     assert.equal(catalog.schemaVersion, 1);
-    assert.ok(catalog.components.some((component) => component.manifest.id === "security-parser"));
+    // R3 keeps security parsing as a host service, outside the replaceable
+    // component catalog; only installable UI/tool contributions are listed.
+    assert.equal(catalog.components.some((component) => component.manifest.id === "security-parser"), false);
     assert.ok(catalog.components.some((component) => component.manifest.id === "ui.pane.search"));
     assert.ok(catalog.components.some((component) => component.manifest.id === "language-service.typescript"));
     assert.equal(catalog.components.some((component) => "enable" in component), false);

@@ -1,7 +1,14 @@
+/**
+ * The only replacement slots owned by the production host.  Security,
+ * permission, MCP and presentation are host services, not user-replaceable
+ * providers.  The manager still accepts legacy groups in isolated test
+ * fixtures while old state is migrated away from the production catalog.
+ */
+export const CORE_REPLACEMENT_GROUPS = new Set(["agent-engine", "model-router", "session-store"])
 export const HIGH_RISK_REPLACEMENT_GROUPS = new Set([
-  "bootstrap",
   "agent-engine",
   "session-store",
+  // Kept only for isolated legacy manager fixtures during migration.
   "permission",
   "security-parser",
   "mcp-host",

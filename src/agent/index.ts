@@ -128,6 +128,7 @@ export type {
 } from "./declarative-resources.js"
 export {
   HIGH_RISK_REPLACEMENT_GROUPS,
+  CORE_REPLACEMENT_GROUPS,
   failedReplacementChecks,
 } from "./capability-component-replacement.js"
 export type {
