@@ -24,6 +24,7 @@
     "firstPartyComponentPackages": 20,
     "uiPaneRegistrations": 5,
     "httpRouteEntries": 110,
-    "componentCatalogEntrypoints": 1
+    "componentCatalogEntrypoints": 1,
+    "legacyCompatibilityReferences": 19
   }
 }

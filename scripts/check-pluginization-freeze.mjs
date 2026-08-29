@@ -5,6 +5,14 @@ import { buildTestReport } from "./test-report.mjs"
 
 const ROOT = resolve(import.meta.dirname, "..")
 const BASELINE_PATH = resolve(ROOT, "docs/generated/pluginization-baseline.json")
+const LEGACY_COMPATIBILITY_SYMBOLS = [
+  "installFirstPartyComponentPackage",
+  "registerPane",
+  "getPane",
+  "validateCapabilityComponentPackageManifest",
+  "parseCapabilityComponentPackageManifest",
+  "componentManifestFingerprint",
+]
 
 function currentCommit() {
   try {
@@ -41,6 +49,13 @@ function countMatches(file, pattern) {
   return [...source.matchAll(pattern)].length
 }
 
+function countLegacyCompatibilityReferences(files) {
+  return files.reduce((total, file) => {
+    const source = readFileSync(file, "utf8")
+    return total + LEGACY_COMPATIBILITY_SYMBOLS.reduce((count, symbol) => count + (source.match(new RegExp(`\\b${symbol}\\b`, "gu"))?.length ?? 0), 0)
+  }, 0)
+}
+
 function collectMetrics() {
   const productionFiles = sourceFiles(resolve(ROOT, "src"))
   const componentManifestFile = resolve(ROOT, "src/agent/capability-components.ts")
@@ -67,6 +82,7 @@ function collectMetrics() {
     uiPaneRegistrations: paneRegistrations,
     httpRouteEntries: Array.isArray(capabilityCatalog.routes) ? capabilityCatalog.routes.length : 0,
     componentCatalogEntrypoints: countMatches(resolve(ROOT, "src/frontend/pane/components/index.ts"), /componentsContributionRegistry\.register\(/gu),
+    legacyCompatibilityReferences: countLegacyCompatibilityReferences(productionFiles),
   }
 }
 
@@ -82,6 +98,7 @@ function check() {
     "requiredComponentManifests",
     "firstPartyComponentPackages",
     "uiPaneRegistrations",
+    "legacyCompatibilityReferences",
   ]
   const violations = frozen
     .filter((key) => current[key] > baseline.metrics[key])
@@ -94,7 +111,7 @@ function check() {
     return
   }
   console.log(`[pluginization-freeze] pass; frozen=${frozen.map((key) => `${key}:${current[key]}/${baseline.metrics[key]}`).join(", ")}`)
-  console.log(`[pluginization-freeze] current production=${current.productionFiles} files/${current.productionLines} lines; tests=${current.testFiles} files/${current.declaredTestBlocks} blocks`)
+  console.log(`[pluginization-freeze] current production=${current.productionFiles} files/${current.productionLines} lines; tests=${current.testFiles} files/${current.declaredTestBlocks} blocks; legacy-compat=${current.legacyCompatibilityReferences}/${baseline.metrics.legacyCompatibilityReferences}`)
 }
 
 if (process.argv.includes("--write")) {
@@ -108,7 +125,7 @@ if (process.argv.includes("--write")) {
     scope: {
       production: "src/**/*.ts|tsx|js|mjs, excluding generated src/**/gen/**",
       tests: "scripts/test-report.mjs discovered test manifest",
-      frozen: ["requiredComponentManifests", "firstPartyComponentPackages", "uiPaneRegistrations"],
+      frozen: ["requiredComponentManifests", "firstPartyComponentPackages", "uiPaneRegistrations", "legacyCompatibilityReferences"],
       rule: "frozen metrics may decrease; increases require an intentional baseline update",
     },
     metrics,

@@ -196,10 +196,6 @@ function effectiveDependencies(manifest: CapabilityComponentManifest): Capabilit
   return dependencies.sort((left, right) => left.id.localeCompare(right.id))
 }
 
-function fingerprint(manifest: CapabilityComponentManifest): string {
-  return createHash("sha256").update(JSON.stringify(stableManifest(manifest))).digest("hex")
-}
-
 export function validateCapabilityComponentManifest(input: CapabilityComponentManifest): Readonly<CapabilityComponentManifest> {
   const id = String(input.id || "").trim()
   if (!/^[a-z0-9][a-z0-9._-]*$/u.test(id)) throw new CapabilityComponentError("invalid_manifest", `Invalid component id: ${id || "(empty)"}`, id)
@@ -1071,5 +1067,3 @@ export const REQUIRED_COMPONENT_MANIFESTS: readonly CapabilityComponentManifest[
 ])
 
 export const capabilityComponentManager = new CapabilityComponentManager(REQUIRED_COMPONENT_MANIFESTS)
-
-export function componentManifestFingerprint(manifest: CapabilityComponentManifest): string { return fingerprint(manifest) }

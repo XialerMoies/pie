@@ -322,9 +322,6 @@ export function normalizeCapabilityComponentPackageManifest(input: unknown, comp
   return result
 }
 
-export const validateCapabilityComponentPackageManifest = normalizeCapabilityComponentPackageManifest
-export const parseCapabilityComponentPackageManifest = normalizeCapabilityComponentPackageManifest
-
 export function assertCapabilityComponentPackageCompatible(manifest: CapabilityComponentPackageManifest, context: CapabilityComponentPackageCompatibilityContext): void {
   if (!satisfiesVersion(exactVersion(context.hostVersion, "hostVersion"), manifest.compatibility.host)) throw new CapabilityComponentPackageError("incompatible_host", `Package ${manifest.packageId} is incompatible with host ${context.hostVersion}`)
   if (!satisfiesVersion(exactVersion(context.contractVersion, "contractVersion"), manifest.compatibility.contract)) throw new CapabilityComponentPackageError("incompatible_contract", `Package ${manifest.packageId} is incompatible with contract ${context.contractVersion}`)

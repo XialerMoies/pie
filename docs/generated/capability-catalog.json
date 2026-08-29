@@ -876,14 +876,14 @@
     },
     {
       "file": "scripts/check-pluginization-freeze.mjs",
-      "line": 11,
+      "line": 19,
       "api": "execFileSync",
       "category": "build-or-test",
       "owner": "tooling"
     },
     {
       "file": "scripts/check-pluginization-freeze.mjs",
-      "line": 19,
+      "line": 27,
       "api": "execFileSync",
       "category": "build-or-test",
       "owner": "tooling"
