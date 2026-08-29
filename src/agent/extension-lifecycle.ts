@@ -6,6 +6,10 @@ import {
   type CapabilityComponentState,
   validateCapabilityComponentManifest,
 } from "./capability-components.js"
+import {
+  normalizeCapabilityComponentPackageManifest,
+  type CapabilityComponentPackageCompatibilityContext,
+} from "./component-package.js"
 
 /** The only lifecycle exposed to installable product extensions. */
 export type ExtensionLifecyclePhase =
@@ -33,6 +37,11 @@ export interface ExtensionLifecycleHooks {
 export interface ExtensionInstallOptions {
   /** Trust is still a host decision; user/workspace packages default to false. */
   trusted?: boolean
+}
+
+export interface ExtensionPackageInstallOptions extends ExtensionInstallOptions {
+  /** The host supplies its versions; a package cannot self-declare compatibility. */
+  compatibility: CapabilityComponentPackageCompatibilityContext
 }
 
 export interface ExtensionActivationContext {
@@ -109,6 +118,10 @@ export class ExtensionLifecycle {
     const state = this.#manager.register(normalized, { trusted: options.trusted ?? normalized.source === "builtin", enabled: false, health: "healthy" })
     const record: ExtensionRecord = { manifest: normalized, hooks, phase: "installed", generation: state.generation, resources: [] }
     this.#records.set(normalized.id, record)
+    // External packages are deliberately installed but inert until the host
+    // records trust. Treating this expected state as activation failure makes
+    // it impossible for a user to approve the exact installed artifact later.
+    if (!state.trusted) return this.snapshot(normalized.id)
     try {
       await this.validate(normalized.id)
       await this.enable(normalized.id)
@@ -121,6 +134,28 @@ export class ExtensionLifecycle {
       try { this.#manager.disable(normalized.id) } catch { /* already disabled */ }
       throw error
     }
+  }
+
+  /**
+   * Validate an installable package declaration before entering the ordinary
+   * optional-extension lifecycle. This remains a declaration boundary: the
+   * entry is never imported or executed here.
+   */
+  async installPackage(manifest: unknown, hooks: ExtensionLifecycleHooks = {}, options: ExtensionPackageInstallOptions): Promise<ExtensionLifecycleSnapshot> {
+    const normalized = normalizeCapabilityComponentPackageManifest(manifest, options.compatibility)
+    return this.install(normalized.component, hooks, { trusted: options.trusted })
+  }
+
+  /** Host-mediated trust change that disposes live resources before revocation. */
+  async trust(componentId: string, trusted = true): Promise<ExtensionLifecycleSnapshot> {
+    const record = this.#record(componentId)
+    if (!trusted && (record.phase === "active" || record.phase === "enabled")) await this.dispose(componentId)
+    const state = this.#manager.trust(componentId, trusted)
+    if (!trusted) {
+      record.phase = "disabled"
+      record.generation = state.generation
+    }
+    return this.snapshot(componentId)
   }
 
   async validate(componentId: string): Promise<ExtensionLifecycleSnapshot> {

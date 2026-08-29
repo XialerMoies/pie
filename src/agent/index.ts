@@ -78,6 +78,7 @@ export {
 export type {
   ExtensionActivationContext,
   ExtensionInstallOptions,
+  ExtensionPackageInstallOptions,
   ExtensionLifecycleHooks,
   ExtensionLifecyclePhase,
   ExtensionLifecycleSnapshot,
