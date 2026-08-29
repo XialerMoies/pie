@@ -7,11 +7,8 @@
 export const CORE_REPLACEMENT_GROUPS = new Set(["agent-engine", "model-router", "session-store"])
 export const HIGH_RISK_REPLACEMENT_GROUPS = new Set([
   "agent-engine",
+  "model-router",
   "session-store",
-  // Kept only for isolated legacy manager fixtures during migration.
-  "permission",
-  "security-parser",
-  "mcp-host",
 ])
 
 export interface RequiredComponentGenerationRef {

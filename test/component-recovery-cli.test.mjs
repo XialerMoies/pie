@@ -8,10 +8,6 @@ import { parseComponentRecoveryArgs, runComponentRecovery } from "../scripts/com
 import { FILE_READ_COMPONENT_PACKAGE_MANIFEST } from "../src/agent/component-package.ts";
 
 const optional = { id: "demo-tool", version: "1", kind: "optional", capability: "tool", source: "user" };
-const required = { id: "demo-parser", version: "1", kind: "required", capability: "security-parser", replacementGroup: "security-parser", source: "builtin" };
-const replacement = { ...required, id: "demo-parser-v2", version: "2", source: "user" };
-const provider = () => ({ kind: "security-parser", parse() {}, parseLegacy() {}, parseTreeSitter() {} });
-const passedPreflight = async () => ({ isolated: true, staticCheck: { status: "passed" }, replay: { status: "passed" }, failureMatrix: { status: "passed" }, shadow: { status: "passed" } });
 
 describe("component recovery CLI", () => {
   it("parses list and targeted recovery actions without a desktop dependency", () => {
@@ -61,17 +57,4 @@ describe("component recovery CLI", () => {
     }
   });
 
-  it("rolls back a required provider and rejects migration failure before commit", async () => {
-    const manager = new CapabilityComponentManager([required]);
-    manager.bindRequiredProvider("demo-parser", provider());
-    manager.register(replacement, { trusted: true, enabled: false, health: "healthy" });
-    manager.bindRequiredProvider("demo-parser-v2", provider());
-    await assert.rejects(() => manager.replaceRequired("demo-parser", "demo-parser-v2", {
-      approved: true, preflight: passedPreflight, verify: async () => {}, migrateState: async () => { throw new Error("migration failed"); },
-    }), /migration failed/u);
-    assert.equal(manager.activeRequiredProvider("security-parser").manifest.id, "demo-parser");
-    await manager.replaceRequired("demo-parser", "demo-parser-v2", { approved: true, preflight: passedPreflight, verify: async () => {} });
-    manager.rollbackRequired("security-parser");
-    assert.equal(manager.activeRequiredProvider("security-parser").manifest.id, "demo-parser");
-  });
 });

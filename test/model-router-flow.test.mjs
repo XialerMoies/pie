@@ -76,6 +76,7 @@ describe("model-router Required Component flow", () => {
 
     const oldLease = manager.acquireRequiredLease();
     const result = await manager.replaceRequired("model-router", "model-router.v2", {
+      approved: true,
       preflight: passedPreflight,
       verify: async () => {
         const verificationLease = manager.acquireRequiredLease();
@@ -127,6 +128,7 @@ describe("model-router Required Component flow", () => {
     manager.bindRequiredProvider("model-router.bad", routerProvider("bad", []));
 
     const result = await manager.replaceRequired("model-router", "model-router.bad", {
+      approved: true,
       preflight: passedPreflight,
       verify: async () => { throw new Error("model lookup probe failed"); },
     });

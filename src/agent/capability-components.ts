@@ -377,14 +377,10 @@ export class CapabilityComponentManager {
   readonly #providerReferences = new Map<string, number>()
   readonly #requiredProviderBindings = new Map<string, unknown>()
   readonly #disposingRequiredProviders = new Set<string>()
-  readonly #legacyReplacementGroups = new Set<string>()
   #generation = 0
   #replacementTail: Promise<void> = Promise.resolve()
 
   constructor(manifests: readonly CapabilityComponentManifest[] = []) {
-    for (const manifest of manifests) {
-      if (manifest.replacementGroup && !CORE_REPLACEMENT_GROUPS.has(manifest.replacementGroup)) this.#legacyReplacementGroups.add(manifest.replacementGroup)
-    }
     for (const manifest of manifests) this.register(manifest)
   }
 
@@ -845,7 +841,7 @@ export class CapabilityComponentManager {
     const current = this.#requireMutable(currentId)
     const candidate = this.#requireMutable(candidateId)
     const group = current.manifest.replacementGroup
-    if (!group || (!CORE_REPLACEMENT_GROUPS.has(group) && !this.#legacyReplacementGroups.has(group))) {
+    if (!group || !CORE_REPLACEMENT_GROUPS.has(group)) {
       return this.#reject("core_replacement_only", `Only core replacement slots may be replaced: ${group}`, currentId)
     }
     if (current.manifest.kind !== "required" || candidate.manifest.kind !== "required" || !group
