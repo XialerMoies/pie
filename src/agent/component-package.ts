@@ -4,6 +4,7 @@ import {
   type CapabilityComponentManager,
   validateCapabilityComponentManifest,
   type CapabilityComponentManifest,
+  type CapabilityComponentAgentConfig,
   type CapabilityComponentSource,
 } from "./capability-components.js"
 
@@ -339,6 +340,9 @@ function firstPartyPackageManifest(input: {
   entry: string
   description: string
   displayName?: string
+  publisher?: string
+  icon?: string
+  agentConfig?: CapabilityComponentAgentConfig
   capability?: string
   network?: boolean | readonly string[]
   filesystem?: readonly CapabilityComponentPackagePermission[]
@@ -366,6 +370,9 @@ function firstPartyPackageManifest(input: {
       productClass: input.productClass ?? "native",
       hostSurface: input.hostSurface ?? "agent",
       ...(input.displayName ? { displayName: input.displayName } : {}),
+      publisher: input.publisher ?? "XialerMoies",
+      ...(input.icon ? { icon: input.icon } : {}),
+      ...(input.agentConfig ? { agentConfig: input.agentConfig } : {}),
       description: input.description,
     },
     entry: input.entry,

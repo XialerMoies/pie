@@ -42,7 +42,7 @@
         "id": "tool.command",
         "packageId": "my-code-agent.tool.command",
         "packageVersion": "1.0.0",
-        "fingerprint": "38e71b23ab4897f61772bc1a8c1ea6a932210ff980217cebce5db4cd60c67c13"
+        "fingerprint": "6150ca7e2ba950195de52a02da35c4994d20ff64775fe2383376f28f6e1cf83e"
       }
     },
     {
@@ -172,7 +172,7 @@
         "id": "tool.delegate-tasks",
         "packageId": "my-code-agent.tool.delegate-tasks",
         "packageVersion": "1.0.0",
-        "fingerprint": "995c141421d2760f63caec85dd11388e0dacaa65b5a95ad23985974e4a61096a"
+        "fingerprint": "d183ab96b8b2aa9b3054234e5c58cf9b2df981eecb95489a69ee54511e215e79"
       }
     },
     {
@@ -209,7 +209,7 @@
         "id": "tool.memory",
         "packageId": "my-code-agent.tool.memory",
         "packageVersion": "1.0.0",
-        "fingerprint": "0c3a3207c0ef4db144f306244c55706f266b67dd7ccde20b05a65e8fbf20cad5"
+        "fingerprint": "c8546cd10e1637d58023fd0f25f938c87d99cb6ff1a9830e23016817a3030dc5"
       }
     },
     {
@@ -236,7 +236,7 @@
         "id": "tool.plan-mode",
         "packageId": "my-code-agent.tool.plan-mode",
         "packageVersion": "1.0.0",
-        "fingerprint": "ca3a4210beefa7414898f86b2158135f46729e07acbddc392894024017ecbc6c"
+        "fingerprint": "2c01226ffd4c50abbfa025547a60ba3766660d4646592fa2a5affea8ad064dce"
       }
     },
     {
@@ -266,7 +266,7 @@
         "id": "tool.plan-mode",
         "packageId": "my-code-agent.tool.plan-mode",
         "packageVersion": "1.0.0",
-        "fingerprint": "ca3a4210beefa7414898f86b2158135f46729e07acbddc392894024017ecbc6c"
+        "fingerprint": "2c01226ffd4c50abbfa025547a60ba3766660d4646592fa2a5affea8ad064dce"
       }
     },
     {
@@ -297,7 +297,7 @@
         "id": "tool.explorer-list",
         "packageId": "my-code-agent.tool.explorer-list",
         "packageVersion": "1.0.0",
-        "fingerprint": "af8e462ef60d42a36f4d55cba41319bf853cd79418c407d2c5e48e840c521d82"
+        "fingerprint": "7e342a0ffc37a68b8642723512777ec8989bf2470c1d116c30e9e755f74f5e94"
       }
     },
     {
@@ -327,7 +327,7 @@
         "id": "tool.file-outline",
         "packageId": "my-code-agent.tool.file-outline",
         "packageVersion": "1.0.0",
-        "fingerprint": "2e37843b364b66816f52453cf3119949c9a7d4812bd8ccd83558cdf3458c6e1e"
+        "fingerprint": "8d06839ce23d278906c1bad9f3375c79ad2eab420b59921ec17460565f4b5825"
       }
     },
     {
@@ -365,7 +365,7 @@
         "id": "tool.file-read",
         "packageId": "my-code-agent.tool.file-read",
         "packageVersion": "1.0.0",
-        "fingerprint": "b39e335e70bb036e09ea44062bebce08957dc85a7eebd40d34d289360351b92d"
+        "fingerprint": "3565a2fcb46082cc866209590e97fff47e65e1a23da385615e3ce915499c063e"
       }
     },
     {
@@ -400,7 +400,7 @@
         "id": "tool.file-write",
         "packageId": "my-code-agent.tool.file-write",
         "packageVersion": "1.0.0",
-        "fingerprint": "52b570a454acb31d719620427a34d218840e369ccf21bd461abe84bffd6577dd"
+        "fingerprint": "35a6ce3472374d10fe7761d84dead1c3b147ace8a93fad6344b2c0b55182924a"
       }
     },
     {
@@ -422,7 +422,7 @@
         "id": "tool.git-status",
         "packageId": "my-code-agent.tool.git-status",
         "packageVersion": "1.0.0",
-        "fingerprint": "817da0ef96807885d9de9e04a8b1af907f27f9f50c03ea108dfca2dcb4ebc824"
+        "fingerprint": "a6c673ed23ee25d43047df841ca7aa35d43a5b35f1da423b6792f7e95883dcd9"
       }
     },
     {
@@ -449,7 +449,7 @@
         "id": "tool.git-log",
         "packageId": "my-code-agent.tool.git-log",
         "packageVersion": "1.0.0",
-        "fingerprint": "3c899513efc5d4f4a35074fdd77297a1da9f4b2bd2258c2ee5d6ba3e74dc94af"
+        "fingerprint": "58f3035e77f8bf425d1e9500324398b62b47764be8c139f3d81d1cab1d0cfa5e"
       }
     },
     {
@@ -480,7 +480,7 @@
         "id": "tool.memory",
         "packageId": "my-code-agent.tool.memory",
         "packageVersion": "1.0.0",
-        "fingerprint": "0c3a3207c0ef4db144f306244c55706f266b67dd7ccde20b05a65e8fbf20cad5"
+        "fingerprint": "c8546cd10e1637d58023fd0f25f938c87d99cb6ff1a9830e23016817a3030dc5"
       }
     },
     {
@@ -518,7 +518,7 @@
         "id": "tool.memory",
         "packageId": "my-code-agent.tool.memory",
         "packageVersion": "1.0.0",
-        "fingerprint": "0c3a3207c0ef4db144f306244c55706f266b67dd7ccde20b05a65e8fbf20cad5"
+        "fingerprint": "c8546cd10e1637d58023fd0f25f938c87d99cb6ff1a9830e23016817a3030dc5"
       }
     },
     {
@@ -564,7 +564,7 @@
         "id": "tool.search",
         "packageId": "my-code-agent.tool.search",
         "packageVersion": "1.0.0",
-        "fingerprint": "f0efd8bd570a758763736389233d49d311ccb1547cecbe2c113ea37f1494549d"
+        "fingerprint": "58484c7741caccfce0cdfc06906d245745c6d7400ca6637fc756f4265e63cc07"
       }
     },
     {
@@ -605,7 +605,7 @@
         "id": "tool.memory",
         "packageId": "my-code-agent.tool.memory",
         "packageVersion": "1.0.0",
-        "fingerprint": "0c3a3207c0ef4db144f306244c55706f266b67dd7ccde20b05a65e8fbf20cad5"
+        "fingerprint": "c8546cd10e1637d58023fd0f25f938c87d99cb6ff1a9830e23016817a3030dc5"
       }
     },
     {
@@ -643,7 +643,7 @@
         "id": "tool.skill-facts",
         "packageId": "my-code-agent.tool.skill-facts",
         "packageVersion": "1.0.0",
-        "fingerprint": "9997705e83a948115f63d2832f0fb0683ebc1c95af9f0e848778b99fa03485cc"
+        "fingerprint": "056ccf953f73408e9402ef38f9bd00479868c88e22bbb549a1819849e9099660"
       }
     },
     {
@@ -707,7 +707,7 @@
         "id": "tool.str-replace-editor",
         "packageId": "my-code-agent.tool.str-replace-editor",
         "packageVersion": "1.0.0",
-        "fingerprint": "4f7f1ac9fc57e053980597a393c7efbe5e3e9d90cb7f7a3a1632189b451bba87"
+        "fingerprint": "0634fa41772ea08fca8c11fa2994f880af6b97c9eeb6a8be7dc5f37617687c6b"
       }
     },
     {
@@ -737,7 +737,7 @@
         "id": "tool.web-fetch",
         "packageId": "my-code-agent.tool.web-fetch",
         "packageVersion": "1.0.0",
-        "fingerprint": "6714505a3221687699f525f077369e642d7f53048541d77c7fc726a1a59cf0ae"
+        "fingerprint": "764f2722ec89ef8c087274eb70dadde08a4fe26c84cb53bc2b760c25c7f6c470"
       }
     },
     {
@@ -767,7 +767,7 @@
         "id": "tool.web-search",
         "packageId": "my-code-agent.tool.web-search",
         "packageVersion": "1.0.0",
-        "fingerprint": "ea95d04f52e5a5b75499068ed449d45840c35d5a5e27cc26e751473d98d990bd"
+        "fingerprint": "60b8f1c344a0be21cdec03298d3c8d545cd0e30cd9539a79a4e7f99915392b91"
       }
     },
     {
@@ -797,7 +797,7 @@
         "id": "tool.write-agent-md",
         "packageId": "my-code-agent.tool.write-agent-md",
         "packageVersion": "1.0.0",
-        "fingerprint": "e0e765e349cc6cf126702570f7d8b1ec091c9de579b9be28800f0278798642e1"
+        "fingerprint": "264cd50231e0daf61b47f3cce10e0ac858228c8ca89a60903992344771239db7"
       }
     },
     {
@@ -848,7 +848,7 @@
         "id": "tool.memory",
         "packageId": "my-code-agent.tool.memory",
         "packageVersion": "1.0.0",
-        "fingerprint": "0c3a3207c0ef4db144f306244c55706f266b67dd7ccde20b05a65e8fbf20cad5"
+        "fingerprint": "c8546cd10e1637d58023fd0f25f938c87d99cb6ff1a9830e23016817a3030dc5"
       }
     }
   ],

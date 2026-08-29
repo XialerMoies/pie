@@ -43,6 +43,9 @@ const manifest = {
     source: "user",
     productClass: "third-party",
     hostSurface: "agent",
+    displayName: "示例接口",
+    icon: "#iplus",
+    agentConfig: { timeoutMs: 30_000, maxConcurrent: 2 },
   },
   entry: "dist/index.js",
   source: { kind: "registry", origin: "https://registry.example.test/example-api.tgz", digest: "c".repeat(64) },
@@ -65,6 +68,9 @@ describe("third-party extension management API", () => {
       assert.equal(installed.body.extension.trusted, false)
       assert.equal(installed.body.extension.fingerprint.length, 64)
       assert.equal(installed.body.extension.source.kind, "registry")
+      assert.equal(installed.body.extension.manifest.component.displayName, "示例接口")
+      assert.equal(installed.body.extension.manifest.component.icon, "#iplus")
+      assert.deepEqual(installed.body.extension.manifest.component.agentConfig, { timeoutMs: 30_000, maxConcurrent: 2 })
 
       const listed = await call("GET", "/api/extensions")
       assert.ok(listed.body.extensions.some((entry) => entry.packageId === manifest.packageId && entry.trusted === false))

@@ -26,6 +26,11 @@ export interface ExtensionManifestCompatibility {
   readonly contract: string
 }
 
+export interface ExtensionAgentConfig {
+  readonly timeoutMs?: number
+  readonly maxConcurrent?: number
+}
+
 export interface ExtensionManifest {
   readonly schemaVersion: typeof EXTENSION_MANIFEST_SCHEMA_VERSION
   readonly id: string
@@ -33,6 +38,14 @@ export interface ExtensionManifest {
   readonly contributions: readonly ExtensionContributionType[]
   readonly permissions: ExtensionManifestPermissions
   readonly compatibility: ExtensionManifestCompatibility
+  /** Human-readable title shown in extension management surfaces. */
+  readonly displayName?: string
+  /** Publisher/author shown to users; informational only. */
+  readonly publisher?: string
+  /** Safe host sprite reference, HTTPS URL, or base64 image data URI. */
+  readonly icon?: string
+  /** Defaults/ceilings used when the Agent invokes this contribution. */
+  readonly agentConfig?: ExtensionAgentConfig
   readonly entry?: string
   readonly source?: "builtin" | "workspace" | "user" | "registry"
 }
@@ -60,6 +73,7 @@ export function assertExtensionEligible(manifest: Pick<ExtensionManifest, "id" |
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/u
 const VERSION_PATTERN = /^\d+(?:\.\d+){0,2}$/u
 const RANGE_PATTERN = /^(?:\*|\d+(?:\.\d+){0,2}|[~^]\d+(?:\.\d+){0,2}|>=\s*\d+(?:\.\d+){0,2})$/u
+const ICON_REFERENCE_PATTERN = /^(?:#[a-z][a-z0-9_-]*|https:\/\/[^\s]+|data:image\/(?:svg\+xml|png|jpeg|webp);base64,[a-z0-9+/=]+)$/iu
 const CONTRIBUTIONS = new Set<ExtensionContributionType>([
   "agent-tool",
   "desktop-ui",
@@ -112,6 +126,14 @@ export function normalizeExtensionManifest(input: unknown): Readonly<ExtensionMa
   if (!compatibilityValue || typeof compatibilityValue !== "object" || Array.isArray(compatibilityValue)) throw new Error("compatibility must be an object")
   const compatibility = compatibilityValue as Record<string, unknown>
   const source = value.source === undefined ? undefined : text(value.source, "source") as ExtensionManifest["source"]
+  const displayName = value.displayName === undefined ? undefined : text(value.displayName, "displayName")
+  const publisher = value.publisher === undefined ? undefined : text(value.publisher, "publisher")
+  const icon = value.icon === undefined ? undefined : text(value.icon, "icon")
+  const agentConfig = value.agentConfig === undefined ? undefined : value.agentConfig as ExtensionAgentConfig
+  if (icon !== undefined && (icon.length > 512 || !ICON_REFERENCE_PATTERN.test(icon))) throw new Error("icon must be a safe sprite reference, HTTPS URL, or base64 image")
+  if (agentConfig !== undefined && (!agentConfig || typeof agentConfig !== "object" || Array.isArray(agentConfig))) throw new Error("agentConfig must be an object")
+  if (agentConfig?.timeoutMs !== undefined && (!Number.isSafeInteger(agentConfig.timeoutMs) || agentConfig.timeoutMs < 100 || agentConfig.timeoutMs > 3_600_000)) throw new Error("agentConfig.timeoutMs must be between 100 and 3600000")
+  if (agentConfig?.maxConcurrent !== undefined && (!Number.isSafeInteger(agentConfig.maxConcurrent) || agentConfig.maxConcurrent < 1 || agentConfig.maxConcurrent > 30)) throw new Error("agentConfig.maxConcurrent must be between 1 and 30")
   if (source !== undefined && !["builtin", "workspace", "user", "registry"].includes(source)) throw new Error("source is unsupported")
   const normalized = Object.freeze({
     schemaVersion: EXTENSION_MANIFEST_SCHEMA_VERSION,
@@ -120,6 +142,10 @@ export function normalizeExtensionManifest(input: unknown): Readonly<ExtensionMa
     contributions: Object.freeze(contributions.sort()),
     permissions: Object.freeze({ capabilities: Object.freeze(permissions.sort()) }),
     compatibility: Object.freeze({ host: versionRange(compatibility.host, "compatibility.host"), contract: versionRange(compatibility.contract, "compatibility.contract") }),
+    ...(displayName ? { displayName } : {}),
+    ...(publisher ? { publisher } : {}),
+    ...(icon ? { icon } : {}),
+    ...(agentConfig ? { agentConfig: Object.freeze({ ...(agentConfig.timeoutMs === undefined ? {} : { timeoutMs: agentConfig.timeoutMs }), ...(agentConfig.maxConcurrent === undefined ? {} : { maxConcurrent: agentConfig.maxConcurrent }) }) } : {}),
     ...(value.entry === undefined ? {} : { entry: safeRelativePath(value.entry, "entry") }),
     ...(source === undefined ? {} : { source }),
   })
@@ -135,9 +161,13 @@ export function extensionManifestFromPackage(input: {
   packageVersion: string
   entry?: string
   source?: "builtin" | "workspace" | "user" | "registry"
-  component: { id: string; version: string; capability: string }
+  component: { id: string; version: string; capability: string; displayName?: string; publisher?: string; icon?: string; agentConfig?: ExtensionAgentConfig }
   permissions: { filesystem: readonly string[]; network: boolean | readonly string[]; subprocess: boolean; secrets: readonly string[] }
   compatibility: { host: string; contract: string }
+  displayName?: string
+  publisher?: string
+  icon?: string
+  agentConfig?: ExtensionAgentConfig
 }): Readonly<ExtensionManifest> {
   const capability = input.component.capability
   const contribution: ExtensionContributionType = capability === "desktop.ui-pane"
@@ -163,6 +193,14 @@ export function extensionManifestFromPackage(input: {
     contributions: [contribution],
     permissions: { capabilities: permissions },
     compatibility: input.compatibility,
+    ...(input.component.displayName ? { displayName: input.component.displayName } : {}),
+    ...(input.component.publisher ? { publisher: input.component.publisher } : {}),
+    ...(input.component.icon ? { icon: input.component.icon } : {}),
+    ...(input.component.agentConfig ? { agentConfig: input.component.agentConfig } : {}),
+    ...(input.displayName ? { displayName: input.displayName } : {}),
+    ...(input.publisher ? { publisher: input.publisher } : {}),
+    ...(input.icon ? { icon: input.icon } : {}),
+    ...(input.agentConfig ? { agentConfig: input.agentConfig } : {}),
     ...(input.entry === undefined ? {} : { entry: input.entry }),
     ...(input.source === undefined ? {} : { source: input.source }),
   })

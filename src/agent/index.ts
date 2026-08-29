@@ -56,6 +56,7 @@ export {
 } from "./component-package.js"
 export type {
   CapabilityComponentDependency,
+  CapabilityComponentAgentConfig,
   CapabilityComponentHealth,
   CapabilityComponentKind,
   CapabilityComponentLifecycleAction,
@@ -123,6 +124,7 @@ export type {
   ExtensionManifest,
   ExtensionManifestCompatibility,
   ExtensionManifestPermissions,
+  ExtensionAgentConfig,
   ExtensionContributionType,
   ExtensionPermission,
 } from "./extension-manifest.js"

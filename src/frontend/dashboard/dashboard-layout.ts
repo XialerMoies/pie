@@ -351,6 +351,12 @@ function _syncMainArea(activeId: string | null, items: AppTab[]): void {
 
 type ComponentTabManifest = NonNullable<AppTab['componentManifest']>;
 
+function componentIconMarkup(icon: string | undefined, size = 22): string {
+  const reference = icon?.trim();
+  if (!reference || reference.startsWith('#')) return S(reference?.slice(1) || 'ipuzzle', size);
+  return `<img class="component-detail-image" width="${size}" height="${size}" src="${E(reference)}" alt="" referrerpolicy="no-referrer">`;
+}
+
 function renderAgentToolCollectionTab(tab: AppTab, manifest: ComponentTabManifest, root: HTMLElement): void {
   const children = manifest.children || [];
   const title = manifest.displayName || "Agent 工具";
@@ -358,11 +364,11 @@ function renderAgentToolCollectionTab(tab: AppTab, manifest: ComponentTabManifes
   const rows = children.map((child) => {
     const state = child.status === 'active' ? '已启用' : child.status === 'disabled' ? '已停用' : child.status === 'untrusted' ? '未信任' : '不可用';
     const canManage = Boolean(child.id);
-    return `<article class="component-tool-row" data-tool-id="${E(child.id)}"><div class="component-tool-main"><strong>${E(child.displayName || child.id)}</strong><span>${value(child.description)}</span></div><span class="component-tool-status">${state}</span>${canManage ? `<button class="component-detail-action component-tool-toggle" data-tool-action="toggle" type="button">${state === '已停用' ? '启用' : '停用'}</button>` : ''}</article>`;
+    return `<article class="component-tool-row" data-tool-id="${E(child.id)}"><span class="component-tool-icon">${componentIconMarkup(child.icon, 18)}</span><div class="component-tool-main"><strong>${E(child.displayName || child.id)}</strong><span>${value(child.description)}</span></div><span class="component-tool-status">${state}</span>${canManage ? `<button class="component-detail-action component-tool-toggle" data-tool-action="toggle" type="button">${state === '已停用' ? '启用' : '停用'}</button>` : ''}</article>`;
   }).join('');
   root.innerHTML = `<article class="component-detail component-tool-collection" data-component-detail="${E(manifest.id)}">
-    <header class="component-detail-header"><div class="component-detail-title"><span class="component-detail-icon">${S('ipuzzle', 22)}</span><div><h1>${E(title)}</h1><p>${value(manifest.description)}</p></div></div></header>
-    <section class="component-detail-section"><h2>集合信息</h2><dl class="component-detail-grid"><div><dt>归属</dt><dd>Agent</dd></div><div><dt>类型</dt><dd>功能扩展集合</dd></div><div><dt>工具数量</dt><dd>${children.length}</dd></div></dl></section>
+    <header class="component-detail-header"><div class="component-detail-title"><span class="component-detail-icon">${componentIconMarkup(manifest.icon, 22)}</span><div><h1>${E(title)}</h1><p>${value(manifest.description)}</p></div></div></header>
+    <section class="component-detail-section"><h2>集合信息</h2><dl class="component-detail-grid"><div><dt>归属</dt><dd>Agent</dd></div><div><dt>类型</dt><dd>功能扩展集合</dd></div><div><dt>发布者</dt><dd>${value(manifest.publisher)}</dd></div><div><dt>工具数量</dt><dd>${children.length}</dd></div></dl></section>
     <section class="component-detail-section"><h2>包含工具</h2><div class="component-tool-list">${rows || '<p class="component-detail-deps">暂无已登记工具</p>'}</div></section>
   </article>`;
   root.querySelectorAll<HTMLButtonElement>('[data-tool-action="toggle"]').forEach((button) => {
@@ -407,9 +413,10 @@ function renderComponentTab(tab: AppTab): void {
   const canManage = manifest.source === 'builtin' && manifest.kind === 'optional' && tab.componentInstalled !== false;
   const value = (item: unknown): string => typeof item === 'string' && item.trim() ? E(item) : '未提供';
   root.innerHTML = `<article class="component-detail" data-component-detail="${E(manifest.id)}">
-    <header class="component-detail-header"><div class="component-detail-title"><span class="component-detail-icon">${S('ipuzzle', 22)}</span><div><h1>${E(manifest.displayName || manifest.id)}</h1><p>${value(manifest.description)}</p></div></div>${canManage ? `<div class="component-detail-actions"><button class="component-detail-action" data-component-action="toggle" type="button">${state === '已停用' ? '启用' : '停用'}</button><button class="component-detail-action danger" data-component-action="uninstall" type="button">卸载</button></div>` : ''}</header>
-    <section class="component-detail-section"><h2>组件信息</h2><dl class="component-detail-grid"><div><dt>归属</dt><dd>${value(manifest.hostSurface)}</dd></div><div><dt>类型</dt><dd>${kind}</dd></div><div><dt>来源</dt><dd>${source}</dd></div><div><dt>版本</dt><dd>${value(manifest.version)}</dd></div><div><dt>能力</dt><dd>${value(manifest.capability)}</dd></div><div><dt>状态</dt><dd>${state}</dd></div></dl></section>
+    <header class="component-detail-header"><div class="component-detail-title"><span class="component-detail-icon">${componentIconMarkup(manifest.icon)}</span><div><h1>${E(manifest.displayName || manifest.id)}</h1><p>${value(manifest.description)}</p></div></div>${canManage ? `<div class="component-detail-actions"><button class="component-detail-action" data-component-action="toggle" type="button">${state === '已停用' ? '启用' : '停用'}</button><button class="component-detail-action danger" data-component-action="uninstall" type="button">卸载</button></div>` : ''}</header>
+    <section class="component-detail-section"><h2>组件信息</h2><dl class="component-detail-grid"><div><dt>归属</dt><dd>${value(manifest.hostSurface)}</dd></div><div><dt>类型</dt><dd>${kind}</dd></div><div><dt>来源</dt><dd>${source}</dd></div><div><dt>发布者</dt><dd>${value(manifest.publisher)}</dd></div><div><dt>版本</dt><dd>${value(manifest.version)}</dd></div><div><dt>能力</dt><dd>${value(manifest.capability)}</dd></div><div><dt>状态</dt><dd>${state}</dd></div></dl></section>
     <section class="component-detail-section"><h2>依赖</h2><p class="component-detail-deps">${manifest.dependencies?.length ? manifest.dependencies.map((dependency) => E(typeof dependency === 'string' ? dependency : dependency.id)).join('、') : '无声明依赖'}</p></section>
+    ${manifest.agentConfig ? `<section class="component-detail-section"><h2>Agent 参数</h2><dl class="component-detail-grid"><div><dt>单次超时</dt><dd>${manifest.agentConfig.timeoutMs ? `${manifest.agentConfig.timeoutMs} ms` : '宿主默认'}</dd></div><div><dt>最大并发</dt><dd>${manifest.agentConfig.maxConcurrent || '宿主默认'}</dd></div></dl><p class="component-detail-deps">参数由扩展声明，实际执行仍受宿主权限和资源上限约束。</p></section>` : ''}
   </article>`;
   const bindAction = (name: string, endpoint: string, success: string) => root.querySelector<HTMLButtonElement>(`[data-component-action="${name}"]`)?.addEventListener('click', async () => {
     const button = root.querySelector<HTMLButtonElement>(`[data-component-action="${name}"]`);

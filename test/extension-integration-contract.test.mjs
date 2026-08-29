@@ -21,17 +21,40 @@ describe("R2 extension and integration contracts", () => {
     assert.equal("hostSurface" in manifest, false);
   });
 
+  it("preserves extension title, icon and Agent execution configuration", () => {
+    const manifest = normalizeExtensionManifest({
+      schemaVersion: 1,
+      id: "demo.agent",
+      version: "1.0.0",
+      displayName: "代码检查",
+      publisher: "XialerMoies",
+      icon: "#icheck",
+      contributions: ["agent-tool"],
+      agentConfig: { timeoutMs: 45_000, maxConcurrent: 3 },
+      permissions: { capabilities: ["read"] },
+      compatibility: { host: "1", contract: "1" },
+    });
+    assert.equal(manifest.displayName, "代码检查");
+    assert.equal(manifest.publisher, "XialerMoies");
+    assert.equal(manifest.icon, "#icheck");
+    assert.deepEqual(manifest.agentConfig, { timeoutMs: 45_000, maxConcurrent: 3 });
+    assert.throws(() => normalizeExtensionManifest({ ...manifest, icon: "javascript:alert(1)" }), /icon/);
+  });
+
   it("adapts a legacy package declaration without leaking its component taxonomy", () => {
     const manifest = extensionManifestFromPackage({
       packageId: "demo.ui",
       packageVersion: "1.0.0",
-      component: { id: "ui.demo", version: "1.0.0", capability: "desktop.ui-pane" },
+      component: { id: "ui.demo", version: "1.0.0", capability: "desktop.ui-pane", displayName: "演示面板", publisher: "XialerMoies", icon: "#ipanel" },
       entry: "dist/index.js",
       source: "workspace",
       permissions: { filesystem: ["read"], network: false, subprocess: false, secrets: [] },
       compatibility: { host: ">=1.0.0", contract: "1" },
     });
     assert.deepEqual(manifest.contributions, ["desktop-ui"]);
+    assert.equal(manifest.displayName, "演示面板");
+    assert.equal(manifest.publisher, "XialerMoies");
+    assert.equal(manifest.icon, "#ipanel");
     assert.equal("productClass" in manifest, false);
     assert.equal("hostSurface" in manifest, false);
   });

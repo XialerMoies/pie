@@ -23,6 +23,7 @@ export type CapabilityComponentStatus = "active" | "disabled" | "untrusted" | "u
 /** Product-facing ownership. This is deliberately separate from source/kind. */
 export type CapabilityComponentProductClass = "system" | "native" | "third-party" | "mcp"
 export type CapabilityComponentHostSurface = "runtime" | "desktop" | "agent" | "server" | "mcp-service"
+const ICON_REFERENCE_PATTERN = /^(?:#[a-z][a-z0-9_-]*|https:\/\/[^\s]+|data:image\/(?:svg\+xml|png|jpeg|webp);base64,[a-z0-9+/=]+)$/iu
 
 export interface CapabilityComponentDependency {
   id: string
@@ -32,6 +33,13 @@ export interface CapabilityComponentDependency {
   optional?: boolean
   /** If set, the provider must expose this capability. */
   capability?: string
+}
+
+export interface CapabilityComponentAgentConfig {
+  /** Maximum wall-clock time for one Agent invocation, in milliseconds. */
+  timeoutMs?: number
+  /** Maximum concurrent invocations allowed for this contribution. */
+  maxConcurrent?: number
 }
 
 export interface RequiredComponentContract {
@@ -60,6 +68,12 @@ export interface CapabilityComponentManifest {
   hostSurface?: CapabilityComponentHostSurface
   /** User-facing component name. The stable id remains internal. */
   displayName?: string
+  /** Publisher/author shown to users; informational only. */
+  publisher?: string
+  /** Optional icon URL or host sprite reference (for example #ipuzzle). */
+  icon?: string
+  /** Agent-facing execution defaults and ceilings. */
+  agentConfig?: CapabilityComponentAgentConfig
   description?: string
 }
 
@@ -112,6 +126,9 @@ export interface SyncComponentOptions {
   productClass?: CapabilityComponentProductClass
   hostSurface?: CapabilityComponentHostSurface
   displayName?: string
+  publisher?: string
+  icon?: string
+  agentConfig?: CapabilityComponentAgentConfig
   trusted: boolean
   enabled: boolean
   health: CapabilityComponentHealth
@@ -175,6 +192,9 @@ function stableManifest(manifest: CapabilityComponentManifest): CapabilityCompon
     ...(manifest.productClass ? { productClass: manifest.productClass } : {}),
     ...(manifest.hostSurface ? { hostSurface: manifest.hostSurface } : {}),
     ...(manifest.displayName ? { displayName: manifest.displayName } : {}),
+    ...(manifest.publisher ? { publisher: manifest.publisher } : {}),
+    ...(manifest.icon ? { icon: manifest.icon } : {}),
+    ...(manifest.agentConfig ? { agentConfig: { ...(manifest.agentConfig.timeoutMs === undefined ? {} : { timeoutMs: manifest.agentConfig.timeoutMs }), ...(manifest.agentConfig.maxConcurrent === undefined ? {} : { maxConcurrent: manifest.agentConfig.maxConcurrent }) } } : {}),
     ...(manifest.description ? { description: manifest.description } : {}),
   }
 }
@@ -270,7 +290,23 @@ export function validateCapabilityComponentManifest(input: CapabilityComponentMa
   if (hostSurface === "mcp-service" && productClass !== "mcp") {
     throw new CapabilityComponentError("invalid_manifest", `MCP surface component ${id} must belong to mcp`, id)
   }
-  return Object.freeze(stableManifest({ ...input, id, dependencies, ...(parentId ? { parentId } : {}), ...(providedBy ? { providedBy } : {}) }))
+  const icon = input.icon === undefined ? undefined : String(input.icon).trim()
+  const publisher = input.publisher === undefined ? undefined : String(input.publisher).trim()
+  if (publisher !== undefined && (!publisher || publisher.length > 128)) throw new CapabilityComponentError("invalid_manifest", `Component ${id} has an invalid publisher`, id)
+  if (icon !== undefined && (icon.length > 512 || !ICON_REFERENCE_PATTERN.test(icon))) {
+    throw new CapabilityComponentError("invalid_manifest", `Component ${id} has an invalid icon reference`, id)
+  }
+  const agentConfig = input.agentConfig
+  if (agentConfig !== undefined) {
+    if (!agentConfig || typeof agentConfig !== "object" || Array.isArray(agentConfig)) throw new CapabilityComponentError("invalid_manifest", `Component ${id} has an invalid Agent config`, id)
+    if (agentConfig.timeoutMs !== undefined && (!Number.isSafeInteger(agentConfig.timeoutMs) || agentConfig.timeoutMs < 100 || agentConfig.timeoutMs > 3_600_000)) {
+      throw new CapabilityComponentError("invalid_manifest", `Component ${id} has an invalid Agent timeout`, id)
+    }
+    if (agentConfig.maxConcurrent !== undefined && (!Number.isSafeInteger(agentConfig.maxConcurrent) || agentConfig.maxConcurrent < 1 || agentConfig.maxConcurrent > 30)) {
+      throw new CapabilityComponentError("invalid_manifest", `Component ${id} has an invalid Agent concurrency`, id)
+    }
+  }
+  return Object.freeze(stableManifest({ ...input, id, dependencies, ...(parentId ? { parentId } : {}), ...(providedBy ? { providedBy } : {}), ...(publisher ? { publisher } : {}), ...(icon ? { icon } : {}), ...(agentConfig ? { agentConfig: { ...(agentConfig.timeoutMs === undefined ? {} : { timeoutMs: agentConfig.timeoutMs }), ...(agentConfig.maxConcurrent === undefined ? {} : { maxConcurrent: agentConfig.maxConcurrent }) } } : {}) }))
 }
 
 function isVersionRange(value: string): boolean {

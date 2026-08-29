@@ -14,6 +14,9 @@ interface ComponentPaneManifest {
   productClass?: ComponentPaneManifestClass;
   hostSurface?: ComponentPaneSubgroup;
   displayName?: string;
+  publisher?: string;
+  icon?: string;
+  agentConfig?: { timeoutMs?: number; maxConcurrent?: number };
   description?: string;
 }
 
@@ -57,6 +60,21 @@ function makeIcon(symbol: string, size = 16): SVGSVGElement {
   use.setAttribute("href", `#${symbol}`);
   svg.append(use);
   return svg;
+}
+
+function makeComponentIcon(component: ComponentPaneState | ComponentPaneManifest, size = 17): HTMLElement {
+  const manifest = "manifest" in component ? component.manifest : component;
+  const icon = manifest.icon?.trim();
+  if (!icon || icon.startsWith("#")) return makeIcon(icon || "ipuzzle", size);
+  const image = makeElement("img", "component-row-image") as HTMLImageElement;
+  image.width = size;
+  image.height = size;
+  image.src = icon;
+  image.alt = "";
+  image.referrerPolicy = "no-referrer";
+  image.loading = "lazy";
+  image.addEventListener("error", () => { image.replaceWith(makeIcon("ipuzzle", size)); }, { once: true });
+  return image;
 }
 
 function componentKindLabel(component: ComponentPaneState | ComponentPaneManifest): string {
@@ -135,6 +153,7 @@ function makeAgentToolCollection(components: ComponentPaneState[]): ComponentPan
     hostSurface: "agent",
     providedBy: "my-code-agent.agent-tools",
     displayName: "Agent 工具",
+    publisher: "XialerMoies",
     description: "Agent 可用的第一方工具集合",
   };
   return {
@@ -237,12 +256,12 @@ function renderInstalledRows(container: HTMLElement, components: ComponentPaneSt
     row.setAttribute("role", "button");
     row.setAttribute("aria-label", `查看组件 ${componentTitle(component)}`);
     const icon = makeElement("span", "component-row-icon");
-    icon.append(makeIcon("ipuzzle", 17));
+    icon.append(makeComponentIcon(component, 17));
     const main = makeElement("div", "component-row-main");
     main.append(
       makeElement("div", "component-name", componentTitle(component)),
       makeElement("div", "component-row-summary", component.children?.length ? `${component.children.length} 个工具` : (component.manifest.description || componentKindLabel(component))),
-      makeElement("div", "component-row-meta", `${componentOriginLabel(component)} · ${componentKindLabel(component)} · ${componentStatusLabel(component)}`),
+      makeElement("div", "component-row-meta", `${componentOriginLabel(component)} · ${componentKindLabel(component)} · ${componentStatusLabel(component)}${component.manifest.publisher ? ` · ${component.manifest.publisher}` : ""}`),
     );
     row.append(icon, main);
     const openDetails = (): void => componentPaneApp.UI?.openComponentTab?.({ ...component.manifest, ...(component.children?.length ? { children: component.children.map((child) => ({ ...child.manifest, id: child.manifest.id, enabled: child.enabled, status: child.status, health: child.health })) } : {}), enabled: component.enabled, status: component.status, installed: true });
@@ -311,7 +330,7 @@ function renderRecoverableRows(container: HTMLElement, packages: ComponentPanePa
     row.setAttribute("role", "button");
     row.setAttribute("aria-label", `查看组件 ${componentTitle(entry.component)}`);
     const icon = makeElement("span", "component-row-icon component-row-icon-muted");
-    icon.append(makeIcon("ipuzzle", 17));
+    icon.append(makeComponentIcon(entry.component, 17));
     const main = makeElement("div", "component-row-main");
     main.append(
       makeElement("div", "component-name", componentTitle(entry.component)),
