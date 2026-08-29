@@ -37,6 +37,26 @@ export interface ExtensionManifest {
   readonly source?: "builtin" | "workspace" | "user" | "registry"
 }
 
+const HOST_RESERVED_EXTENSION_IDS = new Set([
+  "desktop.chat",
+  "desktop.layout",
+  "desktop.shell",
+  "permission.core",
+  "security.core",
+])
+
+/** A product extension may contribute features, but never replace host policy. */
+export function isExtensionEligible(manifest: Pick<ExtensionManifest, "id" | "contributions" | "source">): boolean {
+  if (HOST_RESERVED_EXTENSION_IDS.has(manifest.id)) return false
+  const external = manifest.source !== undefined && manifest.source !== "builtin"
+  if (external && manifest.contributions.some((item) => item === "server-route" || item === "model-adapter")) return false
+  return true
+}
+
+export function assertExtensionEligible(manifest: Pick<ExtensionManifest, "id" | "contributions" | "source">): void {
+  if (!isExtensionEligible(manifest)) throw new Error(`Extension is not eligible for this host surface: ${manifest.id}`)
+}
+
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/u
 const VERSION_PATTERN = /^\d+(?:\.\d+){0,2}$/u
 const RANGE_PATTERN = /^(?:\*|\d+(?:\.\d+){0,2}|[~^]\d+(?:\.\d+){0,2}|>=\s*\d+(?:\.\d+){0,2})$/u
@@ -93,7 +113,7 @@ export function normalizeExtensionManifest(input: unknown): Readonly<ExtensionMa
   const compatibility = compatibilityValue as Record<string, unknown>
   const source = value.source === undefined ? undefined : text(value.source, "source") as ExtensionManifest["source"]
   if (source !== undefined && !["builtin", "workspace", "user", "registry"].includes(source)) throw new Error("source is unsupported")
-  return Object.freeze({
+  const normalized = Object.freeze({
     schemaVersion: EXTENSION_MANIFEST_SCHEMA_VERSION,
     id,
     version,
@@ -103,6 +123,8 @@ export function normalizeExtensionManifest(input: unknown): Readonly<ExtensionMa
     ...(value.entry === undefined ? {} : { entry: safeRelativePath(value.entry, "entry") }),
     ...(source === undefined ? {} : { source }),
   })
+  assertExtensionEligible(normalized)
+  return normalized
 }
 
 export const validateExtensionManifest = normalizeExtensionManifest

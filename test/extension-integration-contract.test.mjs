@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { extensionManifestFromPackage, normalizeExtensionManifest } from "../src/agent/extension-manifest.ts";
+import { assertExtensionEligible, extensionManifestFromPackage, normalizeExtensionManifest } from "../src/agent/extension-manifest.ts";
+import { createExtensionApi } from "../src/agent/extension-api.ts";
 import { mcpIntegrationRecord } from "../src/agent/integrations.ts";
 import { handleComponents } from "../src/server/routes/components.ts";
 
@@ -66,5 +67,30 @@ describe("R2 extension and integration contracts", () => {
     assert.equal(status, 200);
     assert.ok(response.extensions.length > 0);
     assert.ok(response.extensions.every((entry) => !("productClass" in entry.manifest) && !("hostSurface" in entry.manifest)));
+  });
+
+  it("keeps host replacement surfaces out of external extensions", () => {
+    assert.throws(() => normalizeExtensionManifest({
+      schemaVersion: 1, id: "demo.route", version: "1.0.0", source: "user",
+      contributions: ["server-route"], permissions: { capabilities: [] }, compatibility: { host: "1", contract: "1" },
+    }), /not eligible/);
+    assert.throws(() => assertExtensionEligible({ id: "desktop.layout", contributions: ["desktop-ui"], source: "builtin" }), /not eligible/);
+  });
+
+  it("provides only namespaced, host-adapted contribution handles", () => {
+    const calls = [];
+    const disposable = { dispose() {} };
+    const api = createExtensionApi("demo.extension", {
+      registerTool(definition) { calls.push(["tool", definition.id]); return disposable; },
+      registerSetting(definition) { calls.push(["setting", definition.id]); return disposable; },
+      registerUi(definition) { calls.push(["ui", definition.id]); return disposable; },
+      on(event) { calls.push(["event", event]); return disposable; },
+    });
+    api.tools.register({ id: "lookup", description: "lookup", inputSchema: {}, execute() {} });
+    api.settings.register({ id: "theme", type: "string", label: "Theme", read: () => "dark" });
+    api.ui.register({ id: "panel", kind: "pane", mount() {} });
+    api.events.on("workspace.changed", () => {});
+    assert.deepEqual(calls, [["tool", "demo.extension.lookup"], ["setting", "demo.extension.theme"], ["ui", "demo.extension.panel"], ["event", "workspace.changed"]]);
+    assert.throws(() => api.settings.register({ id: "api-key", type: "string", label: "Key", read: () => "" }), /host-owned/);
   });
 });

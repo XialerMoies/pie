@@ -7,6 +7,7 @@ import {
   validateCapabilityComponentManifest,
 } from "../src/agent/capability-components.ts";
 import { handleComponents } from "../src/server/routes/components.ts";
+import { ExtensionLifecycle } from "../src/agent/extension-lifecycle.ts";
 
 const modelRouter = {
   id: "model-router", version: "1", kind: "required", capability: "model-router",
@@ -86,5 +87,45 @@ describe("CapabilityComponentManager", () => {
     const entries = [];
     persistCapabilityComponentGeneration({ appendCustomEntry(type, data) { entries.push({ type: "custom", customType: type, data }); } }, { generation: 2, providers: { "model-router": "model-router" } });
     assert.deepEqual(readCapabilityComponentGeneration(entries), { generation: 2, providers: { "model-router": "model-router" } });
+  });
+
+  it("runs one extension lifecycle and disposes resources in reverse order", async () => {
+    const manager = new CapabilityComponentManager();
+    const lifecycle = new ExtensionLifecycle(manager);
+    const events = [];
+    const manifest = { id: "demo.extension", version: "1", kind: "optional", capability: "demo", source: "workspace" };
+    const snapshot = await lifecycle.install(manifest, {
+      activate: ({ registerResource }) => {
+        registerResource({ id: "first", dispose: () => events.push("first") });
+        registerResource({ id: "second", dispose: () => events.push("second") });
+      },
+      dispose: () => events.push("hook"),
+    }, { trusted: true });
+    assert.equal(snapshot.phase, "active");
+    assert.equal(snapshot.resourceCount, 2);
+    assert.equal(lifecycle.snapshot("demo.extension").phase, "active");
+    const disposed = await lifecycle.dispose("demo.extension");
+    assert.equal(disposed.phase, "disposed");
+    assert.deepEqual(events, ["hook", "second", "first"]);
+    const uninstalled = await lifecycle.uninstall("demo.extension");
+    assert.equal(uninstalled.phase, "uninstalled");
+    assert.equal(manager.get("demo.extension"), undefined);
+  });
+
+  it("fails closed and cleans registered resources when activation fails", async () => {
+    const manager = new CapabilityComponentManager();
+    const lifecycle = new ExtensionLifecycle(manager);
+    const disposed = [];
+    await assert.rejects(lifecycle.install(
+      { id: "broken.extension", version: "1", kind: "optional", capability: "demo", source: "workspace" },
+      { activate: ({ registerResource }) => {
+        registerResource({ id: "worker", dispose: () => disposed.push("worker") });
+        throw new Error("activation failed");
+      } },
+      { trusted: true },
+    ), /activation failed/);
+    assert.deepEqual(disposed, ["worker"]);
+    assert.equal(lifecycle.snapshot("broken.extension").phase, "failed");
+    assert.equal(manager.require("broken.extension").enabled, false);
   });
 });

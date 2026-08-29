@@ -75,6 +75,18 @@ export type {
   RequiredProviderHealthResult,
   RequiredProviderLifecycle,
 } from "./capability-components.js"
+export {
+  ExtensionLifecycle,
+  extensionLifecycle,
+} from "./extension-lifecycle.js"
+export type {
+  ExtensionActivationContext,
+  ExtensionInstallOptions,
+  ExtensionLifecycleHooks,
+  ExtensionLifecyclePhase,
+  ExtensionLifecycleSnapshot,
+  ExtensionResource,
+} from "./extension-lifecycle.js"
 export type {
   CapabilityComponentPackageManifest,
   CapabilityComponentPackageSource,
@@ -99,6 +111,8 @@ export {
   EXTENSION_MANIFEST_SCHEMA_VERSION,
   normalizeExtensionManifest,
   validateExtensionManifest,
+  isExtensionEligible,
+  assertExtensionEligible,
   extensionManifestFromPackage,
 } from "./extension-manifest.js"
 export type {
@@ -108,6 +122,17 @@ export type {
   ExtensionContributionType,
   ExtensionPermission,
 } from "./extension-manifest.js"
+export { createExtensionApi } from "./extension-api.js"
+export type {
+  ExtensionApi,
+  ExtensionApiAdapters,
+  ExtensionDisposable,
+  ExtensionEventName,
+  ExtensionSettingDefinition,
+  ExtensionSettingType,
+  ExtensionToolDefinition,
+  ExtensionUiDefinition,
+} from "./extension-api.js"
 export {
   INTEGRATION_RECORD_SCHEMA_VERSION,
   mcpIntegrationRecord,

@@ -4,7 +4,6 @@ import {
   firstPartyComponentPackage,
   firstPartyComponentPackageCatalog,
   firstPartyComponentPackageForComponent,
-  installFirstPartyComponentPackage,
   registerFirstPartyComponentPackages,
 } from "../../agent/component-package.js"
 import { reconcileMcpServerComponents } from "../../agent/mcp/MCPClientService.js"
@@ -13,6 +12,7 @@ import { loadMcpConfigFromCandidates, defaultGlobalConfigPath, getCandidatePaths
 import { canonicalWorkspacePath } from "../../data/data-layout.js"
 import { dirname, join } from "node:path"
 import { extensionManifestFromPackage } from "../../agent/extension-manifest.js"
+import { extensionLifecycle } from "../../agent/extension-lifecycle.js"
 
 const cors = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" }
 
@@ -89,9 +89,17 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ ok: false, code: "component_not_managed", error: "This component is not managed by the desktop component pane" }))
         return true
       }
-      const state = action === "enable"
-        ? capabilityComponentManager.enable(componentId)
-        : capabilityComponentManager.disable(componentId)
+      extensionLifecycle.adopt(componentId)
+      let state
+      if (action === "enable") {
+        await extensionLifecycle.validate(componentId)
+        await extensionLifecycle.enable(componentId)
+        await extensionLifecycle.activate(componentId)
+        state = capabilityComponentManager.require(componentId)
+      } else {
+        await extensionLifecycle.dispose(componentId)
+        state = capabilityComponentManager.require(componentId)
+      }
       await persistComponentState()
       res.writeHead(200, { "Content-Type": "application/json", ...cors })
       res.end(JSON.stringify({ ok: true, component: state, catalog: capabilityComponentManager.catalog() }))
@@ -111,7 +119,9 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ ok: false, code: "component_not_managed", error: "This component is not managed by the desktop component pane" }))
         return true
       }
-      const state = capabilityComponentManager.uninstall(componentId)
+      extensionLifecycle.adopt(componentId)
+      const state = capabilityComponentManager.require(componentId)
+      await extensionLifecycle.uninstall(componentId)
       await persistComponentState()
       res.writeHead(200, { "Content-Type": "application/json", ...cors })
       res.end(JSON.stringify({ ok: true, component: state, catalog: capabilityComponentManager.catalog() }))
@@ -131,7 +141,10 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ ok: false, code: "package_not_installable", error: "This package cannot be restored from the desktop component pane" }))
         return true
       }
-      const component = installFirstPartyComponentPackage(capabilityComponentManager, packageId)
+      const componentManifest = firstPartyComponentPackage(packageId)
+      if (!componentManifest) throw new CapabilityComponentError("unknown_first_party_package", `Unknown first-party package: ${packageId}`)
+      await extensionLifecycle.install(componentManifest.component, {}, { trusted: true })
+      const component = capabilityComponentManager.require(componentManifest.component.id)
       await persistComponentState()
       res.writeHead(200, { "Content-Type": "application/json", ...cors })
       res.end(JSON.stringify({ ok: true, component, catalog: capabilityComponentManager.catalog() }))

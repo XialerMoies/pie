@@ -4,9 +4,9 @@ import { defaultTrustStorePath } from "../src/agent/mcp/trust-store.ts";
 import { capabilityComponentManager } from "../src/agent/capability-components.ts";
 import {
   firstPartyComponentPackage,
-  installFirstPartyComponentPackage,
   registerFirstPartyComponentPackages,
 } from "../src/agent/component-package.ts";
+import { ExtensionLifecycle } from "../src/agent/extension-lifecycle.ts";
 
 function valueAfter(argv, name) {
   const inline = argv.find((arg) => arg.startsWith(`${name}=`));
@@ -58,13 +58,24 @@ export async function runComponentRecovery({ argv, manager = capabilityComponent
     await manager.save(filePath);
   } else if (parsed.action === "install") {
     if (!parsed.target) throw new Error("--components install requires --package-id <id>");
-    const manifest = installFirstPartyComponentPackage(manager, parsed.target);
+    const manifest = firstPartyComponentPackage(parsed.target);
+    if (!manifest) throw new Error(`Unknown first-party package: ${parsed.target}`);
+    const lifecycle = new ExtensionLifecycle(manager);
+    await lifecycle.install(manifest.component, {}, { trusted: true });
     result = { packageId: manifest.packageId, component: manager.require(manifest.component.id) };
     await manager.save(filePath);
   } else if (parsed.action === "uninstall") {
     if (!parsed.target) throw new Error("--components uninstall requires --component-id <id> or --package-id <id>");
     const componentId = firstPartyComponentPackage(parsed.target)?.component.id || parsed.target;
-    result = manager.uninstall(componentId);
+    const current = manager.require(componentId);
+    if (current.manifest.kind === "optional") {
+      const lifecycle = new ExtensionLifecycle(manager);
+      lifecycle.adopt(componentId);
+      await lifecycle.uninstall(componentId);
+      result = current;
+    } else {
+      result = manager.uninstall(componentId);
+    }
     await manager.save(filePath);
   } else if (parsed.action === "rollback") {
     if (!parsed.target) throw new Error("--components rollback requires --group <replacement-group>");
