@@ -49,6 +49,7 @@ export interface ToolPoolEntry {
 export interface ExtensionToolPoolEntry {
   componentId: string
   tool: AgentTool
+  audiences?: readonly AgentToolAudience[]
 }
 
 export interface ToolPoolProjection {
@@ -93,7 +94,7 @@ export class ToolPool {
 
   addExtensions(entries: readonly ExtensionToolPoolEntry[]): this {
     for (const entry of entries) {
-      this.#add(entry.tool, "extension", undefined, ["main"], entry.componentId)
+      this.#add(entry.tool, "extension", undefined, entry.audiences || ["main"], entry.componentId)
     }
     return this
   }

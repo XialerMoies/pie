@@ -90,7 +90,7 @@ export class ExtensionLifecycle {
   }
 
   /** Bring a shipped extension under lifecycle management without reinstalling it. */
-  adopt(componentId: string, hooks: ExtensionLifecycleHooks = {}): ExtensionLifecycleSnapshot {
+  adopt(componentId: string, hooks: ExtensionLifecycleHooks = {}, resources: readonly ExtensionResource[] = []): ExtensionLifecycleSnapshot {
     const state = this.#manager.require(componentId)
     if (state.manifest.kind !== "optional") {
       throw new CapabilityComponentError("required_component", `Only optional components can use extension lifecycle: ${componentId}`, componentId)
@@ -104,6 +104,8 @@ export class ExtensionLifecycle {
         resources: [],
       })
     }
+    const record = this.#records.get(componentId)!
+    for (const resource of resources) this.#registerResource(record, resource)
     return this.snapshot(componentId)
   }
 

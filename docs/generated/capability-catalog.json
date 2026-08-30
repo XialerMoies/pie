@@ -2047,7 +2047,7 @@
     ]
   },
   "sources": {
-    "tools": "src/agent/tools/index.ts",
+    "tools": "src/agent/tools/index.ts + src/agent/extension-tool-registry.ts",
     "spawnPoints": "src/**/*.ts|js|mjs,scripts/**/*.js|mjs",
     "engineEvents": "src/agent-engine/contracts.ts",
     "applicationEvents": "src/server/app-events.ts",

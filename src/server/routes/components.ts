@@ -13,6 +13,7 @@ import { canonicalWorkspacePath } from "../../data/data-layout.js"
 import { dirname, join } from "node:path"
 import { extensionManifestFromPackage } from "../../agent/extension-manifest.js"
 import { extensionLifecycle } from "../../agent/extension-lifecycle.js"
+import { firstPartyExtensionHooks } from "../../agent/first-party-extension-contributions.js"
 import {
   defaultExtensionPackageStorePath,
   extensionPackageStore,
@@ -177,7 +178,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ ok: false, code: "extension_not_managed", error: "Only installed third-party extensions use this endpoint" }))
         return true
       }
-      extensionLifecycle.adopt(componentId)
+      extensionLifecycle.adopt(componentId, firstPartyExtensionHooks(componentId))
       let lifecycle
       if (action === "trust") {
         const body = await parseBody(req)
@@ -213,7 +214,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ ok: false, code: "component_not_managed", error: "This component is not managed by the desktop component pane" }))
         return true
       }
-      extensionLifecycle.adopt(componentId)
+      extensionLifecycle.adopt(componentId, firstPartyExtensionHooks(componentId))
       let state
       if (action === "enable") {
         await extensionLifecycle.validate(componentId)
@@ -243,7 +244,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ ok: false, code: "component_not_managed", error: "This component is not managed by the desktop component pane" }))
         return true
       }
-      extensionLifecycle.adopt(componentId)
+      extensionLifecycle.adopt(componentId, firstPartyExtensionHooks(componentId))
       const state = capabilityComponentManager.require(componentId)
       await extensionLifecycle.uninstall(componentId)
       await persistComponentState()
@@ -267,7 +268,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
       }
       const componentManifest = firstPartyComponentPackage(packageId)
       if (!componentManifest) throw new CapabilityComponentError("unknown_first_party_package", `Unknown first-party package: ${packageId}`)
-      await extensionLifecycle.install(componentManifest.component, {}, { trusted: true })
+      await extensionLifecycle.install(componentManifest.component, firstPartyExtensionHooks(componentManifest.component.id), { trusted: true })
       const component = capabilityComponentManager.require(componentManifest.component.id)
       await persistComponentState()
       res.writeHead(200, { "Content-Type": "application/json", ...cors })

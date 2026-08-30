@@ -4,7 +4,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { toolRegistry } from "../src/agent/tools/index.ts";
+import { getManagedAgentTools, toolRegistry } from "../src/agent/tools/index.ts";
 import { capabilityComponentPackageForTool, componentPackageManifestFingerprint } from "../src/agent/component-package.ts";
 import { ENGINE_EVENT_TYPES } from "../src/agent-engine/contracts.ts";
 import { APP_EVENT_TYPES } from "../src/server/app-events.ts";
@@ -52,13 +52,16 @@ async function toolSources() {
       imports.set(binding.replace(/\s+as\s+.*/, ""), sourcePath);
     }
   }
-  return [...source.matchAll(/toolRegistry\.register\((\w+)\)/g)]
-    .map((match) => imports.get(match[1]) || "src/agent/tools/index.ts");
+  const registrations = [...source.matchAll(/toolRegistry\.register\((\w+)\)/g)]
+  return new Map(toolRegistry.getAll().map((tool, index) => {
+    const registration = registrations[index]
+    return [tool.name, registration ? imports.get(registration[1]) || "src/agent/tools/index.ts" : "src/agent/tools/index.ts"]
+  }));
 }
 
 async function collectTools() {
   const sources = await toolSources();
-  return sortBy(toolRegistry.getAll().map((tool, index) => {
+  return sortBy(getManagedAgentTools().map((tool) => {
     const packageManifest = capabilityComponentPackageForTool(tool.name);
     return {
       name: tool.name,
@@ -71,7 +74,7 @@ async function collectTools() {
         needsPermission: tool.needsPermission === true,
         workspaceBounded: tool.workspaceBounded !== false,
       },
-      source: sources[index] || "src/agent/tools/index.ts",
+      source: packageManifest?.entry || sources.get(tool.name) || "src/agent/tools/index.ts",
       ...(packageManifest ? {
         component: {
           id: packageManifest.component.id,
@@ -232,7 +235,7 @@ export async function buildCapabilityCatalog() {
       summaryFields: ["id", "name", "description", "source", "path", "trust", "enabled", "parse", "declaredTools"],
     },
     sources: {
-      tools: "src/agent/tools/index.ts",
+      tools: "src/agent/tools/index.ts + src/agent/extension-tool-registry.ts",
       spawnPoints: "src/**/*.ts|js|mjs,scripts/**/*.js|mjs",
       engineEvents: "src/agent-engine/contracts.ts",
       applicationEvents: "src/server/app-events.ts",

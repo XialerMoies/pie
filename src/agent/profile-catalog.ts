@@ -11,6 +11,7 @@ import { resolveToolPresentation, type ToolPresentationMode } from "./tool-prese
 import { profileAllowsFeature, ToolPool, type AgentToolAudience, type ToolPoolEntry, type ToolPoolSource } from "./tool-pool.js"
 import { toolRegistry } from "./tools/index.js"
 import { extensionToolRegistry } from "./extension-tool-registry.js"
+import { ensureFirstPartyExtensionContributions } from "./first-party-extension-contributions.js"
 import type { AgentTool, ToolOperation } from "./types.js"
 import type { CapabilityComponentManager } from "./capability-components.js"
 
@@ -134,6 +135,7 @@ export function buildProfileCatalog(
   profileOrSnapshot: AgentProfile | AgentProfileSnapshot,
   options: ProfileCatalogOptions = {},
 ): ProfileCatalog {
+  ensureFirstPartyExtensionContributions()
   const snapshot = healthSnapshot(profileOrSnapshot)
   const base = {
     schemaVersion: 1 as const,
@@ -159,12 +161,14 @@ export function buildProfileCatalog(
   const registry = options.registry || toolRegistry
   const sections = options.promptSections || listPromptSections()
   const pool = new ToolPool().addNative(registry.getAll()).addExtensions(extensionToolRegistry.entries())
+  const availableNames = new Set(pool.entries().map((entry) => entry.tool.name))
+  const resolveProfileToolName = (name: string): string | undefined => registry.resolveName(name) || (availableNames.has(name) ? name : undefined)
   const requestedNames = profile.toolNames === "*"
     ? "*"
-    : profile.toolNames.map((name) => registry.resolveName(name) || name)
+    : profile.toolNames.map((name) => resolveProfileToolName(name) || name)
   const hostTools = pool.project({ audience: "main", names: requestedNames, featureGates: profile.featureGates, componentManager: options.componentManager })
   if (profile.toolNames !== "*") {
-    const declaredNames = profile.toolNames.map((name) => registry.resolveName(name))
+    const declaredNames = profile.toolNames.map(resolveProfileToolName)
     if (declaredNames.some((name): name is undefined => !name)) {
       throw new Error(`Agent profile references unknown tool(s): ${profile.toolNames.filter((_, index) => !declaredNames[index]).join(", ")}`)
     }

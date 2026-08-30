@@ -8,18 +8,20 @@ import { getCustomTools, toolRegistry } from "../src/agent/tools/index.ts";
 import { checkProfileCatalog } from "../scripts/generate-profile-catalog.mjs";
 
 describe("AP-08 profile-generated tool and prompt catalog flow", () => {
-  it("matches the real registry projection and native presentation for every ready profile", () => {
+  it("matches the real ToolPool projection and presentation for every ready profile", () => {
     const catalogs = buildAllProfileCatalogs();
     assert.deepStrictEqual(catalogs.map((catalog) => catalog.id), ["minimal", "standard"]);
     for (const catalog of catalogs) {
       const profile = resolveAgentProfile(catalog.id);
-      const host = toolRegistry.project(profile.toolNames);
       const presented = getCustomTools("/workspace", undefined, undefined, profile);
-      assert.deepStrictEqual(catalog.tools.map((tool) => tool.name), host.map((tool) => tool.name));
       assert.deepStrictEqual(presented.map((tool) => tool.name), catalog.tools.map((tool) => tool.name));
       assert.ok(catalog.tools.every((tool) => tool.executable && tool.enabled));
       assert.deepStrictEqual(catalog.featureGates, profile.featureGates);
-      assert.ok(catalog.tools.every((tool) => tool.source === "native" && tool.audiences.includes("main")));
+      assert.ok(catalog.tools.every((tool) => tool.audiences.includes("main")));
+      if (catalog.id === "standard") {
+        assert.equal(catalog.tools.find((tool) => tool.name === "file_outline")?.source, "extension");
+        assert.ok(catalog.tools.filter((tool) => tool.name !== "file_outline").every((tool) => tool.source === "native"));
+      }
       assert.equal(catalog.presentation, profile.presentation);
       assert.deepStrictEqual(catalog.dependencies, { mcp: profile.allowMcp, skills: profile.includeSkills });
       const expectedPromptKeys = profile.promptSections === "*"
@@ -34,7 +36,7 @@ describe("AP-08 profile-generated tool and prompt catalog flow", () => {
     const minimal = buildProfileCatalog(resolveAgentProfile("minimal"));
     assert.deepStrictEqual(minimal.tools.map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode"]);
     assert.deepStrictEqual(minimal.featureGates, ["planning"]);
-    assert.deepStrictEqual(minimal.dynamicSources, []);
+    assert.deepStrictEqual(minimal.dynamicSources, ["extension"]);
   });
 
   it("fails closed when a model-visible tool is not executable and keeps undeclared tools disabled", () => {

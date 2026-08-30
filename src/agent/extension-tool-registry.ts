@@ -13,16 +13,24 @@ import type { ExtensionPermission } from "./extension-manifest.js"
 import { HOST_EXECUTION_CHAIN } from "./execution-boundary.js"
 import { structuredToolResult } from "./tool-outcomes.js"
 import type { AgentTool, ToolOperation } from "./types.js"
+import type { AgentToolAudience } from "./tool-pool.js"
 
 export interface ExtensionToolRegistration {
   readonly componentId: string
   readonly tool: AgentTool
+  readonly audiences?: readonly AgentToolAudience[]
 }
 
 export interface ExtensionToolRegistrationOptions {
   /** Package-declared capabilities selected by the host, never by the tool. */
   readonly permissions?: readonly ExtensionPermission[]
 }
+
+export interface FirstPartyToolRegistrationOptions {
+  readonly audiences: readonly AgentToolAudience[]
+}
+
+const AUTHORIZED_TOOL = Symbol.for("my-code-agent.authorized-tool")
 
 type ExtensionLimitWaiter = {
   resolve: (release: () => void) => void
@@ -218,6 +226,50 @@ export class ExtensionToolRegistry {
       },
     })
   }
+
+  /**
+   * Host-only bridge for a shipped tool package. It preserves the tool's
+   * existing canonical execute wrapper and stable public name, while making
+   * its availability a lifecycle-owned extension contribution.
+   */
+  registerFirstParty(componentId: string, sourceTool: AgentTool, options: FirstPartyToolRegistrationOptions): ExtensionDisposable {
+    const id = String(componentId || "").trim()
+    const state = this.#manager.require(id)
+    if (state.manifest.kind !== "optional" || state.manifest.source !== "builtin" || state.manifest.capability !== "agent-tool") {
+      throw new Error(`Component is not a first-party Agent-tool package: ${id}`)
+    }
+    if (state.status !== "active") throw new Error(`First-party extension must be active before registering tools: ${id}`)
+    const name = String(sourceTool.name || "").trim()
+    if (!name || this.#tools.has(name)) throw new Error(`First-party extension tool already registered: ${name || id}`)
+    if (!(sourceTool as AgentTool & { [AUTHORIZED_TOOL]?: boolean })[AUTHORIZED_TOOL]) {
+      throw new Error(`First-party tool must use the canonical execute wrapper: ${name}`)
+    }
+    const isAvailable = (): boolean => this.#tools.get(name)?.tool === tool && this.#manager.get(id)?.status === "active"
+    const tool: AgentTool = {
+      ...sourceTool,
+      isEnabled: isAvailable,
+      execute: async (args, context) => {
+        if (!isAvailable()) throw new Error(`Extension tool is unavailable: ${name}`)
+        if (context.executionBoundary?.stages.join(",") !== HOST_EXECUTION_CHAIN.join(",")) {
+          throw new Error(`Extension tool bypassed the host execution boundary: ${name}`)
+        }
+        return sourceTool.execute(args, context)
+      },
+    }
+    // The wrapped source tool already owns authorization; preserve that
+    // marker so ToolPresentation does not introduce a second authorization.
+    Object.defineProperty(tool, AUTHORIZED_TOOL, { value: true })
+    const registration: ExtensionToolRegistration = Object.freeze({ componentId: id, tool, audiences: Object.freeze([...options.audiences]) })
+    this.#tools.set(name, registration)
+    let disposed = false
+    return Object.freeze({ dispose: () => {
+      if (disposed) return
+      disposed = true
+      if (this.#tools.get(name) === registration) this.#tools.delete(name)
+    } })
+  }
+
+  has(name: string): boolean { return this.#tools.has(String(name || "").trim()) }
 
   entries(): ExtensionToolRegistration[] {
     return [...this.#tools.values()].filter((entry) => entry.tool.isEnabled?.() !== false)

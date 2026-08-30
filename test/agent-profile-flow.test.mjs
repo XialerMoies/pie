@@ -15,7 +15,7 @@ import {
   resolveAgentProfileSelection,
 } from "../src/agent/agent-profile.ts";
 import { resolveSystemPrompt } from "../src/agent/prompts.ts";
-import { getCustomTools, getCustomToolsAsync, toolRegistry } from "../src/agent/tools/index.ts";
+import { getCustomTools, getCustomToolsAsync, getManagedAgentTools } from "../src/agent/tools/index.ts";
 import { currentGeneration } from "../src/agent/mcp/MCPClientService.ts";
 import { defaultPlanState, persistPlanState, readPlanState, replacePlanState } from "../src/agent/plan-state.ts";
 import { handleSessions } from "../src/server/routes/sessions.ts";
@@ -144,7 +144,7 @@ describe("AP-01 profile registry and projection", () => {
   it("projects deterministic tools and prompts without mutating standard behavior or starting MCP", async () => {
     const standard = resolveAgentProfile("standard");
     const minimal = resolveAgentProfile("minimal");
-    const allNames = toolRegistry.getAll().map((tool) => tool.name);
+    const allNames = getManagedAgentTools().map((tool) => tool.name);
     assert.deepStrictEqual(getCustomTools(undefined, undefined, undefined, standard).map((tool) => tool.name), allNames);
     assert.deepStrictEqual(getCustomTools(undefined, undefined, undefined, minimal).map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode"]);
 

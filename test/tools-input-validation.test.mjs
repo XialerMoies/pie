@@ -59,6 +59,10 @@ import { gitStatusTool } from "../src/agent/tools/git-status.ts";
 import { searchTool } from "../src/agent/tools/search.ts";
 import { setSearchBackend, webSearchTool } from "../src/agent/tools/web-search.ts";
 import { toolRegistry } from "../src/agent/tools/index.ts";
+import { capabilityComponentManager } from "../src/agent/capability-components.ts";
+import { extensionToolRegistry } from "../src/agent/extension-tool-registry.ts";
+import { ensureFirstPartyExtensionContributions } from "../src/agent/first-party-extension-contributions.ts";
+import { ToolPool } from "../src/agent/tool-pool.ts";
 import { buildFileDiffMetadata } from "../src/agent/tools/file-diff.ts";
 
 function ctx(overrides = {}) {
@@ -69,6 +73,14 @@ function toolText(result) {
   assert.strictEqual(typeof result, "object");
   assert.strictEqual(typeof result.text, "string");
   return result.text;
+}
+
+function builtinTools() {
+  ensureFirstPartyExtensionContributions();
+  return new ToolPool()
+    .addNative(toolRegistry.getAll())
+    .addExtensions(extensionToolRegistry.entries())
+    .project({ audience: "main", names: "*", featureGates: "*", componentManager: capabilityComponentManager });
 }
 
 describe("builtin tool governance metadata", () => {
@@ -100,7 +112,7 @@ describe("builtin tool governance metadata", () => {
     const validOperations = new Set(["read", "write", "create", "remove", "execute"]);
     const validRiskLevels = new Set(["low", "medium", "high"]);
 
-    for (const tool of toolRegistry.getAll()) {
+    for (const tool of builtinTools()) {
       assert.ok(Array.isArray(tool.operations), `${tool.name} should declare operations`);
       assert.ok(tool.operations.length > 0, `${tool.name} should declare at least one operation`);
       for (const operation of tool.operations) {
@@ -112,9 +124,9 @@ describe("builtin tool governance metadata", () => {
     }
   });
 
-  it("every registered builtin tool returns structured results", () => {
-    assert.strictEqual(toolRegistry.getAll().length, expectedMetadata.size);
-    for (const tool of toolRegistry.getAll()) {
+  it("every projected builtin tool returns structured results", () => {
+    assert.strictEqual(builtinTools().length, expectedMetadata.size);
+    for (const tool of builtinTools()) {
       assert.strictEqual(tool.resultFormat, "structured", `${tool.name} should return structured results`);
     }
   });
@@ -134,8 +146,8 @@ describe("builtin tool governance metadata", () => {
     assert.deepStrictEqual(search.data.results, mockBody.results);
   });
 
-  it("tracks the expected operations and risk for registered builtin tools", () => {
-    const toolsByName = new Map(toolRegistry.getAll().map((tool) => [tool.name, tool]));
+  it("tracks the expected operations and risk for projected builtin tools", () => {
+    const toolsByName = new Map(builtinTools().map((tool) => [tool.name, tool]));
 
     for (const [name, expected] of expectedMetadata) {
       const tool = toolsByName.get(name);

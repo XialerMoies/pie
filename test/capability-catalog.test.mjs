@@ -106,6 +106,7 @@ describe("capability catalog generator", () => {
       assert.equal(tool?.component?.packageId, packageId, `${name} must remain package-backed`);
       assert.match(tool?.component?.fingerprint ?? "", /^[a-f0-9]{64}$/);
     }
+    assert.equal(first.tools.find((tool) => tool.name === "file_outline")?.source, "src/agent/tools/file-outline.ts");
     assert.ok(first.events.engine.includes("turn.cancelled"));
     assert.ok(first.events.application.includes("permission.confirm"));
     assert.ok(first.routes.some((route) => route.path === "/api/chat" && route.method === "POST"));

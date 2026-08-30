@@ -8,6 +8,8 @@ import { CapabilityComponentManager } from "../src/agent/capability-components.t
 import { FILE_READ_COMPONENT_PACKAGE_MANIFEST } from "../src/agent/component-package.ts";
 import { nativeToolPresentation } from "../src/agent/tool-presentation.ts";
 import { toolRegistry } from "../src/agent/tools/index.ts";
+import { extensionToolRegistry } from "../src/agent/extension-tool-registry.ts";
+import { ensureFirstPartyExtensionContributions } from "../src/agent/first-party-extension-contributions.ts";
 import { structuredToolResult } from "../src/agent/types.ts";
 import { attachEngineEvents } from "../src/server/agent-event-router.ts";
 import { replayChatEvents } from "../src/server/chat-stream.ts";
@@ -90,15 +92,16 @@ describe("AP-10/AP-11 Profile, host, and ToolPool cross-layer flow", () => {
     );
   });
 
-  it("projects exact main, coordinator, and subagent audiences from one native/MCP pool", () => {
+  it("projects exact main, coordinator, and subagent audiences from one ToolPool", () => {
     const mcp = fixture("mcp_probe");
-    const pool = new ToolPool().addNative(toolRegistry.getAll()).addMcp([mcp]);
+    ensureFirstPartyExtensionContributions();
+    const pool = new ToolPool().addNative(toolRegistry.getAll()).addExtensions(extensionToolRegistry.entries()).addMcp([mcp]);
     const coordinator = pool.project({ audience: "coordinator", names: "*", featureGates: "*" }).map((tool) => tool.name);
     const subagent = pool.project({ audience: "subagent", names: "*", featureGates: "*" }).map((tool) => tool.name);
     const main = pool.project({ audience: "main", names: "*", featureGates: "*" }).map((tool) => tool.name);
 
-    assert.deepStrictEqual(coordinator, [...COORDINATOR_TOOL_NAMES]);
-    assert.deepStrictEqual(subagent, [...READ_ONLY_SUBAGENT_TOOL_NAMES]);
+    assert.deepStrictEqual([...coordinator].sort(), [...COORDINATOR_TOOL_NAMES].sort());
+    assert.deepStrictEqual([...subagent].sort(), [...READ_ONLY_SUBAGENT_TOOL_NAMES].sort());
     assert.ok(main.includes("command"));
     assert.ok(main.includes("delegate_tasks"));
     assert.ok(main.includes("mcp_probe"));

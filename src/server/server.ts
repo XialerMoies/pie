@@ -68,7 +68,7 @@ import { createHttpApp, openAppEventStream } from "./http-app.js";
 export { openAppEventStream } from "./http-app.js";
 import { createServerLifecycle } from "./server-lifecycle.js";
 import { SkillService } from "../agent/skills/skill-service.js";
-import { toolRegistry } from "../agent/tools/index.js";
+import { getManagedAgentTools } from "../agent/tools/index.js";
 import { assertProfileCatalogsReady } from "../agent/profile-catalog.js";
 import { setLocalApiToken } from "../agent/tools/local-api.js";
 import { capabilityComponentManager } from "../agent/capability-components.js";
@@ -140,7 +140,7 @@ async function main() {
     filePath: join(STARTUP.layout.instanceRoot, "server.log.jsonl"),
   });
   const toolOutcomeMetrics = new ToolOutcomeMetrics();
-  toolOutcomeMetrics.setExpectedTools(toolRegistry.getAll().map((tool) => tool.name));
+  toolOutcomeMetrics.setExpectedTools(getManagedAgentTools().map((tool) => tool.name));
   const evidenceLedger = new EvidenceLedger({
     filePath: join(STARTUP.layout.instanceRoot, "evidence-ledger.jsonl"),
   });
@@ -267,7 +267,7 @@ async function main() {
     userRoot: join(PI_CONFIG_DIR, "skills"),
     workspaceRoot: () => join(runtime?.currentWorkspace || STARTUP.workspace, "agent", "skills"),
     statePath: join(PI_CONFIG_DIR, "skill-state.json"),
-    knownTools: new Set(toolRegistry.getAll().map((tool) => tool.name)),
+    knownTools: new Set(getManagedAgentTools().map((tool) => tool.name)),
   });
 
   ({ runtime, engine } = await initAgentHost({
