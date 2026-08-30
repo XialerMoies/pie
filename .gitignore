@@ -29,6 +29,8 @@ docs/
 docs/*
 !docs/能力组件插件化清单.md
 !docs/插件化减法重构清单.md
+!docs/扩展开发者指南.md
+!docs/extension-manifest.example.json
 !docs/generated/
 docs/generated/*
 !docs/generated/pluginization-baseline.json

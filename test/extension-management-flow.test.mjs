@@ -94,6 +94,12 @@ describe("third-party extension management API", () => {
       })
       assert.equal(workspaceSettings.status, 200)
       assert.deepEqual(workspaceSettings.body.values.effective, { "result-limit": 5, "safe-search": false, region: "cn" })
+      const anotherWorkspace = { currentWorkspace: join(root, "another-workspace") }
+      const otherWorkspaceSettings = await call("PATCH", "/api/extensions/example.api.extension/settings", {
+        scope: "workspace", values: { "result-limit": 3, region: "global" },
+      }, anotherWorkspace)
+      assert.equal(otherWorkspaceSettings.status, 200)
+      assert.deepEqual(otherWorkspaceSettings.body.values.effective, { "result-limit": 3, "safe-search": false, region: "global" })
       const rejectedSettings = await call("PATCH", "/api/extensions/example.api.extension/settings", {
         scope: "user", values: { "api-key": "not-allowed" },
       })
@@ -118,8 +124,22 @@ describe("third-party extension management API", () => {
       const removed = await call("POST", "/api/extensions/example.api.extension/uninstall", {})
       assert.equal(removed.status, 200)
       assert.equal(removed.body.extension, null)
+
+      const reinstalled = await call("POST", "/api/extensions/install", { manifest })
+      assert.equal(reinstalled.status, 201)
+      const reinstalledSettings = await call("GET", "/api/extensions/example.api.extension/settings")
+      assert.equal(reinstalledSettings.status, 200)
+      assert.deepEqual(reinstalledSettings.body.values.effective, { "result-limit": 10, "safe-search": true, region: "global" })
+      const reinstalledOtherWorkspaceSettings = await call("GET", "/api/extensions/example.api.extension/settings", undefined, anotherWorkspace)
+      assert.equal(reinstalledOtherWorkspaceSettings.status, 200)
+      assert.deepEqual(reinstalledOtherWorkspaceSettings.body.values.effective, { "result-limit": 10, "safe-search": true, region: "global" })
+
       const afterRestart = await call("GET", "/api/extensions/example.api.extension")
-      assert.equal(afterRestart.status, 404)
+      assert.equal(afterRestart.status, 200)
+      const removedAgain = await call("POST", "/api/extensions/example.api.extension/uninstall", {})
+      assert.equal(removedAgain.status, 200)
+      const afterSecondRestart = await call("GET", "/api/extensions/example.api.extension")
+      assert.equal(afterSecondRestart.status, 404)
     } finally {
       process.env.PI_USER_CONFIG = previousConfig
       rmSync(root, { recursive: true, force: true })

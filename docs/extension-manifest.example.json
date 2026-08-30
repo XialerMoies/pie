@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "packageId": "example.readonly-search",
+  "packageVersion": "1.0.0",
+  "component": {
+    "schemaVersion": 1,
+    "id": "example.readonly-search",
+    "version": "1.0.0",
+    "kind": "optional",
+    "capability": "agent-tool",
+    "source": "user",
+    "productClass": "third-party",
+    "hostSurface": "agent",
+    "displayName": "示例只读搜索",
+    "publisher": "Example Developer",
+    "agentConfig": {
+      "timeoutMs": 30000,
+      "maxConcurrent": 2
+    },
+    "settings": [
+      {
+        "id": "result-limit",
+        "type": "number",
+        "label": "结果数量",
+        "defaultValue": 10
+      },
+      {
+        "id": "region",
+        "type": "select",
+        "label": "区域",
+        "choices": ["cn", "global"],
+        "defaultValue": "global"
+      }
+    ]
+  },
+  "entry": "dist/index.js",
+  "source": {
+    "kind": "registry",
+    "origin": "https://registry.example.test/example.readonly-search-1.0.0.tgz",
+    "digest": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "signature": {
+    "algorithm": "sha256",
+    "value": "1111111111111111111111111111111111111111111111111111111111111111",
+    "keyId": "example-registry"
+  },
+  "compatibility": {
+    "host": "^1.0.0",
+    "contract": "1",
+    "engine": "^1.0.0"
+  },
+  "permissions": {
+    "network": false,
+    "filesystem": ["read"],
+    "subprocess": false,
+    "secrets": []
+  },
+  "resources": {
+    "maxMemoryMb": 64,
+    "maxCpuMs": 1000,
+    "maxNetworkRequests": 1,
+    "maxFileBytes": 4096
+  },
+  "isolation": {
+    "mode": "worker",
+    "installRoot": "extensions/example.readonly-search",
+    "allowedEntry": "dist/index.js"
+  }
+}

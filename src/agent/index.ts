@@ -135,6 +135,7 @@ export {
   resolveExtensionSettings,
   readExtensionSettings,
   updateExtensionSettings,
+  removeExtensionSettings,
 } from "./extension-settings.js"
 export type {
   ExtensionSettingSchema,

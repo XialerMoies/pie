@@ -16,6 +16,11 @@ function run(args, env = {}) {
   })
 }
 
+function lifecycleResult(result) {
+  assert.equal(result.status, 0, result.stderr)
+  return JSON.parse(result.stdout)
+}
+
 describe("extensions validate CLI", () => {
   it("prints normalized declaration facts without creating extension state", () => {
     const dataRoot = mkdtempSync(join(tmpdir(), "extensions-cli-"))
@@ -49,9 +54,66 @@ describe("extensions validate CLI", () => {
         PI_USER_CONFIG: dataRoot,
       })
       assert.notEqual(result.status, 0)
-      assert.match(result.stderr, /Setting is reserved for host-owned secure storage: api-key/)
+      assert.equal(result.status, 1)
+      assert.match(result.stderr, /^扩展校验失败/m)
+      assert.match(result.stderr, /文件: .*invalid\.json/)
+      assert.match(result.stderr, /代码: invalid_manifest/)
+      assert.match(result.stderr, /原因: Setting is reserved for host-owned secure storage: api-key/)
+      assert.match(result.stderr, /修复建议: 根据原因修正对应 manifest 字段后重试。/)
+      assert.doesNotMatch(result.stderr, /at normalizeCapabilityComponentPackageManifest/)
       assert.equal(existsSync(componentState), false)
       assert.equal(existsSync(packageState), false)
+    } finally {
+      rmSync(dataRoot, { recursive: true, force: true })
+    }
+  })
+
+  it("reports invalid JSON with a stable diagnostic", () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), "extensions-cli-json-"))
+    const invalidManifest = join(dataRoot, "invalid.json")
+    try {
+      writeFileSync(invalidManifest, "{ invalid", "utf8")
+      const result = run(["validate", "--manifest", invalidManifest], { PI_USER_CONFIG: dataRoot })
+      assert.equal(result.status, 1)
+      assert.match(result.stderr, /^扩展校验失败/m)
+      assert.match(result.stderr, /代码: invalid_json/)
+      assert.match(result.stderr, /原因: manifest 不是有效的 JSON/)
+      assert.match(result.stderr, /修复建议: 检查逗号、引号和 JSON 结构后重试。/)
+      assert.doesNotMatch(result.stderr, /SyntaxError/)
+    } finally {
+      rmSync(dataRoot, { recursive: true, force: true })
+    }
+  })
+
+  it("keeps an external declaration inert until trusted and removed across CLI restarts", () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), "extensions-cli-lifecycle-"))
+    const componentState = join(dataRoot, "component-state.json")
+    const packageState = join(dataRoot, "extension-packages.json")
+    const options = ["--component-state-file", componentState, "--package-state-file", packageState]
+    const env = { PI_USER_CONFIG: dataRoot }
+    const id = "example.cli.extension"
+    try {
+      assert.equal(run(["validate", "--manifest", fixture], env).status, 0)
+      const installed = lifecycleResult(run(["install", "--manifest", fixture, ...options], env))
+      assert.equal(installed.lifecycle.phase, "installed")
+      assert.equal(installed.package.trusted, false)
+
+      const denied = run(["enable", id, ...options], env)
+      assert.notEqual(denied.status, 0)
+      assert.match(denied.stderr, /Cannot enable untrusted component/)
+
+      const trusted = lifecycleResult(run(["trust", id, ...options], env))
+      assert.equal(trusted.lifecycle.phase, "disabled")
+      assert.equal(trusted.package.trusted, true)
+      assert.equal(lifecycleResult(run(["enable", id, ...options], env)).lifecycle.phase, "active")
+      assert.equal(lifecycleResult(run(["disable", id, ...options], env)).lifecycle.phase, "disposed")
+      const removed = lifecycleResult(run(["uninstall", id, ...options], env))
+      assert.equal(removed.lifecycle.phase, "uninstalled")
+      assert.equal(removed.package, null)
+
+      const restarted = lifecycleResult(run(["list", ...options], env))
+      assert.deepEqual(restarted.packages, [])
+      assert.deepEqual(restarted.components, [])
     } finally {
       rmSync(dataRoot, { recursive: true, force: true })
     }

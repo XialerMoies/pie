@@ -9,6 +9,7 @@ import {
 import { reconcileMcpServerComponents } from "../../agent/mcp/MCPClientService.js"
 import { loadMcpConfigFromCandidates, defaultGlobalConfigPath, getCandidatePaths } from "../../agent/mcp/config.js"
 import { canonicalWorkspacePath, workspaceKey } from "../../data/data-layout.js"
+import { existsSync, readdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { extensionManifestFromPackage } from "../../agent/extension-manifest.js"
 import { extensionLifecycle } from "../../agent/extension-lifecycle.js"
@@ -17,7 +18,7 @@ import {
   extensionPackageStore,
 } from "../../agent/extension-package-store.js"
 import { parseBody } from "./parse-body.js"
-import { readExtensionSettings, resolveExtensionSettings, updateExtensionSettings, type ExtensionSettingsScope } from "../../agent/extension-settings.js"
+import { readExtensionSettings, removeExtensionSettings, resolveExtensionSettings, updateExtensionSettings, type ExtensionSettingsScope } from "../../agent/extension-settings.js"
 
 const cors = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" }
 
@@ -101,6 +102,20 @@ function extensionSettingsPath(ctx: ServerContext, scope: ExtensionSettingsScope
   const runtime = ctx.groups.core.runtime as { currentWorkspace?: string }
   const workspace = canonicalWorkspacePath(runtime.currentWorkspace || ctx.groups.storage.paths.APP_ROOT)
   return join(ctx.groups.storage.paths.DATA_DIR, "workspaces", workspaceKey(workspace), "extension-settings.json")
+}
+
+async function clearExtensionSettings(ctx: ServerContext, componentId: string): Promise<void> {
+  const userPath = extensionSettingsPath(ctx, "user")
+  const workspaceRoot = join(ctx.groups.storage.paths.DATA_DIR, "workspaces")
+  const paths = [userPath]
+  if (existsSync(workspaceRoot)) {
+    for (const entry of readdirSync(workspaceRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const path = join(workspaceRoot, entry.name, "extension-settings.json")
+      if (existsSync(path)) paths.push(path)
+    }
+  }
+  await Promise.all([...new Set(paths)].filter((path) => existsSync(path)).map((path) => removeExtensionSettings(path, componentId)))
 }
 
 async function extensionSettingsProjection(ctx: ServerContext, componentId: string) {
@@ -265,6 +280,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         lifecycle = await extensionLifecycle.dispose(componentId)
       } else {
         lifecycle = await extensionLifecycle.uninstall(componentId)
+        await clearExtensionSettings(ctx, componentId)
       }
       await persistComponentState(ctx)
       await persistExtensionPackageState()
@@ -350,6 +366,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
       extensionLifecycle.adopt(componentId)
       const state = capabilityComponentManager.require(componentId)
       await extensionLifecycle.uninstall(componentId)
+      await clearExtensionSettings(ctx, componentId)
       await persistComponentState(ctx)
       await refreshAgentToolSession(ctx, [componentId])
       res.writeHead(200, { "Content-Type": "application/json", ...cors })

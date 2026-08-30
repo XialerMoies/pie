@@ -153,3 +153,20 @@ export async function updateExtensionSettings(
   )
   return Object.freeze(valuesFor(schemas, document.extensions[componentId]))
 }
+
+/** Remove all persisted non-secret settings when an extension is uninstalled. */
+export async function removeExtensionSettings(filePath: string, componentId: string): Promise<void> {
+  const id = text(componentId, "extension component id")
+  await updateLockedJson<ExtensionSettingsDocument>(
+    filePath,
+    () => ({ schemaVersion: EXTENSION_SETTINGS_SCHEMA_VERSION, extensions: {} }),
+    (current) => {
+      const normalized = asDocument(current)
+      if (!(id in normalized.extensions)) return normalized
+      const extensions = { ...normalized.extensions }
+      delete extensions[id]
+      return { schemaVersion: EXTENSION_SETTINGS_SCHEMA_VERSION, extensions }
+    },
+    { recoverInvalidJson: true },
+  )
+}

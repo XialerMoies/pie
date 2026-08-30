@@ -50,23 +50,67 @@ function extensionSummary(manifest) {
   ].join("\n")
 }
 
+function validateErrorDetails(error) {
+  if (error instanceof SyntaxError) {
+    return { code: "invalid_json", reason: "manifest 不是有效的 JSON", advice: "检查逗号、引号和 JSON 结构后重试。" }
+  }
+  if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+    return { code: "manifest_not_found", reason: "找不到 manifest 文件", advice: "检查 --manifest 路径是否存在且可读。" }
+  }
+  const code = error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : "invalid_manifest"
+  const reason = error instanceof Error ? error.message : String(error || "未知校验错误")
+  const advice = {
+    invalid_compatibility: "使用受支持的 host、contract 和 engine 版本范围。",
+    invalid_identity: "检查 packageId、component.id 和版本格式。",
+    identity_mismatch: "使 package 与 component 的身份、版本和来源映射保持一致。",
+    invalid_isolation: "使用不含绝对路径或 .. 的相对 entry 和隔离路径。",
+    invalid_permissions: "仅声明宿主支持的文件、网络、子进程和密钥权限。",
+    invalid_resources: "将资源上限调整到宿主允许的正整数范围内。",
+    invalid_signature: "检查签名算法、摘要格式和 keyId。",
+    missing_signature: "为非内置 package 声明签名。",
+    invalid_source: "为非内置 package 提供来源 origin 与 SHA-256 digest。",
+  }[code] || "根据原因修正对应 manifest 字段后重试。"
+  return { code, reason, advice }
+}
+
+function printValidateError(manifestPath, error) {
+  const details = validateErrorDetails(error)
+  console.error([
+    "扩展校验失败",
+    `文件: ${manifestPath ? resolve(manifestPath) : "未提供"}`,
+    `代码: ${details.code}`,
+    `原因: ${details.reason}`,
+    `修复建议: ${details.advice}`,
+  ].join("\n"))
+}
+
 if (action === "validate") {
   const manifestPath = validateManifestPath()
-  if (!manifestPath) throw new Error("extensions validate requires --manifest <file>")
-  const packageManifest = normalizeCapabilityComponentPackageManifest(JSON.parse(readFileSync(resolve(manifestPath), "utf8")), {
-    hostVersion: "1.0.0", contractVersion: "1.0.0", engineVersion: "1.0.0",
-  })
-  const manifest = extensionManifestFromPackage({
-    packageId: packageManifest.packageId,
-    packageVersion: packageManifest.packageVersion,
-    entry: packageManifest.entry,
-    source: packageManifest.source.kind === "registry" ? "registry" : packageManifest.source.kind === "mcp" ? "user" : packageManifest.source.kind,
-    component: packageManifest.component,
-    permissions: packageManifest.permissions,
-    compatibility: packageManifest.compatibility,
-  })
-  console.log(extensionSummary(manifest))
-  process.exitCode = 0
+  if (!manifestPath) {
+    printValidateError(undefined, new Error("extensions validate requires --manifest <file>"))
+    process.exitCode = 2
+  } else {
+    try {
+      const packageManifest = normalizeCapabilityComponentPackageManifest(JSON.parse(readFileSync(resolve(manifestPath), "utf8")), {
+        hostVersion: "1.0.0", contractVersion: "1.0.0", engineVersion: "1.0.0",
+      })
+      const manifest = extensionManifestFromPackage({
+        packageId: packageManifest.packageId,
+        packageVersion: packageManifest.packageVersion,
+        entry: packageManifest.entry,
+        source: packageManifest.source.kind === "registry" ? "registry" : packageManifest.source.kind === "mcp" ? "user" : packageManifest.source.kind,
+        component: packageManifest.component,
+        permissions: packageManifest.permissions,
+        compatibility: packageManifest.compatibility,
+      })
+      console.log(extensionSummary(manifest))
+    } catch (error) {
+      printValidateError(manifestPath, error)
+      process.exitCode = 1
+    }
+  }
 } else {
   const stateFile = resolve(valueAfter("--component-state-file") || join(dirname(defaultTrustStorePath()), "component-state.json"))
   const packageFile = resolve(valueAfter("--package-state-file") || defaultExtensionPackageStorePath())
