@@ -39,6 +39,12 @@ const packageManifest = {
   isolation: { mode: "worker", installRoot: "extensions/example.third-party.lookup", allowedEntry: "dist/index.js" },
 }
 
+function deferred() {
+  let resolve
+  const promise = new Promise((next) => { resolve = next })
+  return { promise, resolve }
+}
+
 describe("third-party optional extension acceptance", () => {
   it("requires trust, releases all contributions, and stays removed after restart", async () => {
     const manager = new CapabilityComponentManager()
@@ -157,5 +163,70 @@ describe("third-party optional extension acceptance", () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  it("enforces host-owned timeout and concurrency limits for an activated tool", async () => {
+    const manager = new CapabilityComponentManager()
+    manager.register({
+      id: "example.limited.tool",
+      version: "1.0.0",
+      kind: "optional",
+      capability: "agent-tool",
+      source: "workspace",
+      agentConfig: { timeoutMs: 100, maxConcurrent: 1 },
+    }, { trusted: true, enabled: true, health: "healthy" })
+    const registry = new ExtensionToolRegistry(manager)
+    const neverEnding = deferred()
+    let running = 0
+    let maximumRunning = 0
+    let calls = 0
+    let timeoutSignal
+    const api = createExtensionApi("example.limited.tool", {
+      registerTool(definition) { return registry.register("example.limited.tool", definition, { permissions: ["read"] }) },
+      registerSetting() { return { dispose() {} } },
+      registerUi() { return { dispose() {} } },
+      on() { return { dispose() {} } },
+    })
+    const registration = api.tools.register({
+      id: "probe",
+      description: "Host-limited extension probe",
+      inputSchema: { type: "object", properties: { mode: { type: "string" } } },
+      async execute(input, signal) {
+        calls += 1
+        running += 1
+        maximumRunning = Math.max(maximumRunning, running)
+        try {
+          if (input.mode === "ignore-abort") {
+            timeoutSignal = signal
+            await neverEnding.promise
+          }
+          return { mode: input.mode, aborted: signal.aborted }
+        } finally {
+          running -= 1
+        }
+      },
+    })
+    const tool = registry.entries()[0].tool
+    assert.equal(tool.isConcurrencySafe, false)
+    const [wrapped] = nativeToolPresentation.present([tool], {
+      workspace: "/workspace",
+      extraCtx: { authorizeTool: async () => ({ allow: true }) },
+    })
+
+    const timedOut = wrapped.execute("limited-timeout", { mode: "ignore-abort" })
+    await assert.rejects(timedOut, /timed out after 100ms/)
+    assert.equal(timeoutSignal?.aborted, true)
+
+    const queued = wrapped.execute("limited-queued", { mode: "queued" })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(calls, 1, "a timed-out callback that ignores abort must keep its concurrency slot")
+    neverEnding.resolve()
+    const queuedResult = await queued
+    assert.match(queuedResult.content[0].text, /queued/)
+    assert.equal(maximumRunning, 1)
+
+    manager.disable("example.limited.tool")
+    await assert.rejects(() => wrapped.execute("limited-disabled", { mode: "ready" }), /unavailable/)
+    registration.dispose()
   })
 })
