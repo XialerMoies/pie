@@ -174,6 +174,7 @@ describe("third-party optional extension acceptance", () => {
       capability: "agent-tool",
       source: "workspace",
       agentConfig: { timeoutMs: 100, maxConcurrent: 1 },
+      settings: [{ id: "result-limit", type: "number", label: "Result limit", defaultValue: 10 }],
     }, { trusted: true, enabled: true, health: "healthy" })
     const registry = new ExtensionToolRegistry(manager)
     const neverEnding = deferred()
@@ -181,8 +182,9 @@ describe("third-party optional extension acceptance", () => {
     let maximumRunning = 0
     let calls = 0
     let timeoutSignal
+    let receivedSettings
     const api = createExtensionApi("example.limited.tool", {
-      registerTool(definition) { return registry.register("example.limited.tool", definition, { permissions: ["read"] }) },
+      registerTool(definition) { return registry.register("example.limited.tool", definition, { permissions: ["read"], resolveSettings: () => ({ "result-limit": 7 }) }) },
       registerSetting() { return { dispose() {} } },
       registerUi() { return { dispose() {} } },
       on() { return { dispose() {} } },
@@ -191,7 +193,8 @@ describe("third-party optional extension acceptance", () => {
       id: "probe",
       description: "Host-limited extension probe",
       inputSchema: { type: "object", properties: { mode: { type: "string" } } },
-      async execute(input, signal) {
+      async execute(input, signal, settings) {
+        receivedSettings = settings
         calls += 1
         running += 1
         maximumRunning = Math.max(maximumRunning, running)
@@ -216,6 +219,8 @@ describe("third-party optional extension acceptance", () => {
     const timedOut = wrapped.execute("limited-timeout", { mode: "ignore-abort" })
     await assert.rejects(timedOut, /timed out after 100ms/)
     assert.equal(timeoutSignal?.aborted, true)
+    assert.deepEqual(receivedSettings, { "result-limit": 7 })
+    assert.equal(Object.isFrozen(receivedSettings), true)
 
     const queued = wrapped.execute("limited-queued", { mode: "queued" })
     await new Promise((resolve) => setTimeout(resolve, 20))

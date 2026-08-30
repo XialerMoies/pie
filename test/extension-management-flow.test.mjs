@@ -27,7 +27,7 @@ async function call(method, url, body, runtime = { currentWorkspace: process.cwd
   const handled = await handleComponents(
     request(method, url, body),
     { writeHead(code) { status = code }, end(value) { responseBody = String(value || "") } },
-    { groups: { core: { runtime }, storage: { paths: { APP_ROOT: process.cwd(), PI_CONFIG_DIR: process.env.PI_USER_CONFIG || process.cwd() } } } },
+    { groups: { core: { runtime }, storage: { paths: { APP_ROOT: process.cwd(), DATA_DIR: process.env.PI_USER_CONFIG || process.cwd(), PI_CONFIG_DIR: process.env.PI_USER_CONFIG || process.cwd() } } } },
   )
   return { handled, status, body: JSON.parse(responseBody || "null") }
 }
@@ -48,6 +48,11 @@ const manifest = {
     displayName: "示例接口",
     icon: "#iplus",
     agentConfig: { timeoutMs: 30_000, maxConcurrent: 2 },
+    settings: [
+      { id: "result-limit", type: "number", label: "结果数量", defaultValue: 10 },
+      { id: "safe-search", type: "boolean", label: "安全搜索", defaultValue: true },
+      { id: "region", type: "select", label: "区域", choices: ["cn", "global"], defaultValue: "global" },
+    ],
   },
   entry: "dist/index.js",
   source: { kind: "registry", origin: "https://registry.example.test/example-api.tgz", digest: "c".repeat(64) },
@@ -73,6 +78,26 @@ describe("third-party extension management API", () => {
       assert.equal(installed.body.extension.manifest.component.displayName, "示例接口")
       assert.equal(installed.body.extension.manifest.component.icon, "#iplus")
       assert.deepEqual(installed.body.extension.manifest.component.agentConfig, { timeoutMs: 30_000, maxConcurrent: 2 })
+
+      const initialSettings = await call("GET", "/api/extensions/example.api.extension/settings")
+      assert.equal(initialSettings.status, 200)
+      assert.equal(initialSettings.body.settings.length, 3)
+      assert.deepEqual(initialSettings.body.values.effective, { "result-limit": 10, "safe-search": true, region: "global" })
+
+      const userSettings = await call("PATCH", "/api/extensions/example.api.extension/settings", {
+        scope: "user", values: { "result-limit": 20, "safe-search": false },
+      })
+      assert.equal(userSettings.status, 200)
+      assert.equal(userSettings.body.values.effective["result-limit"], 20)
+      const workspaceSettings = await call("PATCH", "/api/extensions/example.api.extension/settings", {
+        scope: "workspace", values: { "result-limit": 5, region: "cn" },
+      })
+      assert.equal(workspaceSettings.status, 200)
+      assert.deepEqual(workspaceSettings.body.values.effective, { "result-limit": 5, "safe-search": false, region: "cn" })
+      const rejectedSettings = await call("PATCH", "/api/extensions/example.api.extension/settings", {
+        scope: "user", values: { "api-key": "not-allowed" },
+      })
+      assert.equal(rejectedSettings.status, 400)
 
       const listed = await call("GET", "/api/extensions")
       assert.ok(listed.body.extensions.some((entry) => entry.packageId === manifest.packageId && entry.trusted === false))

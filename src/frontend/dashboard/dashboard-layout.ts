@@ -458,6 +458,95 @@ function renderAgentToolCollectionTab(tab: AppTab, manifest: ComponentTabManifes
   });
 }
 
+type ExtensionSettingSchema = NonNullable<ComponentTabManifest['settings']>[number];
+type ExtensionSettingValues = Record<string, string | number | boolean>;
+
+function renderExtensionSettingsFields(host: HTMLElement, schemas: readonly ExtensionSettingSchema[], values: ExtensionSettingValues): void {
+  host.innerHTML = '';
+  for (const schema of schemas) {
+    const row = document.createElement('label');
+    row.className = 'component-setting-row';
+    const title = document.createElement('strong');
+    title.textContent = schema.label;
+    row.append(title);
+    if (schema.description) {
+      const description = document.createElement('span');
+      description.textContent = schema.description;
+      row.append(description);
+    }
+    let control: HTMLInputElement | HTMLSelectElement;
+    if (schema.type === 'select') {
+      const select = document.createElement('select');
+      for (const choice of schema.choices || []) {
+        const option = document.createElement('option');
+        option.value = choice;
+        option.textContent = choice;
+        select.append(option);
+      }
+      select.value = String(values[schema.id] ?? schema.defaultValue ?? '');
+      control = select;
+    } else {
+      const input = document.createElement('input');
+      input.type = schema.type === 'boolean' ? 'checkbox' : schema.type === 'number' ? 'number' : 'text';
+      if (schema.type === 'boolean') input.checked = Boolean(values[schema.id] ?? schema.defaultValue ?? false);
+      else input.value = String(values[schema.id] ?? schema.defaultValue ?? '');
+      control = input;
+    }
+    control.dataset.extensionSetting = schema.id;
+    control.dataset.extensionSettingType = schema.type;
+    row.append(control);
+    host.append(row);
+  }
+}
+
+async function bindExtensionSettings(manifest: ComponentTabManifest, root: HTMLElement): Promise<void> {
+  const section = root.querySelector<HTMLElement>('[data-extension-settings]');
+  if (!section || !manifest.settings?.length) return;
+  try {
+    const response = await fetch(`/api/extensions/${encodeURIComponent(manifest.id)}/settings`, { credentials: 'include', cache: 'no-store' });
+    const payload = await response.json().catch(() => null) as { settings?: ExtensionSettingSchema[]; values?: { user?: ExtensionSettingValues; workspace?: ExtensionSettingValues } } | null;
+    if (!response.ok || !payload?.settings || !payload.values) throw new Error('无法读取扩展设置');
+    const schemas = payload.settings;
+    const scope = section.querySelector<HTMLSelectElement>('[data-extension-settings-scope]');
+    const fields = section.querySelector<HTMLElement>('[data-extension-settings-fields]');
+    const save = section.querySelector<HTMLButtonElement>('[data-extension-settings-save]');
+    if (!scope || !fields || !save) return;
+    const render = () => renderExtensionSettingsFields(fields, schemas, payload.values?.[scope.value as 'user' | 'workspace'] || {});
+    scope.addEventListener('change', render);
+    render();
+    save.addEventListener('click', async () => {
+      const values: ExtensionSettingValues = {};
+      for (const schema of schemas) {
+        const control = fields.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-extension-setting="${schema.id}"]`);
+        if (!control) continue;
+        values[schema.id] = schema.type === 'boolean'
+          ? (control as HTMLInputElement).checked
+          : schema.type === 'number'
+            ? Number((control as HTMLInputElement).value)
+            : control.value;
+      }
+      save.disabled = true;
+      try {
+        const update = await fetch(`/api/extensions/${encodeURIComponent(manifest.id)}/settings`, {
+          method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope: scope.value, values }),
+        });
+        const next = await update.json().catch(() => null) as { values?: { user?: ExtensionSettingValues; workspace?: ExtensionSettingValues }; error?: string } | null;
+        if (!update.ok || !next?.values) throw new Error(next?.error || '扩展设置保存失败');
+        payload.values = next.values;
+        render();
+        App.UI.toast?.('扩展设置已保存', 'success');
+      } catch (error) {
+        App.UI.toast?.(error instanceof Error ? error.message : '扩展设置保存失败', 'error');
+      } finally {
+        save.disabled = false;
+      }
+    });
+  } catch (error) {
+    section.textContent = error instanceof Error ? error.message : '无法读取扩展设置';
+  }
+}
+
 function renderComponentTab(tab: AppTab): void {
   const root = $('component-content');
   const manifest = tab.componentManifest;
@@ -480,7 +569,9 @@ function renderComponentTab(tab: AppTab): void {
     <section class="component-detail-section"><h2>组件信息</h2><dl class="component-detail-grid"><div><dt>归属</dt><dd>${value(manifest.hostSurface)}</dd></div><div><dt>类型</dt><dd>${kind}</dd></div><div><dt>来源</dt><dd>${source}</dd></div><div><dt>发布者</dt><dd>${value(manifest.publisher)}</dd></div><div><dt>版本</dt><dd>${value(manifest.version)}</dd></div><div><dt>能力</dt><dd>${value(manifest.capability)}</dd></div><div><dt>状态</dt><dd>${state}</dd></div></dl></section>
     <section class="component-detail-section"><h2>依赖</h2><p class="component-detail-deps">${manifest.dependencies?.length ? manifest.dependencies.map((dependency) => E(typeof dependency === 'string' ? dependency : dependency.id)).join('、') : '无声明依赖'}</p></section>
     ${manifest.agentConfig ? `<section class="component-detail-section"><h2>Agent 参数</h2><dl class="component-detail-grid"><div><dt>单次超时</dt><dd>${manifest.agentConfig.timeoutMs ? `${manifest.agentConfig.timeoutMs} ms` : '宿主默认'}</dd></div><div><dt>最大并发</dt><dd>${manifest.agentConfig.maxConcurrent || '宿主默认'}</dd></div></dl><p class="component-detail-deps">参数由扩展声明，实际执行仍受宿主权限和资源上限约束。</p></section>` : ''}
+    ${manifest.settings?.length ? `<section class="component-detail-section" data-extension-settings><h2>扩展设置</h2><div class="component-setting-scope"><label>作用域 <select data-extension-settings-scope><option value="user">用户默认</option><option value="workspace">当前工作区</option></select></label><button class="component-detail-action" type="button" data-extension-settings-save>保存</button></div><div data-extension-settings-fields></div></section>` : ''}
   </article>`;
+  void bindExtensionSettings(manifest, root);
   const bindAction = (name: string, endpoint: string, success: string) => root.querySelector<HTMLButtonElement>(`[data-component-action="${name}"]`)?.addEventListener('click', async () => {
     const button = root.querySelector<HTMLButtonElement>(`[data-component-action="${name}"]`);
     if (!button) return;

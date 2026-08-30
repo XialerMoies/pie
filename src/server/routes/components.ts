@@ -8,7 +8,7 @@ import {
 } from "../../agent/component-package.js"
 import { reconcileMcpServerComponents } from "../../agent/mcp/MCPClientService.js"
 import { loadMcpConfigFromCandidates, defaultGlobalConfigPath, getCandidatePaths } from "../../agent/mcp/config.js"
-import { canonicalWorkspacePath } from "../../data/data-layout.js"
+import { canonicalWorkspacePath, workspaceKey } from "../../data/data-layout.js"
 import { dirname, join } from "node:path"
 import { extensionManifestFromPackage } from "../../agent/extension-manifest.js"
 import { extensionLifecycle } from "../../agent/extension-lifecycle.js"
@@ -17,6 +17,7 @@ import {
   extensionPackageStore,
 } from "../../agent/extension-package-store.js"
 import { parseBody } from "./parse-body.js"
+import { readExtensionSettings, resolveExtensionSettings, updateExtensionSettings, type ExtensionSettingsScope } from "../../agent/extension-settings.js"
 
 const cors = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" }
 
@@ -95,9 +96,54 @@ function managementComponentProjection(component: ReturnType<typeof capabilityCo
   }
 }
 
+function extensionSettingsPath(ctx: ServerContext, scope: ExtensionSettingsScope): string {
+  if (scope === "user") return join(ctx.groups.storage.paths.PI_CONFIG_DIR, "extension-settings.json")
+  const runtime = ctx.groups.core.runtime as { currentWorkspace?: string }
+  const workspace = canonicalWorkspacePath(runtime.currentWorkspace || ctx.groups.storage.paths.APP_ROOT)
+  return join(ctx.groups.storage.paths.DATA_DIR, "workspaces", workspaceKey(workspace), "extension-settings.json")
+}
+
+async function extensionSettingsProjection(ctx: ServerContext, componentId: string) {
+  const state = capabilityComponentManager.get(componentId)
+  if (!state || state.manifest.kind !== "optional") throw new CapabilityComponentError("unknown_extension", `Unknown optional extension: ${componentId}`, componentId)
+  const settings = state.manifest.settings || []
+  const [user, workspace] = await Promise.all([
+    readExtensionSettings(extensionSettingsPath(ctx, "user"), componentId, settings),
+    readExtensionSettings(extensionSettingsPath(ctx, "workspace"), componentId, settings),
+  ])
+  return { settings, values: { user, workspace, effective: resolveExtensionSettings(settings, user, workspace) } }
+}
+
 /** Read-only component catalog for the desktop host and diagnostics surfaces. */
 export const handleComponents: RouteHandler = async (req, res, ctx) => {
   const parsedUrl = new URL(req.url || "/", `http://${req.headers?.host || "localhost"}`)
+
+  const extensionSettingsMatch = parsedUrl.pathname.match(/^\/api\/extensions\/([a-z0-9][a-z0-9._-]*)\/settings$/u)
+  if (extensionSettingsMatch && (req.method === "GET" || req.method === "PATCH")) {
+    const [, componentId] = extensionSettingsMatch
+    try {
+      registerFirstPartyComponentPackages(capabilityComponentManager)
+      if (req.method === "PATCH") {
+        const body = await parseBody(req)
+        const scope = body?.scope
+        if (scope !== "user" && scope !== "workspace") throw new Error("settings scope must be user or workspace")
+        const state = capabilityComponentManager.get(componentId)
+        if (!state || state.manifest.kind !== "optional") throw new CapabilityComponentError("unknown_extension", `Unknown optional extension: ${componentId}`, componentId)
+        await updateExtensionSettings(extensionSettingsPath(ctx, scope), componentId, state.manifest.settings || [], body?.values)
+      }
+      const projection = await extensionSettingsProjection(ctx, componentId)
+      res.writeHead(200, { "Content-Type": "application/json", ...cors })
+      res.end(JSON.stringify({ ok: true, componentId, ...projection }))
+    } catch (error) {
+      res.writeHead(400, { "Content-Type": "application/json", ...cors })
+      res.end(JSON.stringify({
+        ok: false,
+        code: error instanceof CapabilityComponentError ? error.code : "invalid_extension_settings",
+        error: error instanceof Error ? error.message : String(error),
+      }))
+    }
+    return true
+  }
 
   // Product extension projection. This is deliberately separate from the
   // internal component catalog and carries no productClass/hostSurface fields.

@@ -241,6 +241,7 @@ interface AppTab {
     publisher?: string;
     icon?: string;
     agentConfig?: { timeoutMs?: number; maxConcurrent?: number };
+    settings?: Array<{ id: string; type: 'string' | 'number' | 'boolean' | 'select'; label: string; description?: string; defaultValue?: string | number | boolean; choices?: string[] }>;
     permissions?: { network?: boolean | string[]; filesystem?: string[]; subprocess?: boolean; secrets?: string[] };
     description?: string;
     dependencies?: Array<string | { id: string; version?: string; optional?: boolean; capability?: string }>;
@@ -287,7 +288,7 @@ interface AppUI {
   restoreFileTabs(): void;
   quickOpenFile(): void;
   openFileTab(id: string, content: string, lang?: string, renderer?: 'text' | 'image' | 'video', options?: { activate?: boolean }): void;
-  openComponentTab(component: { id: string; version?: string; kind?: 'required' | 'optional'; capability?: string; source?: string; productClass?: string; hostSurface?: string; displayName?: string; publisher?: string; icon?: string; agentConfig?: { timeoutMs?: number; maxConcurrent?: number }; permissions?: { network?: boolean | string[]; filesystem?: string[]; subprocess?: boolean; secrets?: string[] }; description?: string; dependencies?: Array<string | { id: string; version?: string; optional?: boolean; capability?: string }>; children?: Array<{ id: string; displayName?: string; publisher?: string; description?: string; icon?: string; agentConfig?: { timeoutMs?: number; maxConcurrent?: number }; permissions?: { network?: boolean | string[]; filesystem?: string[]; subprocess?: boolean; secrets?: string[] }; enabled?: boolean; status?: 'active' | 'disabled' | 'untrusted' | 'unhealthy'; health?: string }>; enabled?: boolean; status?: 'active' | 'disabled' | 'untrusted' | 'unhealthy'; installed?: boolean }): void;
+  openComponentTab(component: { id: string; version?: string; kind?: 'required' | 'optional'; capability?: string; source?: string; productClass?: string; hostSurface?: string; displayName?: string; publisher?: string; icon?: string; agentConfig?: { timeoutMs?: number; maxConcurrent?: number }; settings?: Array<{ id: string; type: 'string' | 'number' | 'boolean' | 'select'; label: string; description?: string; defaultValue?: string | number | boolean; choices?: string[] }>; permissions?: { network?: boolean | string[]; filesystem?: string[]; subprocess?: boolean; secrets?: string[] }; description?: string; dependencies?: Array<string | { id: string; version?: string; optional?: boolean; capability?: string }>; children?: Array<{ id: string; displayName?: string; publisher?: string; description?: string; icon?: string; agentConfig?: { timeoutMs?: number; maxConcurrent?: number }; permissions?: { network?: boolean | string[]; filesystem?: string[]; subprocess?: boolean; secrets?: string[] }; enabled?: boolean; status?: 'active' | 'disabled' | 'untrusted' | 'unhealthy'; health?: string }>; enabled?: boolean; status?: 'active' | 'disabled' | 'untrusted' | 'unhealthy'; installed?: boolean }): void;
   /** Opens the MCP Server discovery/install workspace, not a component detail. */
   openMcpManagementTab(): void;
   saveCurrentFile(): Promise<void>;

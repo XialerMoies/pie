@@ -10,7 +10,7 @@ export interface ExtensionToolDefinition {
   description: string
   inputSchema: unknown
   /** The host wraps this callback in the normal permission/security/trace chain. */
-  execute(input: unknown, signal: AbortSignal): unknown | Promise<unknown>
+  execute(input: unknown, signal: AbortSignal, settings: Readonly<Record<string, string | number | boolean>>): unknown | Promise<unknown>
 }
 
 export interface ExtensionSettingDefinition {

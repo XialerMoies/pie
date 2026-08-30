@@ -39,6 +39,7 @@ export interface AppTab {
     hostSurface?: string;
     displayName?: string;
     description?: string;
+    settings?: Array<{ id: string; type: 'string' | 'number' | 'boolean' | 'select'; label: string; description?: string; defaultValue?: string | number | boolean; choices?: string[] }>;
     dependencies?: Array<string | { id: string; version?: string; optional?: boolean; capability?: string }>;
   };
   componentEnabled?: boolean;

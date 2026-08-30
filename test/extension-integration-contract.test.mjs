@@ -31,6 +31,7 @@ describe("R2 extension and integration contracts", () => {
       icon: "#icheck",
       contributions: ["agent-tool"],
       agentConfig: { timeoutMs: 45_000, maxConcurrent: 3 },
+      settings: [{ id: "result-limit", type: "number", label: "结果数量", defaultValue: 12 }],
       permissions: { capabilities: ["read"] },
       compatibility: { host: "1", contract: "1" },
     });
@@ -38,7 +39,9 @@ describe("R2 extension and integration contracts", () => {
     assert.equal(manifest.publisher, "XialerMoies");
     assert.equal(manifest.icon, "#icheck");
     assert.deepEqual(manifest.agentConfig, { timeoutMs: 45_000, maxConcurrent: 3 });
+    assert.deepEqual(manifest.settings, [{ id: "result-limit", type: "number", label: "结果数量", defaultValue: 12 }]);
     assert.throws(() => normalizeExtensionManifest({ ...manifest, icon: "javascript:alert(1)" }), /icon/);
+    assert.throws(() => normalizeExtensionManifest({ ...manifest, settings: [{ id: "api-key", type: "string", label: "API Key" }] }), /secure storage/);
   });
 
   it("adapts a legacy package declaration without leaking its component taxonomy", () => {

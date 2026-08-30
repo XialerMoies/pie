@@ -12,6 +12,7 @@ import {
   type RequiredReplacementResult,
 } from "./capability-component-replacement.js"
 import { assertRequiredProviderContract, type RequiredCapability } from "./capability-contracts.js"
+import { normalizeExtensionSettingSchemas, type ExtensionSettingSchema } from "./extension-settings.js"
 
 export const CAPABILITY_COMPONENT_SCHEMA_VERSION = 1 as const
 export const CAPABILITY_COMPONENT_SESSION_CUSTOM_TYPE = "my-code-agent.capability-components"
@@ -74,6 +75,8 @@ export interface CapabilityComponentManifest {
   icon?: string
   /** Agent-facing execution defaults and ceilings. */
   agentConfig?: CapabilityComponentAgentConfig
+  /** Declarative, non-secret settings editable through the host. */
+  settings?: readonly ExtensionSettingSchema[]
   description?: string
 }
 
@@ -129,6 +132,7 @@ export interface SyncComponentOptions {
   publisher?: string
   icon?: string
   agentConfig?: CapabilityComponentAgentConfig
+  settings?: readonly ExtensionSettingSchema[]
   trusted: boolean
   enabled: boolean
   health: CapabilityComponentHealth
@@ -195,6 +199,7 @@ function stableManifest(manifest: CapabilityComponentManifest): CapabilityCompon
     ...(manifest.publisher ? { publisher: manifest.publisher } : {}),
     ...(manifest.icon ? { icon: manifest.icon } : {}),
     ...(manifest.agentConfig ? { agentConfig: { ...(manifest.agentConfig.timeoutMs === undefined ? {} : { timeoutMs: manifest.agentConfig.timeoutMs }), ...(manifest.agentConfig.maxConcurrent === undefined ? {} : { maxConcurrent: manifest.agentConfig.maxConcurrent }) } } : {}),
+    ...(manifest.settings?.length ? { settings: normalizeExtensionSettingSchemas(manifest.settings) } : {}),
     ...(manifest.description ? { description: manifest.description } : {}),
   }
 }
@@ -306,7 +311,8 @@ export function validateCapabilityComponentManifest(input: CapabilityComponentMa
       throw new CapabilityComponentError("invalid_manifest", `Component ${id} has an invalid Agent concurrency`, id)
     }
   }
-  return Object.freeze(stableManifest({ ...input, id, dependencies, ...(parentId ? { parentId } : {}), ...(providedBy ? { providedBy } : {}), ...(publisher ? { publisher } : {}), ...(icon ? { icon } : {}), ...(agentConfig ? { agentConfig: { ...(agentConfig.timeoutMs === undefined ? {} : { timeoutMs: agentConfig.timeoutMs }), ...(agentConfig.maxConcurrent === undefined ? {} : { maxConcurrent: agentConfig.maxConcurrent }) } } : {}) }))
+  const settings = normalizeExtensionSettingSchemas(input.settings)
+  return Object.freeze(stableManifest({ ...input, id, dependencies, ...(parentId ? { parentId } : {}), ...(providedBy ? { providedBy } : {}), ...(publisher ? { publisher } : {}), ...(icon ? { icon } : {}), ...(agentConfig ? { agentConfig: { ...(agentConfig.timeoutMs === undefined ? {} : { timeoutMs: agentConfig.timeoutMs }), ...(agentConfig.maxConcurrent === undefined ? {} : { maxConcurrent: agentConfig.maxConcurrent }) } } : {}), ...(settings.length ? { settings } : {}) }))
 }
 
 function isVersionRange(value: string): boolean {

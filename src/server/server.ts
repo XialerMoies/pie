@@ -36,7 +36,7 @@ import { AppEventHub } from "./app-events.js";
 import { WorkspaceFileWatcher } from "./workspace-file-watcher.js";
 import { mcpHostIntegrationProvider } from "../agent/mcp/MCPClientService.js";
 import { resolveStartupPaths, startupPathsSnapshot } from "./startup-paths.js";
-import { canonicalWorkspacePath } from "../data/data-layout.js";
+import { canonicalWorkspacePath, workspaceKey } from "../data/data-layout.js";
 import {
   readUserPreferences,
   readUserPreferencesStrict,
@@ -75,6 +75,8 @@ import { capabilityComponentManager } from "../agent/capability-components.js";
 import { createPermissionEvaluatorProvider } from "../agent/capability-contracts.js";
 import { defaultTrustStorePath } from "../agent/mcp/trust-store.js";
 import { defaultExtensionPackageStorePath, extensionPackageStore } from "../agent/extension-package-store.js";
+import { extensionToolRegistry } from "../agent/extension-tool-registry.js";
+import { readExtensionSettings, resolveExtensionSettings } from "../agent/extension-settings.js";
 
 import { attachEngineEvents, recordUserNoteBlock } from "./agent-event-router.js";
 export { attachEngineEvents, emitBlock, emitTrace, flushPendingBlockPersist, flushPendingTracePersist, nextBlockSeq, persistBlockEvent, persistTaskLifecycle, persistTraceEvent, recordUserNoteBlock, tagSessionHeader } from "./agent-event-router.js";
@@ -167,6 +169,16 @@ async function main() {
   }
   await capabilityComponentManager.restore(join(PI_CONFIG_DIR, "component-state.json"));
   await extensionPackageStore.restore(defaultExtensionPackageStorePath());
+  extensionToolRegistry.setSettingsResolver(async (componentId, context) => {
+    const settings = capabilityComponentManager.get(componentId)?.manifest.settings || [];
+    if (settings.length === 0) return Object.freeze({});
+    const workspace = canonicalWorkspacePath(context.workspace || STARTUP.workspace);
+    const [user, workspaceValues] = await Promise.all([
+      readExtensionSettings(join(PI_CONFIG_DIR, "extension-settings.json"), componentId, settings),
+      readExtensionSettings(join(DATA_DIR, "workspaces", workspaceKey(workspace), "extension-settings.json"), componentId, settings),
+    ]);
+    return resolveExtensionSettings(settings, user, workspaceValues);
+  });
   // Restored disable/uninstall state must take effect before any catalog
   // projection can adopt first-party extension contributions.
   assertProfileCatalogsReady();

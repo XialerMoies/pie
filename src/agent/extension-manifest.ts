@@ -6,6 +6,8 @@
  * lifecycle state; an extension manifest describes only an installable
  * contribution and never carries product classification fields.
  */
+import { normalizeExtensionSettingSchemas, type ExtensionSettingSchema } from "./extension-settings.js"
+
 export const EXTENSION_MANIFEST_SCHEMA_VERSION = 1 as const
 
 export type ExtensionContributionType =
@@ -46,6 +48,8 @@ export interface ExtensionManifest {
   readonly icon?: string
   /** Defaults/ceilings used when the Agent invokes this contribution. */
   readonly agentConfig?: ExtensionAgentConfig
+  /** Declarative non-secret settings rendered and persisted by the host. */
+  readonly settings?: readonly ExtensionSettingSchema[]
   readonly entry?: string
   readonly source?: "builtin" | "workspace" | "user" | "registry"
 }
@@ -130,6 +134,7 @@ export function normalizeExtensionManifest(input: unknown): Readonly<ExtensionMa
   const publisher = value.publisher === undefined ? undefined : text(value.publisher, "publisher")
   const icon = value.icon === undefined ? undefined : text(value.icon, "icon")
   const agentConfig = value.agentConfig === undefined ? undefined : value.agentConfig as ExtensionAgentConfig
+  const settings = normalizeExtensionSettingSchemas(value.settings)
   if (icon !== undefined && (icon.length > 512 || !ICON_REFERENCE_PATTERN.test(icon))) throw new Error("icon must be a safe sprite reference, HTTPS URL, or base64 image")
   if (agentConfig !== undefined && (!agentConfig || typeof agentConfig !== "object" || Array.isArray(agentConfig))) throw new Error("agentConfig must be an object")
   if (agentConfig?.timeoutMs !== undefined && (!Number.isSafeInteger(agentConfig.timeoutMs) || agentConfig.timeoutMs < 100 || agentConfig.timeoutMs > 3_600_000)) throw new Error("agentConfig.timeoutMs must be between 100 and 3600000")
@@ -146,6 +151,7 @@ export function normalizeExtensionManifest(input: unknown): Readonly<ExtensionMa
     ...(publisher ? { publisher } : {}),
     ...(icon ? { icon } : {}),
     ...(agentConfig ? { agentConfig: Object.freeze({ ...(agentConfig.timeoutMs === undefined ? {} : { timeoutMs: agentConfig.timeoutMs }), ...(agentConfig.maxConcurrent === undefined ? {} : { maxConcurrent: agentConfig.maxConcurrent }) }) } : {}),
+    ...(settings.length ? { settings } : {}),
     ...(value.entry === undefined ? {} : { entry: safeRelativePath(value.entry, "entry") }),
     ...(source === undefined ? {} : { source }),
   })
@@ -161,7 +167,7 @@ export function extensionManifestFromPackage(input: {
   packageVersion: string
   entry?: string
   source?: "builtin" | "workspace" | "user" | "registry"
-  component: { id: string; version: string; capability: string; displayName?: string; publisher?: string; icon?: string; agentConfig?: ExtensionAgentConfig }
+  component: { id: string; version: string; capability: string; displayName?: string; publisher?: string; icon?: string; agentConfig?: ExtensionAgentConfig; settings?: readonly ExtensionSettingSchema[] }
   permissions: { filesystem: readonly string[]; network: boolean | readonly string[]; subprocess: boolean; secrets: readonly string[] }
   compatibility: { host: string; contract: string }
   displayName?: string
@@ -197,6 +203,7 @@ export function extensionManifestFromPackage(input: {
     ...(input.component.publisher ? { publisher: input.component.publisher } : {}),
     ...(input.component.icon ? { icon: input.component.icon } : {}),
     ...(input.component.agentConfig ? { agentConfig: input.component.agentConfig } : {}),
+    ...(input.component.settings?.length ? { settings: input.component.settings } : {}),
     ...(input.displayName ? { displayName: input.displayName } : {}),
     ...(input.publisher ? { publisher: input.publisher } : {}),
     ...(input.icon ? { icon: input.icon } : {}),

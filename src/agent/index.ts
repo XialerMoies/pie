@@ -129,8 +129,21 @@ export type {
   ExtensionPermission,
 } from "./extension-manifest.js"
 export { createExtensionApi } from "./extension-api.js"
+export {
+  EXTENSION_SETTINGS_SCHEMA_VERSION,
+  normalizeExtensionSettingSchemas,
+  resolveExtensionSettings,
+  readExtensionSettings,
+  updateExtensionSettings,
+} from "./extension-settings.js"
+export type {
+  ExtensionSettingSchema,
+  ExtensionSettingType as ExtensionManifestSettingType,
+  ExtensionSettingValue,
+  ExtensionSettingsScope,
+} from "./extension-settings.js"
 export { ExtensionToolRegistry, extensionToolRegistry } from "./extension-tool-registry.js"
-export type { ExtensionToolRegistration, ExtensionToolRegistrationOptions } from "./extension-tool-registry.js"
+export type { ExtensionToolRegistration, ExtensionToolRegistrationOptions, ExtensionToolSettingsResolver } from "./extension-tool-registry.js"
 export type {
   ExtensionApi,
   ExtensionApiAdapters,

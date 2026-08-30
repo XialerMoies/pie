@@ -10,9 +10,10 @@ import type { CapabilityComponentManager } from "./capability-components.js"
 import { capabilityComponentManager } from "./capability-components.js"
 import type { ExtensionDisposable, ExtensionToolDefinition } from "./extension-api.js"
 import type { ExtensionPermission } from "./extension-manifest.js"
+import type { ExtensionSettingValue } from "./extension-settings.js"
 import { HOST_EXECUTION_CHAIN } from "./execution-boundary.js"
 import { structuredToolResult } from "./tool-outcomes.js"
-import type { AgentTool, ToolOperation } from "./types.js"
+import type { AgentTool, ToolContext, ToolOperation } from "./types.js"
 import type { AgentToolAudience } from "./tool-pool.js"
 
 export interface ExtensionToolRegistration {
@@ -24,7 +25,11 @@ export interface ExtensionToolRegistration {
 export interface ExtensionToolRegistrationOptions {
   /** Package-declared capabilities selected by the host, never by the tool. */
   readonly permissions?: readonly ExtensionPermission[]
+  /** Host-owned, already validated settings snapshot resolver. */
+  readonly resolveSettings?: (context: ToolContext) => Readonly<Record<string, ExtensionSettingValue>> | Promise<Readonly<Record<string, ExtensionSettingValue>>>
 }
+
+export type ExtensionToolSettingsResolver = (componentId: string, context: ToolContext) => Readonly<Record<string, ExtensionSettingValue>> | Promise<Readonly<Record<string, ExtensionSettingValue>>>
 
 type ExtensionLimitWaiter = {
   resolve: (release: () => void) => void
@@ -129,10 +134,14 @@ export class ExtensionToolRegistry {
   readonly #manager: CapabilityComponentManager
   readonly #tools = new Map<string, ExtensionToolRegistration>()
   readonly #limits = new Map<string, ExtensionLimitState>()
+  #settingsResolver?: ExtensionToolSettingsResolver
 
-  constructor(manager: CapabilityComponentManager = capabilityComponentManager) {
+  constructor(manager: CapabilityComponentManager = capabilityComponentManager, settingsResolver?: ExtensionToolSettingsResolver) {
     this.#manager = manager
+    this.#settingsResolver = settingsResolver
   }
+
+  setSettingsResolver(resolver: ExtensionToolSettingsResolver | undefined): void { this.#settingsResolver = resolver }
 
   register(componentId: string, definition: ExtensionToolDefinition, options: ExtensionToolRegistrationOptions = {}): ExtensionDisposable {
     const id = String(componentId || "").trim()
@@ -183,7 +192,10 @@ export class ExtensionToolRegistry {
           : setTimeout(() => timeout.abort(timeoutError(definition.id, timeoutMs)), timeoutMs)
         let settled = false
         const execution = Promise.resolve()
-          .then(() => definition.execute(args, combined.signal))
+          .then(async () => {
+            const settings = await (options.resolveSettings?.(context) || this.#settingsResolver?.(id, context) || {})
+            return definition.execute(args, combined.signal, Object.freeze({ ...settings }))
+          })
           .then(
             (result) => { settled = true; return result },
             (error) => { settled = true; throw error },
