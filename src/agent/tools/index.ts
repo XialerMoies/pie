@@ -16,7 +16,9 @@ import { canonicalToolName } from "../tool-identity.js"
 import { searchTool } from "./search.js"
 import { fileReadTool } from "./file-read.js"
 import { explorerListTool } from "./explorer-list.js"
+import { gitStatusTool } from "./git-status.js"
 import { gitLogTool } from "./git-log.js"
+import { fileOutlineTool } from "./file-outline.js"
 import { webSearchTool, setSearchBackend, getSearchBackend } from "./web-search.js"
 import { webFetchTool } from "./web-fetch.js"
 import { commandTool } from "./command.js"
@@ -33,7 +35,6 @@ import { buildProfileToolPool, profileAllowsFeature, ToolPool } from "../tool-po
 import { capabilityComponentManager } from "../capability-components.js"
 import { registerFirstPartyComponentPackages } from "../component-package.js"
 import { extensionToolRegistry } from "../extension-tool-registry.js"
-import { ensureFirstPartyExtensionContributions } from "../first-party-extension-contributions.js"
 import type { RequiredComponentLease } from "../capability-component-replacement.js"
 
 /** 全局 Tool 注册表 */
@@ -54,7 +55,9 @@ registerFirstPartyComponentPackages(capabilityComponentManager)
 toolRegistry.register(searchTool)
 toolRegistry.register(fileReadTool)
 toolRegistry.register(explorerListTool)
+toolRegistry.register(gitStatusTool)
 toolRegistry.register(gitLogTool)
+toolRegistry.register(fileOutlineTool)
 toolRegistry.register(webSearchTool)
 toolRegistry.register(webFetchTool)
 toolRegistry.register(commandTool)
@@ -79,7 +82,6 @@ export function registerTool(
 
 /** Complete host-managed Agent-tool surface, excluding per-session MCP discovery. */
 export function getManagedAgentTools(): AgentTool[] {
-  ensureFirstPartyExtensionContributions()
   return new ToolPool()
     .addNative(toolRegistry.getAll())
     .addExtensions(extensionToolRegistry.entries())
@@ -88,7 +90,6 @@ export function getManagedAgentTools(): AgentTool[] {
 
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */
 export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard"), componentLease?: RequiredComponentLease) {
-  ensureFirstPartyExtensionContributions()
   const pool = new ToolPool().addNative(toolRegistry.getAll()).addExtensions(extensionToolRegistry.entries())
   const tools = pool.project({ audience: "main", names: profile.toolNames, featureGates: profile.featureGates, componentManager: capabilityComponentManager })
   return presentSessionTools(tools, { workspace, emitTrace, extraCtx }, profile.presentation, componentLease) as any
@@ -99,7 +100,6 @@ function presentProfileTools(tools: readonly AgentTool[], workspace?: string, em
 }
 
 function assembleProfileTools(profile: AgentProfile, mcpTools: readonly AgentTool[] = []): AgentTool[] {
-  ensureFirstPartyExtensionContributions()
   const pool = buildProfileToolPool(profile, toolRegistry.getAll(), mcpTools, capabilityComponentManager, extensionToolRegistry.entries())
   const nativeNames = profile.toolNames === "*" ? "*" : profile.toolNames
   const native = pool.project({ audience: "main", names: nativeNames, featureGates: profile.featureGates, componentManager: capabilityComponentManager })

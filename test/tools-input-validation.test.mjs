@@ -61,7 +61,6 @@ import { setSearchBackend, webSearchTool } from "../src/agent/tools/web-search.t
 import { toolRegistry } from "../src/agent/tools/index.ts";
 import { capabilityComponentManager } from "../src/agent/capability-components.ts";
 import { extensionToolRegistry } from "../src/agent/extension-tool-registry.ts";
-import { ensureFirstPartyExtensionContributions } from "../src/agent/first-party-extension-contributions.ts";
 import { ToolPool } from "../src/agent/tool-pool.ts";
 import { buildFileDiffMetadata } from "../src/agent/tools/file-diff.ts";
 
@@ -76,7 +75,6 @@ function toolText(result) {
 }
 
 function builtinTools() {
-  ensureFirstPartyExtensionContributions();
   return new ToolPool()
     .addNative(toolRegistry.getAll())
     .addExtensions(extensionToolRegistry.entries())

@@ -4,6 +4,7 @@ type ComponentPaneCategory = "extensions" | "integrations";
 type ComponentPaneManifestClass = "system" | "native" | "third-party" | "mcp";
 type ComponentPaneSubgroup = "desktop" | "agent" | "server" | "mcp-server";
 type ComponentPaneFilter = "all" | "active" | "disabled" | "required";
+type ComponentPanePermissions = { network?: boolean | string[]; filesystem?: string[]; subprocess?: boolean; secrets?: string[] };
 
 interface ComponentPaneManifest {
   id: string;
@@ -17,6 +18,7 @@ interface ComponentPaneManifest {
   publisher?: string;
   icon?: string;
   agentConfig?: { timeoutMs?: number; maxConcurrent?: number };
+  permissions?: ComponentPanePermissions;
   description?: string;
 }
 

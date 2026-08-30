@@ -9,7 +9,6 @@ import { FILE_READ_COMPONENT_PACKAGE_MANIFEST } from "../src/agent/component-pac
 import { nativeToolPresentation } from "../src/agent/tool-presentation.ts";
 import { toolRegistry } from "../src/agent/tools/index.ts";
 import { extensionToolRegistry } from "../src/agent/extension-tool-registry.ts";
-import { ensureFirstPartyExtensionContributions } from "../src/agent/first-party-extension-contributions.ts";
 import { structuredToolResult } from "../src/agent/types.ts";
 import { attachEngineEvents } from "../src/server/agent-event-router.ts";
 import { replayChatEvents } from "../src/server/chat-stream.ts";
@@ -94,7 +93,6 @@ describe("AP-10/AP-11 Profile, host, and ToolPool cross-layer flow", () => {
 
   it("projects exact main, coordinator, and subagent audiences from one ToolPool", () => {
     const mcp = fixture("mcp_probe");
-    ensureFirstPartyExtensionContributions();
     const pool = new ToolPool().addNative(toolRegistry.getAll()).addExtensions(extensionToolRegistry.entries()).addMcp([mcp]);
     const coordinator = pool.project({ audience: "coordinator", names: "*", featureGates: "*" }).map((tool) => tool.name);
     const subagent = pool.project({ audience: "subagent", names: "*", featureGates: "*" }).map((tool) => tool.name);

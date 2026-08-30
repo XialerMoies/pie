@@ -13,7 +13,6 @@ import { canonicalWorkspacePath } from "../../data/data-layout.js"
 import { dirname, join } from "node:path"
 import { extensionManifestFromPackage } from "../../agent/extension-manifest.js"
 import { extensionLifecycle } from "../../agent/extension-lifecycle.js"
-import { firstPartyExtensionHooks } from "../../agent/first-party-extension-contributions.js"
 import {
   defaultExtensionPackageStorePath,
   extensionPackageStore,
@@ -66,6 +65,29 @@ function writeExtensionError(res: Parameters<RouteHandler>[1], error: unknown): 
 function isManagedFirstPartyOptional(componentId: string): boolean {
   const manifest = firstPartyComponentPackageForComponent(componentId)
   return manifest?.component.kind === "optional"
+}
+
+function installedFirstPartyAgentToolIds(): string[] {
+  const removedPackages = new Set(capabilityComponentManager.catalog().uninstalledFirstPartyPackages)
+  return firstPartyComponentPackageCatalog()
+    .filter(({ packageId, component }) => component.kind === "optional"
+      && component.source === "builtin"
+      && component.capability === "agent-tool"
+      && !removedPackages.has(packageId)
+      && capabilityComponentManager.get(component.id))
+    .map(({ component }) => component.id)
+}
+
+function managementComponentProjection(component: ReturnType<typeof capabilityComponentManager.require>) {
+  const packageManifest = firstPartyComponentPackageForComponent(component.manifest.id)
+  if (!packageManifest) return component
+  return {
+    ...component,
+    manifest: {
+      ...component.manifest,
+      permissions: packageManifest.permissions,
+    },
+  }
 }
 
 /** Read-only component catalog for the desktop host and diagnostics surfaces. */
@@ -178,7 +200,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ ok: false, code: "extension_not_managed", error: "Only installed third-party extensions use this endpoint" }))
         return true
       }
-      extensionLifecycle.adopt(componentId, firstPartyExtensionHooks(componentId))
+      extensionLifecycle.adopt(componentId)
       let lifecycle
       if (action === "trust") {
         const body = await parseBody(req)
@@ -202,6 +224,32 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
     return true
   }
 
+  const agentToolCollectionMatch = parsedUrl.pathname.match(/^\/api\/components\/agent-tools\/(enable|disable)$/u)
+  if (agentToolCollectionMatch && req.method === "POST") {
+    const [, action] = agentToolCollectionMatch
+    try {
+      registerFirstPartyComponentPackages(capabilityComponentManager)
+      const componentIds = installedFirstPartyAgentToolIds()
+      for (const componentId of componentIds) {
+        extensionLifecycle.adopt(componentId)
+        if (action === "enable") {
+          await extensionLifecycle.validate(componentId)
+          await extensionLifecycle.enable(componentId)
+          await extensionLifecycle.activate(componentId)
+        } else {
+          await extensionLifecycle.dispose(componentId)
+        }
+      }
+      await persistComponentState()
+      const components = componentIds.map((componentId) => managementComponentProjection(capabilityComponentManager.require(componentId)))
+      res.writeHead(200, { "Content-Type": "application/json", ...cors })
+      res.end(JSON.stringify({ ok: true, components, catalog: capabilityComponentManager.catalog() }))
+    } catch (error) {
+      writeComponentError(res, error)
+    }
+    return true
+  }
+
   const actionMatch = parsedUrl.pathname.match(/^\/api\/components\/([a-z0-9][a-z0-9._-]*)\/(enable|disable)$/u)
   if (actionMatch && req.method === "POST") {
     const [, componentId, action] = actionMatch
@@ -214,7 +262,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ ok: false, code: "component_not_managed", error: "This component is not managed by the desktop component pane" }))
         return true
       }
-      extensionLifecycle.adopt(componentId, firstPartyExtensionHooks(componentId))
+      extensionLifecycle.adopt(componentId)
       let state
       if (action === "enable") {
         await extensionLifecycle.validate(componentId)
@@ -244,7 +292,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         res.end(JSON.stringify({ ok: false, code: "component_not_managed", error: "This component is not managed by the desktop component pane" }))
         return true
       }
-      extensionLifecycle.adopt(componentId, firstPartyExtensionHooks(componentId))
+      extensionLifecycle.adopt(componentId)
       const state = capabilityComponentManager.require(componentId)
       await extensionLifecycle.uninstall(componentId)
       await persistComponentState()
@@ -268,7 +316,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
       }
       const componentManifest = firstPartyComponentPackage(packageId)
       if (!componentManifest) throw new CapabilityComponentError("unknown_first_party_package", `Unknown first-party package: ${packageId}`)
-      await extensionLifecycle.install(componentManifest.component, firstPartyExtensionHooks(componentManifest.component.id), { trusted: true })
+      await extensionLifecycle.install(componentManifest.component, {}, { trusted: true })
       const component = capabilityComponentManager.require(componentManifest.component.id)
       await persistComponentState()
       res.writeHead(200, { "Content-Type": "application/json", ...cors })
@@ -291,8 +339,12 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
     const catalog = capabilityComponentManager.catalog()
     const isIntegration = (component: { manifest: { source?: string; hostSurface?: string } }): boolean => component.manifest.source === "mcp" || component.manifest.hostSurface === "mcp-service"
     const removed = new Set(catalog.uninstalledFirstPartyPackages)
-    const extensions = catalog.components.filter((component) => component.manifest.kind === "optional" && !isIntegration(component))
-    const integrations = catalog.components.filter((component) => component.manifest.kind === "optional" && isIntegration(component))
+    const extensions = catalog.components
+      .filter((component) => component.manifest.kind === "optional" && !isIntegration(component))
+      .map(managementComponentProjection)
+    const integrations = catalog.components
+      .filter((component) => component.manifest.kind === "optional" && isIntegration(component))
+      .map(managementComponentProjection)
     const availableExtensions = firstPartyComponentPackageCatalog().filter((entry) => removed.has(entry.packageId) && entry.component.kind === "optional" && !isIntegration({ manifest: entry.component }))
     res.writeHead(200, { "Content-Type": "application/json", ...cors })
     res.end(JSON.stringify({

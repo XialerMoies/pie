@@ -98,4 +98,27 @@ describe("third-party extension management API", () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it("toggles only the installed built-in Agent tool collection", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-tool-collection-"))
+    const previousConfig = process.env.PI_USER_CONFIG
+    process.env.PI_USER_CONFIG = root
+    try {
+      const disabled = await call("POST", "/api/components/agent-tools/disable")
+      assert.equal(disabled.status, 200)
+      assert.ok(disabled.body.components.length > 0)
+      assert.ok(disabled.body.components.every((component) => component.manifest.source === "builtin" && component.manifest.capability === "agent-tool"))
+      assert.ok(disabled.body.components.every((component) => component.manifest.permissions && Array.isArray(component.manifest.permissions.filesystem)))
+      assert.ok(disabled.body.components.every((component) => component.status === "disabled" && component.enabled === false))
+
+      const enabled = await call("POST", "/api/components/agent-tools/enable")
+      assert.equal(enabled.status, 200)
+      assert.deepEqual(enabled.body.components.map((component) => component.manifest.id), disabled.body.components.map((component) => component.manifest.id))
+      assert.ok(enabled.body.components.every((component) => component.status === "active" && component.enabled === true))
+    } finally {
+      await call("POST", "/api/components/agent-tools/enable")
+      process.env.PI_USER_CONFIG = previousConfig
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })

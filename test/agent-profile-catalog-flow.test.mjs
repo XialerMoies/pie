@@ -18,11 +18,7 @@ describe("AP-08 profile-generated tool and prompt catalog flow", () => {
       assert.ok(catalog.tools.every((tool) => tool.executable && tool.enabled));
       assert.deepStrictEqual(catalog.featureGates, profile.featureGates);
       assert.ok(catalog.tools.every((tool) => tool.audiences.includes("main")));
-      if (catalog.id === "standard") {
-        const extensionTools = catalog.tools.filter((tool) => tool.source === "extension").map((tool) => tool.name).sort();
-        assert.deepStrictEqual(extensionTools, ["file_outline", "git-status"]);
-        assert.ok(catalog.tools.filter((tool) => tool.source !== "extension").every((tool) => tool.source === "native"));
-      }
+      assert.ok(catalog.tools.every((tool) => tool.source === "native"));
       assert.equal(catalog.presentation, profile.presentation);
       assert.deepStrictEqual(catalog.dependencies, { mcp: profile.allowMcp, skills: profile.includeSkills });
       const expectedPromptKeys = profile.promptSections === "*"
@@ -37,7 +33,7 @@ describe("AP-08 profile-generated tool and prompt catalog flow", () => {
     const minimal = buildProfileCatalog(resolveAgentProfile("minimal"));
     assert.deepStrictEqual(minimal.tools.map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode"]);
     assert.deepStrictEqual(minimal.featureGates, ["planning"]);
-    assert.deepStrictEqual(minimal.dynamicSources, ["extension"]);
+    assert.deepStrictEqual(minimal.dynamicSources, []);
   });
 
   it("fails closed when a model-visible tool is not executable and keeps undeclared tools disabled", () => {

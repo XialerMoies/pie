@@ -11,7 +11,6 @@ import { toolRegistry } from "../agent/tools/index.js"
 import { presentNativeTool } from "../agent/tool-presentation.js"
 import { ToolPool } from "../agent/tool-pool.js"
 import { extensionToolRegistry } from "../agent/extension-tool-registry.js"
-import { ensureFirstPartyExtensionContributions } from "../agent/first-party-extension-contributions.js"
 import {
   type SubagentModelRef,
   type SubagentProfile,
@@ -138,7 +137,6 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
     const configuredTools = input.task.agent?.tools ?? input.tools
     const inputToolSet = new Set(input.tools)
     const requestedTools = configuredTools.filter((name) => inputToolSet.has(name))
-    ensureFirstPartyExtensionContributions()
     const selectedTools = new ToolPool().addNative(toolRegistry.getAll()).addExtensions(extensionToolRegistry.entries()).project({
       audience: "subagent",
       names: requestedTools,

@@ -357,20 +357,54 @@ function componentIconMarkup(icon: string | undefined, size = 22): string {
   return `<img class="component-detail-image" width="${size}" height="${size}" src="${E(reference)}" alt="" referrerpolicy="no-referrer">`;
 }
 
+function componentPermissionSummary(permissions: ComponentTabManifest['permissions']): string {
+  if (!permissions) return '由宿主统一授权';
+  const labels = [
+    ...(permissions.filesystem || []).map((operation) => ({ read: '读取文件', write: '写入文件', create: '创建文件', remove: '删除文件' }[operation] || operation)),
+    ...(permissions.network ? ['网络访问'] : []),
+    ...(permissions.subprocess ? ['启动子进程'] : []),
+    ...((permissions.secrets?.length || 0) > 0 ? ['受控凭据'] : []),
+  ];
+  return labels.length ? labels.join('、') : '无额外权限';
+}
+
 function renderAgentToolCollectionTab(tab: AppTab, manifest: ComponentTabManifest, root: HTMLElement): void {
   const children = manifest.children || [];
   const title = manifest.displayName || "Agent 工具";
   const value = (item: unknown): string => typeof item === 'string' && item.trim() ? E(item) : '未提供';
+  const enabledCount = children.filter((child) => child.status === 'active').length;
+  const collectionAction = enabledCount === children.length ? 'disable' : 'enable';
   const rows = children.map((child) => {
     const state = child.status === 'active' ? '已启用' : child.status === 'disabled' ? '已停用' : child.status === 'untrusted' ? '未信任' : '不可用';
     const canManage = Boolean(child.id);
-    return `<article class="component-tool-row" data-tool-id="${E(child.id)}"><span class="component-tool-icon">${componentIconMarkup(child.icon, 18)}</span><div class="component-tool-main"><strong>${E(child.displayName || child.id)}</strong><span>${value(child.description)}</span></div><span class="component-tool-status">${state}</span>${canManage ? `<button class="component-detail-action component-tool-toggle" data-tool-action="toggle" type="button">${state === '已停用' ? '启用' : '停用'}</button>` : ''}</article>`;
+    return `<article class="component-tool-row" data-tool-id="${E(child.id)}"><span class="component-tool-icon">${componentIconMarkup(child.icon, 18)}</span><div class="component-tool-main"><strong>${E(child.displayName || child.id)}</strong><span>${value(child.description)} · 权限：${E(componentPermissionSummary(child.permissions))}</span></div><span class="component-tool-status">${state}</span>${canManage ? `<button class="component-detail-action component-tool-toggle" data-tool-action="toggle" type="button">${state === '已停用' ? '启用' : '停用'}</button>` : ''}</article>`;
   }).join('');
   root.innerHTML = `<article class="component-detail component-tool-collection" data-component-detail="${E(manifest.id)}">
-    <header class="component-detail-header"><div class="component-detail-title"><span class="component-detail-icon">${componentIconMarkup(manifest.icon, 22)}</span><div><h1>${E(title)}</h1><p>${value(manifest.description)}</p></div></div></header>
-    <section class="component-detail-section"><h2>集合信息</h2><dl class="component-detail-grid"><div><dt>归属</dt><dd>Agent</dd></div><div><dt>类型</dt><dd>功能扩展集合</dd></div><div><dt>发布者</dt><dd>${value(manifest.publisher)}</dd></div><div><dt>工具数量</dt><dd>${children.length}</dd></div></dl></section>
+    <header class="component-detail-header"><div class="component-detail-title"><span class="component-detail-icon">${componentIconMarkup(manifest.icon, 22)}</span><div><h1>${E(title)}</h1><p>${value(manifest.description)}</p></div></div>${children.length ? `<div class="component-detail-actions"><button class="component-detail-action" data-collection-action="${collectionAction}" type="button">${collectionAction === 'enable' ? '全部启用' : '全部停用'}</button></div>` : ''}</header>
+    <section class="component-detail-section"><h2>集合信息</h2><dl class="component-detail-grid"><div><dt>归属</dt><dd>Agent</dd></div><div><dt>类型</dt><dd>内置工具集合</dd></div><div><dt>发布者</dt><dd>${value(manifest.publisher)}</dd></div><div><dt>已启用</dt><dd>${enabledCount}/${children.length}</dd></div></dl></section>
     <section class="component-detail-section"><h2>包含工具</h2><div class="component-tool-list">${rows || '<p class="component-detail-deps">暂无已登记工具</p>'}</div></section>
   </article>`;
+  root.querySelector<HTMLButtonElement>('[data-collection-action]')?.addEventListener('click', async () => {
+    const button = root.querySelector<HTMLButtonElement>('[data-collection-action]');
+    if (!button) return;
+    const action = button.dataset.collectionAction;
+    if (action !== 'enable' && action !== 'disable') return;
+    button.disabled = true;
+    try {
+      const response = await fetch(`/api/components/agent-tools/${action}`, { method: 'POST', credentials: 'include' });
+      if (!response.ok) throw new Error(`工具集${action === 'enable' ? '启用' : '停用'}失败`);
+      for (const child of children) {
+        child.status = action === 'enable' ? 'active' : 'disabled';
+        child.enabled = action === 'enable';
+      }
+      App.UI.toast?.(`Agent 工具已${action === 'enable' ? '全部启用' : '全部停用'}`, 'success');
+      renderAgentToolCollectionTab(tab, manifest, root);
+      App.UI.syncComponents?.();
+    } catch (error) {
+      App.UI.toast?.(error instanceof Error ? error.message : '工具集操作失败', 'error');
+      button.disabled = false;
+    }
+  });
   root.querySelectorAll<HTMLButtonElement>('[data-tool-action="toggle"]').forEach((button) => {
     button.addEventListener('click', async () => {
       const row = button.closest<HTMLElement>('[data-tool-id]');

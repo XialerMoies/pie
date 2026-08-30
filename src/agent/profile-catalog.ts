@@ -11,7 +11,6 @@ import { resolveToolPresentation, type ToolPresentationMode } from "./tool-prese
 import { profileAllowsFeature, ToolPool, type AgentToolAudience, type ToolPoolEntry, type ToolPoolSource } from "./tool-pool.js"
 import { toolRegistry } from "./tools/index.js"
 import { extensionToolRegistry } from "./extension-tool-registry.js"
-import { ensureFirstPartyExtensionContributions } from "./first-party-extension-contributions.js"
 import type { AgentTool, ToolOperation } from "./types.js"
 import type { CapabilityComponentManager } from "./capability-components.js"
 
@@ -135,7 +134,6 @@ export function buildProfileCatalog(
   profileOrSnapshot: AgentProfile | AgentProfileSnapshot,
   options: ProfileCatalogOptions = {},
 ): ProfileCatalog {
-  ensureFirstPartyExtensionContributions()
   const snapshot = healthSnapshot(profileOrSnapshot)
   const base = {
     schemaVersion: 1 as const,

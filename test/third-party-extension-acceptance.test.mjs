@@ -11,9 +11,6 @@ import { ExtensionToolRegistry } from "../src/agent/extension-tool-registry.ts"
 import { ToolPool } from "../src/agent/tool-pool.ts"
 import { nativeToolPresentation } from "../src/agent/tool-presentation.ts"
 import { resolveAgentProfile } from "../src/agent/agent-profile.ts"
-import { FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST, GIT_STATUS_COMPONENT_PACKAGE_MANIFEST } from "../src/agent/component-package.ts"
-import { fileOutlineTool } from "../src/agent/tools/file-outline.ts"
-import { gitStatusTool } from "../src/agent/tools/git-status.ts"
 
 const packageManifest = {
   schemaVersion: 1,
@@ -232,56 +229,4 @@ describe("third-party optional extension acceptance", () => {
     await assert.rejects(() => wrapped.execute("limited-disabled", { mode: "ready" }), /unavailable/)
     registration.dispose()
   })
-
-  it("moves first-party tools through the same controlled lifecycle", async () => {
-    for (const { manifest, tool } of [
-      { manifest: FILE_OUTLINE_COMPONENT_PACKAGE_MANIFEST, tool: fileOutlineTool },
-      { manifest: GIT_STATUS_COMPONENT_PACKAGE_MANIFEST, tool: gitStatusTool },
-    ]) await assertFirstPartyLifecycle(manifest, tool)
-  })
 })
-
-async function assertFirstPartyLifecycle(manifest, sourceTool) {
-  const manager = new CapabilityComponentManager()
-  const lifecycle = new ExtensionLifecycle(manager)
-  const registry = new ExtensionToolRegistry(manager)
-  const componentId = manifest.component.id
-  manager.register(manifest.component, { trusted: true, enabled: false, health: "healthy" })
-
-  const hooks = {
-    activate: ({ registerResource }) => {
-      const registration = registry.registerFirstParty(componentId, sourceTool, {
-        audiences: ["main", "coordinator", "subagent"],
-      })
-      registerResource({ id: `tool.${sourceTool.name}`, dispose: registration.dispose })
-    },
-  }
-  lifecycle.adopt(componentId, hooks)
-  await lifecycle.validate(componentId)
-  await lifecycle.enable(componentId)
-  await lifecycle.activate(componentId)
-
-  const activeEntry = registry.entries().find((entry) => entry.tool.name === sourceTool.name)
-  assert.ok(activeEntry)
-  assert.equal(activeEntry.componentId, componentId)
-  assert.deepEqual(activeEntry.audiences, ["main", "coordinator", "subagent"])
-  assert.deepEqual(
-    new ToolPool().addExtensions(registry.entries()).project({ audience: "subagent", names: "*", featureGates: "*", componentManager: manager }).map((tool) => tool.name),
-    [sourceTool.name],
-  )
-
-  const staleTool = activeEntry.tool
-  await lifecycle.dispose(componentId)
-  assert.deepEqual(registry.entries(), [])
-  assert.equal(staleTool.isEnabled?.(), false, "existing session definitions fail closed after disable")
-  assert.deepEqual(
-    new ToolPool().addExtensions([{ componentId, tool: staleTool, audiences: ["main"] }]).project({ audience: "main", names: "*", featureGates: "*", componentManager: manager }),
-    [],
-  )
-
-  await lifecycle.validate(componentId)
-  await lifecycle.enable(componentId)
-  await lifecycle.activate(componentId)
-  assert.deepEqual(registry.entries().map((entry) => entry.tool.name), [sourceTool.name])
-  await lifecycle.dispose(componentId)
-}
