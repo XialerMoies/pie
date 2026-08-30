@@ -7,6 +7,8 @@ import { defaultTrustStorePath } from "../src/agent/mcp/trust-store.ts"
 import { ExtensionLifecycle } from "../src/agent/extension-lifecycle.ts"
 import { defaultExtensionPackageStorePath, extensionPackageStore } from "../src/agent/extension-package-store.ts"
 import { extensionManifestFromPackage } from "../src/agent/extension-manifest.ts"
+import { ExtensionSourceCatalog } from "../src/agent/extension-source-catalog.ts"
+import { defaultExtensionSourceStorePath, extensionSourceStore } from "../src/agent/extension-source-store.ts"
 import { dirname, join } from "node:path"
 
 const argv = process.argv.slice(2)
@@ -21,7 +23,7 @@ function valueAfter(name) {
 }
 
 function usage() {
-  console.log("Usage: npm run extensions -- <list|validate|install|trust|untrust|enable|disable|uninstall> [id] [--manifest file]")
+  console.log("Usage: npm run extensions -- <list|validate|install|trust|untrust|enable|disable|uninstall|source-list|source-add|source-remove|source-view|source-install> [id] [--manifest file]")
 }
 
 function validateManifestPath() {
@@ -86,6 +88,16 @@ function printValidateError(manifestPath, error) {
   ].join("\n"))
 }
 
+function printSourceError(error) {
+  const details = validateErrorDetails(error)
+  console.error([
+    "扩展来源操作失败",
+    `代码: ${details.code}`,
+    `原因: ${details.reason}`,
+    `修复建议: ${details.advice}`,
+  ].join("\n"))
+}
+
 if (action === "validate") {
   const manifestPath = validateManifestPath()
   if (!manifestPath) {
@@ -110,6 +122,62 @@ if (action === "validate") {
       printValidateError(manifestPath, error)
       process.exitCode = 1
     }
+  }
+} else if (action.startsWith("source-")) {
+  const sourceFile = resolve(valueAfter("--source-state-file") || defaultExtensionSourceStorePath())
+  const compatibility = { hostVersion: "1.0.0", contractVersion: "1.0.0", engineVersion: "1.0.0" }
+  try {
+    await extensionSourceStore.restore(sourceFile)
+    const sourceId = valueAfter("--id") || (argv[1] && !argv[1].startsWith("--") ? argv[1] : undefined)
+    if (action === "source-list") {
+      console.log(JSON.stringify({ sources: extensionSourceStore.list() }, null, 2))
+    } else if (action === "source-add") {
+      const indexPath = valueAfter("--path")
+      if (!sourceId || !indexPath) throw new Error("source-add requires <id> and --path <index.json>")
+      const source = extensionSourceStore.add({ id: sourceId, displayName: valueAfter("--name") || sourceId, kind: "file", indexPath })
+      try {
+        await new ExtensionSourceCatalog(compatibility).list(source)
+      } catch (error) {
+        extensionSourceStore.remove(source.id)
+        throw error
+      }
+      await extensionSourceStore.save(sourceFile)
+      console.log(JSON.stringify({ source }, null, 2))
+    } else if (action === "source-remove") {
+      if (!sourceId) throw new Error("source-remove requires <id>")
+      if (!extensionSourceStore.remove(sourceId)) throw new Error(`Unknown extension source: ${sourceId}`)
+      await extensionSourceStore.save(sourceFile)
+      console.log(JSON.stringify({ removed: sourceId }, null, 2))
+    } else if (action === "source-view" || action === "source-refresh") {
+      if (!sourceId) throw new Error(`${action} requires <id>`)
+      const source = extensionSourceStore.get(sourceId)
+      if (!source) throw new Error(`Unknown extension source: ${sourceId}`)
+      const packages = await new ExtensionSourceCatalog(compatibility).list(source)
+      console.log(JSON.stringify({ source, packages }, null, 2))
+    } else if (action === "source-install") {
+      const packageId = argv[2] && !argv[2].startsWith("--") ? argv[2] : undefined
+      const version = valueAfter("--version")
+      if (!sourceId || !packageId || !version) throw new Error("source-install requires <source-id> <package-id> --version <version>")
+      const source = extensionSourceStore.get(sourceId)
+      if (!source) throw new Error(`Unknown extension source: ${sourceId}`)
+      const selected = await new ExtensionSourceCatalog(compatibility).find(source, packageId, version)
+      const stateFile = resolve(valueAfter("--component-state-file") || join(dirname(defaultTrustStorePath()), "component-state.json"))
+      const packageFile = resolve(valueAfter("--package-state-file") || defaultExtensionPackageStorePath())
+      registerFirstPartyComponentPackages(capabilityComponentManager)
+      await capabilityComponentManager.restore(stateFile)
+      await extensionPackageStore.restore(packageFile)
+      const lifecycle = new ExtensionLifecycle(capabilityComponentManager, extensionPackageStore)
+      const lifecycleState = await lifecycle.installPackage(selected.manifest, {}, { compatibility, trusted: false })
+      await capabilityComponentManager.save(stateFile)
+      await extensionPackageStore.save(packageFile)
+      console.log(JSON.stringify({ source, selected: { packageId, version }, lifecycle: lifecycleState, package: extensionPackageStore.get(lifecycleState.componentId) }, null, 2))
+    } else {
+      usage()
+      process.exitCode = 2
+    }
+  } catch (error) {
+    printSourceError(error)
+    process.exitCode = 1
   }
 } else {
   const stateFile = resolve(valueAfter("--component-state-file") || join(dirname(defaultTrustStorePath()), "component-state.json"))

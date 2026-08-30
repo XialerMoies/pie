@@ -1,9 +1,11 @@
 import assert from "node:assert/strict"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { describe, it } from "node:test"
+import { componentPackageManifestFingerprint, normalizeCapabilityComponentPackageManifest } from "../src/agent/component-package.ts"
 
 const root = resolve(import.meta.dirname, "..")
 const fixture = resolve(root, "test/fixtures/extension-manifest.json")
@@ -114,6 +116,53 @@ describe("extensions validate CLI", () => {
       const restarted = lifecycleResult(run(["list", ...options], env))
       assert.deepEqual(restarted.packages, [])
       assert.deepEqual(restarted.components, [])
+    } finally {
+      rmSync(dataRoot, { recursive: true, force: true })
+    }
+  })
+
+  it("installs a selected local source version through the existing untrusted lifecycle", () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), "extensions-cli-source-"))
+    const sourceState = join(dataRoot, "extension-sources.json")
+    const componentState = join(dataRoot, "component-state.json")
+    const packageState = join(dataRoot, "extension-packages.json")
+    const manifestPath = join(dataRoot, "manifest.json")
+    const indexPath = join(dataRoot, "index.json")
+    const env = { PI_USER_CONFIG: dataRoot }
+    const options = ["--source-state-file", sourceState, "--component-state-file", componentState, "--package-state-file", packageState]
+    try {
+      const rawManifest = readFileSync(fixture, "utf8")
+      const manifest = JSON.parse(rawManifest)
+      writeFileSync(manifestPath, rawManifest, "utf8")
+      const digest = createHash("sha256").update(rawManifest).digest("hex")
+      writeFileSync(indexPath, JSON.stringify({
+        schemaVersion: 1,
+        sourceId: "demo.local",
+        packages: [{
+          packageId: manifest.packageId,
+          displayName: "本地 CLI 示例",
+          versions: [{
+            version: manifest.packageVersion,
+            manifestPath: "manifest.json",
+            manifestDigest: digest,
+            manifestFingerprint: componentPackageManifestFingerprint(normalizeCapabilityComponentPackageManifest(manifest, { hostVersion: "1.0.0", contractVersion: "1.0.0", engineVersion: "1.0.0" })),
+          }],
+        }],
+      }), "utf8")
+
+      const added = run(["source-add", "demo.local", "--path", indexPath, ...options], env)
+      assert.equal(added.status, 0, added.stderr)
+      const viewed = run(["source-view", "demo.local", ...options], env)
+      assert.equal(viewed.status, 0, viewed.stderr)
+      assert.equal(JSON.parse(viewed.stdout).packages[0].packageId, manifest.packageId)
+      const installed = lifecycleResult(run(["source-install", "demo.local", manifest.packageId, "--version", manifest.packageVersion, ...options], env))
+      assert.equal(installed.lifecycle.phase, "installed")
+      assert.equal(installed.package.trusted, false)
+
+      const removed = run(["source-remove", "demo.local", ...options], env)
+      assert.equal(removed.status, 0, removed.stderr)
+      assert.deepEqual(lifecycleResult(run(["source-list", ...options], env)).sources, [])
+      assert.equal(lifecycleResult(run(["list", ...options], env)).packages[0].packageId, manifest.packageId)
     } finally {
       rmSync(dataRoot, { recursive: true, force: true })
     }

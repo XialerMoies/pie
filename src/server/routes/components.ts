@@ -17,6 +17,12 @@ import {
   defaultExtensionPackageStorePath,
   extensionPackageStore,
 } from "../../agent/extension-package-store.js"
+import { ExtensionSourceCatalog } from "../../agent/extension-source-catalog.js"
+import {
+  defaultExtensionSourceStorePath,
+  ExtensionSourceError,
+  extensionSourceStore,
+} from "../../agent/extension-source-store.js"
 import { parseBody } from "./parse-body.js"
 import { readExtensionSettings, removeExtensionSettings, resolveExtensionSettings, updateExtensionSettings, type ExtensionSettingsScope } from "../../agent/extension-settings.js"
 
@@ -48,6 +54,21 @@ async function persistExtensionPackageState(): Promise<void> {
   await extensionPackageStore.save(defaultExtensionPackageStorePath())
 }
 
+let extensionSourceStoreLoadedPath = ""
+async function ensureExtensionSourceStore(): Promise<void> {
+  const filePath = defaultExtensionSourceStorePath()
+  if (extensionSourceStoreLoadedPath === filePath) return
+  await extensionSourceStore.restore(filePath)
+  extensionSourceStoreLoadedPath = filePath
+}
+
+async function persistExtensionSourceState(): Promise<void> {
+  await extensionSourceStore.save(defaultExtensionSourceStorePath())
+}
+
+const extensionPackageCompatibility = { hostVersion: "1.0.0", contractVersion: "1.0.0", engineVersion: "1.0.0" } as const
+const extensionSourceCatalog = new ExtensionSourceCatalog(extensionPackageCompatibility)
+
 function writeComponentError(res: Parameters<RouteHandler>[1], error: unknown): void {
   const known = error instanceof CapabilityComponentError
   res.writeHead(known ? 400 : 500, { "Content-Type": "application/json", ...cors })
@@ -60,11 +81,11 @@ function writeComponentError(res: Parameters<RouteHandler>[1], error: unknown): 
 }
 
 function writeExtensionError(res: Parameters<RouteHandler>[1], error: unknown): void {
-  const status = error instanceof CapabilityComponentError || error instanceof SyntaxError ? 400 : 500
+  const status = error instanceof CapabilityComponentError || error instanceof ExtensionSourceError || error instanceof SyntaxError ? 400 : 500
   res.writeHead(status, { "Content-Type": "application/json", ...cors })
   res.end(JSON.stringify({
     ok: false,
-    code: error instanceof CapabilityComponentError ? error.code : "extension_operation_failed",
+    code: error instanceof CapabilityComponentError || error instanceof ExtensionSourceError ? error.code : "extension_operation_failed",
     error: error instanceof Error ? error.message : String(error),
   }))
 }
@@ -157,6 +178,97 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         error: error instanceof Error ? error.message : String(error),
       }))
     }
+  return true
+}
+
+  const sourceItemMatch = parsedUrl.pathname.match(/^\/api\/extension-sources\/([a-z0-9][a-z0-9._-]*)\/(refresh|install|remove)$/u)
+  if (sourceItemMatch && req.method === "POST") {
+    const [, sourceId, action] = sourceItemMatch
+    try {
+      await ensureExtensionSourceStore()
+      const source = extensionSourceStore.get(sourceId)
+      if (!source) {
+        res.writeHead(404, { "Content-Type": "application/json", ...cors })
+        res.end(JSON.stringify({ ok: false, code: "extension_source_not_found", error: `Unknown extension source: ${sourceId}` }))
+        return true
+      }
+      if (action === "remove") {
+        extensionSourceStore.remove(sourceId)
+        await persistExtensionSourceState()
+        res.writeHead(200, { "Content-Type": "application/json", ...cors })
+        res.end(JSON.stringify({ ok: true, removed: sourceId }))
+        return true
+      }
+      const packages = await extensionSourceCatalog.list(source)
+      if (action === "refresh") {
+        res.writeHead(200, { "Content-Type": "application/json", ...cors })
+        res.end(JSON.stringify({ ok: true, source, packages }))
+        return true
+      }
+      const body = await parseBody(req)
+      const packageId = typeof body?.packageId === "string" ? body.packageId : ""
+      const version = typeof body?.version === "string" ? body.version : ""
+      const selected = packages.find((entry) => entry.packageId === packageId && entry.version === version)
+      if (!selected) throw new ExtensionSourceError("source_package_not_found", `Package version not found in source ${sourceId}: ${packageId}@${version}`)
+      await ensureExtensionPackageStore()
+      const snapshot = await extensionLifecycle.installPackage(selected.manifest, {}, { compatibility: extensionPackageCompatibility, trusted: false })
+      await persistComponentState(ctx)
+      await persistExtensionPackageState()
+      await refreshAgentToolSession(ctx, [snapshot.componentId])
+      res.writeHead(201, { "Content-Type": "application/json", ...cors })
+      res.end(JSON.stringify({ ok: true, source, selected: { packageId, version }, extension: extensionPackageStore.get(snapshot.componentId), lifecycle: snapshot }))
+    } catch (error) {
+      writeExtensionError(res, error)
+    }
+    return true
+  }
+
+  if (parsedUrl.pathname === "/api/extension-sources" && (req.method === "GET" || req.method === "POST")) {
+    try {
+      await ensureExtensionSourceStore()
+      if (req.method === "POST") {
+        const body = await parseBody(req)
+        const source = extensionSourceStore.add({
+          id: typeof body?.id === "string" ? body.id : "",
+          displayName: typeof body?.displayName === "string" ? body.displayName : typeof body?.name === "string" ? body.name : "",
+          kind: body?.kind === undefined ? "file" : body.kind,
+          indexPath: typeof body?.indexPath === "string" ? body.indexPath : typeof body?.path === "string" ? body.path : "",
+        })
+        // Refuse malformed indexes before they can become a persistent source.
+        try {
+          await extensionSourceCatalog.list(source)
+        } catch (error) {
+          extensionSourceStore.remove(source.id)
+          throw error
+        }
+        await persistExtensionSourceState()
+        res.writeHead(201, { "Content-Type": "application/json", ...cors })
+        res.end(JSON.stringify({ ok: true, source }))
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json", ...cors })
+        res.end(JSON.stringify({ ok: true, sources: extensionSourceStore.list() }))
+      }
+    } catch (error) {
+      writeExtensionError(res, error)
+    }
+    return true
+  }
+
+  const sourceViewMatch = parsedUrl.pathname.match(/^\/api\/extension-sources\/([a-z0-9][a-z0-9._-]*)$/u)
+  if (sourceViewMatch && req.method === "GET") {
+    try {
+      await ensureExtensionSourceStore()
+      const source = extensionSourceStore.get(sourceViewMatch[1])
+      if (!source) {
+        res.writeHead(404, { "Content-Type": "application/json", ...cors })
+        res.end(JSON.stringify({ ok: false, code: "extension_source_not_found", error: `Unknown extension source: ${sourceViewMatch[1]}` }))
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json", ...cors })
+        res.end(JSON.stringify({ ok: true, source, packages: await extensionSourceCatalog.list(source) }))
+      }
+    } catch (error) {
+      writeExtensionError(res, error)
+    }
     return true
   }
 
@@ -243,7 +355,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
       const body = await parseBody(req)
       const packageManifest = body && typeof body === "object" && "manifest" in body ? body.manifest : body
       const snapshot = await extensionLifecycle.installPackage(packageManifest, {}, {
-        compatibility: { hostVersion: "1.0.0", contractVersion: "1.0.0", engineVersion: "1.0.0" },
+        compatibility: extensionPackageCompatibility,
         trusted: false,
       })
       await persistComponentState(ctx)

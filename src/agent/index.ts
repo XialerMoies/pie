@@ -83,6 +83,26 @@ export {
   defaultExtensionPackageStorePath,
 } from "./extension-package-store.js"
 export type { InstalledExtensionPackageRecord } from "./extension-package-store.js"
+export {
+  EXTENSION_SOURCE_STORE_SCHEMA_VERSION,
+  ExtensionSourceError,
+  ExtensionSourceStore,
+  extensionSourceStore,
+  defaultExtensionSourceStorePath,
+} from "./extension-source-store.js"
+export {
+  EXTENSION_SOURCE_INDEX_SCHEMA_VERSION,
+  ExtensionSourceCatalog,
+} from "./extension-source-catalog.js"
+export type {
+  ExtensionSourceRecord,
+} from "./extension-source-store.js"
+export type {
+  ExtensionSourceIndex,
+  ExtensionSourceIndexPackage,
+  ExtensionSourceIndexVersion,
+  ExtensionSourceCatalogPackageVersion,
+} from "./extension-source-catalog.js"
 export type {
   ExtensionActivationContext,
   ExtensionInstallOptions,
