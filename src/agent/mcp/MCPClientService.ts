@@ -139,7 +139,10 @@ export function syncMcpServerComponent(
   trusted: boolean,
   status?: McpServerStatus,
 ): void {
-  const state = status?.state
+  // connectAll clears the display-status snapshot before a retry. A retained
+  // connection is still usable during that retry, so do not temporarily make
+  // its component unavailable merely because its status is being rebuilt.
+  const state = status?.state ?? (_connections.has(source.name) ? "connected" : undefined)
   const health = state === "connected" ? "healthy" : state === "error" ? "broken" : "unknown"
   capabilityComponentManager.sync(mcpServerComponentId(source.name), {
     version: "1",

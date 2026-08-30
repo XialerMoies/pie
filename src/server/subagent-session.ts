@@ -142,6 +142,10 @@ export function createEmbeddedSubagentSessionFactory(dependencies: EmbeddedSubag
       names: requestedTools,
       featureGates: "*",
     })
+    // ToolPool preserves registry order. Keep the caller's already-validated
+    // allowlist order so the model-facing list matches its declared contract.
+    const requestedOrder = new Map(requestedTools.map((name, index) => [name, index]))
+    selectedTools.sort((left, right) => (requestedOrder.get(left.name) ?? Infinity) - (requestedOrder.get(right.name) ?? Infinity))
     const tools = selectedTools.map((tool) => tool.name)
     const customTools = selectedTools
       .map((tool) => {

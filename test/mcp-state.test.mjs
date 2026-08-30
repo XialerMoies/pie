@@ -96,16 +96,17 @@ describe("MCP state boundary", () => {
     );
   });
 
-  it("does not interpolate server names into trust-result selectors", () => {
-    const paneSource = readFileSync(
-      resolve(process.cwd(), "src/frontend/pane/mcp/index.ts"),
+  it("does not interpolate server names into MCP action selectors or request paths", () => {
+    const componentSource = readFileSync(
+      resolve(process.cwd(), "src/frontend/dashboard/dashboard-layout.ts"),
       "utf8",
     );
 
-    assert.match(paneSource, /btnEl\.closest\("\.mcp-server"\)/);
+    assert.match(componentSource, /\[data-mcp-action="\$\{action\}"\]/);
+    assert.match(componentSource, /encodeURIComponent\(server\.name\)/);
     assert.doesNotMatch(
-      paneSource,
-      /querySelector\(`[^`]*data-name=\"\$\{E\(name\)\}/,
+      componentSource,
+      /querySelector\(`[^`]*data-name=\"\$\{E\([^)]*server\.name/,
     );
   });
 });

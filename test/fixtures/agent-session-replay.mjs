@@ -10,6 +10,11 @@ import { parseSessionMessages } from "../../src/server/routes/session-message-pa
 const ROOT = resolve(import.meta.dirname, "../..");
 const CATALOG_PATH = join(import.meta.dirname, "agent-session-replay-fixtures.json");
 const ENGINEERING_RECORDINGS_PATH = join(import.meta.dirname, "agent-engineering-task-recordings.json");
+const REPLAY_FIXTURE_FILES = [
+  "agent-behavior-baseline.json",
+  "agent-engineering-task-recordings.json",
+  "agent-session-replay-fixtures.json",
+];
 export const REPLAY_MODES = ["replay", "record", "refresh"];
 
 function stable(value) {
@@ -31,8 +36,11 @@ export function normalizeReplayValue(value) {
 }
 
 export function loadReplayCatalog() {
-  const jsonFiles = readdirSync(import.meta.dirname).filter((name) => name.endsWith(".json"));
-  assert.deepEqual(jsonFiles, ["agent-behavior-baseline.json", "agent-engineering-task-recordings.json", "agent-session-replay-fixtures.json"], "replay fixture inventory contains an undeclared JSON file");
+  // Extension manifests share this directory but are not replay catalogs. Keep the
+  // replay input set explicit so unrelated fixture JSON cannot be parsed as events.
+  const jsonFiles = readdirSync(import.meta.dirname)
+    .filter((name) => REPLAY_FIXTURE_FILES.includes(name));
+  assert.deepEqual(jsonFiles, REPLAY_FIXTURE_FILES, "replay fixture inventory is incomplete");
   const catalogs = [CATALOG_PATH, ENGINEERING_RECORDINGS_PATH].map((file) => JSON.parse(readFileSync(file, "utf8")));
   for (const catalog of catalogs) {
     assert.equal(catalog.version, 1, "replay catalog version must be 1");

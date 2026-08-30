@@ -1151,7 +1151,7 @@
     },
     {
       "file": "src/agent/mcp/MCPClientService.ts",
-      "line": 369,
+      "line": 372,
       "api": "StdioClientTransport",
       "category": "mcp",
       "owner": "mcp-client",
