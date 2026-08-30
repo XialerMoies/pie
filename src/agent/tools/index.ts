@@ -34,6 +34,7 @@ import { nativeToolPresentation, presentNativeTool, presentSessionTools } from "
 import { buildProfileToolPool, profileAllowsFeature, ToolPool } from "../tool-pool.js"
 import { capabilityComponentManager } from "../capability-components.js"
 import { registerFirstPartyComponentPackages } from "../component-package.js"
+import { extensionToolRegistry } from "../extension-tool-registry.js"
 import type { RequiredComponentLease } from "../capability-component-replacement.js"
 
 /** 全局 Tool 注册表 */
@@ -81,7 +82,7 @@ export function registerTool(
 
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */
 export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard"), componentLease?: RequiredComponentLease) {
-  const pool = new ToolPool().addNative(toolRegistry.getAll())
+  const pool = new ToolPool().addNative(toolRegistry.getAll()).addExtensions(extensionToolRegistry.entries())
   const tools = pool.project({ audience: "main", names: profile.toolNames, featureGates: profile.featureGates, componentManager: capabilityComponentManager })
   return presentSessionTools(tools, { workspace, emitTrace, extraCtx }, profile.presentation, componentLease) as any
 }
@@ -91,7 +92,7 @@ function presentProfileTools(tools: readonly AgentTool[], workspace?: string, em
 }
 
 function assembleProfileTools(profile: AgentProfile, mcpTools: readonly AgentTool[] = []): AgentTool[] {
-  const pool = buildProfileToolPool(profile, toolRegistry.getAll(), mcpTools)
+  const pool = buildProfileToolPool(profile, toolRegistry.getAll(), mcpTools, capabilityComponentManager, extensionToolRegistry.entries())
   const nativeNames = profile.toolNames === "*" ? "*" : profile.toolNames
   const native = pool.project({ audience: "main", names: nativeNames, featureGates: profile.featureGates, componentManager: capabilityComponentManager })
   const nativeSet = new Set(native.map((tool) => tool.name))

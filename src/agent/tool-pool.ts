@@ -5,7 +5,7 @@ import type { CapabilityComponentManager } from "./capability-components.js"
 import { capabilityComponentIdForTool } from "./component-package.js"
 
 export type AgentToolAudience = "main" | "coordinator" | "subagent"
-export type ToolPoolSource = "native" | "mcp"
+export type ToolPoolSource = "native" | "extension" | "mcp"
 
 export const READ_ONLY_SUBAGENT_TOOL_NAMES = [
   "git-status",
@@ -46,6 +46,11 @@ export interface ToolPoolEntry {
   componentId?: string
 }
 
+export interface ExtensionToolPoolEntry {
+  componentId: string
+  tool: AgentTool
+}
+
 export interface ToolPoolProjection {
   audience: AgentToolAudience
   names?: "*" | readonly string[]
@@ -82,6 +87,13 @@ export class ToolPool {
     for (const tool of tools) {
       const match = /^mcp__(.+?)__.+$/u.exec(canonicalToolName(tool.name))
       this.#add(tool, "mcp", "mcp", ["main"], match ? `mcp-server.${match[1].toLowerCase()}` : undefined)
+    }
+    return this
+  }
+
+  addExtensions(entries: readonly ExtensionToolPoolEntry[]): this {
+    for (const entry of entries) {
+      this.#add(entry.tool, "extension", undefined, ["main"], entry.componentId)
     }
     return this
   }
@@ -140,8 +152,10 @@ export function buildProfileToolPool(
   nativeTools: readonly AgentTool[],
   mcpTools: readonly AgentTool[] = [],
   componentManager?: CapabilityComponentManager,
+  extensionTools: readonly ExtensionToolPoolEntry[] = [],
 ): ToolPool {
   const pool = new ToolPool().addNative(nativeTools)
+  if (extensionTools.length > 0) pool.addExtensions(extensionTools)
   if (mcpTools.length > 0) {
     if (!profile.allowMcp || !profileAllowsFeature(profile, "mcp")) {
       throw new Error(`Profile ${profile.id} cannot load MCP tools`)

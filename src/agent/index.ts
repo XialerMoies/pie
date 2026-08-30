@@ -129,6 +129,8 @@ export type {
   ExtensionPermission,
 } from "./extension-manifest.js"
 export { createExtensionApi } from "./extension-api.js"
+export { ExtensionToolRegistry, extensionToolRegistry } from "./extension-tool-registry.js"
+export type { ExtensionToolRegistration, ExtensionToolRegistrationOptions } from "./extension-tool-registry.js"
 export type {
   ExtensionApi,
   ExtensionApiAdapters,

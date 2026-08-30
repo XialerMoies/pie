@@ -10,6 +10,7 @@ import { listPromptSections, type PromptSection } from "./prompts.js"
 import { resolveToolPresentation, type ToolPresentationMode } from "./tool-presentation.js"
 import { profileAllowsFeature, ToolPool, type AgentToolAudience, type ToolPoolEntry, type ToolPoolSource } from "./tool-pool.js"
 import { toolRegistry } from "./tools/index.js"
+import { extensionToolRegistry } from "./extension-tool-registry.js"
 import type { AgentTool, ToolOperation } from "./types.js"
 import type { CapabilityComponentManager } from "./capability-components.js"
 
@@ -157,7 +158,7 @@ export function buildProfileCatalog(
   const profile = snapshot.profile
   const registry = options.registry || toolRegistry
   const sections = options.promptSections || listPromptSections()
-  const pool = new ToolPool().addNative(registry.getAll())
+  const pool = new ToolPool().addNative(registry.getAll()).addExtensions(extensionToolRegistry.entries())
   const requestedNames = profile.toolNames === "*"
     ? "*"
     : profile.toolNames.map((name) => registry.resolveName(name) || name)
@@ -200,7 +201,10 @@ export function buildProfileCatalog(
     contentFingerprint: promptFingerprint(section),
   }))
   const dependencies = { mcp: profile.allowMcp && profileAllowsFeature(profile, "mcp"), skills: profile.includeSkills }
-  const dynamicSources = dependencies.mcp ? ["mcp"] : []
+  const dynamicSources = [
+    ...(dependencies.mcp ? ["mcp"] : []),
+    ...(pool.entries().some((entry) => entry.source === "extension") ? ["extension"] : []),
+  ]
   const completed = { ...base, tools, promptSections: promptCatalog, dependencies, dynamicSources, disabledTools }
   if (errors.length > 0) throw new Error(`Invalid profile catalog for ${profile.id}: ${errors.join("; ")}`)
   return { ...completed, fingerprint: catalogFingerprint(completed) }

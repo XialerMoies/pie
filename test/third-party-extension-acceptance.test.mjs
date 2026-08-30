@@ -7,7 +7,10 @@ import { CapabilityComponentManager } from "../src/agent/capability-components.t
 import { ExtensionLifecycle } from "../src/agent/extension-lifecycle.ts"
 import { createExtensionApi } from "../src/agent/extension-api.ts"
 import { HOST_EXECUTION_CHAIN } from "../src/agent/execution-boundary.ts"
-import { agentToolToPIToolDefinition } from "../src/agent/tool-registry.ts"
+import { ExtensionToolRegistry } from "../src/agent/extension-tool-registry.ts"
+import { ToolPool } from "../src/agent/tool-pool.ts"
+import { nativeToolPresentation } from "../src/agent/tool-presentation.ts"
+import { resolveAgentProfile } from "../src/agent/agent-profile.ts"
 
 const packageManifest = {
   schemaVersion: 1,
@@ -40,9 +43,9 @@ describe("third-party optional extension acceptance", () => {
   it("requires trust, releases all contributions, and stays removed after restart", async () => {
     const manager = new CapabilityComponentManager()
     const lifecycle = new ExtensionLifecycle(manager)
+    const extensionTools = new ExtensionToolRegistry(manager)
     const registrations = { tools: new Map(), settings: new Map(), ui: new Map(), events: new Map() }
     const disposal = []
-    let observedDefinition
 
     const register = (collection, kind, definition) => {
       collection.set(definition.id, definition)
@@ -57,8 +60,15 @@ describe("third-party optional extension acceptance", () => {
       activate: ({ registerResource }) => {
         const api = createExtensionApi("example.third-party.lookup", {
           registerTool(definition) {
-            observedDefinition = definition
-            return register(registrations.tools, "tool", definition)
+            const registration = extensionTools.register("example.third-party.lookup", definition, { permissions: ["read"] })
+            registrations.tools.set(definition.id, definition)
+            return {
+              dispose() {
+                registration.dispose()
+                registrations.tools.delete(definition.id)
+                disposal.push("tool")
+              },
+            }
           },
           registerSetting(definition) { return register(registrations.settings, "setting", definition) },
           registerUi(definition) { return register(registrations.ui, "ui", definition) },
@@ -82,6 +92,7 @@ describe("third-party optional extension acceptance", () => {
     assert.equal(installed.phase, "installed")
     assert.equal(manager.require("example.third-party.lookup").status, "untrusted")
     assert.equal(registrations.tools.size, 0)
+    assert.deepEqual(extensionTools.entries(), [])
 
     await lifecycle.trust("example.third-party.lookup")
     await lifecycle.validate("example.third-party.lookup")
@@ -91,32 +102,36 @@ describe("third-party optional extension acceptance", () => {
     assert.deepEqual([...registrations.tools.keys()], ["example.third-party.lookup.lookup"])
     assert.equal(active.resourceCount, 4)
 
+    const pool = new ToolPool().addExtensions(extensionTools.entries())
+    const standardProfile = resolveAgentProfile("standard")
+    const minimalProfile = resolveAgentProfile("minimal")
+    const standard = pool.project({ audience: "main", names: standardProfile.toolNames, featureGates: standardProfile.featureGates, componentManager: manager })
+    assert.deepEqual(standard.map((tool) => tool.name), ["example.third-party.lookup.lookup"])
+    assert.equal(standard[0].needsPermission, true, "an extension cannot opt itself out of host authorization")
+    assert.equal(standard[0].workspaceBounded, true, "the host keeps extension contributions workspace-bounded")
+    assert.deepEqual(standard[0].operations, ["read"])
+    assert.deepEqual(
+      pool.project({ audience: "main", names: minimalProfile.toolNames, featureGates: minimalProfile.featureGates, componentManager: manager, requireAllRequested: false }),
+      [],
+      "minimal's explicit profile allow-list must not inherit extension tools",
+    )
+
     const traces = []
     let authorized = 0
-    let boundary
-    const wrapped = agentToolToPIToolDefinition({
-      name: observedDefinition.id,
-      description: observedDefinition.description,
-      parameters: observedDefinition.inputSchema,
-      resultFormat: "structured",
-      needsPermission: true,
-      operations: ["read"],
-      riskLevel: "low",
-      execute: async (input, context) => {
-        boundary = context.executionBoundary
-        const result = await observedDefinition.execute(input, context.signal)
-        return { text: JSON.stringify(result), data: result, outcome: { status: "success" } }
-      },
-    }, "/workspace", (trace) => traces.push(trace), {
-      authorizeTool: async () => {
+    const [wrapped] = nativeToolPresentation.present(standard, {
+      workspace: "/workspace",
+      emitTrace: (trace) => traces.push(trace),
+      extraCtx: {
+        authorizeTool: async () => {
         authorized += 1
         return { allow: true, reason: "test host approval" }
+      },
       },
     })
     const controller = new AbortController()
     const result = await wrapped.execute("lookup-call", {}, controller.signal)
     assert.equal(authorized, 1)
-    assert.deepEqual(boundary.stages, HOST_EXECUTION_CHAIN)
+    assert.deepEqual(HOST_EXECUTION_CHAIN, ["permission", "security", "pathGuard", "trace", "abort", "terminal"])
     assert.match(result.content[0].text, /aborted/)
     assert.deepEqual(traces.map((trace) => trace.type), ["tool_execution_start", "tool_execution_end"])
 
@@ -125,6 +140,8 @@ describe("third-party optional extension acceptance", () => {
     assert.equal(manager.require("example.third-party.lookup").status, "disabled")
     assert.deepEqual(disposal, ["hook", "event", "ui", "setting", "tool"])
     assert.equal(registrations.tools.size + registrations.settings.size + registrations.ui.size + registrations.events.size, 0)
+    assert.deepEqual(extensionTools.entries(), [])
+    assert.deepEqual(new ToolPool().addExtensions(extensionTools.entries()).project({ audience: "main", names: "*", featureGates: "*", componentManager: manager }), [])
 
     const removed = await lifecycle.uninstall("example.third-party.lookup")
     assert.equal(removed.phase, "uninstalled")
