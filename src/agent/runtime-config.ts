@@ -24,7 +24,7 @@ export interface RuntimeConfig extends ToolHostContext {
 /** Select only host-owned capabilities for the custom-tool adapter boundary. */
 export function buildToolContextExtra(config: RuntimeConfig): ToolExecutionExtraContext | undefined {
   const permissionState = config.sessionPermissionState
-  if (!config.userMemoryRoot && !config.workspaceMemoryRoot && !config.permissionMode && !config.getPermissionMode && !config.getPlanState && !config.enterPlanMode && !config.requestPlanExit && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken && !config.validateSubagentModel && !config.getSubagentDefinitions && !config.getSubagentLimits && !config.delegateTasks && !config.toolOutcomeObserver && !config.evidenceLookup && !config.getCorrelationContext && !config.getExecutionContract && !config.authorizeExecutionContract) return undefined
+  if (!config.userMemoryRoot && !config.workspaceMemoryRoot && !config.permissionMode && !config.getPermissionMode && !config.getPlanState && !config.enterPlanMode && !config.requestPlanExit && !config.confirmCommand && !config.shellDialect && !permissionState && !config.authorizePath && !config.authorizeTool && !config.applyPermissionSuggestions && !config.desktopApiToken && !config.validateSubagentModel && !config.getSubagentDefinitions && !config.getSubagentLimits && !config.delegateTasks && !config.getAgentToolInventory && !config.toolOutcomeObserver && !config.evidenceLookup && !config.getCorrelationContext && !config.getExecutionContract && !config.authorizeExecutionContract) return undefined
   return {
     userMemoryRoot: config.userMemoryRoot,
     workspaceMemoryRoot: config.workspaceMemoryRoot,
@@ -51,6 +51,7 @@ export function buildToolContextExtra(config: RuntimeConfig): ToolExecutionExtra
     getSubagentDefinitions: config.getSubagentDefinitions,
     getSubagentLimits: config.getSubagentLimits,
     delegateTasks: config.delegateTasks,
+    getAgentToolInventory: config.getAgentToolInventory,
     toolOutcomeObserver: config.toolOutcomeObserver,
     toolOutcomeSource: config.toolOutcomeSource,
     evidenceLookup: config.evidenceLookup,

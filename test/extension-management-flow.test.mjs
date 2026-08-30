@@ -1,9 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { handleComponents } from "../src/server/routes/components.ts"
+import { CapabilityComponentManager } from "../src/agent/capability-components.ts"
+import { MEMORY_COMPONENT_PACKAGE_MANIFEST } from "../src/agent/component-package.ts"
 
 function request(method, url, body) {
   const req = {
@@ -19,13 +21,13 @@ function request(method, url, body) {
   return req
 }
 
-async function call(method, url, body) {
+async function call(method, url, body, runtime = { currentWorkspace: process.cwd() }) {
   let status = 0
   let responseBody = ""
   const handled = await handleComponents(
     request(method, url, body),
     { writeHead(code) { status = code }, end(value) { responseBody = String(value || "") } },
-    { groups: { core: { runtime: { currentWorkspace: process.cwd() } }, storage: { paths: { APP_ROOT: process.cwd() } } } },
+    { groups: { core: { runtime }, storage: { paths: { APP_ROOT: process.cwd(), PI_CONFIG_DIR: process.env.PI_USER_CONFIG || process.cwd() } } } },
   )
   return { handled, status, body: JSON.parse(responseBody || "null") }
 }
@@ -117,6 +119,47 @@ describe("third-party extension management API", () => {
       assert.ok(enabled.body.components.every((component) => component.status === "active" && component.enabled === true))
     } finally {
       await call("POST", "/api/components/agent-tools/enable")
+      process.env.PI_USER_CONFIG = previousConfig
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("refreshes the active session after Agent-tool component state changes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-tool-refresh-"))
+    const previousConfig = process.env.PI_USER_CONFIG
+    process.env.PI_USER_CONFIG = root
+    let refreshes = 0
+    const runtime = { currentWorkspace: process.cwd(), async refreshTools() { refreshes += 1 } }
+    try {
+      const disabled = await call("POST", "/api/components/tool.memory/disable", undefined, runtime)
+      assert.equal(disabled.status, 200)
+      assert.equal(refreshes, 1)
+      const enabled = await call("POST", "/api/components/tool.memory/enable", undefined, runtime)
+      assert.equal(enabled.status, 200)
+      assert.equal(refreshes, 2)
+    } finally {
+      await call("POST", "/api/components/tool.memory/enable", undefined, runtime)
+      process.env.PI_USER_CONFIG = previousConfig
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("persists a disabled first-party tool where server startup restores it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-tool-persistence-"))
+    const previousConfig = process.env.PI_USER_CONFIG
+    process.env.PI_USER_CONFIG = root
+    try {
+      const disabled = await call("POST", "/api/components/tool.memory/disable")
+      assert.equal(disabled.status, 200)
+      const stateFile = join(root, "component-state.json")
+      assert.equal(existsSync(stateFile), true)
+
+      const restarted = new CapabilityComponentManager()
+      restarted.register(MEMORY_COMPONENT_PACKAGE_MANIFEST.component, { trusted: true, enabled: true, health: "healthy" })
+      await restarted.restore(stateFile)
+      assert.equal(restarted.get("tool.memory")?.status, "disabled")
+    } finally {
+      await call("POST", "/api/components/tool.memory/enable")
       process.env.PI_USER_CONFIG = previousConfig
       rmSync(root, { recursive: true, force: true })
     }

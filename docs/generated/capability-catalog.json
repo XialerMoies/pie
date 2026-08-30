@@ -453,6 +453,22 @@
       }
     },
     {
+      "name": "list_agent_tools",
+      "description": "查询当前 Agent 工具目录。返回当前会话可执行的工具、已安装但被停用或异常的组件，以及因能力模式未投影的工具。需要回答实时可用性或工具缺失原因时使用；若无法调用，只能依据当前工具声明回答，不能推断组件状态。",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "capabilities": {
+        "readOnly": true,
+        "destructive": false,
+        "riskLevel": "low",
+        "needsPermission": false,
+        "workspaceBounded": false
+      },
+      "source": "src/agent/tools/agent-tool-inventory.ts"
+    },
+    {
       "name": "list_memory",
       "description": "列出作用域中的长期记忆摘要，不读取全部正文。",
       "parameters": {

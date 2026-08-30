@@ -29,9 +29,11 @@ import { fileWriteTool } from "./file-write.js"
 import { delegateTasksTool } from "./delegate-tasks.js"
 import { skillFactsTool } from "./skill-facts.js"
 import { enterPlanModeTool, exitPlanModeTool } from "./plan-mode.js"
+import { agentToolInventoryTool } from "./agent-tool-inventory.js"
 import { resolveAgentProfile, type AgentProfile } from "../agent-profile.js"
 import { nativeToolPresentation, presentNativeTool, presentSessionTools } from "../tool-presentation.js"
 import { buildProfileToolPool, profileAllowsFeature, ToolPool } from "../tool-pool.js"
+import { AGENT_TOOL_INVENTORY_TOOL_NAME, buildAgentToolInventory } from "../agent-tool-inventory.js"
 import { capabilityComponentManager } from "../capability-components.js"
 import { registerFirstPartyComponentPackages } from "../component-package.js"
 import { extensionToolRegistry } from "../extension-tool-registry.js"
@@ -73,6 +75,7 @@ toolRegistry.register(delegateTasksTool)
 toolRegistry.register(skillFactsTool)
 toolRegistry.register(enterPlanModeTool)
 toolRegistry.register(exitPlanModeTool)
+toolRegistry.register(agentToolInventoryTool)
 
 export function registerTool(
   tool: Parameters<typeof toolRegistry.register>[0],
@@ -88,20 +91,34 @@ export function getManagedAgentTools(): AgentTool[] {
     .project({ audience: "main", names: "*", featureGates: "*", componentManager: capabilityComponentManager })
 }
 
+function profileToolNames(profile: AgentProfile): "*" | string[] {
+  if (profile.toolNames === "*") return "*"
+  return [...new Set([...profile.toolNames, AGENT_TOOL_INVENTORY_TOOL_NAME])]
+}
+
+function toolContextWithInventory(extraCtx: ToolExecutionExtraContext | undefined, profile: AgentProfile, mcpTools: readonly AgentTool[] = []): ToolExecutionExtraContext {
+  return {
+    ...extraCtx,
+    // Assigned last: callers and contributions cannot replace the host's
+    // tool-state view for this session.
+    getAgentToolInventory: () => buildAgentToolInventory(profile, toolRegistry.getAll(), extensionToolRegistry.entries(), capabilityComponentManager, mcpTools),
+  }
+}
+
 /** 获取所有自定义 Tool，转换为 PI SDK 需要的格式 */
 export function getCustomTools(workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard"), componentLease?: RequiredComponentLease) {
   const pool = new ToolPool().addNative(toolRegistry.getAll()).addExtensions(extensionToolRegistry.entries())
-  const tools = pool.project({ audience: "main", names: profile.toolNames, featureGates: profile.featureGates, componentManager: capabilityComponentManager })
-  return presentSessionTools(tools, { workspace, emitTrace, extraCtx }, profile.presentation, componentLease) as any
+  const tools = pool.project({ audience: "main", names: profileToolNames(profile), featureGates: profile.featureGates, componentManager: capabilityComponentManager })
+  return presentSessionTools(tools, { workspace, emitTrace, extraCtx: toolContextWithInventory(extraCtx, profile) }, profile.presentation, componentLease) as any
 }
 
-function presentProfileTools(tools: readonly AgentTool[], workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard"), componentLease?: RequiredComponentLease) {
-  return presentSessionTools(tools, { workspace, emitTrace, extraCtx }, profile.presentation, componentLease) as any
+function presentProfileTools(tools: readonly AgentTool[], workspace?: string, emitTrace?: ToolTraceEmitter, extraCtx?: ToolExecutionExtraContext, profile: AgentProfile = resolveAgentProfile("standard"), componentLease?: RequiredComponentLease, mcpTools: readonly AgentTool[] = []) {
+  return presentSessionTools(tools, { workspace, emitTrace, extraCtx: toolContextWithInventory(extraCtx, profile, mcpTools) }, profile.presentation, componentLease) as any
 }
 
 function assembleProfileTools(profile: AgentProfile, mcpTools: readonly AgentTool[] = []): AgentTool[] {
   const pool = buildProfileToolPool(profile, toolRegistry.getAll(), mcpTools, capabilityComponentManager, extensionToolRegistry.entries())
-  const nativeNames = profile.toolNames === "*" ? "*" : profile.toolNames
+  const nativeNames = profileToolNames(profile)
   const native = pool.project({ audience: "main", names: nativeNames, featureGates: profile.featureGates, componentManager: capabilityComponentManager })
   const nativeSet = new Set(native.map((tool) => tool.name))
   const dynamic = pool.project({ audience: "main", featureGates: profile.featureGates, requireAllRequested: false, componentManager: capabilityComponentManager })
@@ -274,7 +291,7 @@ export async function getCustomToolsAsync(
   // 2. MCP 工具：缓存命中或 workspace 未变直接使用
   const ws = workspace ?? ""
   if (_mcpCacheInitialized && _mcpWorkspace === ws) {
-    return presentProfileTools(assembleProfileTools(profile, _mcpCache), workspace, emitTrace, extraCtx, profile, componentLease)
+    return presentProfileTools(assembleProfileTools(profile, _mcpCache), workspace, emitTrace, extraCtx, profile, componentLease, _mcpCache)
   }
 
   if (_mcpWorkspace !== ws) {
@@ -284,7 +301,7 @@ export async function getCustomToolsAsync(
   }
 
   // incomplete cache 中的健康 raw tools 仍按当前 session 上下文重新包装并提供。
-  const available = presentProfileTools(assembleProfileTools(profile, _mcpCache), workspace, emitTrace, extraCtx, profile, componentLease)
+  const available = presentProfileTools(assembleProfileTools(profile, _mcpCache), workspace, emitTrace, extraCtx, profile, componentLease, _mcpCache)
 
   const current = _mcpInFlight
   if (current && current.workspace === ws && current.epoch === _mcpRequestEpoch) return available

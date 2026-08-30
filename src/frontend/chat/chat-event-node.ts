@@ -94,7 +94,10 @@ function chatEventNodeTraceSummaryText(t: any, input: string, output: string): s
     return firstLine || '验证结果';
   }
   if (name === 'git-log') return '查看提交历史';
-  return chatEventNodeShortText(output || input || '', 180);
+  // The generic OUT panel is the canonical presentation for an unknown
+  // tool's payload. Repeating a truncated prefix above it creates two
+  // competing result nodes, especially for structured JSON responses.
+  return output ? '' : chatEventNodeShortText(input || '', 180);
 }
 
 function chatEventNodeHasTraceValue(value: unknown): boolean {

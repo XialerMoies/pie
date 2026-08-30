@@ -7,7 +7,6 @@ import {
   registerFirstPartyComponentPackages,
 } from "../../agent/component-package.js"
 import { reconcileMcpServerComponents } from "../../agent/mcp/MCPClientService.js"
-import { defaultTrustStorePath } from "../../agent/mcp/trust-store.js"
 import { loadMcpConfigFromCandidates, defaultGlobalConfigPath, getCandidatePaths } from "../../agent/mcp/config.js"
 import { canonicalWorkspacePath } from "../../data/data-layout.js"
 import { dirname, join } from "node:path"
@@ -21,12 +20,18 @@ import { parseBody } from "./parse-body.js"
 
 const cors = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" }
 
-function componentStatePath(): string {
-  return join(dirname(defaultTrustStorePath()), "component-state.json")
+function componentStatePath(ctx: ServerContext): string {
+  return join(ctx.groups.storage.paths.PI_CONFIG_DIR, "component-state.json")
 }
 
-async function persistComponentState(): Promise<void> {
-  await capabilityComponentManager.save(componentStatePath())
+async function persistComponentState(ctx: ServerContext): Promise<void> {
+  await capabilityComponentManager.save(componentStatePath(ctx))
+}
+
+async function refreshAgentToolSession(ctx: ServerContext, componentIds: readonly string[]): Promise<void> {
+  const affectsAgentTools = componentIds.some((componentId) => capabilityComponentManager.get(componentId)?.manifest.capability === "agent-tool")
+  const runtime = ctx.groups.core.runtime as ServerContext["groups"]["core"]["runtime"] & { refreshTools?: () => Promise<void> }
+  if (affectsAgentTools && typeof runtime.refreshTools === "function") await runtime.refreshTools()
 }
 
 let extensionPackageStoreLoadedPath = ""
@@ -180,8 +185,9 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         compatibility: { hostVersion: "1.0.0", contractVersion: "1.0.0", engineVersion: "1.0.0" },
         trusted: false,
       })
-      await persistComponentState()
+      await persistComponentState(ctx)
       await persistExtensionPackageState()
+      await refreshAgentToolSession(ctx, [snapshot.componentId])
       res.writeHead(201, { "Content-Type": "application/json", ...cors })
       res.end(JSON.stringify({ ok: true, extension: extensionPackageStore.get(snapshot.componentId), lifecycle: snapshot }))
     } catch (error) {
@@ -214,8 +220,9 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
       } else {
         lifecycle = await extensionLifecycle.uninstall(componentId)
       }
-      await persistComponentState()
+      await persistComponentState(ctx)
       await persistExtensionPackageState()
+      await refreshAgentToolSession(ctx, [componentId])
       res.writeHead(200, { "Content-Type": "application/json", ...cors })
       res.end(JSON.stringify({ ok: true, lifecycle, extension: extensionPackageStore.get(componentId) || null }))
     } catch (error) {
@@ -240,7 +247,8 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
           await extensionLifecycle.dispose(componentId)
         }
       }
-      await persistComponentState()
+      await persistComponentState(ctx)
+      await refreshAgentToolSession(ctx, componentIds)
       const components = componentIds.map((componentId) => managementComponentProjection(capabilityComponentManager.require(componentId)))
       res.writeHead(200, { "Content-Type": "application/json", ...cors })
       res.end(JSON.stringify({ ok: true, components, catalog: capabilityComponentManager.catalog() }))
@@ -273,7 +281,8 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
         await extensionLifecycle.dispose(componentId)
         state = capabilityComponentManager.require(componentId)
       }
-      await persistComponentState()
+      await persistComponentState(ctx)
+      await refreshAgentToolSession(ctx, [componentId])
       res.writeHead(200, { "Content-Type": "application/json", ...cors })
       res.end(JSON.stringify({ ok: true, component: state, catalog: capabilityComponentManager.catalog() }))
     } catch (error) {
@@ -295,7 +304,8 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
       extensionLifecycle.adopt(componentId)
       const state = capabilityComponentManager.require(componentId)
       await extensionLifecycle.uninstall(componentId)
-      await persistComponentState()
+      await persistComponentState(ctx)
+      await refreshAgentToolSession(ctx, [componentId])
       res.writeHead(200, { "Content-Type": "application/json", ...cors })
       res.end(JSON.stringify({ ok: true, component: state, catalog: capabilityComponentManager.catalog() }))
     } catch (error) {
@@ -318,7 +328,8 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
       if (!componentManifest) throw new CapabilityComponentError("unknown_first_party_package", `Unknown first-party package: ${packageId}`)
       await extensionLifecycle.install(componentManifest.component, {}, { trusted: true })
       const component = capabilityComponentManager.require(componentManifest.component.id)
-      await persistComponentState()
+      await persistComponentState(ctx)
+      await refreshAgentToolSession(ctx, [componentManifest.component.id])
       res.writeHead(200, { "Content-Type": "application/json", ...cors })
       res.end(JSON.stringify({ ok: true, component, catalog: capabilityComponentManager.catalog() }))
     } catch (error) {

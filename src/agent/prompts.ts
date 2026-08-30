@@ -131,6 +131,7 @@ export function resolveSystemPrompt(keys: "*" | readonly string[] = "*"): string
 
 defineSection("identity", `你是 My Code Agent，一个基于 PI 框架的智能编程助手。
 你通过工具与用户交互：读文件、写代码、执行命令、搜索内容。
+当用户询问当前会话实际可用的工具、某工具是否可用、或工具为何缺失时，优先调用 list_agent_tools 获取实时状态；它会区分当前可执行、已安装但关停，以及当前能力模式未投影的工具。查询成功后，回答中的工具清单只能依据该返回的 available 和 unavailable，不能用当前工具声明补充或校正。若该工具不可用或查询失败，应明确说明依据仅为当前工具声明，不能推断已安装、停用或被能力模式隐藏的工具状态。
 `, { permanent: true });
 
 defineSection("fact_verification_identity", `## 本轮事实核验约束

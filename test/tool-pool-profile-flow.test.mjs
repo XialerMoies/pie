@@ -5,7 +5,7 @@ import { AgentProfileRegistry, resolveAgentProfile } from "../src/agent/agent-pr
 import { mapPiEvent } from "../src/agent-engine/event-normalizer.ts";
 import { ToolPool, COORDINATOR_TOOL_NAMES, READ_ONLY_SUBAGENT_TOOL_NAMES } from "../src/agent/tool-pool.ts";
 import { CapabilityComponentManager } from "../src/agent/capability-components.ts";
-import { FILE_READ_COMPONENT_PACKAGE_MANIFEST } from "../src/agent/component-package.ts";
+import { FILE_READ_COMPONENT_PACKAGE_MANIFEST, MEMORY_COMPONENT_PACKAGE_MANIFEST } from "../src/agent/component-package.ts";
 import { nativeToolPresentation } from "../src/agent/tool-presentation.ts";
 import { toolRegistry } from "../src/agent/tools/index.ts";
 import { extensionToolRegistry } from "../src/agent/extension-tool-registry.ts";
@@ -147,6 +147,30 @@ describe("AP-10/AP-11 Profile, host, and ToolPool cross-layer flow", () => {
     assert.deepEqual(pool.project({ audience: "main", names: "*", featureGates: "*", componentManager: manager }).map((tool) => tool.name), ["file_read", "mcp__demo__probe"]);
     manager.disable("mcp-server.demo");
     assert.deepEqual(pool.project({ audience: "main", names: "*", featureGates: "*", componentManager: manager }).map((tool) => tool.name), ["file_read"]);
+  });
+
+  it("fails closed when an already-presented native component is disabled", async () => {
+    const manager = new CapabilityComponentManager();
+    manager.register(MEMORY_COMPONENT_PACKAGE_MANIFEST.component, { trusted: true, enabled: true, health: "healthy" });
+    let executions = 0;
+    const pool = new ToolPool().addNative([fixture("read_memory", {
+      execute: async () => {
+        executions += 1;
+        return structuredToolResult("unexpected", null);
+      },
+    })]);
+    const [presented] = nativeToolPresentation.present(
+      pool.project({ audience: "main", names: ["read_memory"], featureGates: ["memory"], componentManager: manager }),
+      { workspace: process.cwd() },
+    );
+    manager.disable("tool.memory");
+
+    await assert.rejects(() => presented.execute("disabled-memory", {}), (error) => {
+      assert.equal(error?.code, "component_unavailable");
+      assert.match(error?.message || "", /Tool is unavailable: read_memory/);
+      return true;
+    });
+    assert.equal(executions, 0);
   });
 
   it("keeps a denied projected tool terminal across presentation, SSE, and reconnect replay", async () => {

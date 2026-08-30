@@ -463,6 +463,29 @@ describe("msgs() 渲染", () => {
     assert.ok(html.includes('class="trace-card-section trace-card-out"'), "output should be an OUT section");
   });
 
+  it("does not repeat an unknown tool's structured output above OUT", () => {
+    const output = JSON.stringify({
+      content: [{ type: "text", text: "当前会话可执行 20 个 Agent 工具" }],
+      data: { available: ["command", "file_read", "search"] },
+    });
+    state.M = [{
+      role: "assistant",
+      blocks: [{
+        type: "tool",
+        status: "success",
+        name: "list_agent_tools",
+        output,
+        blockId: "inventory-1",
+        seq: 1,
+      }],
+    }];
+    const html = win.App.Chat.msgs();
+
+    assert.strictEqual((html.match(/当前会话可执行 20 个 Agent 工具/g) || []).length, 1, "structured output must only appear in OUT");
+    assert.ok(!html.includes('trace-summary-text'), "unknown tools should not render a duplicate raw summary");
+    assert.ok(html.includes("OUT"), "the canonical output panel remains available");
+  });
+
   it("renders structured file diff metadata inside a tool event node", () => {
     state.M = [{
       role: "assistant",

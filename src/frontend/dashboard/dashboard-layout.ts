@@ -368,6 +368,32 @@ function componentPermissionSummary(permissions: ComponentTabManifest['permissio
   return labels.length ? labels.join('、') : '无额外权限';
 }
 
+type AgentToolCollectionState = { manifest?: { id?: string }; enabled?: boolean; status?: 'active' | 'disabled' | 'untrusted' | 'unhealthy' };
+
+function applyAgentToolCollectionStates(manifest: ComponentTabManifest, states: readonly AgentToolCollectionState[]): boolean {
+  const stateById = new Map(states.map((state) => [state.manifest?.id, state]));
+  let changed = false;
+  for (const child of manifest.children || []) {
+    const state = stateById.get(child.id);
+    if (!state) continue;
+    if (state.status && child.status !== state.status) { child.status = state.status; changed = true; }
+    if (typeof state.enabled === 'boolean' && child.enabled !== state.enabled) { child.enabled = state.enabled; changed = true; }
+  }
+  return changed;
+}
+
+async function refreshAgentToolCollectionStates(manifest: ComponentTabManifest): Promise<boolean> {
+  try {
+    const response = await fetch('/api/components?view=management', { credentials: 'include', cache: 'no-store' });
+    const catalog = await response.json().catch(() => null) as { extensions?: AgentToolCollectionState[] } | null;
+    return response.ok && Array.isArray(catalog?.extensions)
+      ? applyAgentToolCollectionStates(manifest, catalog.extensions)
+      : false;
+  } catch {
+    return false;
+  }
+}
+
 function renderAgentToolCollectionTab(tab: AppTab, manifest: ComponentTabManifest, root: HTMLElement): void {
   const children = manifest.children || [];
   const title = manifest.displayName || "Agent 工具";
@@ -384,6 +410,9 @@ function renderAgentToolCollectionTab(tab: AppTab, manifest: ComponentTabManifes
     <section class="component-detail-section"><h2>集合信息</h2><dl class="component-detail-grid"><div><dt>归属</dt><dd>Agent</dd></div><div><dt>类型</dt><dd>内置工具集合</dd></div><div><dt>发布者</dt><dd>${value(manifest.publisher)}</dd></div><div><dt>已启用</dt><dd>${enabledCount}/${children.length}</dd></div></dl></section>
     <section class="component-detail-section"><h2>包含工具</h2><div class="component-tool-list">${rows || '<p class="component-detail-deps">暂无已登记工具</p>'}</div></section>
   </article>`;
+  void refreshAgentToolCollectionStates(manifest).then((changed) => {
+    if (changed && App.Tabs.getState().activeId === tab.id) renderAgentToolCollectionTab(tab, manifest, root);
+  });
   root.querySelector<HTMLButtonElement>('[data-collection-action]')?.addEventListener('click', async () => {
     const button = root.querySelector<HTMLButtonElement>('[data-collection-action]');
     if (!button) return;
@@ -392,11 +421,10 @@ function renderAgentToolCollectionTab(tab: AppTab, manifest: ComponentTabManifes
     button.disabled = true;
     try {
       const response = await fetch(`/api/components/agent-tools/${action}`, { method: 'POST', credentials: 'include' });
+      const body = await response.json().catch(() => null) as { components?: AgentToolCollectionState[] } | null;
       if (!response.ok) throw new Error(`工具集${action === 'enable' ? '启用' : '停用'}失败`);
-      for (const child of children) {
-        child.status = action === 'enable' ? 'active' : 'disabled';
-        child.enabled = action === 'enable';
-      }
+      applyAgentToolCollectionStates(manifest, body?.components || []);
+      await refreshAgentToolCollectionStates(manifest);
       App.UI.toast?.(`Agent 工具已${action === 'enable' ? '全部启用' : '全部停用'}`, 'success');
       renderAgentToolCollectionTab(tab, manifest, root);
       App.UI.syncComponents?.();
@@ -415,9 +443,10 @@ function renderAgentToolCollectionTab(tab: AppTab, manifest: ComponentTabManifes
       const enabling = child.status === 'disabled';
       try {
         const response = await fetch(`/api/components/${encodeURIComponent(id)}/${enabling ? 'enable' : 'disable'}`, { method: 'POST', credentials: 'include' });
+        const body = await response.json().catch(() => null) as { component?: AgentToolCollectionState } | null;
         if (!response.ok) throw new Error(`工具${enabling ? '启用' : '停用'}失败`);
-        child.status = enabling ? 'active' : 'disabled';
-        child.enabled = enabling;
+        applyAgentToolCollectionStates(manifest, body?.component ? [body.component] : []);
+        await refreshAgentToolCollectionStates(manifest);
         App.UI.toast?.(`${child.displayName || id} ${enabling ? '已启用' : '已停用'}`, 'success');
         renderAgentToolCollectionTab(tab, manifest, root);
         App.UI.syncComponents?.();

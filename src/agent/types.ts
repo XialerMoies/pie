@@ -357,6 +357,8 @@ export interface ToolContext {
   getSubagentDefinitions?: SubagentDefinitionProvider
   getSubagentLimits?: () => SubagentDelegationLimits
   delegateTasks?: SubagentDelegateExecutor
+  /** Host-owned Agent-tool availability inventory. It reveals state, never executable implementations. */
+  getAgentToolInventory?: () => import("./agent-tool-inventory.js").AgentToolInventory
   /** Host-owned observer for structured tool outcome telemetry. */
   toolOutcomeObserver?: ToolOutcomeObserver
   toolOutcomeSource?: ToolOutcomeSource

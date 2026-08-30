@@ -31,7 +31,7 @@ describe("AP-08 profile-generated tool and prompt catalog flow", () => {
 
   it("keeps the minimal capability surface bounded", () => {
     const minimal = buildProfileCatalog(resolveAgentProfile("minimal"));
-    assert.deepStrictEqual(minimal.tools.map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode"]);
+    assert.deepStrictEqual(minimal.tools.map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode", "list_agent_tools"]);
     assert.deepStrictEqual(minimal.featureGates, ["planning"]);
     assert.deepStrictEqual(minimal.dynamicSources, []);
   });

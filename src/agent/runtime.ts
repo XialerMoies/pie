@@ -471,6 +471,25 @@ export class AgentRuntime {
     })
   }
 
+  /**
+   * Rebuild the current PI session with the same history and profile so its
+   * declared tools match the current component state. Calls serialize behind a
+   * running turn; execution still has its own dynamic fail-closed guard.
+   */
+  async refreshTools(): Promise<void> {
+    await this._enqueueSessionTransition(async () => {
+      await this._replaceSessionWithRollback(
+        this.currentWorkspace,
+        true,
+        this._session?.sessionFile,
+        false,
+        this._activeProfile.id,
+        this._activeProfile,
+        "resume",
+      )
+    })
+  }
+
   /** Immutable profile snapshot for the active session. */
   get activeProfile(): AgentProfileSelection {
     return agentProfileSelection(this._activeProfile ?? resolveAgentProfile("standard"))

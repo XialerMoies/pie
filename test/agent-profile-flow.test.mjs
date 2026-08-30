@@ -146,17 +146,19 @@ describe("AP-01 profile registry and projection", () => {
     const minimal = resolveAgentProfile("minimal");
     const allNames = getManagedAgentTools().map((tool) => tool.name);
     assert.deepStrictEqual(getCustomTools(undefined, undefined, undefined, standard).map((tool) => tool.name), allNames);
-    assert.deepStrictEqual(getCustomTools(undefined, undefined, undefined, minimal).map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode"]);
+    assert.deepStrictEqual(getCustomTools(undefined, undefined, undefined, minimal).map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode", "list_agent_tools"]);
 
     const fullBefore = resolveSystemPrompt();
     const minimalPrompt = resolveSystemPrompt(minimal.promptSections);
     const generationBefore = currentGeneration();
     const asyncMinimal = await getCustomToolsAsync(resolve(tmpdir(), "profile-no-mcp"), undefined, undefined, minimal);
-    assert.deepStrictEqual(asyncMinimal.map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode"]);
+    assert.deepStrictEqual(asyncMinimal.map((tool) => tool.name), ["command", "str_replace_editor", "enter_plan_mode", "exit_plan_mode", "list_agent_tools"]);
     assert.strictEqual(currentGeneration(), generationBefore, "minimal must not start or invalidate MCP discovery");
     assert.strictEqual(resolveSystemPrompt(), fullBefore, "profile projection must not mutate the global prompt registry");
     assert.ok(minimalPrompt.length > 0);
     assert.ok(minimalPrompt.length < fullBefore.length);
+    assert.match(minimalPrompt, /优先调用 list_agent_tools 获取实时状态/);
+    assert.match(minimalPrompt, /不能用当前工具声明补充或校正/);
   });
 
   it("persists profile selections through the real PI SessionManager and defaults legacy sessions to standard", () => {

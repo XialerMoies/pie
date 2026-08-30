@@ -179,6 +179,14 @@ export function agentToolToPIToolDefinition(tool: AgentTool, workspace?: string,
       }
       emitTrace?.({ type: "tool_execution_start", toolCallId: _toolCallId, toolName: authorizedTool.name, args })
       try {
+        // A session owns a snapshot of its PI definitions. Re-check dynamic
+        // availability here so a disabled component is fail-closed even before
+        // the session rebuild has replaced that snapshot.
+        if (tool.isEnabled && !tool.isEnabled()) {
+          const error = new Error(`Tool is unavailable: ${authorizedTool.name}`) as Error & { code?: string }
+          error.code = "component_unavailable"
+          throw error
+        }
         // A fresh evidence-contract turn must inspect the current source. The
         // general evidence cache has no source revision/mtime proof and cannot
         // safely satisfy a later verification request.

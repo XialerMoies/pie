@@ -144,7 +144,35 @@ export class ToolPool {
       const missing = [...requested].filter((name) => !selectedNames.has(name))
       if (missing.length > 0) throw new Error(`Tool pool projection denied or unavailable: ${missing.join(", ")}`)
     }
-    return selected.map((entry) => entry.tool)
+    return selected.map((entry) => this.#withComponentAvailability(entry, request.componentManager))
+  }
+
+  /**
+   * A PI session keeps the tool definitions it received at creation time.
+   * Keep component availability dynamic on those definitions so a component
+   * disable cannot be bypassed by an already-open session while it is being
+   * refreshed.
+   */
+  #withComponentAvailability(entry: ToolPoolEntry, manager?: CapabilityComponentManager): AgentTool {
+    if (!manager || !entry.componentId) return entry.tool
+    const original = entry.tool
+    const originalIsEnabled = original.isEnabled
+    const available = (): boolean => {
+      if (originalIsEnabled && !originalIsEnabled()) return false
+      const component = manager.get(entry.componentId!)
+      // Match the initial projection: native package contributions require a
+      // registered active component; MCP remains available until it has a
+      // component record to govern it.
+      return entry.source === "native"
+        ? component?.status === "active"
+        : !component || component.status === "active"
+    }
+    // Copy property descriptors rather than spread: this preserves the
+    // canonical authorization marker while keeping fields such as `name` own
+    // properties of the guarded tool.
+    const guarded = Object.create(Object.getPrototypeOf(original), Object.getOwnPropertyDescriptors(original)) as AgentTool
+    Object.defineProperty(guarded, "isEnabled", { value: available, enumerable: true, configurable: true })
+    return guarded
   }
 }
 

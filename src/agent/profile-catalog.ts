@@ -11,6 +11,7 @@ import { resolveToolPresentation, type ToolPresentationMode } from "./tool-prese
 import { profileAllowsFeature, ToolPool, type AgentToolAudience, type ToolPoolEntry, type ToolPoolSource } from "./tool-pool.js"
 import { toolRegistry } from "./tools/index.js"
 import { extensionToolRegistry } from "./extension-tool-registry.js"
+import { AGENT_TOOL_INVENTORY_TOOL_NAME } from "./agent-tool-inventory.js"
 import type { AgentTool, ToolOperation } from "./types.js"
 import type { CapabilityComponentManager } from "./capability-components.js"
 
@@ -161,14 +162,17 @@ export function buildProfileCatalog(
   const pool = new ToolPool().addNative(registry.getAll()).addExtensions(extensionToolRegistry.entries())
   const availableNames = new Set(pool.entries().map((entry) => entry.tool.name))
   const resolveProfileToolName = (name: string): string | undefined => registry.resolveName(name) || (availableNames.has(name) ? name : undefined)
+  const explicitToolNames = profile.toolNames === "*"
+    ? undefined
+    : [...new Set([...profile.toolNames, ...(resolveProfileToolName(AGENT_TOOL_INVENTORY_TOOL_NAME) ? [AGENT_TOOL_INVENTORY_TOOL_NAME] : [])])]
   const requestedNames = profile.toolNames === "*"
     ? "*"
-    : profile.toolNames.map((name) => resolveProfileToolName(name) || name)
+    : explicitToolNames!.map((name) => resolveProfileToolName(name) || name)
   const hostTools = pool.project({ audience: "main", names: requestedNames, featureGates: profile.featureGates, componentManager: options.componentManager })
-  if (profile.toolNames !== "*") {
-    const declaredNames = profile.toolNames.map(resolveProfileToolName)
+  if (explicitToolNames) {
+    const declaredNames = explicitToolNames.map(resolveProfileToolName)
     if (declaredNames.some((name): name is undefined => !name)) {
-      throw new Error(`Agent profile references unknown tool(s): ${profile.toolNames.filter((_, index) => !declaredNames[index]).join(", ")}`)
+      throw new Error(`Agent profile references unknown tool(s): ${explicitToolNames.filter((_, index) => !declaredNames[index]).join(", ")}`)
     }
     const declaredSet = new Set(declaredNames as string[])
     const hostSet = new Set(hostTools.map((tool) => tool.name))
