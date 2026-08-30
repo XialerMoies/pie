@@ -20,6 +20,20 @@ export interface InstalledExtensionPackageRecord {
   trusted: boolean
 }
 
+export interface ExtensionPackageUpdatePreview {
+  componentId: string
+  packageId: string
+  fromVersion: string
+  toVersion: string
+  fromFingerprint: string
+  toFingerprint: string
+  sourceChanged: boolean
+  permissionsChanged: boolean
+  resourcesChanged: boolean
+  entryChanged: boolean
+  settingsChanged: boolean
+}
+
 interface ExtensionPackageStateDocument {
   schemaVersion: typeof EXTENSION_PACKAGE_STORE_SCHEMA_VERSION
   packages: InstalledExtensionPackageRecord[]
@@ -95,3 +109,24 @@ export class ExtensionPackageStore {
 }
 
 export const extensionPackageStore = new ExtensionPackageStore()
+
+/** Product-facing, bounded diff for an explicit package update confirmation. */
+export function extensionPackageUpdatePreview(
+  current: InstalledExtensionPackageRecord,
+  candidate: CapabilityComponentPackageManifest,
+): ExtensionPackageUpdatePreview {
+  const normalized = normalizeCapabilityComponentPackageManifest(candidate)
+  return Object.freeze({
+    componentId: current.componentId,
+    packageId: current.packageId,
+    fromVersion: current.packageVersion,
+    toVersion: normalized.packageVersion,
+    fromFingerprint: current.fingerprint,
+    toFingerprint: componentPackageManifestFingerprint(normalized),
+    sourceChanged: JSON.stringify(current.source) !== JSON.stringify(normalized.source),
+    permissionsChanged: JSON.stringify(current.manifest.permissions) !== JSON.stringify(normalized.permissions),
+    resourcesChanged: JSON.stringify(current.manifest.resources) !== JSON.stringify(normalized.resources),
+    entryChanged: current.manifest.entry !== normalized.entry || JSON.stringify(current.manifest.isolation) !== JSON.stringify(normalized.isolation),
+    settingsChanged: JSON.stringify(current.manifest.component.settings || []) !== JSON.stringify(normalized.component.settings || []),
+  })
+}

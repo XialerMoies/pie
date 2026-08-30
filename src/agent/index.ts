@@ -81,8 +81,9 @@ export {
   ExtensionPackageStore,
   extensionPackageStore,
   defaultExtensionPackageStorePath,
+  extensionPackageUpdatePreview,
 } from "./extension-package-store.js"
-export type { InstalledExtensionPackageRecord } from "./extension-package-store.js"
+export type { InstalledExtensionPackageRecord, ExtensionPackageUpdatePreview } from "./extension-package-store.js"
 export {
   EXTENSION_SOURCE_STORE_SCHEMA_VERSION,
   ExtensionSourceError,
@@ -93,6 +94,7 @@ export {
 export {
   EXTENSION_SOURCE_INDEX_SCHEMA_VERSION,
   ExtensionSourceCatalog,
+  extensionSourceIndexSigningPayload,
 } from "./extension-source-catalog.js"
 export type {
   ExtensionSourceRecord,
@@ -102,6 +104,7 @@ export type {
   ExtensionSourceIndexPackage,
   ExtensionSourceIndexVersion,
   ExtensionSourceCatalogPackageVersion,
+  ExtensionSourceIndexSignature,
 } from "./extension-source-catalog.js"
 export type {
   ExtensionActivationContext,

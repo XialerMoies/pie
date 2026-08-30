@@ -5,7 +5,7 @@ import { capabilityComponentManager } from "../src/agent/capability-components.t
 import { normalizeCapabilityComponentPackageManifest, registerFirstPartyComponentPackages } from "../src/agent/component-package.ts"
 import { defaultTrustStorePath } from "../src/agent/mcp/trust-store.ts"
 import { ExtensionLifecycle } from "../src/agent/extension-lifecycle.ts"
-import { defaultExtensionPackageStorePath, extensionPackageStore } from "../src/agent/extension-package-store.ts"
+import { defaultExtensionPackageStorePath, extensionPackageStore, extensionPackageUpdatePreview } from "../src/agent/extension-package-store.ts"
 import { extensionManifestFromPackage } from "../src/agent/extension-manifest.ts"
 import { ExtensionSourceCatalog } from "../src/agent/extension-source-catalog.ts"
 import { defaultExtensionSourceStorePath, extensionSourceStore } from "../src/agent/extension-source-store.ts"
@@ -23,7 +23,7 @@ function valueAfter(name) {
 }
 
 function usage() {
-  console.log("Usage: npm run extensions -- <list|validate|install|trust|untrust|enable|disable|uninstall|source-list|source-add|source-remove|source-view|source-install> [id] [--manifest file]")
+  console.log("Usage: npm run extensions -- <list|validate|install|trust|untrust|enable|disable|uninstall|source-list|source-add|source-remove|source-view|source-install|source-update-preview|source-update> [id] [--manifest file]")
 }
 
 function validateManifestPath() {
@@ -132,9 +132,15 @@ if (action === "validate") {
     if (action === "source-list") {
       console.log(JSON.stringify({ sources: extensionSourceStore.list() }, null, 2))
     } else if (action === "source-add") {
+      const kind = valueAfter("--kind") || "file"
       const indexPath = valueAfter("--path")
-      if (!sourceId || !indexPath) throw new Error("source-add requires <id> and --path <index.json>")
-      const source = extensionSourceStore.add({ id: sourceId, displayName: valueAfter("--name") || sourceId, kind: "file", indexPath })
+      const indexUrl = valueAfter("--url")
+      const keyFile = valueAfter("--public-key-file")
+      const publicKey = keyFile ? readFileSync(resolve(keyFile), "utf8") : valueAfter("--public-key")
+      if (!sourceId || (kind === "file" && !indexPath) || (kind === "https" && (!indexUrl || !publicKey || !valueAfter("--key-id")))) {
+        throw new Error("source-add requires <id> and --path <index.json>, or --kind https --url <https-url> --key-id <id> --public-key-file <pem>")
+      }
+      const source = extensionSourceStore.add({ id: sourceId, displayName: valueAfter("--name") || sourceId, kind, indexPath, indexUrl, publicKey, keyId: valueAfter("--key-id") })
       try {
         await new ExtensionSourceCatalog(compatibility).list(source)
       } catch (error) {
@@ -154,10 +160,10 @@ if (action === "validate") {
       if (!source) throw new Error(`Unknown extension source: ${sourceId}`)
       const packages = await new ExtensionSourceCatalog(compatibility).list(source)
       console.log(JSON.stringify({ source, packages }, null, 2))
-    } else if (action === "source-install") {
+    } else if (action === "source-install" || action === "source-update-preview" || action === "source-update") {
       const packageId = argv[2] && !argv[2].startsWith("--") ? argv[2] : undefined
       const version = valueAfter("--version")
-      if (!sourceId || !packageId || !version) throw new Error("source-install requires <source-id> <package-id> --version <version>")
+      if (!sourceId || !packageId || !version) throw new Error(`${action} requires <source-id> <package-id> --version <version>`)
       const source = extensionSourceStore.get(sourceId)
       if (!source) throw new Error(`Unknown extension source: ${sourceId}`)
       const selected = await new ExtensionSourceCatalog(compatibility).find(source, packageId, version)
@@ -167,10 +173,24 @@ if (action === "validate") {
       await capabilityComponentManager.restore(stateFile)
       await extensionPackageStore.restore(packageFile)
       const lifecycle = new ExtensionLifecycle(capabilityComponentManager, extensionPackageStore)
-      const lifecycleState = await lifecycle.installPackage(selected.manifest, {}, { compatibility, trusted: false })
-      await capabilityComponentManager.save(stateFile)
-      await extensionPackageStore.save(packageFile)
-      console.log(JSON.stringify({ source, selected: { packageId, version }, lifecycle: lifecycleState, package: extensionPackageStore.get(lifecycleState.componentId) }, null, 2))
+      const current = extensionPackageStore.get(selected.manifest.component.id)
+      if (action === "source-update-preview") {
+        if (!current) throw new Error(`No installed package can be updated: ${selected.manifest.component.id}`)
+        console.log(JSON.stringify({ source, update: extensionPackageUpdatePreview(current, selected.manifest) }, null, 2))
+      } else {
+        if (action === "source-update" && valueAfter("--confirm") !== "true") {
+          throw new Error("source-update requires --confirm=true after reviewing source-update-preview")
+        }
+        if (action === "source-install" && current) throw new Error(`Extension is already installed; use source-update-preview and source-update: ${current.componentId}`)
+        if (action === "source-update" && !current) throw new Error(`No installed package can be updated: ${selected.manifest.component.id}`)
+        if (current) lifecycle.adopt(current.componentId)
+        const lifecycleState = current
+          ? await lifecycle.replacePackage(current.componentId, selected.manifest, {}, { compatibility, trusted: current.trusted })
+          : await lifecycle.installPackage(selected.manifest, {}, { compatibility, trusted: false })
+        await capabilityComponentManager.save(stateFile)
+        await extensionPackageStore.save(packageFile)
+        console.log(JSON.stringify({ source, selected: { packageId, version }, lifecycle: lifecycleState, package: extensionPackageStore.get(lifecycleState.componentId) }, null, 2))
+      }
     } else {
       usage()
       process.exitCode = 2

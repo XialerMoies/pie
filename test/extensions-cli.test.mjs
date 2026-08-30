@@ -158,11 +158,35 @@ describe("extensions validate CLI", () => {
       const installed = lifecycleResult(run(["source-install", "demo.local", manifest.packageId, "--version", manifest.packageVersion, ...options], env))
       assert.equal(installed.lifecycle.phase, "installed")
       assert.equal(installed.package.trusted, false)
+      assert.equal(lifecycleResult(run(["trust", manifest.component.id, ...options], env)).package.trusted, true)
+      assert.equal(lifecycleResult(run(["enable", manifest.component.id, ...options], env)).lifecycle.phase, "active")
+
+      const updatedManifest = { ...manifest, packageVersion: "1.1.0", component: { ...manifest.component, version: "1.1.0" } }
+      const updatedRawManifest = `${JSON.stringify(updatedManifest, null, 2)}\n`
+      writeFileSync(manifestPath, updatedRawManifest, "utf8")
+      writeFileSync(indexPath, JSON.stringify({
+        schemaVersion: 1,
+        sourceId: "demo.local",
+        packages: [{ packageId: manifest.packageId, versions: [{
+          version: "1.1.0",
+          manifestPath: "manifest.json",
+          manifestDigest: createHash("sha256").update(updatedRawManifest).digest("hex"),
+          manifestFingerprint: componentPackageManifestFingerprint(normalizeCapabilityComponentPackageManifest(updatedManifest, { hostVersion: "1.0.0", contractVersion: "1.0.0", engineVersion: "1.0.0" })),
+        }] }],
+      }), "utf8")
+      const preview = lifecycleResult(run(["source-update-preview", "demo.local", manifest.packageId, "--version", "1.1.0", ...options], env))
+      assert.equal(preview.update.fromVersion, "1.0.0")
+      assert.equal(preview.update.toVersion, "1.1.0")
+      assert.notEqual(run(["source-update", "demo.local", manifest.packageId, "--version", "1.1.0", ...options], env).status, 0)
+      const updated = lifecycleResult(run(["source-update", "demo.local", manifest.packageId, "--version", "1.1.0", "--confirm=true", ...options], env))
+      assert.equal(updated.package.packageVersion, "1.1.0")
+      assert.equal(updated.package.trusted, true)
+      assert.equal(updated.lifecycle.phase, "active")
 
       const removed = run(["source-remove", "demo.local", ...options], env)
       assert.equal(removed.status, 0, removed.stderr)
       assert.deepEqual(lifecycleResult(run(["source-list", ...options], env)).sources, [])
-      assert.equal(lifecycleResult(run(["list", ...options], env)).packages[0].packageId, manifest.packageId)
+      assert.equal(lifecycleResult(run(["list", ...options], env)).packages[0].packageVersion, "1.1.0")
     } finally {
       rmSync(dataRoot, { recursive: true, force: true })
     }

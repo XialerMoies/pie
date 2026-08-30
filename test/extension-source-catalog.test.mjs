@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
-import { createHash } from "node:crypto"
+import { createHash, generateKeyPairSync, sign } from "node:crypto"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { describe, it } from "node:test"
 import { componentPackageManifestFingerprint, normalizeCapabilityComponentPackageManifest } from "../src/agent/component-package.ts"
-import { ExtensionSourceCatalog } from "../src/agent/extension-source-catalog.ts"
+import { ExtensionSourceCatalog, extensionSourceIndexSigningPayload } from "../src/agent/extension-source-catalog.ts"
 import { ExtensionSourceError } from "../src/agent/extension-source-store.ts"
 
 const compatibility = { hostVersion: "1.0.0", contractVersion: "1.0.0", engineVersion: "1.0.0" }
@@ -97,6 +97,47 @@ describe("extension source catalog", () => {
       index.packages[0].versions[0].manifestFingerprint = "0".repeat(64)
       writeFileSync(indexPath, JSON.stringify(index), "utf8")
       await assert.rejects(() => catalog.list(source), (error) => error instanceof ExtensionSourceError && error.code === "manifest_fingerprint_mismatch")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("fetches only a signed HTTPS index and refuses a signature mismatch", async () => {
+    const root = mkdtempSync(join(tmpdir(), "extension-source-https-"))
+    try {
+      const { records } = writeSource(root, ["1.0.0"])
+      const rawManifest = readFileSync(join(root, ...records[0].manifestPath.split("/")), "utf8")
+      const { privateKey, publicKey } = generateKeyPairSync("ed25519")
+      const unsigned = {
+        schemaVersion: 1,
+        sourceId: "team.remote",
+        packages: [{ packageId: "example.source.extension", versions: [{ ...records[0], manifestPath: "packages/example.source.extension/1.0.0/manifest.json" }] }],
+      }
+      const index = {
+        ...unsigned,
+        signature: { algorithm: "ed25519", keyId: "team-key", value: sign(null, extensionSourceIndexSigningPayload(unsigned), privateKey).toString("base64") },
+      }
+      let remoteIndex = JSON.stringify(index)
+      const fetch = async (url) => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => url.endsWith("index.json") ? remoteIndex : rawManifest,
+      })
+      const source = {
+        schemaVersion: 1,
+        id: "team.remote",
+        displayName: "Team remote",
+        kind: "https",
+        indexUrl: "https://extensions.example.test/catalog/index.json",
+        keyId: "team-key",
+        publicKey: publicKey.export({ type: "spki", format: "pem" }).toString(),
+      }
+      const catalog = new ExtensionSourceCatalog(compatibility, { fetch })
+      assert.equal((await catalog.list(source)).length, 1)
+      index.signature.value = "A".repeat(86) + "=="
+      remoteIndex = JSON.stringify(index)
+      await assert.rejects(() => catalog.list(source), (error) => error instanceof ExtensionSourceError && error.code === "invalid_source_signature")
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

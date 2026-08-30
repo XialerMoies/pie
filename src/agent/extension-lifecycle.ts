@@ -7,6 +7,7 @@ import {
   validateCapabilityComponentManifest,
 } from "./capability-components.js"
 import {
+  componentPackageManifestFingerprint,
   normalizeCapabilityComponentPackageManifest,
   type CapabilityComponentPackageCompatibilityContext,
 } from "./component-package.js"
@@ -164,6 +165,60 @@ export class ExtensionLifecycle {
     const snapshot = await this.install(normalized.component, hooks, { trusted: options.trusted })
     this.#packageStore?.register(normalized, snapshot.phase !== "installed")
     return snapshot
+  }
+
+  /**
+   * Replaces one user-approved package declaration only after the caller has
+   * fetched and validated the candidate. Identity continuity plus the explicit
+   * update confirmation let user-owned trust and enabled state carry forward.
+   */
+  async replacePackage(componentId: string, manifest: unknown, hooks: ExtensionLifecycleHooks = {}, options: ExtensionPackageInstallOptions): Promise<ExtensionLifecycleSnapshot> {
+    const current = this.#packageStore?.get(componentId)
+    if (!current) throw new CapabilityComponentError("unknown_extension", `Unknown installed extension: ${componentId}`, componentId)
+    const candidate = normalizeCapabilityComponentPackageManifest(manifest, options.compatibility)
+    if (candidate.source.kind === "mcp") {
+      throw new CapabilityComponentError("integration_required", "MCP servers must use the integration lifecycle, not an extension package", candidate.packageId)
+    }
+    if (candidate.component.id !== current.componentId || candidate.packageId !== current.packageId) {
+      throw new CapabilityComponentError("update_identity_mismatch", `Package update must preserve component and package identity: ${componentId}`, componentId)
+    }
+    if (componentPackageManifestFingerprint(candidate) === current.fingerprint) {
+      throw new CapabilityComponentError("update_no_change", `Package update has no declaration change: ${componentId}`, componentId)
+    }
+    // Keep installPackage's package-to-extension validation before any old
+    // component is disposed, so malformed candidates cannot create a gap.
+    extensionManifestFromPackage({
+      packageId: candidate.packageId,
+      packageVersion: candidate.packageVersion,
+      entry: candidate.entry,
+      source: candidate.source.kind === "registry" ? "registry" : candidate.source.kind,
+      component: candidate.component,
+      permissions: candidate.permissions,
+      compatibility: candidate.compatibility,
+    })
+    const previous = current
+    const previousState = this.#manager.get(componentId)
+    const record = this.#record(componentId)
+    try {
+      await this.uninstall(componentId)
+      const snapshot = await this.installPackage(candidate, hooks, { compatibility: options.compatibility, trusted: previous.trusted })
+      // installPackage activates trusted packages. Preserve an intentionally
+      // disabled package as disabled after a declaration-only update.
+      if (previousState && !previousState.enabled && previous.trusted) return this.dispose(componentId)
+      return snapshot
+    } catch (error) {
+      // Candidate validation happens before uninstall. This rollback protects
+      // the remaining lifecycle/storage failure window and restores trust.
+      if (!this.#manager.get(componentId)) {
+        try {
+          await this.installPackage(previous.manifest, {}, { compatibility: options.compatibility, trusted: previous.trusted })
+          if (previousState && !previousState.enabled) await this.dispose(componentId)
+        } catch { /* retain original update error */ }
+      }
+      record.phase = "failed"
+      record.error = errorMessage(error)
+      throw error
+    }
   }
 
   /** Host-mediated trust change that disposes live resources before revocation. */

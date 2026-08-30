@@ -16,6 +16,7 @@ import { extensionLifecycle } from "../../agent/extension-lifecycle.js"
 import {
   defaultExtensionPackageStorePath,
   extensionPackageStore,
+  extensionPackageUpdatePreview,
 } from "../../agent/extension-package-store.js"
 import { ExtensionSourceCatalog } from "../../agent/extension-source-catalog.js"
 import {
@@ -181,7 +182,7 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
   return true
 }
 
-  const sourceItemMatch = parsedUrl.pathname.match(/^\/api\/extension-sources\/([a-z0-9][a-z0-9._-]*)\/(refresh|install|remove)$/u)
+  const sourceItemMatch = parsedUrl.pathname.match(/^\/api\/extension-sources\/([a-z0-9][a-z0-9._-]*)\/(refresh|install|update-preview|update|remove)$/u)
   if (sourceItemMatch && req.method === "POST") {
     const [, sourceId, action] = sourceItemMatch
     try {
@@ -211,11 +212,24 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
       const selected = packages.find((entry) => entry.packageId === packageId && entry.version === version)
       if (!selected) throw new ExtensionSourceError("source_package_not_found", `Package version not found in source ${sourceId}: ${packageId}@${version}`)
       await ensureExtensionPackageStore()
-      const snapshot = await extensionLifecycle.installPackage(selected.manifest, {}, { compatibility: extensionPackageCompatibility, trusted: false })
+      const current = extensionPackageStore.get(selected.manifest.component.id)
+      if (action === "update-preview") {
+        if (!current) throw new ExtensionSourceError("update_not_installed", `No installed package can be updated: ${selected.manifest.component.id}`)
+        res.writeHead(200, { "Content-Type": "application/json", ...cors })
+        res.end(JSON.stringify({ ok: true, source, update: extensionPackageUpdatePreview(current, selected.manifest) }))
+        return true
+      }
+      if (action === "install" && current) throw new ExtensionSourceError("extension_already_installed", `Extension is already installed: ${current.componentId}`)
+      if (action === "update" && !current) throw new ExtensionSourceError("update_not_installed", `No installed package can be updated: ${selected.manifest.component.id}`)
+      if (action === "update" && body?.confirm !== true) throw new ExtensionSourceError("update_confirmation_required", "Review update-preview and confirm this package update explicitly")
+      if (current) extensionLifecycle.adopt(current.componentId)
+      const snapshot = current
+        ? await extensionLifecycle.replacePackage(current.componentId, selected.manifest, {}, { compatibility: extensionPackageCompatibility, trusted: current.trusted })
+        : await extensionLifecycle.installPackage(selected.manifest, {}, { compatibility: extensionPackageCompatibility, trusted: false })
       await persistComponentState(ctx)
       await persistExtensionPackageState()
       await refreshAgentToolSession(ctx, [snapshot.componentId])
-      res.writeHead(201, { "Content-Type": "application/json", ...cors })
+      res.writeHead(action === "update" ? 200 : 201, { "Content-Type": "application/json", ...cors })
       res.end(JSON.stringify({ ok: true, source, selected: { packageId, version }, extension: extensionPackageStore.get(snapshot.componentId), lifecycle: snapshot }))
     } catch (error) {
       writeExtensionError(res, error)
@@ -233,6 +247,9 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
           displayName: typeof body?.displayName === "string" ? body.displayName : typeof body?.name === "string" ? body.name : "",
           kind: body?.kind === undefined ? "file" : body.kind,
           indexPath: typeof body?.indexPath === "string" ? body.indexPath : typeof body?.path === "string" ? body.path : "",
+          indexUrl: typeof body?.indexUrl === "string" ? body.indexUrl : typeof body?.url === "string" ? body.url : "",
+          publicKey: typeof body?.publicKey === "string" ? body.publicKey : undefined,
+          keyId: typeof body?.keyId === "string" ? body.keyId : undefined,
         })
         // Refuse malformed indexes before they can become a persistent source.
         try {

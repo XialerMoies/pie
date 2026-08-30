@@ -39,7 +39,10 @@ function sourceManifest() {
     schemaVersion: 1,
     packageId: "example.source.api",
     packageVersion: "1.0.0",
-    component: { schemaVersion: 1, id: "example.source.api", version: "1.0.0", kind: "optional", capability: "agent-tool", source: "user", productClass: "third-party", hostSurface: "agent", displayName: "来源 API 示例" },
+    component: {
+      schemaVersion: 1, id: "example.source.api", version: "1.0.0", kind: "optional", capability: "agent-tool", source: "user", productClass: "third-party", hostSurface: "agent", displayName: "来源 API 示例",
+      settings: [{ id: "result-limit", type: "number", label: "结果数量", defaultValue: 10 }],
+    },
     entry: "dist/index.js",
     source: { kind: "registry", origin: "file:///local/example.source.api", digest: "d".repeat(64) },
     signature: { algorithm: "sha256", value: "d".repeat(64), keyId: "local" },
@@ -84,6 +87,42 @@ describe("extension source management API", () => {
       assert.equal(installed.status, 201)
       assert.equal(installed.body.lifecycle.phase, "installed")
       assert.equal(installed.body.extension.trusted, false)
+      assert.equal((await call("POST", `/api/extensions/${manifest.packageId}/trust`, { trusted: true })).status, 200)
+      assert.equal((await call("POST", `/api/extensions/${manifest.packageId}/enable`)).body.lifecycle.phase, "active")
+      assert.equal((await call("PATCH", `/api/extensions/${manifest.packageId}/settings`, { scope: "user", values: { "result-limit": 23 } })).status, 200)
+
+      const updatedManifest = { ...manifest, packageVersion: "1.1.0", component: { ...manifest.component, version: "1.1.0" } }
+      const updatedRawManifest = `${JSON.stringify(updatedManifest, null, 2)}\n`
+      writeFileSync(manifestPath, updatedRawManifest, "utf8")
+      const updatedIndex = {
+        schemaVersion: 1,
+        sourceId: "demo.local",
+        packages: [{ packageId: manifest.packageId, versions: [{
+          version: "1.1.0",
+          manifestPath: "packages/example.source.api/manifest.json",
+          manifestDigest: createHash("sha256").update(updatedRawManifest).digest("hex"),
+          manifestFingerprint: componentPackageManifestFingerprint(normalizeCapabilityComponentPackageManifest(updatedManifest, compatibility)),
+        }] }],
+      }
+      writeFileSync(indexPath, JSON.stringify(updatedIndex), "utf8")
+      const preview = await call("POST", "/api/extension-sources/demo.local/update-preview", { packageId: manifest.packageId, version: "1.1.0" })
+      assert.equal(preview.status, 200)
+      assert.equal(preview.body.update.fromVersion, "1.0.0")
+      assert.equal(preview.body.update.toVersion, "1.1.0")
+      const unconfirmed = await call("POST", "/api/extension-sources/demo.local/update", { packageId: manifest.packageId, version: "1.1.0" })
+      assert.equal(unconfirmed.status, 400)
+      const updated = await call("POST", "/api/extension-sources/demo.local/update", { packageId: manifest.packageId, version: "1.1.0", confirm: true })
+      assert.equal(updated.status, 200)
+      assert.equal(updated.body.extension.packageVersion, "1.1.0")
+      assert.equal(updated.body.extension.trusted, true)
+      assert.equal(updated.body.lifecycle.phase, "active")
+      assert.equal((await call("GET", `/api/extensions/${manifest.packageId}/settings`)).body.values.effective["result-limit"], 23)
+
+      updatedIndex.packages[0].versions[0].manifestDigest = "0".repeat(64)
+      writeFileSync(indexPath, JSON.stringify(updatedIndex), "utf8")
+      const rejectedRefresh = await call("POST", "/api/extension-sources/demo.local/refresh")
+      assert.equal(rejectedRefresh.status, 400)
+      assert.equal((await call("GET", `/api/extensions/${manifest.packageId}`)).body.extension.packageVersion, "1.1.0")
 
       const removed = await call("POST", "/api/extension-sources/demo.local/remove")
       assert.equal(removed.status, 200)
