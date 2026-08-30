@@ -13,7 +13,6 @@ import {
 } from "../tool-registry.js"
 import type { AgentTool, ToolExecutionExtraContext, ToolTraceEmitter } from "../types.js"
 import { canonicalToolName } from "../tool-identity.js"
-import { gitStatusTool } from "./git-status.js"
 import { searchTool } from "./search.js"
 import { fileReadTool } from "./file-read.js"
 import { explorerListTool } from "./explorer-list.js"
@@ -52,7 +51,6 @@ registerFirstPartyComponentPackages(capabilityComponentManager)
  */
 
 // 注册自定义工具
-toolRegistry.register(gitStatusTool)
 toolRegistry.register(searchTool)
 toolRegistry.register(fileReadTool)
 toolRegistry.register(explorerListTool)

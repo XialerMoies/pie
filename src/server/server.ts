@@ -135,12 +135,10 @@ async function releaseActiveWorkspaceLock(): Promise<void> {
 // ─── 启动 Pi ──────────────────────────────────────────────────────
 async function main() {
   const startedAt = Date.now();
-  assertProfileCatalogsReady();
   const logger = new StructuredLogger({
     filePath: join(STARTUP.layout.instanceRoot, "server.log.jsonl"),
   });
   const toolOutcomeMetrics = new ToolOutcomeMetrics();
-  toolOutcomeMetrics.setExpectedTools(getManagedAgentTools().map((tool) => tool.name));
   const evidenceLedger = new EvidenceLedger({
     filePath: join(STARTUP.layout.instanceRoot, "evidence-ledger.jsonl"),
   });
@@ -169,6 +167,10 @@ async function main() {
   }
   await capabilityComponentManager.restore(join(PI_CONFIG_DIR, "component-state.json"));
   await extensionPackageStore.restore(defaultExtensionPackageStorePath());
+  // Restored disable/uninstall state must take effect before any catalog
+  // projection can adopt first-party extension contributions.
+  assertProfileCatalogsReady();
+  toolOutcomeMetrics.setExpectedTools(getManagedAgentTools().map((tool) => tool.name));
   try {
     writeFileSync(STARTUP.layout.authFile, JSON.stringify({}, null, 2), { encoding: "utf8", flag: "wx" });
   } catch (error: any) {

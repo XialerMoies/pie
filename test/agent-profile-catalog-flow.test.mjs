@@ -19,8 +19,9 @@ describe("AP-08 profile-generated tool and prompt catalog flow", () => {
       assert.deepStrictEqual(catalog.featureGates, profile.featureGates);
       assert.ok(catalog.tools.every((tool) => tool.audiences.includes("main")));
       if (catalog.id === "standard") {
-        assert.equal(catalog.tools.find((tool) => tool.name === "file_outline")?.source, "extension");
-        assert.ok(catalog.tools.filter((tool) => tool.name !== "file_outline").every((tool) => tool.source === "native"));
+        const extensionTools = catalog.tools.filter((tool) => tool.source === "extension").map((tool) => tool.name).sort();
+        assert.deepStrictEqual(extensionTools, ["file_outline", "git-status"]);
+        assert.ok(catalog.tools.filter((tool) => tool.source !== "extension").every((tool) => tool.source === "native"));
       }
       assert.equal(catalog.presentation, profile.presentation);
       assert.deepStrictEqual(catalog.dependencies, { mcp: profile.allowMcp, skills: profile.includeSkills });
