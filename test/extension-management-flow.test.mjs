@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { handleComponents } from "../src/server/routes/components.ts"
@@ -184,6 +184,49 @@ describe("third-party extension management API", () => {
       assert.equal(refreshes, 2)
     } finally {
       await call("POST", "/api/components/tool.memory/enable", undefined, runtime)
+      process.env.PI_USER_CONFIG = previousConfig
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("installs a local manifest through the direct location flow and stages it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "extension-direct-install-"))
+    const previousConfig = process.env.PI_USER_CONFIG
+    process.env.PI_USER_CONFIG = root
+    const manifestPath = join(root, "demo-manifest.json")
+    try {
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8")
+      const result = await call("POST", "/api/extensions/install-from-location", { kind: "file", location: manifestPath })
+      assert.equal(result.status, 201)
+      assert.equal(result.body.lifecycle.phase, "installed")
+      assert.equal(result.body.extension.trusted, false)
+      assert.equal(existsSync(join(root, "extension-installs", "example.api.extension", "1.0.0", "manifest.json")), true)
+      await call("POST", `/api/extensions/${manifest.component.id}/uninstall`)
+    } finally {
+      process.env.PI_USER_CONFIG = previousConfig
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("fetches an HTTPS manifest without credentials or redirects and keeps it untrusted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "extension-direct-https-"))
+    const previousConfig = process.env.PI_USER_CONFIG
+    const originalFetch = globalThis.fetch
+    process.env.PI_USER_CONFIG = root
+    globalThis.fetch = async (url, options) => {
+      assert.equal(String(url), "https://extensions.example.test/example-api.json")
+      assert.equal(options?.credentials, "omit")
+      assert.equal(options?.redirect, "error")
+      return new Response(JSON.stringify(manifest), { status: 200, headers: { "content-length": "512" } })
+    }
+    try {
+      const result = await call("POST", "/api/extensions/install-from-location", { kind: "https", location: "https://extensions.example.test/example-api.json" })
+      assert.equal(result.status, 201)
+      assert.equal(result.body.extension.trusted, false)
+      assert.equal(existsSync(join(root, "extension-installs", "example.api.extension", "1.0.0", "manifest.json")), true)
+      await call("POST", `/api/extensions/${manifest.component.id}/uninstall`)
+    } finally {
+      globalThis.fetch = originalFetch
       process.env.PI_USER_CONFIG = previousConfig
       rmSync(root, { recursive: true, force: true })
     }

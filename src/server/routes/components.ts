@@ -1,16 +1,20 @@
 import type { RouteHandler, ServerContext } from "./types.js"
 import { CapabilityComponentError, capabilityComponentManager } from "../../agent/capability-components.js"
 import {
+  CapabilityComponentPackageError,
+  componentPackageManifestFingerprint,
   firstPartyComponentPackage,
   firstPartyComponentPackageCatalog,
   firstPartyComponentPackageForComponent,
+  normalizeCapabilityComponentPackageManifest,
   registerFirstPartyComponentPackages,
 } from "../../agent/component-package.js"
 import { reconcileMcpServerComponents } from "../../agent/mcp/MCPClientService.js"
 import { loadMcpConfigFromCandidates, defaultGlobalConfigPath, getCandidatePaths } from "../../agent/mcp/config.js"
 import { canonicalWorkspacePath, workspaceKey } from "../../data/data-layout.js"
 import { existsSync, readdirSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
+import { dirname, isAbsolute, join, resolve } from "node:path"
 import { extensionManifestFromPackage } from "../../agent/extension-manifest.js"
 import { extensionLifecycle } from "../../agent/extension-lifecycle.js"
 import {
@@ -82,13 +86,67 @@ function writeComponentError(res: Parameters<RouteHandler>[1], error: unknown): 
 }
 
 function writeExtensionError(res: Parameters<RouteHandler>[1], error: unknown): void {
-  const status = error instanceof CapabilityComponentError || error instanceof ExtensionSourceError || error instanceof SyntaxError ? 400 : 500
+  const status = error instanceof CapabilityComponentError || error instanceof CapabilityComponentPackageError || error instanceof ExtensionSourceError || error instanceof SyntaxError ? 400 : 500
   res.writeHead(status, { "Content-Type": "application/json", ...cors })
   res.end(JSON.stringify({
     ok: false,
-    code: error instanceof CapabilityComponentError || error instanceof ExtensionSourceError ? error.code : "extension_operation_failed",
+    code: error instanceof CapabilityComponentError || error instanceof CapabilityComponentPackageError || error instanceof ExtensionSourceError ? error.code : "extension_operation_failed",
     error: error instanceof Error ? error.message : String(error),
   }))
+}
+
+const DIRECT_EXTENSION_MAX_BYTES = 1_048_576
+
+async function readDirectExtensionManifest(location: string, kind: "file" | "https"): Promise<{ raw: string; manifest: Readonly<import("../../agent/component-package.js").CapabilityComponentPackageManifest> }> {
+  const value = location.trim()
+  if (!value) throw new CapabilityComponentPackageError("invalid_location", "安装位置不能为空")
+  let raw: string
+  if (kind === "file") {
+    if (!isAbsolute(value)) throw new CapabilityComponentPackageError("invalid_location", "本地扩展路径必须是绝对路径")
+    try {
+      const path = resolve(value)
+      const metadata = await stat(path)
+      if (!metadata.isFile()) throw new CapabilityComponentPackageError("manifest_unreadable", "本地扩展位置必须是 manifest 文件")
+      if (metadata.size > DIRECT_EXTENSION_MAX_BYTES) throw new CapabilityComponentPackageError("manifest_too_large", "扩展 manifest 超过 1 MiB")
+      raw = await readFile(path, "utf8")
+    } catch (error) {
+      if (error instanceof CapabilityComponentPackageError) throw error
+      throw new CapabilityComponentPackageError("manifest_unreadable", `无法读取扩展 manifest：${error instanceof Error ? error.message : String(error)}`)
+    }
+  } else {
+    let url: URL
+    try { url = new URL(value) } catch { throw new CapabilityComponentPackageError("invalid_location", "HTTPS 地址格式无效") }
+    if (url.protocol !== "https:" || url.username || url.password || url.hash) throw new CapabilityComponentPackageError("invalid_location", "扩展地址必须是无凭据的 HTTPS manifest 地址")
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
+    try {
+      const response = await fetch(url, { method: "GET", redirect: "error", credentials: "omit", signal: controller.signal })
+      if (!response.ok) throw new CapabilityComponentPackageError("source_fetch_failed", `扩展地址返回 HTTP ${response.status}`)
+      const contentLength = Number.parseInt(response.headers.get("content-length") || "0", 10)
+      if (Number.isSafeInteger(contentLength) && contentLength > DIRECT_EXTENSION_MAX_BYTES) throw new CapabilityComponentPackageError("manifest_too_large", "扩展 manifest 超过 1 MiB")
+      raw = await response.text()
+    } catch (error) {
+      if (error instanceof CapabilityComponentPackageError) throw error
+      throw new CapabilityComponentPackageError(controller.signal.aborted ? "source_fetch_timeout" : "source_fetch_failed", controller.signal.aborted ? "扩展地址响应超时" : `无法获取扩展 manifest：${error instanceof Error ? error.message : String(error)}`)
+    } finally { clearTimeout(timeout) }
+  }
+  if (Buffer.byteLength(raw, "utf8") > DIRECT_EXTENSION_MAX_BYTES) throw new CapabilityComponentPackageError("manifest_too_large", "扩展 manifest 超过 1 MiB")
+  let input: unknown
+  try { input = JSON.parse(raw) } catch (error) { throw new CapabilityComponentPackageError("invalid_manifest", `扩展 manifest 不是有效 JSON：${error instanceof Error ? error.message : String(error)}`) }
+  const manifest = normalizeCapabilityComponentPackageManifest(input, extensionPackageCompatibility)
+  return { raw, manifest }
+}
+
+async function stageDirectExtensionManifest(ctx: ServerContext, raw: string, manifest: Readonly<import("../../agent/component-package.js").CapabilityComponentPackageManifest>): Promise<string> {
+  const directory = join(ctx.groups.storage.paths.PI_CONFIG_DIR, "extension-installs", manifest.packageId, manifest.packageVersion)
+  await mkdir(directory, { recursive: true })
+  const path = join(directory, "manifest.json")
+  await writeFile(path, raw, { encoding: "utf8", flag: "wx" }).catch(async (error: NodeJS.ErrnoException) => {
+    if (error.code !== "EEXIST") throw error
+    const existing = await readFile(path, "utf8")
+    if (componentPackageManifestFingerprint(normalizeCapabilityComponentPackageManifest(JSON.parse(existing), extensionPackageCompatibility)) !== componentPackageManifestFingerprint(manifest)) throw new CapabilityComponentPackageError("install_conflict", "受控安装目录中已存在不同的同版本 manifest")
+  })
+  return path
 }
 
 function isManagedFirstPartyOptional(componentId: string): boolean {
@@ -364,8 +422,33 @@ export const handleComponents: RouteHandler = async (req, res, ctx) => {
     return true
   }
 
-  // Third-party management deliberately accepts only a package declaration;
-  // no endpoint imports or executes its entry path.
+  // Third-party installation records a declaration only; no endpoint imports
+  // or executes an entry path.
+  if (parsedUrl.pathname === "/api/extensions/install-from-location" && req.method === "POST") {
+    try {
+      await ensureExtensionPackageStore()
+      const body = await parseBody(req)
+      const kind = body?.kind === "https" ? "https" : body?.kind === "file" ? "file" : ""
+      if (!kind) throw new CapabilityComponentPackageError("invalid_location", "安装来源必须是本地文件或 HTTPS 地址")
+      const location = typeof body?.location === "string" ? body.location : ""
+      const { raw, manifest } = await readDirectExtensionManifest(location, kind)
+      if (extensionPackageStore.get(manifest.component.id)) throw new CapabilityComponentError("duplicate_component", `Extension already installed: ${manifest.component.id}`, manifest.component.id)
+      await stageDirectExtensionManifest(ctx, raw, manifest)
+      const snapshot = await extensionLifecycle.installPackage(manifest, {}, {
+        compatibility: extensionPackageCompatibility,
+        trusted: false,
+      })
+      await persistComponentState(ctx)
+      await persistExtensionPackageState()
+      await refreshAgentToolSession(ctx, [snapshot.componentId])
+      res.writeHead(201, { "Content-Type": "application/json", ...cors })
+      res.end(JSON.stringify({ ok: true, extension: extensionPackageStore.get(snapshot.componentId), lifecycle: snapshot }))
+    } catch (error) {
+      writeExtensionError(res, error)
+    }
+    return true
+  }
+
   if (parsedUrl.pathname === "/api/extensions/install" && req.method === "POST") {
     try {
       await ensureExtensionPackageStore()

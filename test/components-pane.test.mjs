@@ -66,6 +66,17 @@ describe("扩展与集成 pane", () => {
     addMcp?.click();
     assert.ok(doc.querySelector("#components-mcp-install-modal"), "MCP Server 新增动作应在组件栏打开自定义安装对话框");
     doc.querySelector("#components-mcp-install-modal .mcp-modal-close")?.dispatchEvent(new win.Event("click", { bubbles: true }));
+    const addExtension = container.querySelector('[aria-label="安装扩展"]');
+    assert.ok(addExtension, "扩展分组应提供集合级安装动作");
+    addExtension?.dispatchEvent(new win.Event("click", { bubbles: true }));
+    const extensionModal = doc.querySelector("#components-extension-install-modal");
+    assert.ok(extensionModal, "扩展安装动作应打开轻量安装对话框");
+    assert.equal(extensionModal?.querySelector('[aria-label="manifest 文件路径"]') !== null, true);
+    extensionModal?.querySelector(".extension-install-mode-button:nth-child(2)")?.dispatchEvent(new win.Event("click", { bubbles: true }));
+    assert.equal(extensionModal?.querySelector('[aria-label="manifest HTTPS 地址"]') !== null, true);
+    assert.equal(extensionModal?.querySelector('[aria-label="选择本地 manifest"]')?.hidden, true);
+    assert.ok(extensionModal?.querySelector('[aria-label="选择本地 manifest"] use[href="#if"]'), "本地 manifest 按钮应使用已登记的文件图标");
+    extensionModal?.querySelector(".mcp-modal-close")?.dispatchEvent(new win.Event("click", { bubbles: true }));
     container.querySelector('[data-component-id="mcp.server.demo"] .component-row-main')?.dispatchEvent(new win.Event("click", { bubbles: true }));
     assert.equal(opened[1]?.id, "mcp.server.demo", "MCP Server 实例应直接打开自己的详情页");
     const desktopOrigin = container.querySelector('[data-group="extensions"] .components-origin-heading');

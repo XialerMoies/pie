@@ -1436,6 +1436,13 @@
     },
     {
       "method": "POST",
+      "path": "/api/extensions/install-from-location",
+      "handler": "handleComponents",
+      "source": "src/server/routes/components.ts",
+      "category": "extensions"
+    },
+    {
+      "method": "POST",
       "path": "/api/extensions/install",
       "handler": "handleComponents",
       "source": "src/server/routes/components.ts",

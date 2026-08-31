@@ -232,6 +232,59 @@ function openMcpInstallDialog(refresh: () => void): void {
   nameInput?.focus();
 }
 
+function openExtensionInstallDialog(refresh: () => void): void {
+  if (document.getElementById("components-extension-install-modal")) return;
+  const overlay = makeElement("div", "mcp-modal-overlay") as HTMLDivElement;
+  overlay.id = "components-extension-install-modal";
+  const modal = makeElement("div", "mcp-modal") as HTMLDivElement;
+  modal.setAttribute("role", "dialog"); modal.setAttribute("aria-modal", "true"); modal.setAttribute("aria-labelledby", "components-extension-install-title");
+  const header = makeElement("div", "mcp-modal-header");
+  const title = makeElement("span", "mcp-modal-title", "安装扩展"); title.id = "components-extension-install-title"; header.append(title);
+  const closeButton = makeElement("button", "mcp-modal-close") as HTMLButtonElement;
+  closeButton.type = "button"; closeButton.setAttribute("aria-label", "关闭"); closeButton.textContent = "×"; header.append(closeButton);
+  const body = makeElement("div", "mcp-modal-body");
+  const mode = makeElement("div", "extension-install-mode");
+  const fileMode = makeElement("button", "extension-install-mode-button active", "本地文件") as HTMLButtonElement;
+  const httpsMode = makeElement("button", "extension-install-mode-button", "HTTPS 地址") as HTMLButtonElement;
+  fileMode.type = "button"; httpsMode.type = "button"; mode.append(fileMode, httpsMode);
+  const field = makeElement("div", "mcp-modal-field");
+  const label = makeElement("label", "mcp-modal-label", "manifest 文件路径") as HTMLLabelElement;
+  const input = makeElement("input", "mcp-input") as HTMLInputElement;
+  input.type = "text"; input.placeholder = "选择 manifest.json 文件"; input.setAttribute("aria-label", "manifest 文件路径");
+  const browse = makeElement("button", "component-action") as HTMLButtonElement;
+  browse.type = "button"; browse.title = "选择本地 manifest"; browse.setAttribute("aria-label", "选择本地 manifest"); browse.append(makeIcon("if", 15));
+  const inputRow = makeElement("div", "extension-install-input-row"); inputRow.append(input, browse); label.append(inputRow); field.append(label);
+  const note = makeElement("div", "mcp-custom-msg", "安装后默认未信任，需要在扩展详情页信任并启用。");
+  body.append(mode, field, note);
+  const footer = makeElement("div", "mcp-modal-footer");
+  const cancel = makeElement("button", "mcp-btn mcp-btn-cancel", "取消") as HTMLButtonElement; cancel.type = "button";
+  const install = makeElement("button", "mcp-btn mcp-btn-install-custom", "安装") as HTMLButtonElement; install.type = "button";
+  footer.append(cancel, install); modal.append(header, body, footer); overlay.append(modal); document.body.append(overlay);
+  let kind: "file" | "https" = "file";
+  const close = (): void => overlay.remove();
+  const setMode = (next: "file" | "https"): void => {
+    kind = next; fileMode.classList.toggle("active", next === "file"); httpsMode.classList.toggle("active", next === "https");
+    label.firstChild && (label.firstChild.textContent = next === "file" ? "manifest 文件路径" : "manifest HTTPS 地址");
+    input.setAttribute("aria-label", next === "file" ? "manifest 文件路径" : "manifest HTTPS 地址");
+    input.placeholder = next === "file" ? "选择 manifest.json 文件" : "https://example.com/manifest.json"; input.value = "";
+    browse.hidden = next !== "file";
+  };
+  closeButton.addEventListener("click", close); cancel.addEventListener("click", close); overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); });
+  fileMode.addEventListener("click", () => setMode("file")); httpsMode.addEventListener("click", () => setMode("https"));
+  browse.addEventListener("click", async () => { const path = await (window as any).electronAPI?.selectFile?.(); if (path) input.value = path; });
+  install.addEventListener("click", async () => {
+    const location = input.value.trim(); if (!location) { note.textContent = "请输入 manifest 位置"; return; }
+    install.disabled = true; note.textContent = "安装中…";
+    try {
+      const response = await fetch("/api/extensions/install-from-location", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, location }) });
+      const result = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!response.ok || result?.ok === false) throw new Error(result?.error || "扩展安装失败");
+      close(); setNotice("扩展已安装，请在详情页信任并启用", "success"); await componentPaneApp.UI?.syncComponents?.(); refresh();
+    } catch (error) { note.textContent = error instanceof Error ? error.message : "扩展安装失败"; install.disabled = false; }
+  });
+  input.focus();
+}
+
 function componentMatches(component: ComponentPaneState, query: string, filter: ComponentPaneFilter): boolean {
   if (filter === "active" && component.status !== "active") return false;
   if (filter === "disabled" && component.status !== "disabled") return false;
@@ -397,6 +450,12 @@ export function componentsPaneRender(container: HTMLElement): () => void {
       paint();
     });
     section.append(heading);
+    if (group === "extensions") {
+      const installAction = makeElement("button", "components-group-action") as HTMLButtonElement;
+      installAction.type = "button"; installAction.title = "安装扩展"; installAction.setAttribute("aria-label", "安装扩展"); installAction.append(makeIcon("iplus", 14));
+      installAction.addEventListener("click", (event) => { event.stopPropagation(); openExtensionInstallDialog(() => void refresh()); });
+      section.append(installAction);
+    }
     if (expanded[group]) {
       const groupBody = makeElement("div", "components-group-body");
       body(groupBody);

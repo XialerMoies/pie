@@ -254,8 +254,8 @@ body{background:var(--bg);height:100vh}
 .components-filter-button{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:3px;background:transparent;color:var(--tm);cursor:pointer}
 .components-filter-button:hover,.components-filter-button.on{border-color:var(--bd);background:var(--bh);color:var(--am)}
 .components-groups{padding:0 0 10px}
-.components-group{margin:0}
-.components-group-heading{width:100%;height:30px;display:flex;align-items:center;gap:3px;padding:0 9px;border:0;border-top:1px solid var(--bd);background:transparent;color:var(--ts);font:600 .69rem var(--fb);text-align:left;cursor:pointer}
+.components-group{position:relative;margin:0}
+.components-group-heading{width:100%;height:30px;display:flex;align-items:center;gap:3px;padding:0 38px 0 9px;border:0;border-top:1px solid var(--bd);background:transparent;color:var(--ts);font:600 .69rem var(--fb);text-align:left;cursor:pointer}
 .components-group-heading:hover{background:var(--bh);color:var(--tx)}
 .components-chevron{width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;color:var(--tm)}
 .components-group-label{flex:1}
@@ -911,6 +911,7 @@ textarea.cpe-input{resize:vertical;line-height:1.45}
 .component-tool-list{display:flex;flex-direction:column;gap:6px}.component-tool-row{display:flex;align-items:center;gap:12px;min-height:42px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--bd) 72%,transparent);border-radius:5px;background:var(--bc)}.component-tool-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}.component-tool-main strong{font:600 .74rem var(--fb);color:var(--tx)}.component-tool-main span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ts);font:.64rem var(--fb)}.component-tool-status{flex:none;color:var(--tm);font:.62rem var(--fm)}.component-tool-toggle{flex:none;padding:5px 9px;font-size:.64rem}
 .component-setting-scope{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;font:.7rem var(--fb);color:var(--ts)}.component-setting-scope label{display:flex;align-items:center;gap:8px}.component-setting-scope select,.component-setting-row input,.component-setting-row select{border:1px solid var(--bd);border-radius:4px;background:var(--bc);color:var(--tx);font:.72rem var(--fm);min-height:30px;padding:5px 7px}.component-setting-row{display:grid;grid-template-columns:minmax(150px,1fr) minmax(180px,1.2fr);align-items:center;gap:5px 18px;padding:11px 0;border-top:1px solid color-mix(in srgb,var(--bd) 55%,transparent)}.component-setting-row strong{font:600 .73rem var(--fb);color:var(--tx)}.component-setting-row span{grid-column:1;color:var(--tm);font:.66rem var(--fb)}.component-setting-row input,.component-setting-row select{grid-column:2;grid-row:1 / span 2;width:100%;box-sizing:border-box}.component-setting-row input[type=checkbox]{width:16px;justify-self:start;accent-color:var(--am)}
 .component-tool-icon{width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 20px;color:var(--am)}
+.extension-install-mode{display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--bd)}.extension-install-mode-button{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--tm);padding:6px 10px;font:.68rem var(--fb);cursor:pointer}.extension-install-mode-button.active{border-bottom-color:var(--am);color:var(--tx)}.extension-install-input-row{display:flex;align-items:center;gap:6px}.extension-install-input-row .mcp-input{min-width:0}.extension-install-input-row .component-action{flex:0 0 28px;width:28px;height:28px;border:1px solid var(--bd)}
 @media (max-width:700px){.component-detail{max-width:none}.component-detail-header{display:block}.component-detail-actions{margin-top:18px}.component-detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .fc-toolbar{height:1px;background:var(--bd);flex-shrink:0;overflow:visible}
 .fc-toolbar .fc-status{display:none}
@@ -1264,5 +1265,6 @@ textarea.cpe-input{resize:vertical;line-height:1.45}
 .workspace-status-primary:hover{background:#fbbf24}
 .workspace-status-secondary{border:1px solid var(--bd);background:var(--bc);color:var(--ts)}
 .workspace-status-secondary:hover{border-color:var(--tm);color:var(--tx)}
+.extension-install-input-row .component-action[hidden]{display:none}
 @media (prefers-reduced-motion:reduce){.workspace-status-spinner{animation:none}}
 
